@@ -19,6 +19,8 @@
   - `segment.py`
   - `ocr_backend.py`
   - `build_structured_page_json.py`
+- Added an MVP export CLI that produces JSON, placement plans, rendered board pages, and a best-effort image-only `.edb`:
+  - `build_mvp_export.py`
 - Added a minimal `.edb` builder for controlled samples:
   - `edb_builder.py`
 - Added planning and pipeline documents:
@@ -27,6 +29,10 @@
   - `STRUCTURED_PIPELINE.md`
   - `UI_UX_EDB_PRODUCT_DESIGN.md`
   - `EDB_LAYOUT_PLACEMENT_RULES.md`
+- Added a local preview-first UI prototype:
+  - `ui_prototype/index.html`
+  - `ui_prototype/styles.css`
+  - `ui_prototype/app.js`
 
 ## Key Findings
 - `.edb` = fixed 11-byte outer header + gzip payload.
@@ -42,11 +48,12 @@
 - Structured page understanding is scaffolded and now has runnable preprocessing, segmentation, OCR abstraction, and JSON export entrypoints.
 - Smoke tests were run on photographed ClassIn board images with `noop` OCR and produced fallback image-block `PageModel` JSON output.
 - Current segmentation is still conservative and often collapses a photographed board into a single large block when OCR is disabled or image quality/layout cues are weak.
+- MVP export now successfully produces `pages.json`, `placements.json`, rendered board PNGs, and an exportable board-image `.edb`.
 
 ## Next Recommended Steps
 1. Improve rule-based segmentation so one board photo splits into title/text/formula/diagram regions
 2. Install and validate a real OCR backend (`PaddleOCR` first, `Tesseract` fallback)
 3. Route OCR results into `PageModel` with stronger type refinement
-4. Connect `PageModel` blocks to a mixed text/image `.edb` writer
+4. Evolve the image-only MVP `.edb` export into a mixed text/image writer where ClassIn behavior is stable
 5. Test generated `.edb` files directly in ClassIn
 6. Add template-driven placement for empty teaching space and board consistency

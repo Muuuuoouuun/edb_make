@@ -9,6 +9,8 @@ out_images_sample4/
 smoke_pipeline_output/
 pipeline_output_smoke/
 pipeline_output_test/
+pipeline_output_perspective/
+mvp_export*/
 tmp_debug_output/
 
 generated_*.edb

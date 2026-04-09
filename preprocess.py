@@ -28,6 +28,15 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", 
 
 
 @dataclass(slots=True)
+class PreprocessOptions:
+    dpi: int = 160
+    enable_perspective: bool = True
+    enable_deskew: bool = True
+    enable_margin_crop: bool = True
+    max_dimension: int | None = None
+
+
+@dataclass(slots=True)
 class PreparedPage:
     page_id: str
     source_path: str
@@ -231,6 +240,7 @@ def normalize_image(
     enable_perspective: bool = True,
     enable_deskew: bool = True,
     enable_margin_crop: bool = True,
+    max_dimension: int | None = None,
 ) -> NormalizedPageImage:
     source_path = Path(source)
     out_dir = Path(output_dir)
@@ -248,6 +258,14 @@ def normalize_image(
     if enable_margin_crop:
         image = crop_uniform_margin(image)
         metadata["margin_cropped"] = True
+
+    if max_dimension:
+        width, height = image.size
+        scale = min(max_dimension / max(width, height), 1.0)
+        if scale < 1.0:
+            new_size = (int(round(width * scale)), int(round(height * scale)))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+            metadata["resized_to_max_dimension"] = max_dimension
 
     resolved_page_id = page_id or f"{source_path.stem}-page-{page_index + 1:03d}"
     out_path = out_dir / f"{resolved_page_id}.png"
@@ -271,6 +289,7 @@ def prepare_pages(
     enable_perspective: bool = True,
     enable_deskew: bool = True,
     enable_margin_crop: bool = True,
+    max_dimension: int | None = None,
 ) -> list[NormalizedPageImage]:
     source_path = Path(source)
     suffix = source_path.suffix.lower()
@@ -290,6 +309,7 @@ def prepare_pages(
                     enable_perspective=False,
                     enable_deskew=enable_deskew,
                     enable_margin_crop=enable_margin_crop,
+                    max_dimension=max_dimension,
                 )
             )
         return normalized_pages
@@ -303,32 +323,11 @@ def prepare_pages(
                 enable_perspective=enable_perspective,
                 enable_deskew=enable_deskew,
                 enable_margin_crop=enable_margin_crop,
+                max_dimension=max_dimension,
             )
         ]
 
     raise ValueError(f"Unsupported input type: {source_path.suffix}")
-
-
-PreparedPage = NormalizedPageImage
-
-
-def prepare_source_pages(
-    source: str | Path,
-    *,
-    pdf_dpi: int = 160,
-    detect_perspective: bool = True,
-    deskew: bool = True,
-    crop_margins: bool = True,
-    max_dimension: int | None = None,
-) -> list[PreparedPage]:
-    return prepare_pages(
-        source,
-        Path("pipeline_output") / "prepared",
-        dpi=pdf_dpi,
-        enable_perspective=detect_perspective,
-        enable_deskew=deskew,
-        enable_margin_crop=crop_margins,
-    )
 
 
 def prepare_source_pages(
@@ -346,6 +345,7 @@ def prepare_source_pages(
         enable_perspective=detect_perspective,
         enable_deskew=deskew,
         enable_margin_crop=crop_margins,
+        max_dimension=max_dimension,
     )
     prepared: list[PreparedPage] = []
     for page in normalized_pages:
@@ -365,5 +365,18 @@ def prepare_source_pages(
                 original_size=(page.width_px, page.height_px),
                 metadata=dict(page.metadata),
             )
-        )
+    )
     return prepared
+
+
+def load_pages(source: str | Path, options: PreprocessOptions) -> list[NormalizedPageImage]:
+    normalized_pages = prepare_pages(
+        source,
+        Path(source).parent / ".pipeline_cache",
+        dpi=options.dpi,
+        enable_perspective=options.enable_perspective,
+        enable_deskew=options.enable_deskew,
+        enable_margin_crop=options.enable_margin_crop,
+        max_dimension=options.max_dimension,
+    )
+    return normalized_pages

@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import gzip
+import io
 import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 
 OUTER_PREFIX = bytes.fromhex("00 00 00 04 65 64 62 00 00 32 01")
 CANVAS_WIDTH = 590.0
 CANVAS_HEIGHT = 1280.0
+DEFAULT_PAGE_COUNT_HINT = 50
 
 
 def pack_u16(value: int) -> bytes:
@@ -149,6 +153,34 @@ def build_edb(records: list[bytes], header_flag: int, version: str = "6.0.5.3911
 
 def write_edb(path: str | Path, payload: bytes) -> None:
     Path(path).write_bytes(payload)
+
+
+def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (512, 512), format_hint: str | None = None, quality: int = 88) -> bytes:
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image.thumbnail(max_size, Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    ext = (format_hint or image.format or "JPEG").upper()
+    if ext == "PNG":
+        image.save(output, format="PNG")
+    else:
+        image.save(output, format="JPEG", quality=quality, optimize=True)
+    return output.getvalue()
+
+
+def normalize_x_px(x_px: float) -> float:
+    return x_px / CANVAS_HEIGHT
+
+
+def normalize_width_px(width_px: float) -> float:
+    return width_px / CANVAS_HEIGHT
+
+
+def normalize_y_px(y_px: float, *, page_count_hint: int = DEFAULT_PAGE_COUNT_HINT) -> float:
+    return y_px / (CANVAS_WIDTH * page_count_hint)
+
+
+def normalize_height_px(height_px: float, *, page_count_hint: int = DEFAULT_PAGE_COUNT_HINT) -> float:
+    return height_px / (CANVAS_WIDTH * page_count_hint)
 
 
 def build_text_only_example() -> bytes:

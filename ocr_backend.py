@@ -10,12 +10,12 @@ from structured_schema import Box
 
 try:
     from paddleocr import PaddleOCR  # type: ignore
-except ImportError:  # pragma: no cover
+except ImportError:  # pragma: no cover - optional dependency
     PaddleOCR = None
 
 try:
     import pytesseract  # type: ignore
-except ImportError:  # pragma: no cover
+except ImportError:  # pragma: no cover - optional dependency
     pytesseract = None
 
 
@@ -57,34 +57,47 @@ class OCRBackend:
         return self.ocr_image(image)
 
 
-class NoOpOCRBackend(OCRBackend):
-    name = "noop"
+class NoOcrBackend(OCRBackend):
+    name = "none"
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
         return OCRResult(text="", confidence=None, backend_name=self.name, metadata={"backend": self.name})
 
 
+NoOpOCRBackend = NoOcrBackend
+
+
 class PaddleOCRBackend(OCRBackend):
     name = "paddleocr"
 
-    def __init__(self, *, lang: str = "korean", use_angle_cls: bool = False) -> None:
+    def __init__(self, *, lang: str = "korean", use_angle_cls: bool = True) -> None:
         if PaddleOCR is None:
             raise RuntimeError("paddleocr is not installed")
         self.engine = PaddleOCR(lang=lang, use_angle_cls=use_angle_cls, show_log=False)
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
-        rgb = image.convert("RGB")
-        raw = self.engine.ocr(rgb, cls=False)
+        try:
+            raw = self.engine.ocr(image.convert("RGB"), cls=True)
+        except Exception as exc:  # pragma: no cover - runtime fallback
+            return OCRResult(
+                text="",
+                confidence=None,
+                lines=[],
+                backend_name=self.name,
+                metadata={"backend": self.name, "error": str(exc)},
+            )
+
         entries = raw[0] if raw else []
         lines: list[OCRLine] = []
         collected: list[str] = []
         confidences: list[float] = []
+
         for entry in entries or []:
             polygon, payload = entry
-            text = payload[0].strip()
-            confidence = float(payload[1])
+            text = str(payload[0]).strip()
             if not text:
                 continue
+            confidence = float(payload[1]) if len(payload) > 1 else 0.0
             xs = [point[0] for point in polygon]
             ys = [point[1] for point in polygon]
             lines.append(
@@ -96,6 +109,7 @@ class PaddleOCRBackend(OCRBackend):
             )
             collected.append(text)
             confidences.append(confidence)
+
         average_confidence = sum(confidences) / len(confidences) if confidences else None
         return OCRResult(
             text="\n".join(collected),
@@ -119,8 +133,9 @@ class TesseractOCRBackend(OCRBackend):
         lines: list[OCRLine] = []
         collected: list[str] = []
         confidences: list[float] = []
-        for idx, text in enumerate(data["text"]):
-            cleaned = text.strip()
+
+        for idx, text in enumerate(data.get("text", [])):
+            cleaned = str(text).strip()
             if not cleaned:
                 continue
             raw_conf = data["conf"][idx]
@@ -138,6 +153,7 @@ class TesseractOCRBackend(OCRBackend):
             )
             collected.append(cleaned)
             confidences.append(confidence)
+
         average_confidence = sum(confidences) / len(confidences) if confidences else None
         return OCRResult(
             text="\n".join(collected),
@@ -150,9 +166,9 @@ class TesseractOCRBackend(OCRBackend):
 
 def build_ocr_backend(name: str = "auto") -> OCRBackend:
     normalized = name.lower()
-    if normalized == "noop":
-        return NoOpOCRBackend()
-    if normalized == "paddleocr":
+    if normalized in {"none", "noop"}:
+        return NoOcrBackend()
+    if normalized in {"paddle", "paddleocr"}:
         return PaddleOCRBackend()
     if normalized == "tesseract":
         return TesseractOCRBackend()
@@ -161,22 +177,11 @@ def build_ocr_backend(name: str = "auto") -> OCRBackend:
         return PaddleOCRBackend()
     if pytesseract is not None:
         return TesseractOCRBackend()
-    return NoOpOCRBackend()
-
-
-NoOcrBackend = NoOpOCRBackend
+    return NoOcrBackend()
 
 
 def create_ocr_backend(name: str = "auto") -> OCRBackend:
     return build_ocr_backend(name)
 
 
-class NoOcrBackend(NoOpOCRBackend):
-    name = "none"
-
-
-def create_ocr_backend(preferred: str = "auto") -> OCRBackend:
-    backend = build_ocr_backend(preferred)
-    if isinstance(backend, NoOpOCRBackend):
-        return NoOcrBackend()
-    return backend
+OcrResult = OCRResult
