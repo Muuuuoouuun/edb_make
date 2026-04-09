@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from PIL import Image, ImageOps, ImageStat
+
+from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
 
 try:
     import cv2  # type: ignore
@@ -16,8 +18,6 @@ try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
     np = None
-
-from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
 
 
 @dataclass(slots=True)
@@ -170,12 +170,7 @@ def _find_candidate_boxes_cv2(image: Image.Image, region: Box, options: SegmentO
         fill_ratio = float(np.count_nonzero(crop)) / float(crop.size) if crop.size else 0.0
         if fill_ratio < options.min_fill_ratio:
             continue
-        candidates.append(
-            (
-                Box(left=region.left + float(x), top=region.top + float(y), width=float(w), height=float(h)),
-                fill_ratio,
-            )
-        )
+        candidates.append((Box(left=region.left + float(x), top=region.top + float(y), width=float(w), height=float(h)), fill_ratio))
     return candidates
 
 
@@ -233,12 +228,7 @@ def _find_candidate_boxes_pil(image: Image.Image, region: Box, options: SegmentO
         top = max(0, top - options.fallback_padding_px)
         right = min(region_width, right + options.fallback_padding_px)
         bottom = min(region_height, bottom + options.fallback_padding_px)
-        box = Box(
-            left=region.left + float(left),
-            top=region.top + float(top),
-            width=float(max(0, right - left)),
-            height=float(max(0, bottom - top)),
-        )
+        box = Box(left=region.left + float(left), top=region.top + float(top), width=float(max(0, right - left)), height=float(max(0, bottom - top)))
         if box.area < min_area:
             continue
         crop = bright_mask.crop((left, top, right, bottom))
@@ -246,6 +236,36 @@ def _find_candidate_boxes_pil(image: Image.Image, region: Box, options: SegmentO
         if fill_ratio < options.min_fill_ratio / 3.0:
             continue
         candidates.append((box, fill_ratio))
+
+    if len(candidates) > 1:
+        filtered = [
+            item
+            for item in candidates
+            if item[0].area < region_width * region_height * 0.75 and item[1] >= 0.22
+        ]
+        if filtered:
+            candidates = filtered
+
+    if len(candidates) > 1:
+        region_area = region_width * region_height
+        contained_large_candidates = []
+        for index, (box, fill_ratio) in enumerate(candidates):
+            contains_other = False
+            for other_index, (other_box, _) in enumerate(candidates):
+                if index == other_index:
+                    continue
+                if (
+                    box.left <= other_box.left
+                    and box.top <= other_box.top
+                    and box.right >= other_box.right
+                    and box.bottom >= other_box.bottom
+                ):
+                    contains_other = True
+                    break
+            if contains_other and box.area >= region_area * 0.08:
+                contained_large_candidates.append((box, fill_ratio))
+        if contained_large_candidates and len(candidates) - len(contained_large_candidates) >= 1:
+            candidates = [item for item in candidates if item not in contained_large_candidates]
 
     return candidates
 
@@ -281,6 +301,21 @@ def _merge_boxes(boxes: list[Box], options: SegmentOptions) -> list[Box]:
             i = 0
             while i < len(merged):
                 other = merged[i]
+                current_contains_other = (
+                    current.left <= other.left
+                    and current.top <= other.top
+                    and current.right >= other.right
+                    and current.bottom >= other.bottom
+                )
+                other_contains_current = (
+                    other.left <= current.left
+                    and other.top <= current.top
+                    and other.right >= current.right
+                    and other.bottom >= current.bottom
+                )
+                if (current_contains_other or other_contains_current) and max(current.area, other.area) >= min(current.area, other.area) * 1.4:
+                    i += 1
+                    continue
                 vertical_overlap = min(current.bottom, other.bottom) - max(current.top, other.top)
                 horizontal_overlap = min(current.right, other.right) - max(current.left, other.left)
                 near_same_line = abs(other.top - current.top) <= options.max_merge_gap_y_px
@@ -327,12 +362,20 @@ def _classify_geometry(image: Image.Image, box: Box, board_region: Box, fill_rat
         return BlockType.IMAGE, metadata
     if aspect_ratio > 4.5 and box.height < board_region.height * 0.08:
         return BlockType.FORMULA, metadata
+    if area_ratio < 0.01 and box.height < board_region.height * 0.09:
+        return BlockType.NOTE, metadata
     return BlockType.STEM, metadata
 
 
-def segment_page(image_path: str | Path, *, page_id: str, subject: Subject = Subject.UNKNOWN, options: SegmentOptions | None = None) -> PageModel:
+def segment_page(
+    image_path: str | Path | Image.Image | Any,
+    *,
+    page_id: str,
+    subject: Subject = Subject.UNKNOWN,
+    options: SegmentOptions | None = None,
+) -> PageModel:
     resolved_options = options or SegmentOptions()
-    image = Image.open(image_path).convert("RGB")
+    image = _load_image(image_path)
     board_region = _detect_board_region(image, resolved_options)
     candidates = _find_candidate_boxes(image, board_region, resolved_options)
     merged_boxes = _merge_boxes([box for box, _ in candidates], resolved_options)
@@ -348,6 +391,7 @@ def segment_page(image_path: str | Path, *, page_id: str, subject: Subject = Sub
             0.25,
         )
         block_type, metadata = _classify_geometry(image, box, board_region, fill_ratio)
+        metadata["segmenter"] = "rule-based"
         blocks.append(
             ContentBlock(
                 block_id=f"{page_id}-block-{index + 1:03d}",
@@ -365,23 +409,35 @@ def segment_page(image_path: str | Path, *, page_id: str, subject: Subject = Sub
                 block_type=BlockType.IMAGE,
                 bbox=board_region,
                 reading_order=0,
-                metadata={"fill_ratio": 1.0, "fallback_reason": "empty_segmentation"},
+                metadata={"fill_ratio": 1.0, "fallback_reason": "empty_segmentation", "segmenter": "rule-based"},
             )
         ]
+
+    source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
+    if source_path is None and not isinstance(image_path, Image.Image):
+        source_path = str(image_path)
 
     return PageModel(
         page_id=page_id,
         width_px=image.width,
         height_px=image.height,
         subject=subject,
-        source_path=str(image_path),
+        source_path=source_path,
         blocks=blocks,
-        metadata={"segmenter": "rule-based", "board_region": {"left": board_region.left, "top": board_region.top, "width": board_region.width, "height": board_region.height}},
+        metadata={
+            "segmenter": "rule-based",
+            "board_region": {
+                "left": board_region.left,
+                "top": board_region.top,
+                "width": board_region.width,
+                "height": board_region.height,
+            },
+        },
     )
 
 
-def crop_block_images(image_path: str | Path, blocks: Iterable[ContentBlock], output_dir: str | Path) -> dict[str, str]:
-    image = Image.open(image_path).convert("RGB")
+def crop_block_images(image_path: str | Path | Image.Image | Any, blocks: Iterable[ContentBlock], output_dir: str | Path) -> dict[str, str]:
+    image = _load_image(image_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, str] = {}
@@ -394,59 +450,10 @@ def crop_block_images(image_path: str | Path, blocks: Iterable[ContentBlock], ou
 
 
 def blocks_from_page(prepared_page, config: SegmentOptions | None = None) -> list[ContentBlock]:
-    resolved_options = config or SegmentOptions()
-    if hasattr(prepared_page, "image") and getattr(prepared_page, "image") is not None:
-        image = prepared_page.image.convert("RGB")
-        board_region = _detect_board_region(image, resolved_options)
-        candidates = _find_candidate_boxes(image, board_region, resolved_options)
-        merged_boxes = _merge_boxes([box for box, _ in candidates], resolved_options)
-
-        blocks: list[ContentBlock] = []
-        for index, box in enumerate(sorted(merged_boxes, key=lambda item: (item.top, item.left))):
-            fill_ratio = next(
-                (
-                    candidate_fill_ratio
-                    for candidate_box, candidate_fill_ratio in candidates
-                    if abs(candidate_box.left - box.left) < 2 and abs(candidate_box.top - box.top) < 2
-                ),
-                0.25,
-            )
-            block_type, metadata = _classify_geometry(image, box, board_region, fill_ratio)
-            blocks.append(
-                ContentBlock(
-                    block_id=f"{prepared_page.page_id}-block-{index + 1:03d}",
-                    block_type=block_type,
-                    bbox=box,
-                    reading_order=index,
-                    metadata=metadata,
-                )
-            )
-
-        if not blocks:
-            blocks = [
-                ContentBlock(
-                    block_id=f"{prepared_page.page_id}-block-001",
-                    block_type=BlockType.IMAGE,
-                    bbox=board_region,
-                    reading_order=0,
-                    metadata={"fill_ratio": 1.0, "fallback_reason": "empty_segmentation"},
-                )
-            ]
-        return blocks
-
-    normalized_path = getattr(prepared_page, "normalized_path", None)
-    if normalized_path is not None:
-        page = segment_page(normalized_path, page_id=prepared_page.page_id, options=resolved_options)
-        return page.blocks
-    raise AttributeError("prepared_page must provide either an image or normalized_path")
+    page = segment_page(prepared_page, page_id=prepared_page.page_id, options=config)
+    return page.blocks
 
 
 def crop_block_image(prepared_page, block: ContentBlock) -> Image.Image:
-    if hasattr(prepared_page, "image") and getattr(prepared_page, "image") is not None:
-        image = prepared_page.image.convert("RGB")
-    else:
-        normalized_path = getattr(prepared_page, "normalized_path", None)
-        if normalized_path is None:
-            raise AttributeError("prepared_page must provide either an image or normalized_path")
-        image = Image.open(normalized_path).convert("RGB")
+    image = _load_image(prepared_page)
     return image.crop((int(block.bbox.left), int(block.bbox.top), int(block.bbox.right), int(block.bbox.bottom)))
