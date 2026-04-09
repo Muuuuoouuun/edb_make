@@ -9,14 +9,24 @@
   - `inspect_edb.py`
 - Added structured intermediate schema for page understanding:
   - `structured_schema.py`
+- Added layout template and staircase placement scaffolding:
+  - `layout_template_schema.py`
+  - `placement_engine.py`
 - Added page assembly helpers for grouping blocks into problem units:
   - `assemble_page.py`
+- Added preprocessing, segmentation, OCR, and JSON build scaffolding:
+  - `preprocess.py`
+  - `segment.py`
+  - `ocr_backend.py`
+  - `build_structured_page_json.py`
 - Added a minimal `.edb` builder for controlled samples:
   - `edb_builder.py`
 - Added planning and pipeline documents:
   - `CLASSIN_EDB_NEXT_STEPS.md`
   - `CLASSIN_EDB_STRUCTURED_PIPELINE.md`
   - `STRUCTURED_PIPELINE.md`
+  - `UI_UX_EDB_PRODUCT_DESIGN.md`
+  - `EDB_LAYOUT_PLACEMENT_RULES.md`
 
 ## Key Findings
 - `.edb` = fixed 11-byte outer header + gzip payload.
@@ -29,12 +39,14 @@
 ## Current State
 - Minimal text record reconstruction is working against the controlled sample shape.
 - Minimal image record reconstruction is mostly matched against the controlled sample shape.
-- Structured page understanding is scaffolded, but OCR/segmentation modules are not implemented yet.
+- Structured page understanding is scaffolded and now has runnable preprocessing, segmentation, OCR abstraction, and JSON export entrypoints.
+- Smoke tests were run on photographed ClassIn board images with `noop` OCR and produced fallback image-block `PageModel` JSON output.
+- Current segmentation is still conservative and often collapses a photographed board into a single large block when OCR is disabled or image quality/layout cues are weak.
 
 ## Next Recommended Steps
-1. Implement `preprocess.py`
-2. Implement `segment.py`
-3. Implement `ocr_backend.py`
-4. Export OCR/layout results into `PageModel`
-5. Build a mixed text/image page writer
-6. Test generated `.edb` files directly in ClassIn
+1. Improve rule-based segmentation so one board photo splits into title/text/formula/diagram regions
+2. Install and validate a real OCR backend (`PaddleOCR` first, `Tesseract` fallback)
+3. Route OCR results into `PageModel` with stronger type refinement
+4. Connect `PageModel` blocks to a mixed text/image `.edb` writer
+5. Test generated `.edb` files directly in ClassIn
+6. Add template-driven placement for empty teaching space and board consistency

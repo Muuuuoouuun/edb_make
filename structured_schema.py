@@ -23,6 +23,7 @@ class BlockType(StrEnum):
     STEM = "stem"
     CHOICE = "choice"
     EXPLANATION = "explanation"
+    NOTE = "note"
     FORMULA = "formula"
     TABLE = "table"
     DIAGRAM = "diagram"
@@ -57,6 +58,10 @@ class Box:
     def area(self) -> float:
         return self.width * self.height
 
+    @classmethod
+    def from_points(cls, left: float, top: float, right: float, bottom: float) -> "Box":
+        return cls(left=left, top=top, width=max(0.0, right - left), height=max(0.0, bottom - top))
+
     def normalize(self, page_width: float, page_height: float) -> "Box":
         return Box(
             left=self.left / page_width,
@@ -72,6 +77,17 @@ class Box:
             width=self.width * page_width,
             height=self.height * page_height,
         )
+
+    def expanded(self, padding: float, max_width: float | None = None, max_height: float | None = None) -> "Box":
+        left = max(0.0, self.left - padding)
+        top = max(0.0, self.top - padding)
+        right = self.right + padding
+        bottom = self.bottom + padding
+        if max_width is not None:
+            right = min(max_width, right)
+        if max_height is not None:
+            bottom = min(max_height, bottom)
+        return Box(left=left, top=top, width=max(0.0, right - left), height=max(0.0, bottom - top))
 
 
 @dataclass(slots=True)
@@ -92,6 +108,22 @@ class AssetRef:
     crop_box: Box | None = None
     width_px: int | None = None
     height_px: int | None = None
+    mime_type: str | None = None
+
+
+@dataclass(slots=True)
+class OcrWord:
+    text: str
+    bbox: Box
+    confidence: float | None = None
+
+
+@dataclass(slots=True)
+class OcrLine:
+    text: str
+    bbox: Box
+    confidence: float | None = None
+    words: list[OcrWord] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -104,6 +136,7 @@ class ContentBlock:
     style: TextStyle | None = None
     confidence: float | None = None
     asset: AssetRef | None = None
+    ocr_lines: list[OcrLine] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
     children: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -146,6 +179,7 @@ class PageModel:
                 style=block.style,
                 confidence=block.confidence,
                 asset=block.asset,
+                ocr_lines=list(block.ocr_lines),
                 labels=list(block.labels),
                 children=list(block.children),
                 metadata=dict(block.metadata),
@@ -178,8 +212,45 @@ def save_pages_json(pages: list[PageModel], path: str | Path, indent: int = 2) -
 
 
 def infer_math_like_text(text: str) -> bool:
-    markers = ("=", "lim", "sin", "cos", "tan", "log", "∫", "Σ", "√", "≤", "≥")
+    markers = (
+        "=",
+        "lim",
+        "sin",
+        "cos",
+        "tan",
+        "log",
+        "\u222b",
+        "\u2211",
+        "\u221a",
+        "\u2264",
+        "\u2265",
+        "\ud655\ub960",
+        "\ud568\uc218",
+        "\ubbf8\ubd84",
+        "\uc801\ubd84",
+    )
     return any(marker in text for marker in markers)
+
+
+def is_choice_marker(text: str) -> bool:
+    prefixes = (
+        "\u2460",
+        "\u2461",
+        "\u2462",
+        "\u2463",
+        "\u2464",
+        "1)",
+        "2)",
+        "3)",
+        "4)",
+        "5)",
+        "A.",
+        "B.",
+        "C.",
+        "D.",
+    )
+    stripped = text.strip()
+    return stripped.startswith(prefixes)
 
 
 def classify_text_block(text: str) -> BlockType:
@@ -188,8 +259,8 @@ def classify_text_block(text: str) -> BlockType:
         return BlockType.UNKNOWN
     if infer_math_like_text(stripped):
         return BlockType.FORMULA
-    if stripped.startswith(("①", "②", "③", "④", "⑤")):
+    if is_choice_marker(stripped):
         return BlockType.CHOICE
-    if len(stripped) <= 24 and stripped.endswith(("장", "단원", "주제")):
+    if len(stripped) <= 24 and stripped.endswith(("\uc7a5", "\ub2e8\uc6d0", "\uc8fc\uc81c")):
         return BlockType.SECTION
     return BlockType.STEM

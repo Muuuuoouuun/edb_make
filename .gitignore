@@ -5,5 +5,14 @@ __pycache__/
 samples/
 out_image1/
 out_images_sample4/
+.pipeline_cache/
+smoke_pipeline_output/
+pipeline_output_smoke/
+pipeline_output_test/
+tmp_debug_output/
 
 generated_*.edb
+smoke_pipeline_output/
+pipeline_output_smoke/
+pipeline_output_test/
+tmp_debug_output/

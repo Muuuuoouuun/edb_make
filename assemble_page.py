@@ -8,17 +8,25 @@ from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit, S
 
 
 PROBLEM_MARKER_RE = re.compile(r"^\s*(\d+|[0-9]+\)|[0-9]+\.)\s*")
-CHOICE_MARKER_RE = re.compile(r"^\s*(①|②|③|④|⑤|1\)|2\)|3\)|4\)|5\)|A\.|B\.|C\.|D\.)\s*")
+CHOICE_MARKER_RE = re.compile(
+    r"^\s*(\u2460|\u2461|\u2462|\u2463|\u2464|1\)|2\)|3\)|4\)|5\)|A\.|B\.|C\.|D\.)\s*"
+)
 
 
 def infer_subject(page: PageModel) -> Subject:
     text = "\n".join(block.text or "" for block in page.blocks)
     lowered = text.lower()
-    if any(token in lowered for token in ("lim", "sin", "cos", "tan", "확률", "함수", "미분", "적분")):
+    if any(token in lowered for token in ("lim", "sin", "cos", "tan", "\ud655\ub960", "\ud568\uc218", "\ubbf8\ubd84", "\uc801\ubd84")):
         return Subject.MATH
-    if any(token in lowered for token in ("실험", "분자", "원자", "전류", "가속도", "광합성")):
+    if any(
+        token in lowered
+        for token in ("\uc2e4\ud5d8", "\ubd84\uc790", "\uc6d0\uc790", "\uc804\ub958", "\uac00\uc18d\ub3c4", "\uad11\ud569\uc131")
+    ):
         return Subject.SCIENCE
-    if any(token in lowered for token in ("다음 글", "보기", "문단", "작가", "화자", "밑줄")):
+    if any(
+        token in lowered
+        for token in ("\ub2e4\uc74c \uae00", "\ubcf4\uae30", "\ubb38\ub2e8", "\uc791\uac00", "\ud654\uc790", "\ubc11\uc904")
+    ):
         return Subject.KOREAN
     return page.subject
 
@@ -29,10 +37,7 @@ def sort_blocks_for_reading_order(blocks: list[ContentBlock]) -> list[ContentBlo
 
 def relabel_reading_order(page: PageModel) -> PageModel:
     sorted_blocks = sort_blocks_for_reading_order(page.blocks)
-    rewritten = [
-        replace(block, reading_order=index)
-        for index, block in enumerate(sorted_blocks)
-    ]
+    rewritten = [replace(block, reading_order=index) for index, block in enumerate(sorted_blocks)]
     return replace(page, blocks=rewritten)
 
 
@@ -69,7 +74,7 @@ def group_problem_units(page: PageModel) -> PageModel:
     problems: list[ProblemUnit] = []
     current: ProblemUnit | None = None
 
-    for index, block in enumerate(classified_blocks):
+    for block in classified_blocks:
         if detect_problem_start(block) or current is None:
             current = ProblemUnit(
                 unit_id=f"{page.page_id}-problem-{len(problems) + 1}",
@@ -86,9 +91,8 @@ def group_problem_units(page: PageModel) -> PageModel:
             current.figure_block_ids.append(block.block_id)
         elif block.block_type == BlockType.EXPLANATION:
             current.explanation_block_ids.append(block.block_id)
-        else:
-            if block.text:
-                current.stem_block_ids.append(block.block_id)
+        elif block.text:
+            current.stem_block_ids.append(block.block_id)
 
     return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
