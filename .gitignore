@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+
+samples/
+out_image1/
+out_images_sample4/
+
+generated_*.edb
