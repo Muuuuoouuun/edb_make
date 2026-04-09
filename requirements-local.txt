@@ -1,0 +1,10 @@
+Pillow
+PyMuPDF
+numpy
+opencv-python-headless
+
+# Optional OCR package only. Requires separate Tesseract installation on Windows.
+# pytesseract
+
+# Optional heavier OCR path.
+# paddleocr

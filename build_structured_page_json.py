@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from ocr_backend import NoOcrBackend, create_ocr_backend
@@ -18,6 +19,40 @@ def _resolve_subject(name: str | None) -> Subject:
         return Subject(name.lower())
     except ValueError:
         return Subject.UNKNOWN
+
+
+def build_run_summary(
+    pages: list[PageModel],
+    *,
+    output_dir: str | Path,
+    source: str | Path,
+    ocr_mode: str,
+) -> dict[str, object]:
+    fallback_block_count = 0
+    text_block_count = 0
+    image_block_count = 0
+
+    for page in pages:
+        for block in page.blocks:
+            if block.text:
+                text_block_count += 1
+            if block.block_type == BlockType.IMAGE:
+                image_block_count += 1
+            if block.metadata.get("fallback_reason"):
+                fallback_block_count += 1
+
+    return {
+        "source": str(source),
+        "output_dir": str(output_dir),
+        "ocr_mode": ocr_mode,
+        "page_count": len(pages),
+        "problem_count": sum(len(page.problems) for page in pages),
+        "block_count": sum(len(page.blocks) for page in pages),
+        "text_block_count": text_block_count,
+        "image_block_count": image_block_count,
+        "fallback_block_count": fallback_block_count,
+        "pages_json_path": str(Path(output_dir) / "pages.json"),
+    }
 
 
 def build_page_model(prepared_page: PreparedPage, subject: Subject, ocr_mode: str) -> PageModel:
@@ -104,6 +139,9 @@ def process_source(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
+    for page in pages:
+        page.metadata["schema_version"] = "v0.2"
+        page.metadata["ocr_mode"] = ocr_mode
     save_pages_json(pages, out_dir / "pages.json")
     return pages
 
@@ -121,7 +159,7 @@ def main() -> int:
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     args = parser.parse_args()
 
-    process_source(
+    pages = process_source(
         args.source,
         args.output_dir,
         subject=_resolve_subject(args.subject),
@@ -132,6 +170,15 @@ def main() -> int:
         crop_margins=not args.skip_crop,
         max_dimension=args.max_dimension,
     )
+    run_summary = build_run_summary(
+        pages,
+        output_dir=args.output_dir,
+        source=args.source,
+        ocr_mode=args.ocr,
+    )
+    summary_path = Path(args.output_dir) / "run_summary.json"
+    summary_path.write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(run_summary, ensure_ascii=False, indent=2))
     return 0
 
 

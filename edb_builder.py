@@ -138,7 +138,13 @@ def _bump_record_size_by_one(record: bytes) -> bytes:
     return size + record[4:]
 
 
-def build_edb(records: list[bytes], header_flag: int, version: str = "6.0.5.3911", terminal_eof_plus_one: bool = True) -> bytes:
+def build_edb(
+    records: list[bytes],
+    header_flag: int,
+    version: str = "6.0.5.3911",
+    terminal_eof_plus_one: bool = True,
+    page_count_hint: int = DEFAULT_PAGE_COUNT_HINT,
+) -> bytes:
     final_records = list(records)
     if terminal_eof_plus_one and final_records:
         final_records[-1] = _bump_record_size_by_one(final_records[-1])
@@ -147,6 +153,7 @@ def build_edb(records: list[bytes], header_flag: int, version: str = "6.0.5.3911
         record_count_hint=len(final_records),
         version=version,
         header_flag=header_flag,
+        page_count_hint=page_count_hint,
     ) + b"".join(final_records)
     return OUTER_PREFIX + gzip.compress(inner, compresslevel=9, mtime=0)
 

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EDB Lesson Board Prototype</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">EDB lesson-board builder</p>
+          <h1>Preview-first sequence editor</h1>
+          <p class="subtle">
+            A lightweight prototype for sorting pages like a PDF editor and checking final ClassIn board placement.
+          </p>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button" type="button">Import batch</button>
+          <button class="ghost-button" type="button">Auto split</button>
+          <button class="primary-button" type="button">Export EDB</button>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Template</span>
+          <select id="templateSelect">
+            <option value="academy-default">Academy default</option>
+            <option value="korean-reading">Korean reading</option>
+            <option value="exam-review">Exam review</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Preview</span>
+          <div class="segmented-control" role="tablist" aria-label="Preview mode">
+            <button class="segmented-button is-active" type="button" data-preview-mode="source">Source</button>
+            <button class="segmented-button" type="button" data-preview-mode="problem">Problem</button>
+            <button class="segmented-button" type="button" data-preview-mode="board">Board</button>
+          </div>
+        </div>
+        <div class="toolbar-group stat-group">
+          <div class="stat-card">
+            <span class="stat-label">Problems</span>
+            <strong id="problemCount">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Overflow</span>
+            <strong id="overflowCount">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Board used</span>
+            <strong id="boardUsage">0.0p</strong>
+          </div>
+        </div>
+      </section>
+
+      <main class="workspace">
+        <aside class="panel filmstrip-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Filmstrip</h2>
+              <p class="subtle">Drag to reorder like a PDF sidebar.</p>
+            </div>
+            <button class="small-button" id="addReadingHeavy" type="button">Add long passage</button>
+          </div>
+          <div id="filmstripList" class="filmstrip-list" aria-label="Problem list"></div>
+        </aside>
+
+        <section class="panel preview-panel">
+          <div class="panel-header">
+            <div>
+              <h2 id="previewTitle">Source preview</h2>
+              <p id="previewSubtitle" class="subtle">Selected item preview and board fit.</p>
+            </div>
+            <div class="inline-meta">
+              <span class="meta-pill" id="selectedSubject">unknown</span>
+              <span class="meta-pill" id="selectedPlacement">start 0.0p</span>
+            </div>
+          </div>
+          <div id="previewSurface" class="preview-surface"></div>
+        </section>
+
+        <aside class="panel inspector-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Quick edit</h2>
+              <p class="subtle">Simple sequence and overflow controls only.</p>
+            </div>
+          </div>
+          <div id="inspectorContent" class="inspector-content"></div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./prototype_data.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

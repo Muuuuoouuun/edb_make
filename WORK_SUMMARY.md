@@ -33,6 +33,11 @@
   - `ui_prototype/index.html`
   - `ui_prototype/styles.css`
   - `ui_prototype/app.js`
+- Added local testing and one-command export helpers:
+  - `build_problem_board_edb.py`
+  - `build_ui_prototype_data.py`
+  - `requirements-local.txt`
+  - `LOCAL_TESTING_GUIDE.md`
 
 ## Key Findings
 - `.edb` = fixed 11-byte outer header + gzip payload.
