@@ -290,6 +290,53 @@ def _find_candidate_boxes(image: Image.Image, region: Box, options: SegmentOptio
     return cv2_candidates
 
 
+def _split_large_candidate_box(image: Image.Image, box: Box, options: SegmentOptions) -> list[Box]:
+    if box.height < max(260.0, image.height * 0.14):
+        return [box]
+
+    crop = image.crop((int(box.left), int(box.top), int(box.right), int(box.bottom)))
+    gray = ImageOps.autocontrast(ImageOps.grayscale(crop))
+    stat = ImageStat.Stat(gray)
+    threshold = int(max(120.0, min(235.0, stat.mean[0] + stat.stddev[0] * 0.8)))
+    mask = gray.point(lambda px: 255 if px >= threshold else 0, mode="L")
+
+    row_counts: list[int] = []
+    for row_index in range(mask.height):
+        row = mask.crop((0, row_index, mask.width, row_index + 1))
+        row_counts.append(int(row.histogram()[255]))
+
+    if not row_counts:
+        return [box]
+
+    window = 7
+    smooth_counts: list[float] = []
+    for index in range(len(row_counts)):
+        start = max(0, index - window)
+        end = min(len(row_counts), index + window + 1)
+        smooth_counts.append(sum(row_counts[start:end]) / max(1, end - start))
+
+    search_start = int(len(smooth_counts) * 0.15)
+    search_end = max(search_start + 1, int(len(smooth_counts) * 0.85))
+    segment = smooth_counts[search_start:search_end]
+    if not segment:
+        return [box]
+
+    split_offset = min(range(len(segment)), key=lambda idx: segment[idx])
+    split_row = search_start + split_offset
+    max_count = max(smooth_counts)
+    min_count = smooth_counts[split_row]
+    if max_count <= 0 or min_count > max_count * 0.92:
+        return [box]
+    if split_row < options.fallback_min_band_height_px or len(smooth_counts) - split_row < options.fallback_min_band_height_px:
+        return [box]
+
+    top_box = Box.from_points(box.left, box.top, box.right, box.top + split_row)
+    bottom_box = Box.from_points(box.left, box.top + split_row, box.right, box.bottom)
+    if top_box.area < box.area * 0.1 or bottom_box.area < box.area * 0.1:
+        return [box]
+    return [top_box, bottom_box]
+
+
 def _merge_boxes(boxes: list[Box], options: SegmentOptions) -> list[Box]:
     merged = sorted(boxes, key=lambda item: (item.top, item.left))
     changed = True
@@ -378,7 +425,18 @@ def segment_page(
     image = _load_image(image_path)
     board_region = _detect_board_region(image, resolved_options)
     candidates = _find_candidate_boxes(image, board_region, resolved_options)
-    merged_boxes = _merge_boxes([box for box, _ in candidates], resolved_options)
+    expanded_candidates: list[tuple[Box, float]] = []
+    split_applied = False
+    for box, fill_ratio in candidates:
+        split_boxes = _split_large_candidate_box(image, box, resolved_options)
+        if len(split_boxes) > 1:
+            split_applied = True
+            for split_box in split_boxes:
+                expanded_candidates.append((split_box, fill_ratio))
+        else:
+            expanded_candidates.append((box, fill_ratio))
+    candidates = expanded_candidates
+    merged_boxes = [box for box, _ in candidates] if split_applied else _merge_boxes([box for box, _ in candidates], resolved_options)
 
     blocks: list[ContentBlock] = []
     for index, box in enumerate(sorted(merged_boxes, key=lambda item: (item.top, item.left))):
