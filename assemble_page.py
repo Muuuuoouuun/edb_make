@@ -7,10 +7,63 @@ from dataclasses import replace
 from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit, Subject
 
 
-PROBLEM_MARKER_RE = re.compile(r"^\s*(\d+|[0-9]+\)|[0-9]+\.)\s*")
+PROBLEM_MARKER_RE = re.compile(r"^\s*(?:문항\s*)?(?P<number>[1-9][0-9]{0,2})(?:[\.\)])(?:\s+|$)")
 CHOICE_MARKER_RE = re.compile(
-    r"^\s*(\u2460|\u2461|\u2462|\u2463|\u2464|1\)|2\)|3\)|4\)|5\)|A\.|B\.|C\.|D\.)\s*"
+    r"^\s*(?:"
+    r"[\u2460-\u2469]|"
+    r"\([1-9][0-9]?\)|"
+    r"[1-9][0-9]?\)|"
+    r"[A-Ha-h][\.\)]|"
+    r"[\u3131-\u314e][\.\)]"
+    r")\s*"
 )
+
+
+def _matches_problem_marker(text: str | None) -> bool:
+    return bool(text and PROBLEM_MARKER_RE.match(text))
+
+
+def _matches_choice_marker(text: str | None) -> bool:
+    return bool(text and CHOICE_MARKER_RE.match(text))
+
+
+def extract_problem_number(text: str | None) -> int | None:
+    if not text:
+        return None
+    match = PROBLEM_MARKER_RE.match(text)
+    if not match:
+        return None
+    try:
+        return int(match.group("number"))
+    except (TypeError, ValueError):
+        return None
+
+
+def strip_problem_marker(text: str | None) -> str | None:
+    if not text:
+        return None
+    stripped = text.strip()
+    if not stripped:
+        return None
+    match = PROBLEM_MARKER_RE.match(stripped)
+    if not match:
+        return stripped
+    cleaned = stripped[match.end():].strip()
+    return cleaned or None
+
+
+def _problem_title_source(block: ContentBlock) -> str | None:
+    display_title = block.metadata.get("display_title")
+    if isinstance(display_title, str) and display_title.strip():
+        return display_title.strip()
+    if block.text and block.text.strip():
+        return block.text.strip()
+    return None
+
+
+def _problem_display_title(block: ContentBlock) -> str | None:
+    title_source = _problem_title_source(block)
+    return strip_problem_marker(title_source) or title_source
 
 
 def infer_subject(page: PageModel) -> Subject:
@@ -52,19 +105,30 @@ def relabel_reading_order(page: PageModel) -> PageModel:
 
 
 def detect_problem_start(block: ContentBlock) -> bool:
-    if block.block_type in {BlockType.TITLE, BlockType.SECTION}:
+    if block.metadata.get("force_problem_start"):
         return True
-    if not block.text:
+    if block.block_type == BlockType.CHOICE:
         return False
-    return bool(PROBLEM_MARKER_RE.match(block.text))
+    if block.block_type in {BlockType.TITLE, BlockType.SECTION}:
+        if not (block.text and block.text.strip()) and not block.metadata.get("display_title"):
+            return False
+        return True
+    marker_source = _problem_title_source(block)
+    if not marker_source:
+        return False
+    if _matches_choice_marker(marker_source):
+        return False
+    return _matches_problem_marker(marker_source)
 
 
 def detect_choice_block(block: ContentBlock) -> bool:
+    if block.metadata.get("force_problem_start"):
+        return False
     if block.block_type == BlockType.CHOICE:
         return True
     if not block.text:
         return False
-    return bool(CHOICE_MARKER_RE.match(block.text))
+    return _matches_choice_marker(block.text)
 
 
 def classify_block(block: ContentBlock) -> ContentBlock:
@@ -80,16 +144,17 @@ def classify_block(block: ContentBlock) -> ContentBlock:
 def group_problem_units(page: PageModel) -> PageModel:
     relabeled = relabel_reading_order(page)
     classified_blocks = [classify_block(block) for block in relabeled.blocks]
-    has_text_markers = any(detect_problem_start(block) for block in classified_blocks if block.text)
+    has_text_markers = any(detect_problem_start(block) for block in classified_blocks)
     has_band_metadata = any("question_band_index" in block.metadata for block in classified_blocks)
 
     if not has_text_markers and (has_band_metadata or len(classified_blocks) > 1):
         problems: list[ProblemUnit] = []
         for index, block in enumerate(classified_blocks, start=1):
+            problem_number = extract_problem_number(_problem_title_source(block))
             current = ProblemUnit(
                 unit_id=f"{page.page_id}-problem-{index}",
                 subject=infer_subject(relabeled),
-                title=block.metadata.get("display_title"),
+                title=_problem_display_title(block),
             )
             if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
                 current.figure_block_ids.append(block.block_id)
@@ -106,6 +171,8 @@ def group_problem_units(page: PageModel) -> PageModel:
                     "column_index": block.metadata.get("column_index"),
                 }
             )
+            if problem_number is not None:
+                current.metadata["problem_number"] = problem_number
             problems.append(current)
         return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
@@ -114,11 +181,14 @@ def group_problem_units(page: PageModel) -> PageModel:
 
     for block in classified_blocks:
         if detect_problem_start(block) or current is None:
+            problem_number = extract_problem_number(_problem_title_source(block))
             current = ProblemUnit(
                 unit_id=f"{page.page_id}-problem-{len(problems) + 1}",
                 subject=infer_subject(relabeled),
-                title=block.text.strip() if block.text else None,
+                title=_problem_display_title(block),
             )
+            if problem_number is not None:
+                current.metadata["problem_number"] = problem_number
             problems.append(current)
 
         if block.block_type in {BlockType.TITLE, BlockType.STEM, BlockType.FORMULA, BlockType.SECTION}:
@@ -146,6 +216,7 @@ def summarize_page(page: PageModel) -> dict[str, object]:
             {
                 "unit_id": problem.unit_id,
                 "title": problem.title,
+                "problem_number": problem.metadata.get("problem_number"),
                 "stem_blocks": list(problem.stem_block_ids),
                 "choice_blocks": list(problem.choice_block_ids),
                 "figure_blocks": list(problem.figure_block_ids),

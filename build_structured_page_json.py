@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 
 from ocr_backend import NoOcrBackend, create_ocr_backend
+from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from preprocess import PreparedPage, prepare_source_pages
-from segment import blocks_from_page, crop_block_image
-from assemble_page import group_problem_units
+from segment import crop_block_image, segment_page
 from structured_schema import BlockType, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
 
 
@@ -27,12 +27,21 @@ def build_run_summary(
     output_dir: str | Path,
     source: str | Path,
     ocr_mode: str,
+    ai_config: AIFallbackConfig | None = None,
 ) -> dict[str, object]:
     fallback_block_count = 0
     text_block_count = 0
     image_block_count = 0
+    ai_attempted_pages = 0
+    ai_applied_pages = 0
 
     for page in pages:
+        ai_summary = page.metadata.get("ai_fallback")
+        if isinstance(ai_summary, dict):
+            if ai_summary.get("attempted"):
+                ai_attempted_pages += 1
+            if ai_summary.get("applied"):
+                ai_applied_pages += 1
         for block in page.blocks:
             if block.text:
                 text_block_count += 1
@@ -51,13 +60,23 @@ def build_run_summary(
         "text_block_count": text_block_count,
         "image_block_count": image_block_count,
         "fallback_block_count": fallback_block_count,
+        "ai_fallback": (ai_config or AIFallbackConfig()).to_metadata(),
+        "ai_attempted_page_count": ai_attempted_pages,
+        "ai_applied_page_count": ai_applied_pages,
         "pages_json_path": str(Path(output_dir) / "pages.json"),
     }
 
 
-def build_page_model(prepared_page: PreparedPage, subject: Subject, ocr_mode: str) -> PageModel:
+def build_page_model(
+    prepared_page: PreparedPage,
+    subject: Subject,
+    ocr_mode: str,
+    *,
+    ai_config: AIFallbackConfig | None = None,
+) -> PageModel:
     backend = create_ocr_backend(ocr_mode)
-    blocks = blocks_from_page(prepared_page)
+    segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
+    blocks = segmented_page.blocks
 
     for block in blocks:
         if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
@@ -88,9 +107,13 @@ def build_page_model(prepared_page: PreparedPage, subject: Subject, ocr_mode: st
         subject=subject,
         source_path=prepared_page.source_path,
         blocks=blocks,
-        metadata=dict(prepared_page.metadata),
+        metadata={
+            **dict(prepared_page.metadata),
+            **dict(segmented_page.metadata),
+            "ocr_mode": ocr_mode,
+        },
     )
-    return group_problem_units(page)
+    return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config)
 
 
 def build_pages_from_source(
@@ -98,6 +121,7 @@ def build_pages_from_source(
     *,
     subject: Subject = Subject.UNKNOWN,
     ocr_mode: str = "auto",
+    ai_config: AIFallbackConfig | None = None,
     pdf_dpi: int = 200,
     detect_perspective: bool = False,
     deskew: bool = True,
@@ -112,7 +136,15 @@ def build_pages_from_source(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
-    return [build_page_model(prepared_page, subject=subject, ocr_mode=ocr_mode) for prepared_page in prepared_pages]
+    return [
+        build_page_model(
+            prepared_page,
+            subject=subject,
+            ocr_mode=ocr_mode,
+            ai_config=ai_config,
+        )
+        for prepared_page in prepared_pages
+    ]
 
 
 def process_source(
@@ -121,6 +153,7 @@ def process_source(
     *,
     subject: Subject = Subject.UNKNOWN,
     ocr_mode: str = "auto",
+    ai_config: AIFallbackConfig | None = None,
     pdf_dpi: int = 200,
     detect_perspective: bool = False,
     deskew: bool = True,
@@ -133,6 +166,7 @@ def process_source(
         source,
         subject=subject,
         ocr_mode=ocr_mode,
+        ai_config=ai_config,
         pdf_dpi=pdf_dpi,
         detect_perspective=detect_perspective,
         deskew=deskew,
@@ -142,6 +176,7 @@ def process_source(
     for page in pages:
         page.metadata["schema_version"] = "v0.2"
         page.metadata["ocr_mode"] = ocr_mode
+        page.metadata["ai_config"] = (ai_config or AIFallbackConfig()).to_metadata()
     save_pages_json(pages, out_dir / "pages.json")
     return pages
 
@@ -157,13 +192,32 @@ def main() -> int:
     parser.add_argument("--skip-deskew", action="store_true", help="Disable deskew")
     parser.add_argument("--skip-crop", action="store_true", help="Disable margin crop")
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
+    parser.add_argument("--ai-fallback", default="off", help="AI fallback mode: off, auto, force")
+    parser.add_argument("--ai-provider", default="openai", help="AI fallback provider")
+    parser.add_argument("--ai-model", default="gpt-5.4-mini", help="AI fallback model")
+    parser.add_argument("--ai-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
+    parser.add_argument("--ai-max-regions", type=int, default=18, help="Maximum number of blocks to send to AI fallback")
+    parser.add_argument("--ai-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback requests")
+    parser.add_argument("--ai-save-debug", action="store_true", help="Write AI fallback debug artifacts under .pipeline_cache/ai_debug")
+    parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error instead of silently skipping on AI fallback failures")
     args = parser.parse_args()
+    ai_config = build_ai_fallback_config(
+        mode=args.ai_fallback,
+        provider=args.ai_provider,
+        model=args.ai_model,
+        threshold=args.ai_threshold,
+        max_regions=args.ai_max_regions,
+        timeout_ms=args.ai_timeout_ms,
+        save_debug=args.ai_save_debug,
+        fail_on_error=args.fail_on_ai_error,
+    )
 
     pages = process_source(
         args.source,
         args.output_dir,
         subject=_resolve_subject(args.subject),
         ocr_mode=args.ocr,
+        ai_config=ai_config,
         pdf_dpi=args.pdf_dpi,
         detect_perspective=args.detect_perspective,
         deskew=not args.skip_deskew,
@@ -175,6 +229,7 @@ def main() -> int:
         output_dir=args.output_dir,
         source=args.source,
         ocr_mode=args.ocr,
+        ai_config=ai_config,
     )
     summary_path = Path(args.output_dir) / "run_summary.json"
     summary_path.write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ from PIL import Image, ImageDraw
 from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
 from layout_template_schema import build_default_template
+from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from placement_engine import build_export_plan
 from preprocess import prepare_source_pages, prepare_source_pages_batch
 from structured_schema import Box, PageModel, ProblemUnit, Subject, save_pages_json
@@ -44,6 +46,73 @@ def _to_file_uri(path: str | Path | None) -> str | None:
     if path is None:
         return None
     return Path(path).resolve().as_uri()
+
+
+def _build_ai_fallback_config(
+    *,
+    enabled: bool,
+    mode: str | None,
+    provider: str,
+    model: str,
+    prompt: str,
+    max_tokens: int | None,
+    temperature: float | None,
+    threshold: float,
+    max_regions: int,
+    timeout_ms: int,
+    save_debug: bool,
+    fail_on_error: bool,
+) -> dict[str, Any] | None:
+    threshold = 0.72 if threshold is None else float(threshold)
+    max_regions = 18 if max_regions is None else int(max_regions)
+    timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
+    resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
+    if resolved_mode not in {"off", "auto", "force"}:
+        resolved_mode = "auto" if enabled else "off"
+    effective_enabled = resolved_mode != "off"
+    if (
+        not effective_enabled
+        and provider == "openai"
+        and not model
+        and not prompt
+        and max_tokens is None
+        and temperature is None
+        and threshold == 0.72
+        and max_regions == 18
+        and timeout_ms == 12000
+        and not save_debug
+        and not fail_on_error
+    ):
+        return None
+    return {
+        "enabled": effective_enabled,
+        "mode": resolved_mode,
+        "provider": provider,
+        "model": model or "gpt-5.4-mini",
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "threshold": threshold,
+        "max_regions": max_regions,
+        "timeout_ms": timeout_ms,
+        "save_debug": save_debug,
+        "fail_on_error": fail_on_error,
+    }
+
+
+def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackConfig:
+    if not ai_fallback_config:
+        return build_page_ai_fallback_config()
+    return build_page_ai_fallback_config(
+        mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
+        provider=str(ai_fallback_config.get("provider") or "openai"),
+        model=str(ai_fallback_config.get("model") or "gpt-5.4-mini"),
+        threshold=float(ai_fallback_config.get("threshold") or 0.72),
+        max_regions=int(ai_fallback_config.get("max_regions") or 18),
+        timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
+        save_debug=bool(ai_fallback_config.get("save_debug")),
+        fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
+    )
 
 
 def _coerce_source_paths(source: str | Path | Sequence[str | Path]) -> list[Path]:
@@ -114,7 +183,8 @@ def _render_problem_crops(
                     int(bounds.bottom),
                 )
             )
-            crop_path = output_dir / f"{problem.unit_id}.png"
+            crop_name = f"{page_model.page_id.split('-page-')[-1]}_{index + 1:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
+            crop_path = output_dir / crop_name
             crop.save(crop_path)
             crop_paths[problem.unit_id] = crop_path
 
@@ -213,6 +283,7 @@ def build_ui_session(
     output_dir: Path,
     edb_path: Path | None,
     source_paths: Sequence[Path] | None = None,
+    ai_fallback_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved_source_paths = [Path(path).resolve() for path in (source_paths or [])]
     placements_by_id = {placement.problem_id: placement for placement in export_plan.placements}
@@ -264,6 +335,7 @@ def build_ui_session(
         "rendered_page_paths": [str(path.resolve()) for path in rendered_board_paths],
         "rendered_page_file_uris": [_to_file_uri(path) for path in rendered_board_paths],
         "template": _template_to_dict(export_plan.template),
+        "ai_fallback": ai_fallback_config,
         "problems": problems,
     }
 
@@ -296,6 +368,18 @@ def run_export(
     export_edb: bool = False,
     edb_name: str = "mvp_board.edb",
     sync_ui: bool = True,
+    ai_fallback_enabled: bool = False,
+    ai_fallback: str | None = None,
+    ai_fallback_provider: str = "openai",
+    ai_fallback_model: str = "",
+    ai_fallback_prompt: str = "",
+    ai_fallback_max_tokens: int | None = None,
+    ai_fallback_temperature: float | None = None,
+    ai_fallback_threshold: float = 0.72,
+    ai_fallback_max_regions: int = 18,
+    ai_fallback_timeout_ms: int = 12000,
+    ai_fallback_save_debug: bool = False,
+    fail_on_ai_error: bool = False,
 ) -> dict[str, Any]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +388,21 @@ def run_export(
 
     subject = _resolve_subject(subject_name)
     source_paths = _coerce_source_paths(source)
+    ai_fallback_config = _build_ai_fallback_config(
+        enabled=ai_fallback_enabled,
+        mode=ai_fallback,
+        provider=ai_fallback_provider,
+        model=ai_fallback_model,
+        prompt=ai_fallback_prompt,
+        max_tokens=ai_fallback_max_tokens,
+        temperature=ai_fallback_temperature,
+        threshold=ai_fallback_threshold,
+        max_regions=ai_fallback_max_regions,
+        timeout_ms=ai_fallback_timeout_ms,
+        save_debug=ai_fallback_save_debug,
+        fail_on_error=fail_on_ai_error,
+    )
+    page_ai_config = _to_page_ai_config(ai_fallback_config)
     prepared_pages = (
         prepare_source_pages(
             source_paths[0],
@@ -325,7 +424,7 @@ def run_export(
     )
 
     page_models: list[PageModel] = [
-        build_page_model(prepared_page, subject=subject, ocr_mode=ocr)
+        build_page_model(prepared_page, subject=subject, ocr_mode=ocr, ai_config=page_ai_config)
         for prepared_page in prepared_pages
     ]
     save_pages_json(page_models, out_dir / "pages.json")
@@ -363,6 +462,7 @@ def run_export(
         out_dir,
         edb_path,
         source_paths=source_paths,
+        ai_fallback_config=ai_fallback_config,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -376,6 +476,7 @@ def run_export(
         "ui_session": ui_session,
         "ui_session_path": ui_session_path,
         "synced_ui_path": synced_ui_path,
+        "ai_fallback": ai_fallback_config,
     }
 
 
@@ -393,6 +494,18 @@ def main() -> int:
     parser.add_argument("--export-edb", action="store_true", help="Also export a board-image .edb")
     parser.add_argument("--edb-name", default="mvp_board.edb", help="Output .edb filename")
     parser.add_argument("--skip-ui-sync", action="store_true", help="Do not refresh ui_prototype/generated_session.js")
+    parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
+    parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")
+    parser.add_argument("--ai-fallback-provider", default="openai", help="AI fallback provider name")
+    parser.add_argument("--ai-fallback-model", default="", help="AI fallback model name")
+    parser.add_argument("--ai-fallback-prompt", default="", help="AI fallback prompt template")
+    parser.add_argument("--ai-fallback-max-tokens", type=int, default=None, help="AI fallback max output tokens")
+    parser.add_argument("--ai-fallback-temperature", type=float, default=None, help="AI fallback sampling temperature")
+    parser.add_argument("--ai-fallback-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
+    parser.add_argument("--ai-fallback-max-regions", type=int, default=18, help="Maximum number of regions sent to AI fallback")
+    parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
+    parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
+    parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
     args = parser.parse_args()
 
     result = run_export(
@@ -408,6 +521,18 @@ def main() -> int:
         export_edb=args.export_edb,
         edb_name=args.edb_name,
         sync_ui=not args.skip_ui_sync,
+        ai_fallback_enabled=args.ai_fallback_enabled,
+        ai_fallback=args.ai_fallback,
+        ai_fallback_provider=args.ai_fallback_provider,
+        ai_fallback_model=args.ai_fallback_model,
+        ai_fallback_prompt=args.ai_fallback_prompt,
+        ai_fallback_max_tokens=args.ai_fallback_max_tokens,
+        ai_fallback_temperature=args.ai_fallback_temperature,
+        ai_fallback_threshold=args.ai_fallback_threshold,
+        ai_fallback_max_regions=args.ai_fallback_max_regions,
+        ai_fallback_timeout_ms=args.ai_fallback_timeout_ms,
+        ai_fallback_save_debug=args.ai_fallback_save_debug,
+        fail_on_ai_error=args.fail_on_ai_error,
     )
 
     print(

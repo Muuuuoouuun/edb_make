@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import mimetypes
 import sys
@@ -73,6 +74,50 @@ def _coerce_bool(value: Any, *, default: bool = False) -> bool:
     return default
 
 
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
+    nested = payload.get("aiFallback")
+    if not isinstance(nested, dict):
+        nested = payload.get("ai_fallback")
+    if not isinstance(nested, dict):
+        nested = {}
+
+    def _field(*names: str, default: Any = None) -> Any:
+        for name in names:
+            if name in payload and payload[name] is not None:
+                return payload[name]
+        for name in names:
+            if name in nested and nested[name] is not None:
+                return nested[name]
+        return default
+
+    return {
+        "ai_fallback_enabled": _coerce_bool(_field("aiFallbackEnabled", "ai_fallback_enabled", "enabled"), default=False),
+        "ai_fallback": _field("aiFallbackMode", "ai_fallback_mode", "mode"),
+        "ai_fallback_provider": str(_field("aiFallbackProvider", "ai_fallback_provider", "provider", default="openai")),
+        "ai_fallback_model": str(_field("aiFallbackModel", "ai_fallback_model", "model", default="")),
+        "ai_fallback_prompt": str(_field("aiFallbackPrompt", "ai_fallback_prompt", "prompt", default="")),
+        "ai_fallback_max_tokens": _coerce_optional_int(_field("aiFallbackMaxTokens", "ai_fallback_max_tokens", "maxTokens", "max_tokens")),
+        "ai_fallback_temperature": _coerce_optional_float(_field("aiFallbackTemperature", "ai_fallback_temperature", "temperature")),
+        "ai_fallback_threshold": _coerce_optional_float(_field("aiFallbackThreshold", "ai_fallback_threshold", "threshold")),
+        "ai_fallback_max_regions": _coerce_optional_int(_field("aiFallbackMaxRegions", "ai_fallback_max_regions", "maxRegions", "max_regions")),
+        "ai_fallback_timeout_ms": _coerce_optional_int(_field("aiFallbackTimeoutMs", "ai_fallback_timeout_ms", "timeoutMs", "timeout_ms")),
+        "ai_fallback_save_debug": _coerce_bool(_field("aiFallbackSaveDebug", "ai_fallback_save_debug", "saveDebug", "save_debug"), default=False),
+        "fail_on_ai_error": _coerce_bool(_field("failOnAiError", "fail_on_ai_error"), default=False),
+    }
+
+
 def sanitize_output_dir_name(value: str | None) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -84,8 +129,16 @@ def sanitize_output_dir_name(value: str | None) -> str:
 def sanitize_upload_file_name(value: str | None) -> str:
     raw = Path(value or "upload.bin").name
     invalid = '<>:"/\\|?*'
-    safe = "".join(ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw)
-    return safe or "upload.bin"
+    safe = "".join(ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw).strip(" .")
+    if not safe:
+        return "upload.bin"
+
+    path = Path(safe)
+    extension = path.suffix[:12]
+    stem = path.stem or "upload"
+    digest = hashlib.sha1(safe.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    trimmed_stem = stem[:48].rstrip(" ._") or "upload"
+    return f"{trimmed_stem}_{digest}{extension}"
 
 
 def decode_file_reference(value: str | None) -> Path | None:
@@ -341,6 +394,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "edb_name": str(payload.get("edbName") or payload.get("edb_name") or "mvp_board.edb"),
                 "sync_ui": False,
             }
+            common_kwargs.update(_extract_ai_fallback_kwargs(payload))
             if export_mode == "page":
                 result = run_export(
                     source_paths[0] if len(source_paths) == 1 else source_paths,

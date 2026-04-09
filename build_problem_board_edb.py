@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,7 @@ from edb_builder import (
     write_edb,
 )
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
+from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from placement_engine import place_problems
 from preprocess import PreparedPage, prepare_source_pages
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
@@ -60,6 +63,7 @@ IMAGE_ONLY_BLOCK_TYPES = {
 class ProblemEntry:
     problem_id: str
     title: str
+    problem_number: int | None
     subject: Subject
     source_page_id: str
     source_path: str
@@ -121,6 +125,7 @@ def build_pages(
     *,
     subject: Subject,
     ocr_mode: str,
+    ai_fallback_config: dict[str, Any] | None,
     pdf_dpi: int,
     detect_perspective: bool,
     deskew: bool,
@@ -135,7 +140,11 @@ def build_pages(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
-    page_models = [build_page_model(prepared_page, subject=subject, ocr_mode=ocr_mode) for prepared_page in prepared_pages]
+    page_ai_config = _to_page_ai_config(ai_fallback_config)
+    page_models = [
+        build_page_model(prepared_page, subject=subject, ocr_mode=ocr_mode, ai_config=page_ai_config)
+        for prepared_page in prepared_pages
+    ]
     return prepared_pages, page_models
 
 
@@ -159,6 +168,13 @@ def build_problem_entries(
         for index, problem in enumerate(page.problems):
             problem_block_ids = iter_problem_block_ids(page, problem)
             blocks = [block_by_id[block_id] for block_id in problem_block_ids if block_id in block_by_id]
+            raw_problem_number = problem.metadata.get("problem_number")
+            if isinstance(raw_problem_number, int):
+                problem_number = raw_problem_number
+            elif isinstance(raw_problem_number, str) and raw_problem_number.isdigit():
+                problem_number = int(raw_problem_number)
+            else:
+                problem_number = None
             boxes = [block.bbox for block in blocks]
             if not boxes:
                 boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
@@ -176,13 +192,16 @@ def build_problem_entries(
                     int(merged_box.bottom),
                 )
             )
-            crop_path = crop_dir / f"{problem.unit_id}.png"
+            crop_name = f"problem_{len(entries) + 1:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
+            crop_path = crop_dir / crop_name
             crop.save(crop_path)
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
+            problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {len(entries) + 1}")
             entries.append(
                 ProblemEntry(
                     problem_id=problem.unit_id,
-                    title=problem.title or f"문항 {len(entries) + 1}",
+                    title=problem_title,
+                    problem_number=problem_number,
                     subject=problem.subject,
                     source_page_id=page.page_id,
                     source_path=prepared_page.source_path,
@@ -205,6 +224,73 @@ def _to_file_uri(path: str | Path | None) -> str | None:
     return Path(path).resolve().as_uri()
 
 
+def _build_ai_fallback_config(
+    *,
+    enabled: bool,
+    mode: str | None,
+    provider: str,
+    model: str,
+    prompt: str,
+    max_tokens: int | None,
+    temperature: float | None,
+    threshold: float,
+    max_regions: int,
+    timeout_ms: int,
+    save_debug: bool,
+    fail_on_error: bool,
+) -> dict[str, Any] | None:
+    threshold = 0.72 if threshold is None else float(threshold)
+    max_regions = 18 if max_regions is None else int(max_regions)
+    timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
+    resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
+    if resolved_mode not in {"off", "auto", "force"}:
+        resolved_mode = "auto" if enabled else "off"
+    effective_enabled = resolved_mode != "off"
+    if (
+        not effective_enabled
+        and provider == "openai"
+        and not model
+        and not prompt
+        and max_tokens is None
+        and temperature is None
+        and threshold == 0.72
+        and max_regions == 18
+        and timeout_ms == 12000
+        and not save_debug
+        and not fail_on_error
+    ):
+        return None
+    return {
+        "enabled": effective_enabled,
+        "mode": resolved_mode,
+        "provider": provider,
+        "model": model or "gpt-5.4-mini",
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "threshold": threshold,
+        "max_regions": max_regions,
+        "timeout_ms": timeout_ms,
+        "save_debug": save_debug,
+        "fail_on_error": fail_on_error,
+    }
+
+
+def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackConfig:
+    if not ai_fallback_config:
+        return build_page_ai_fallback_config()
+    return build_page_ai_fallback_config(
+        mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
+        provider=str(ai_fallback_config.get("provider") or "openai"),
+        model=str(ai_fallback_config.get("model") or "gpt-5.4-mini"),
+        threshold=float(ai_fallback_config.get("threshold") or 0.72),
+        max_regions=int(ai_fallback_config.get("max_regions") or 18),
+        timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
+        save_debug=bool(ai_fallback_config.get("save_debug")),
+        fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
+    )
+
+
 def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
     return {
         "name": template.name,
@@ -217,11 +303,16 @@ def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
     }
 
 
-def _normalize_problem_title(title: str | None, index: int, source_page_id: str) -> str:
+GENERIC_PROBLEM_TITLE_RE = re.compile(r"^\s*臾명빆\s*\d+(?:\s*[쨌:\-].*)?$")
+
+
+def _normalize_problem_title(title: str | None, index: int, source_page_id: str, problem_number: int | None = None) -> str:
     raw = (title or "").strip()
-    if raw and "problem" not in raw.lower():
+    if raw and "problem" not in raw.lower() and not GENERIC_PROBLEM_TITLE_RE.match(raw):
         return raw
-    return f"문항 {index + 1:02d} · {source_page_id}"
+    if isinstance(problem_number, int) and problem_number > 0:
+        return f"臾명빆 {problem_number}"
+    return f"臾명빆 {index + 1:02d} 쨌 {source_page_id}"
 
 
 def build_ui_session(
@@ -232,11 +323,12 @@ def build_ui_session(
     source_paths: Sequence[str | Path],
     *,
     record_mode: str,
+    ai_fallback_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
     warning_messages: list[str] = []
     if placements and len(placements) <= len(prepared_pages):
-        warning_messages.append("문항 분리가 충분하지 않아 페이지 단위에 가깝게 묶인 항목이 있습니다.")
+        warning_messages.append("臾명빆 遺꾨━媛 異⑸텇?섏? ?딆븘 ?섏씠吏 ?⑥쐞??媛源앷쾶 臾띠씤 ??ぉ???덉뒿?덈떎.")
 
     problems: list[dict[str, Any]] = []
     for index, placement in enumerate(placements):
@@ -245,7 +337,13 @@ def build_ui_session(
         problems.append(
             {
                 "id": placement["problem_id"],
-                "title": _normalize_problem_title(str(placement.get("title") or ""), index, str(placement["source_page_id"])),
+                "title": _normalize_problem_title(
+                    str(placement.get("title") or ""),
+                    index,
+                    str(placement["source_page_id"]),
+                    int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
+                ),
+                "problemNumber": int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
                 "subject": str(placement["subject"]),
                 "imagePath": _to_file_uri(crop_path),
                 "sourceImagePath": _to_file_uri(source_path),
@@ -291,6 +389,7 @@ def build_ui_session(
                 base_slot_height_pages=1.2,
             )
         ),
+        "ai_fallback": ai_fallback_config,
         "warning_messages": warning_messages,
         "problems": problems,
     }
@@ -348,6 +447,7 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
             reading_heavy=entry.reading_heavy,
             metadata={
                 "title": entry.title,
+                "problem_number": entry.problem_number,
                 "crop_path": str(entry.crop_path),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
@@ -392,6 +492,7 @@ def build_image_only_records(problem_entries: list[ProblemEntry], template: Layo
             {
                 "problem_id": placement.problem_id,
                 "title": placement.metadata["title"],
+                "problem_number": placement.metadata.get("problem_number"),
                 "subject": str(placement.subject),
                 "crop_path": str(crop_path),
                 "source_page_id": placement.metadata["source_page_id"],
@@ -471,7 +572,8 @@ def build_mixed_records(
                         int(block.bbox.bottom),
                     )
                 )
-                crop_path = block_crop_dir / f"{entry.problem_id}_{block.block_id}.png"
+                crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
+                crop_path = block_crop_dir / crop_name
                 crop.save(crop_path)
                 image_bytes = crop_path.read_bytes()
                 preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint="PNG", quality=88)
@@ -533,6 +635,7 @@ def build_mixed_records(
             {
                 "problem_id": placement.problem_id,
                 "title": entry.title,
+                "problem_number": entry.problem_number,
                 "subject": str(entry.subject),
                 "crop_path": str(entry.crop_path),
                 "source_page_id": entry.source_page_id,
@@ -639,6 +742,18 @@ def run_problem_export(
     record_mode: str = "mixed",
     text_confidence_threshold: float = 0.78,
     sync_ui: bool = False,
+    ai_fallback_enabled: bool = False,
+    ai_fallback: str | None = None,
+    ai_fallback_provider: str = "openai",
+    ai_fallback_model: str = "",
+    ai_fallback_prompt: str = "",
+    ai_fallback_max_tokens: int | None = None,
+    ai_fallback_temperature: float | None = None,
+    ai_fallback_threshold: float = 0.72,
+    ai_fallback_max_regions: int = 18,
+    ai_fallback_timeout_ms: int = 12000,
+    ai_fallback_save_debug: bool = False,
+    fail_on_ai_error: bool = False,
 ) -> dict[str, Any]:
     if isinstance(source, (str, Path)):
         source_paths = [Path(source).resolve()]
@@ -651,6 +766,20 @@ def run_problem_export(
     out_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(subject_name)
     template = LayoutTemplate(name="academy-default")
+    ai_fallback_config = _build_ai_fallback_config(
+        enabled=ai_fallback_enabled,
+        mode=ai_fallback,
+        provider=ai_fallback_provider,
+        model=ai_fallback_model,
+        prompt=ai_fallback_prompt,
+        max_tokens=ai_fallback_max_tokens,
+        temperature=ai_fallback_temperature,
+        threshold=ai_fallback_threshold,
+        max_regions=ai_fallback_max_regions,
+        timeout_ms=ai_fallback_timeout_ms,
+        save_debug=ai_fallback_save_debug,
+        fail_on_error=fail_on_ai_error,
+    )
 
     prepared_pages: list[PreparedPage] = []
     pages: list[PageModel] = []
@@ -659,6 +788,7 @@ def run_problem_export(
             source_path,
             subject=subject,
             ocr_mode=ocr,
+            ai_fallback_config=ai_fallback_config,
             pdf_dpi=pdf_dpi,
             detect_perspective=detect_perspective,
             deskew=not skip_deskew,
@@ -688,6 +818,7 @@ def run_problem_export(
         "record_mode": record_mode,
         "header_flag": header_flag,
         "text_confidence_threshold": text_confidence_threshold,
+        "ai_fallback": ai_fallback_config,
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": ocr,
@@ -713,6 +844,7 @@ def run_problem_export(
         edb_path if export_edb else None,
         source_paths,
         record_mode=record_mode,
+        ai_fallback_config=ai_fallback_config,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -725,6 +857,7 @@ def run_problem_export(
         "ui_session_path": ui_session_path.resolve(),
         "synced_ui_path": synced_ui_path.resolve() if synced_ui_path else None,
         "summary": summary,
+        "ai_fallback": ai_fallback_config,
     }
 
 
@@ -744,6 +877,18 @@ def main() -> int:
     parser.add_argument("--slot-height", type=float, default=1.2, help="Base slot height in board pages")
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
     parser.add_argument("--text-confidence-threshold", type=float, default=0.78, help="Minimum OCR confidence for text records in mixed mode")
+    parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
+    parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")
+    parser.add_argument("--ai-fallback-provider", default="openai", help="AI fallback provider name")
+    parser.add_argument("--ai-fallback-model", default="", help="AI fallback model name")
+    parser.add_argument("--ai-fallback-prompt", default="", help="AI fallback prompt template")
+    parser.add_argument("--ai-fallback-max-tokens", type=int, default=None, help="AI fallback max output tokens")
+    parser.add_argument("--ai-fallback-temperature", type=float, default=None, help="AI fallback sampling temperature")
+    parser.add_argument("--ai-fallback-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
+    parser.add_argument("--ai-fallback-max-regions", type=int, default=18, help="Maximum number of regions sent to AI fallback")
+    parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
+    parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
+    parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
     parser.add_argument("--prototype-data-out", default="ui_prototype\\prototype_data.js", help="Path to write UI prototype data JS")
     args = parser.parse_args()
 
@@ -754,6 +899,20 @@ def main() -> int:
         args.source,
         subject=subject,
         ocr_mode=args.ocr,
+        ai_fallback_config=_build_ai_fallback_config(
+            enabled=args.ai_fallback_enabled,
+            mode=args.ai_fallback,
+            provider=args.ai_fallback_provider,
+            model=args.ai_fallback_model,
+            prompt=args.ai_fallback_prompt,
+            max_tokens=args.ai_fallback_max_tokens,
+            temperature=args.ai_fallback_temperature,
+            threshold=args.ai_fallback_threshold,
+            max_regions=args.ai_fallback_max_regions,
+            timeout_ms=args.ai_fallback_timeout_ms,
+            save_debug=args.ai_fallback_save_debug,
+            fail_on_error=args.fail_on_ai_error,
+        ),
         pdf_dpi=args.pdf_dpi,
         detect_perspective=args.detect_perspective,
         deskew=not args.skip_deskew,
@@ -793,6 +952,20 @@ def main() -> int:
         "record_mode": args.record_mode,
         "header_flag": header_flag,
         "text_confidence_threshold": args.text_confidence_threshold,
+        "ai_fallback": _build_ai_fallback_config(
+            enabled=args.ai_fallback_enabled,
+            mode=args.ai_fallback,
+            provider=args.ai_fallback_provider,
+            model=args.ai_fallback_model,
+            prompt=args.ai_fallback_prompt,
+            max_tokens=args.ai_fallback_max_tokens,
+            temperature=args.ai_fallback_temperature,
+            threshold=args.ai_fallback_threshold,
+            max_regions=args.ai_fallback_max_regions,
+            timeout_ms=args.ai_fallback_timeout_ms,
+            save_debug=args.ai_fallback_save_debug,
+            fail_on_error=args.fail_on_ai_error,
+        ),
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": args.ocr,

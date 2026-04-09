@@ -31,6 +31,7 @@
           <button class="primary-button" id="openCameraButton" type="button">카메라</button>
           <button class="ghost-button" id="chooseSourceButton" type="button">파일 업로드</button>
           <button class="primary-button" id="runExportButton" type="button">지금 파싱</button>
+          <button class="ghost-button" id="clearAllButton" type="button">전체 초기화</button>
           <label class="checkbox-chip" for="autoParseToggle">
             <input id="autoParseToggle" type="checkbox" checked>
             <span>추가 즉시 자동 파싱</span>
@@ -43,12 +44,12 @@
           <span class="subtle" id="runStatusText">로컬 파싱 API 연결을 확인하는 중입니다.</span>
         </div>
 
-        <button class="dropzone" id="sourceDropzone" type="button">
+        <label class="dropzone" id="sourceDropzone" for="sourceFileInput" tabindex="0" role="button" aria-controls="sourceFileInput">
           <div class="dropzone-copy">
             <strong>사진이나 PDF를 여기로 놓으세요</strong>
             <span class="subtle">여러 장 사진도 순서대로 한 번에 처리합니다.</span>
           </div>
-        </button>
+        </label>
 
         <div class="source-queue-meta">
           <span class="meta-pill" id="selectedSourceName">선택된 소스 없음</span>

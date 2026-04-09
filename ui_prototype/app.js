@@ -1,5 +1,7 @@
 const BASE_SLOT_HEIGHT = 1.2;
 
+const DEFAULT_OUTPUT_DIR = "mvp_export_app";
+
 const fallbackProblems = [
   {
     id: "math-01",
@@ -90,14 +92,75 @@ function normalizeTemplate(template) {
   };
 }
 
+function normalizeProblemNumber(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function parseProblemTitle(rawTitle) {
+  const markerMatch = rawTitle.match(/^\s*(?:문항\s*)?([1-9][0-9]{0,2})(?:[.)])(?:\s+|$)/);
+  if (markerMatch) {
+    return {
+      problemNumber: normalizeProblemNumber(markerMatch[1]),
+      cleanedTitle: rawTitle.slice(markerMatch[0].length).trim(),
+    };
+  }
+
+  const labeledMatch = rawTitle.match(/^\s*문항\s*([1-9][0-9]{0,2})(?:\s*[·:\-].*)?$/);
+  if (labeledMatch) {
+    return {
+      problemNumber: normalizeProblemNumber(labeledMatch[1]),
+      cleanedTitle: "",
+    };
+  }
+
+  const genericProblemMatch = rawTitle.match(/(?:^|[\s_-])problem\s*(\d+)$/i);
+  if (genericProblemMatch) {
+    return {
+      problemNumber: normalizeProblemNumber(genericProblemMatch[1]),
+      cleanedTitle: "",
+    };
+  }
+
+  return {
+    problemNumber: null,
+    cleanedTitle: rawTitle.trim(),
+  };
+}
+
+function getProblemLabel(problem, fallbackIndex = null) {
+  const problemNumber = normalizeProblemNumber(problem?.problemNumber);
+  if (problemNumber !== null) {
+    return `문항 ${problemNumber}`;
+  }
+  if (Number.isInteger(fallbackIndex)) {
+    return `문항 ${fallbackIndex + 1}`;
+  }
+  return (problem?.title || "").trim() || "문항";
+}
+
+function getProblemHeading(problem, fallbackIndex = null) {
+  const title = (problem?.title || "").trim();
+  const problemNumber = normalizeProblemNumber(problem?.problemNumber);
+  if (problemNumber === null) {
+    return title || getProblemLabel(problem, fallbackIndex);
+  }
+  const label = `문항 ${problemNumber}`;
+  if (!title || title === label) {
+    return label;
+  }
+  return `${label} · ${title}`;
+}
+
 function normalizeProblem(problem, index) {
   const rawTitle = (problem.title || "").trim();
-  const genericProblemMatch = rawTitle.match(/(?:^|[\s_-])problem\s*(\d+)$/i);
+  const parsedTitle = parseProblemTitle(rawTitle);
+  const problemNumber = normalizeProblemNumber(problem.problemNumber ?? problem.problem_number) ?? parsedTitle.problemNumber;
+  const normalizedTitle = parsedTitle.cleanedTitle || (problemNumber !== null ? `문항 ${problemNumber}` : `문항 ${index + 1}`);
   return {
     id: problem.id || problem.problem_id || `problem-${String(index + 1).padStart(2, "0")}`,
-    title: rawTitle
-      ? (genericProblemMatch ? `문항 ${genericProblemMatch[1]}` : rawTitle)
-      : `문항 ${index + 1}`,
+    title: normalizedTitle,
+    problemNumber,
     subject: problem.subject || "unknown",
     imagePath: normalizePath(problem.imagePath || problem.image_path || problem.sourceImagePath || ""),
     sourceImagePath: normalizePath(problem.sourceImagePath || problem.source_image_path || problem.imagePath || ""),
@@ -287,6 +350,32 @@ function clearQueuedFiles() {
   renderSourceQueue();
 }
 
+function clearAllState() {
+  if (state.runBusy) {
+    window.alert("현재 파싱 중에는 전체 초기화를 할 수 없습니다.");
+    return;
+  }
+
+  const confirmed = window.confirm("현재 업로드 큐와 파싱 결과를 모두 지울까요?");
+  if (!confirmed) {
+    return;
+  }
+
+  clearQueuedFiles();
+  state.previewMode = "problem";
+  state.templateKey = "academy-default";
+  state.dragId = null;
+  state.composerOpen = false;
+  resetRunOptions();
+
+  document.getElementById("sourceFileInput").value = "";
+  document.getElementById("cameraFileInput").value = "";
+  document.getElementById("sessionFileInput").value = "";
+
+  applySession(createEmptySession());
+  setRunStatus("업로드 큐와 현재 파싱 결과를 모두 초기화했습니다.", "neutral");
+}
+
 async function maybeAutoRun() {
   if (!state.autoParse || !state.apiAvailable || !state.runSourceFiles.length || state.runBusy) {
     return;
@@ -302,6 +391,24 @@ const sampleSession = normalizeSession(
   },
   "프로토타입 샘플",
 );
+
+function createEmptySession() {
+  return normalizeSession(
+    {
+      session_name: "빈 세션",
+      data_source: "manual",
+      export_mode: "question",
+      record_mode: "mixed",
+      input_file_count: 0,
+      source_page_count: 0,
+      detected_problem_count: 0,
+      input_files: [],
+      warning_messages: [],
+      problems: [],
+    },
+    "빈 세션",
+  );
+}
 
 const generatedSession = window.EDB_UI_SESSION
   ? normalizeSession(window.EDB_UI_SESSION, "생성된 세션")
@@ -364,6 +471,36 @@ function applySession(session) {
   }
   syncTemplateSelect();
   render();
+}
+
+function resetRunOptions() {
+  const runLayoutModeSelect = document.getElementById("runLayoutModeSelect");
+  const runSubjectSelect = document.getElementById("runSubjectSelect");
+  const runOcrSelect = document.getElementById("runOcrSelect");
+  const outputDirInput = document.getElementById("outputDirInput");
+  const runExportEdb = document.getElementById("runExportEdb");
+  const autoParseToggle = document.getElementById("autoParseToggle");
+
+  if (runLayoutModeSelect) {
+    runLayoutModeSelect.value = "question";
+  }
+  if (runSubjectSelect) {
+    runSubjectSelect.value = "unknown";
+  }
+  if (runOcrSelect) {
+    runOcrSelect.value = "auto";
+  }
+  if (outputDirInput) {
+    outputDirInput.value = DEFAULT_OUTPUT_DIR;
+  }
+  if (runExportEdb) {
+    runExportEdb.checked = true;
+  }
+
+  state.autoParse = true;
+  if (autoParseToggle) {
+    autoParseToggle.checked = true;
+  }
 }
 
 function getTemplate() {
@@ -551,6 +688,7 @@ function updateRuntimeControls() {
   const selectedSourceName = document.getElementById("selectedSourceName");
   const sourceQueueCount = document.getElementById("sourceQueueCount");
   const runExportButton = document.getElementById("runExportButton");
+  const clearAllButton = document.getElementById("clearAllButton");
   const autoParseToggle = document.getElementById("autoParseToggle");
   const runLayoutModeSelect = document.getElementById("runLayoutModeSelect");
 
@@ -563,6 +701,9 @@ function updateRuntimeControls() {
     ? `${state.runSourceFiles.length}개 대기`
     : "0개 대기";
   runExportButton.disabled = !state.apiAvailable || state.runBusy || !state.runSourceFiles.length;
+  if (clearAllButton) {
+    clearAllButton.disabled = state.runBusy;
+  }
   runExportButton.textContent = `${exportModeLabel(runLayoutModeSelect?.value)} 변환`;
   autoParseToggle.checked = state.autoParse;
 }
@@ -670,27 +811,35 @@ function renderFilmstrip(placements) {
   }
 
   placements.forEach((item, index) => {
-    const entry = document.createElement("button");
-    entry.type = "button";
+    const entry = document.createElement("article");
     entry.className = `film-item${item.id === state.selectedId ? " is-selected" : ""}`;
     entry.draggable = true;
     entry.dataset.problemId = item.id;
+    const problemLabel = getProblemLabel(item, index);
+    const problemTitle = (item.title || "").trim() || problemLabel;
     entry.innerHTML = `
-      <img class="film-thumb" src="${item.imagePath}" alt="${item.title}">
-      <div class="film-copy">
-        <div class="film-index">${String(index + 1).padStart(2, "0")} · ${subjectLabel(item.subject)}</div>
-        <div class="film-title">${item.title}</div>
-        <div class="film-meta">
-          <span>시작 ${item.startYPages.toFixed(1)}p</span>
-          <span>높이 ${item.actualHeightPages.toFixed(2)}p</span>
-          <span>${item.overflowAllowed ? "오버플로 허용" : "맞춤 우선"}</span>
+      <button class="film-item-delete" type="button" aria-label="${problemLabel} 삭제">&times;</button>
+      <button class="film-item-main" type="button">
+        <img class="film-thumb" src="${item.imagePath}" alt="${problemTitle}" draggable="false">
+        <div class="film-copy">
+          <div class="film-index">${problemLabel} · ${subjectLabel(item.subject)}</div>
+          <div class="film-title">${problemTitle}</div>
+          <div class="film-meta">
+            <span>시작 ${item.startYPages.toFixed(1)}p</span>
+            <span>높이 ${item.actualHeightPages.toFixed(2)}p</span>
+            <span>${item.overflowAllowed ? "오버플로 허용" : "맞춤 우선"}</span>
+          </div>
         </div>
-      </div>
+      </button>
     `;
 
-    entry.addEventListener("click", () => {
+    entry.querySelector(".film-item-main")?.addEventListener("click", () => {
       state.selectedId = item.id;
       render();
+    });
+    entry.querySelector(".film-item-delete")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteProblem(item.id);
     });
     entry.addEventListener("dragstart", () => {
       state.dragId = item.id;
@@ -757,7 +906,7 @@ function renderSourceOrProblemPreview(selected, mode) {
   const subtitle = mode === "source"
     ? `원본 | ${subjectLabel(selected.subject)} | ${selected.sourceFileName || selected.sourcePageId || "페이지 정보 없음"}`
     : `문항 크롭 | ${subjectLabel(selected.subject)} | 시작 ${selected.startYPages.toFixed(1)}p`;
-  root.innerHTML = renderImagePreview(selected.title, subtitle, imagePath);
+  root.innerHTML = renderImagePreview(getProblemHeading(selected), subtitle, imagePath);
 }
 
 function renderBoardPreview(placements, selected) {
@@ -796,12 +945,13 @@ function renderBoardPreview(placements, selected) {
     card.style.top = `${item.startYPages * heightScale + 24}px`;
     card.style.height = `${Math.max(112, item.actualHeightPages * heightScale - 12)}px`;
     card.style.width = `${template.fixedLeftRatio * 100 - 6}%`;
+    const cardTitle = getProblemHeading(item);
     card.innerHTML = `
       <div class="board-card-header">
-        <strong>${item.title}</strong>
+        <strong>${cardTitle}</strong>
         <span>${item.subject}</span>
       </div>
-      <img src="${item.imagePath}" alt="${item.title}">
+      <img src="${item.imagePath}" alt="${cardTitle}">
     `;
     card.addEventListener("click", () => {
       state.selectedId = item.id;
@@ -858,7 +1008,7 @@ function renderInspector(selected) {
 
   root.innerHTML = `
     <div class="inspector-card inspector-card-strong">
-      <h3>${selected.title}</h3>
+      <h3>${getProblemHeading(selected)}</h3>
       <p class="helper-text">${sessionSourceLabel(session.dataSource)} · ${exportModeLabel(session.exportMode)} · 입력 ${session.inputFileCount || 1}개</p>
       <div class="inspector-row">
         <label>과목</label>
@@ -982,7 +1132,7 @@ function renderComposerModal() {
               : `<div class="composer-thumb composer-thumb-placeholder">미리보기 없음</div>`}
             <div class="composer-main">
               <div class="composer-item-head">
-                <strong>${String(index + 1).padStart(2, "0")}. ${problem.title || `문항 ${index + 1}`}</strong>
+                <strong>${getProblemHeading(problem, index)}</strong>
                 <span class="meta-pill">${problem.excluded ? "제외됨" : "포함됨"}</span>
               </div>
               <div class="composer-field-grid">
@@ -1208,6 +1358,8 @@ document.getElementById("useSampleButton").addEventListener("click", () => {
   setRunStatus("번들된 샘플 데이터로 전환했습니다.", "neutral");
 });
 
+document.getElementById("clearAllButton").addEventListener("click", clearAllState);
+
 const sourceFileInput = document.getElementById("sourceFileInput");
 const cameraFileInput = document.getElementById("cameraFileInput");
 const sourceDropzone = document.getElementById("sourceDropzone");
@@ -1220,11 +1372,14 @@ document.getElementById("chooseSourceButton").addEventListener("click", () => {
   sourceFileInput.click();
 });
 
-document.getElementById("clearSourceButton").addEventListener("click", () => {
-  clearQueuedFiles();
-  sourceFileInput.value = "";
-  cameraFileInput.value = "";
-});
+const clearSourceButton = document.getElementById("clearSourceButton");
+if (clearSourceButton) {
+  clearSourceButton.addEventListener("click", () => {
+    clearQueuedFiles();
+    sourceFileInput.value = "";
+    cameraFileInput.value = "";
+  });
+}
 
 document.getElementById("autoParseToggle").addEventListener("change", (event) => {
   state.autoParse = event.target.checked;
@@ -1243,7 +1398,11 @@ cameraFileInput.addEventListener("change", async (event) => {
   await maybeAutoRun();
 });
 
-sourceDropzone.addEventListener("click", () => {
+sourceDropzone.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  event.preventDefault();
   sourceFileInput.click();
 });
 sourceDropzone.addEventListener("dragover", (event) => {

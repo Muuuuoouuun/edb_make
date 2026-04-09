@@ -19,6 +19,7 @@ def main() -> int:
             {
                 "id": item["problem_id"],
                 "title": item["title"],
+                "problemNumber": item.get("problem_number"),
                 "subject": item["subject"],
                 "imagePath": Path(item["crop_path"]).resolve().as_uri(),
                 "actualHeightPages": item["actual_content_height_pages"],

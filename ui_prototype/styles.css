@@ -721,10 +721,8 @@ select:hover,
   border: 1px solid var(--line);
   background: #fff;
   border-radius: 18px;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: 68px minmax(0, 1fr);
-  gap: 10px;
+  position: relative;
+  overflow: hidden;
   cursor: grab;
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
@@ -741,6 +739,55 @@ select:hover,
 
 .film-item.is-drag-target {
   border-style: dashed;
+}
+
+.film-item-main {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.film-item-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(30, 27, 22, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease, border-color 120ms ease;
+  z-index: 1;
+}
+
+.film-item:hover .film-item-delete,
+.film-item:focus-within .film-item-delete {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.film-item-delete:hover,
+.film-item-delete:focus-visible {
+  background: var(--warning-soft);
+  border-color: rgba(180, 83, 9, 0.24);
+  color: var(--warning);
 }
 
 .film-thumb,
