@@ -115,6 +115,7 @@ function normalizeProblem(problem, index) {
     recordMode: problem.recordMode || problem.record_mode || "",
     textRecordCount: toNumber(problem.textRecordCount ?? problem.text_record_count, 0),
     imageRecordCount: toNumber(problem.imageRecordCount ?? problem.image_record_count, 0),
+    excluded: Boolean(problem.excluded ?? problem.isExcluded),
   };
 }
 
@@ -313,6 +314,7 @@ const state = {
   previewMode: "problem",
   templateKey: "academy-default",
   dragId: null,
+  composerOpen: false,
   apiAvailable: false,
   runBusy: false,
   autoParse: true,
@@ -354,7 +356,8 @@ function syncTemplateSelect() {
 function applySession(session) {
   state.session = session;
   state.problems = cloneProblems(session.problems);
-  state.selectedId = session.problems[0]?.id || null;
+  state.selectedId = session.problems.find((problem) => !problem.excluded)?.id || session.problems[0]?.id || null;
+  state.composerOpen = false;
   const layoutModeSelect = document.getElementById("runLayoutModeSelect");
   if (layoutModeSelect) {
     layoutModeSelect.value = session.exportMode || "question";
@@ -374,11 +377,28 @@ function snapUp(value, baseSlotHeight = BASE_SLOT_HEIGHT) {
   return Math.ceil((value - 1e-9) / baseSlotHeight) * baseSlotHeight;
 }
 
+function activeProblems() {
+  return state.problems.filter((problem) => !problem.excluded);
+}
+
+function ensureSelectedProblem(placements) {
+  if (!placements.length) {
+    state.selectedId = null;
+    return null;
+  }
+  const selected = placements.find((item) => item.id === state.selectedId);
+  if (selected) {
+    return selected;
+  }
+  state.selectedId = placements[0].id;
+  return placements[0];
+}
+
 function computePlacements() {
   const template = getTemplate();
   let cursor = 0;
 
-  return state.problems.map((problem) => {
+  return activeProblems().map((problem) => {
     const start = snapUp(cursor, template.baseSlotHeight);
     const actualBottom = Number((start + problem.actualHeightPages).toFixed(2));
     const nextStart = Number(snapUp(actualBottom, template.baseSlotHeight).toFixed(2));
@@ -448,6 +468,20 @@ function deleteProblem(problemId) {
   render();
 }
 
+function toggleProblemExcluded(problemId) {
+  const target = state.problems.find((item) => item.id === problemId);
+  if (!target) {
+    return;
+  }
+  target.excluded = !target.excluded;
+  if (target.excluded && state.selectedId === problemId) {
+    state.selectedId = activeProblems()[0]?.id || null;
+  } else if (!target.excluded && !state.selectedId) {
+    state.selectedId = target.id;
+  }
+  render();
+}
+
 function addLongPassage() {
   const nextId = `korean-${String(state.problems.length + 1).padStart(2, "0")}`;
   state.problems.push({
@@ -494,6 +528,16 @@ function reorderProblems(dragId, dropId) {
   next.splice(toIndex, 0, moved);
   state.problems = next;
   render();
+}
+
+function openComposerModal() {
+  state.composerOpen = true;
+  renderComposerModal();
+}
+
+function closeComposerModal() {
+  state.composerOpen = false;
+  renderComposerModal();
 }
 
 function setRunStatus(message, tone = "neutral") {
@@ -615,6 +659,15 @@ async function runExportFromApi() {
 function renderFilmstrip(placements) {
   const root = document.getElementById("filmstripList");
   root.innerHTML = "";
+
+  if (!placements.length) {
+    root.innerHTML = `
+      <div class="source-queue-empty">
+        <p class="helper-text">현재 포함된 문항이 없습니다. 구성 편집을 눌러 문항을 복원하거나 새로 파싱해주세요.</p>
+      </div>
+    `;
+    return;
+  }
 
   placements.forEach((item, index) => {
     const entry = document.createElement("button");
@@ -782,6 +835,15 @@ function renderBoardPreview(placements, selected) {
 
 function renderInspector(selected) {
   const root = document.getElementById("inspectorContent");
+  if (!selected) {
+    root.innerHTML = `
+      <div class="inspector-card">
+        <h3>구성 비어 있음</h3>
+        <p class="helper-text">현재 포함된 문항이 없습니다. 구성 편집 팝업에서 제외를 풀거나 새 파싱을 실행해주세요.</p>
+      </div>
+    `;
+    return;
+  }
   const session = state.session;
   const warnings = [...(session.warningMessages || [])];
   if (selected.overflowViolation) {
@@ -879,6 +941,119 @@ function renderInspector(selected) {
   root.querySelector("#deleteButton").addEventListener("click", () => deleteProblem(selected.id));
 }
 
+function renderComposerModal() {
+  const root = document.getElementById("composerModal");
+  if (!root) {
+    return;
+  }
+
+  if (!state.composerOpen) {
+    root.hidden = true;
+    root.setAttribute("aria-hidden", "true");
+    root.innerHTML = "";
+    return;
+  }
+
+  const includedProblems = activeProblems();
+  const excludedCount = state.problems.length - includedProblems.length;
+  root.hidden = false;
+  root.setAttribute("aria-hidden", "false");
+  root.innerHTML = `
+    <div class="modal-backdrop" data-close-composer="true"></div>
+    <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="composerTitle">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">EDB 구성 편집</p>
+          <h2 id="composerTitle">문항 순서와 포함 여부를 조정합니다</h2>
+          <p class="subtle">순서 변경, 제목 수정, 제외/복원, 삭제를 팝업에서 바로 처리할 수 있습니다.</p>
+        </div>
+        <button class="modal-close-button" id="closeComposerButton" type="button" aria-label="닫기">×</button>
+      </div>
+      <div class="modal-summary-row">
+        <span class="meta-pill">전체 ${state.problems.length}개</span>
+        <span class="meta-pill">포함 ${includedProblems.length}개</span>
+        <span class="meta-pill">제외 ${excludedCount}개</span>
+      </div>
+      <div class="composer-list">
+        ${state.problems.map((problem, index) => `
+          <article class="composer-item${problem.excluded ? " is-excluded" : ""}">
+            ${problem.imagePath
+              ? `<img class="composer-thumb" src="${problem.imagePath}" alt="${problem.title || `문항 ${index + 1}`}">`
+              : `<div class="composer-thumb composer-thumb-placeholder">미리보기 없음</div>`}
+            <div class="composer-main">
+              <div class="composer-item-head">
+                <strong>${String(index + 1).padStart(2, "0")}. ${problem.title || `문항 ${index + 1}`}</strong>
+                <span class="meta-pill">${problem.excluded ? "제외됨" : "포함됨"}</span>
+              </div>
+              <div class="composer-field-grid">
+                <label class="field-stack">
+                  <span class="toolbar-label">제목</span>
+                  <input class="composer-text-input" type="text" value="${(problem.title || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" data-problem-title="${problem.id}">
+                </label>
+                <label class="field-stack">
+                  <span class="toolbar-label">과목</span>
+                  <select data-problem-subject="${problem.id}">
+                    <option value="unknown"${problem.subject === "unknown" ? " selected" : ""}>과목 자동</option>
+                    <option value="math"${problem.subject === "math" ? " selected" : ""}>수학</option>
+                    <option value="science"${problem.subject === "science" ? " selected" : ""}>과학</option>
+                    <option value="korean"${problem.subject === "korean" ? " selected" : ""}>국어</option>
+                    <option value="english"${problem.subject === "english" ? " selected" : ""}>영어</option>
+                    <option value="social"${problem.subject === "social" ? " selected" : ""}>사회</option>
+                  </select>
+                </label>
+              </div>
+              <div class="composer-actions">
+                <button class="small-button" type="button" data-composer-move-up="${problem.id}">위로</button>
+                <button class="small-button" type="button" data-composer-move-down="${problem.id}">아래로</button>
+                <button class="ghost-button" type="button" data-composer-toggle="${problem.id}">${problem.excluded ? "복원" : "제외"}</button>
+                <button class="ghost-button" type="button" data-composer-focus="${problem.id}">선택</button>
+                <button class="ghost-button danger-ghost-button" type="button" data-composer-delete="${problem.id}">삭제</button>
+              </div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+
+  root.querySelectorAll("[data-close-composer]").forEach((node) => {
+    node.addEventListener("click", closeComposerModal);
+  });
+  root.querySelector("#closeComposerButton")?.addEventListener("click", closeComposerModal);
+
+  root.querySelectorAll("[data-problem-title]").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      updateProblem(event.target.dataset.problemTitle, { title: event.target.value.trim() || "제목 없음" });
+    });
+  });
+
+  root.querySelectorAll("[data-problem-subject]").forEach((select) => {
+    select.addEventListener("change", (event) => {
+      updateProblem(event.target.dataset.problemSubject, { subject: event.target.value });
+    });
+  });
+
+  root.querySelectorAll("[data-composer-move-up]").forEach((button) => {
+    button.addEventListener("click", () => moveProblem(button.dataset.composerMoveUp, -1));
+  });
+  root.querySelectorAll("[data-composer-move-down]").forEach((button) => {
+    button.addEventListener("click", () => moveProblem(button.dataset.composerMoveDown, 1));
+  });
+  root.querySelectorAll("[data-composer-toggle]").forEach((button) => {
+    button.addEventListener("click", () => toggleProblemExcluded(button.dataset.composerToggle));
+  });
+  root.querySelectorAll("[data-composer-focus]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedId = button.dataset.composerFocus;
+      state.previewMode = "problem";
+      render();
+    });
+  });
+  root.querySelectorAll("[data-composer-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteProblem(button.dataset.composerDelete));
+  });
+}
+
 function renderSummary(placements) {
   const maxBottom = placements.length ? Math.max(...placements.map((item) => item.actualBottomYPages)) : 0;
   document.getElementById("problemCount").textContent = String(placements.length);
@@ -892,7 +1067,12 @@ function renderSessionSummary() {
   const inputCount = state.session.inputFileCount || 0;
   const pageCount = state.session.sourcePageCount || state.session.renderedPageFileUris.length || 0;
   const problemCount = state.session.detectedProblemCount || state.problems.length;
-  let text = `${exportModeLabel(state.session.exportMode)} 변환 · 입력 ${inputCount}개 · 렌더 페이지 ${pageCount}개 · 감지 문항 ${problemCount}개`;
+  const includedCount = activeProblems().length;
+  const excludedCount = state.problems.length - includedCount;
+  let text = `${exportModeLabel(state.session.exportMode)} 변환 · 입력 ${inputCount}개 · 렌더 페이지 ${pageCount}개 · 감지 문항 ${problemCount}개 · 현재 포함 ${includedCount}개`;
+  if (excludedCount > 0) {
+    text += ` · 제외 ${excludedCount}개`;
+  }
   if (state.session.warningMessages?.length) {
     text += ` · 주의: ${state.session.warningMessages[0]}`;
   }
@@ -921,22 +1101,31 @@ function renderSessionHeader() {
 
 function render() {
   const placements = computePlacements();
-  const selected = placements.find((item) => item.id === state.selectedId) || placements[0];
+  const selected = ensureSelectedProblem(placements);
   updateRuntimeControls();
-  if (!selected) {
-    return;
-  }
 
   document.querySelectorAll("[data-preview-mode]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.previewMode === state.previewMode);
   });
-  document.getElementById("selectedSubject").textContent = subjectLabel(selected.subject);
-  document.getElementById("selectedPlacement").textContent = `시작 ${selected.startYPages.toFixed(1)}p | 다음 ${selected.snappedNextStartYPages.toFixed(1)}p`;
+  document.getElementById("selectedSubject").textContent = selected ? subjectLabel(selected.subject) : "없음";
+  document.getElementById("selectedPlacement").textContent = selected
+    ? `시작 ${selected.startYPages.toFixed(1)}p | 다음 ${selected.snappedNextStartYPages.toFixed(1)}p`
+    : "포함된 문항 없음";
   renderSessionHeader();
   renderSessionSummary();
   renderSourceQueue();
 
-  if (state.previewMode === "source") {
+  if (!selected) {
+    document.getElementById("previewTitle").textContent = "구성 비어 있음";
+    document.getElementById("previewSubtitle").textContent = "구성 편집 팝업에서 제외를 풀거나 새 파싱을 실행해주세요.";
+    document.getElementById("previewSurface").innerHTML = `
+      <div class="preview-card">
+        <div class="preview-image-frame preview-empty">
+          <p class="helper-text">현재 포함된 문항이 없습니다.</p>
+        </div>
+      </div>
+    `;
+  } else if (state.previewMode === "source") {
     document.getElementById("previewTitle").textContent = "원본 미리보기";
     document.getElementById("previewSubtitle").textContent = "현재 문항의 원본 페이지나 촬영 이미지를 확인합니다.";
     renderSourceOrProblemPreview(selected, "source");
@@ -953,6 +1142,7 @@ function render() {
   renderFilmstrip(placements);
   renderInspector(selected);
   renderSummary(placements);
+  renderComposerModal();
 }
 
 document.querySelectorAll("[data-preview-mode]").forEach((button) => {
@@ -970,6 +1160,8 @@ document.getElementById("templateSelect").addEventListener("change", (event) => 
 document.getElementById("runLayoutModeSelect").addEventListener("change", () => {
   updateRuntimeControls();
 });
+
+document.getElementById("openComposerButton").addEventListener("click", openComposerModal);
 
 const addReadingHeavyButton = document.getElementById("addReadingHeavy");
 if (addReadingHeavyButton) {
@@ -1069,6 +1261,12 @@ sourceDropzone.addEventListener("drop", async (event) => {
 });
 
 document.getElementById("runExportButton").addEventListener("click", runExportFromApi);
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.composerOpen) {
+    closeComposerModal();
+  }
+});
 
 async function initializeRuntimeConnection() {
   syncTemplateSelect();

@@ -316,6 +316,141 @@ h2 {
   gap: 10px;
 }
 
+.modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(30, 27, 22, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+.modal-dialog {
+  position: relative;
+  width: min(1080px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  margin: 20px auto;
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(216, 207, 192, 0.85);
+  background: rgba(255, 253, 250, 0.98);
+  box-shadow: 0 24px 60px rgba(30, 27, 22, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.modal-close-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.composer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.composer-item {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.composer-item.is-excluded {
+  opacity: 0.72;
+  background: linear-gradient(180deg, rgba(216, 207, 192, 0.18), rgba(255, 255, 255, 0.94));
+}
+
+.composer-thumb {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 14px;
+  background: var(--panel-alt);
+  border: 1px solid rgba(216, 207, 192, 0.7);
+}
+
+.composer-thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.composer-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.composer-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.composer-field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(180px, 0.8fr);
+  gap: 12px;
+}
+
+.composer-text-input {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--text);
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.danger-ghost-button {
+  border-color: rgba(180, 83, 9, 0.24);
+  color: var(--warning);
+}
+
 .toolbar {
   margin-top: 18px;
   padding: 14px 18px;
@@ -942,6 +1077,10 @@ select:hover,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .composer-field-grid {
+    grid-template-columns: 1fr;
+  }
+
   .workspace {
     grid-template-columns: 240px minmax(0, 1fr);
     grid-template-areas:
@@ -971,6 +1110,16 @@ select:hover,
       "preview"
       "film"
       "inspector";
+  }
+
+  .modal-dialog {
+    width: calc(100vw - 20px);
+    margin: 10px auto;
+    padding: 16px;
+  }
+
+  .composer-item {
+    grid-template-columns: 72px minmax(0, 1fr);
   }
 
   .preview-panel,

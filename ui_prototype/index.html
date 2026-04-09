@@ -120,6 +120,7 @@
             <option value="korean-reading">국어 지문형</option>
             <option value="exam-review">시험 복습형</option>
           </select>
+          <button class="ghost-button" id="openComposerButton" type="button">구성 편집</button>
         </div>
         <div class="toolbar-group">
           <span class="toolbar-label">미리보기</span>
@@ -189,6 +190,8 @@
         </aside>
       </main>
     </div>
+
+    <div id="composerModal" class="modal-shell" hidden aria-hidden="true"></div>
 
     <script src="./generated_session.js"></script>
     <script src="./prototype_data.js"></script>
