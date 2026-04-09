@@ -66,6 +66,50 @@ def _problem_display_title(block: ContentBlock) -> str | None:
     return strip_problem_marker(title_source) or title_source
 
 
+def _extract_top_left_problem_number(block: ContentBlock) -> tuple[int | None, str | None]:
+    if not block.ocr_lines:
+        return None, None
+
+    block_width = max(block.bbox.width, 1.0)
+    block_height = max(block.bbox.height, 1.0)
+    top_left_candidates: list[tuple[float, int]] = []
+    fallback_candidates: list[tuple[float, int]] = []
+
+    for index, line in enumerate(block.ocr_lines):
+        number = extract_problem_number(line.text)
+        if number is None:
+            continue
+
+        top_ratio = max(0.0, line.bbox.top / block_height)
+        left_ratio = max(0.0, line.bbox.left / block_width)
+        score = top_ratio * 2.4 + left_ratio + index * 0.05
+        in_top_left_zone = top_ratio <= 0.32 and left_ratio <= 0.18
+
+        if in_top_left_zone:
+            top_left_candidates.append((score, number))
+        else:
+            fallback_candidates.append((score, number))
+
+    if top_left_candidates:
+        _, number = min(top_left_candidates, key=lambda item: item[0])
+        return number, "ocr_top_left"
+    if fallback_candidates:
+        _, number = min(fallback_candidates, key=lambda item: item[0])
+        return number, "ocr_line"
+    return None, None
+
+
+def extract_problem_number_from_block(block: ContentBlock) -> tuple[int | None, str | None]:
+    top_left_number, source = _extract_top_left_problem_number(block)
+    if top_left_number is not None:
+        return top_left_number, source
+
+    text_number = extract_problem_number(_problem_title_source(block))
+    if text_number is not None:
+        return text_number, "text_prefix"
+    return None, None
+
+
 def infer_subject(page: PageModel) -> Subject:
     text = "\n".join(block.text or "" for block in page.blocks)
     lowered = text.lower()
@@ -109,6 +153,9 @@ def detect_problem_start(block: ContentBlock) -> bool:
         return True
     if block.block_type == BlockType.CHOICE:
         return False
+    problem_number, _ = extract_problem_number_from_block(block)
+    if problem_number is not None:
+        return True
     if block.block_type in {BlockType.TITLE, BlockType.SECTION}:
         if not (block.text and block.text.strip()) and not block.metadata.get("display_title"):
             return False
@@ -118,11 +165,16 @@ def detect_problem_start(block: ContentBlock) -> bool:
         return False
     if _matches_choice_marker(marker_source):
         return False
-    return _matches_problem_marker(marker_source)
+    if _matches_problem_marker(marker_source):
+        return True
+    return False
 
 
 def detect_choice_block(block: ContentBlock) -> bool:
     if block.metadata.get("force_problem_start"):
+        return False
+    problem_number, _ = extract_problem_number_from_block(block)
+    if problem_number is not None:
         return False
     if block.block_type == BlockType.CHOICE:
         return True
@@ -150,7 +202,7 @@ def group_problem_units(page: PageModel) -> PageModel:
     if not has_text_markers and (has_band_metadata or len(classified_blocks) > 1):
         problems: list[ProblemUnit] = []
         for index, block in enumerate(classified_blocks, start=1):
-            problem_number = extract_problem_number(_problem_title_source(block))
+            problem_number, number_source = extract_problem_number_from_block(block)
             current = ProblemUnit(
                 unit_id=f"{page.page_id}-problem-{index}",
                 subject=infer_subject(relabeled),
@@ -173,6 +225,7 @@ def group_problem_units(page: PageModel) -> PageModel:
             )
             if problem_number is not None:
                 current.metadata["problem_number"] = problem_number
+                current.metadata["problem_number_source"] = number_source
             problems.append(current)
         return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
@@ -181,7 +234,7 @@ def group_problem_units(page: PageModel) -> PageModel:
 
     for block in classified_blocks:
         if detect_problem_start(block) or current is None:
-            problem_number = extract_problem_number(_problem_title_source(block))
+            problem_number, number_source = extract_problem_number_from_block(block)
             current = ProblemUnit(
                 unit_id=f"{page.page_id}-problem-{len(problems) + 1}",
                 subject=infer_subject(relabeled),
@@ -189,6 +242,7 @@ def group_problem_units(page: PageModel) -> PageModel:
             )
             if problem_number is not None:
                 current.metadata["problem_number"] = problem_number
+                current.metadata["problem_number_source"] = number_source
             problems.append(current)
 
         if block.block_type in {BlockType.TITLE, BlockType.STEM, BlockType.FORMULA, BlockType.SECTION}:
@@ -217,6 +271,7 @@ def summarize_page(page: PageModel) -> dict[str, object]:
                 "unit_id": problem.unit_id,
                 "title": problem.title,
                 "problem_number": problem.metadata.get("problem_number"),
+                "problem_number_source": problem.metadata.get("problem_number_source"),
                 "stem_blocks": list(problem.stem_block_ids),
                 "choice_blocks": list(problem.choice_block_ids),
                 "figure_blocks": list(problem.figure_block_ids),

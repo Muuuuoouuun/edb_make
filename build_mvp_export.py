@@ -115,6 +115,35 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
     )
 
 
+def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_config: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not ai_fallback_config:
+        return None
+    attempted_page_count = 0
+    applied_page_count = 0
+    status_counts: dict[str, int] = {}
+
+    for page_model in page_models:
+        ai_summary = page_model.metadata.get("ai_fallback")
+        if not isinstance(ai_summary, dict):
+            continue
+        if ai_summary.get("attempted"):
+            attempted_page_count += 1
+        if ai_summary.get("applied"):
+            applied_page_count += 1
+        status = str(ai_summary.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "requested": bool(ai_fallback_config.get("enabled")),
+        "mode": ai_fallback_config.get("mode"),
+        "provider": ai_fallback_config.get("provider"),
+        "model": ai_fallback_config.get("model"),
+        "attempted_page_count": attempted_page_count,
+        "applied_page_count": applied_page_count,
+        "status_counts": status_counts,
+    }
+
+
 def _coerce_source_paths(source: str | Path | Sequence[str | Path]) -> list[Path]:
     if isinstance(source, (str, Path)):
         return [Path(source).resolve()]
@@ -284,6 +313,7 @@ def build_ui_session(
     edb_path: Path | None,
     source_paths: Sequence[Path] | None = None,
     ai_fallback_config: dict[str, Any] | None = None,
+    ai_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved_source_paths = [Path(path).resolve() for path in (source_paths or [])]
     placements_by_id = {placement.problem_id: placement for placement in export_plan.placements}
@@ -336,6 +366,7 @@ def build_ui_session(
         "rendered_page_file_uris": [_to_file_uri(path) for path in rendered_board_paths],
         "template": _template_to_dict(export_plan.template),
         "ai_fallback": ai_fallback_config,
+        "ai_summary": ai_summary,
         "problems": problems,
     }
 
@@ -428,6 +459,7 @@ def run_export(
         for prepared_page in prepared_pages
     ]
     save_pages_json(page_models, out_dir / "pages.json")
+    ai_summary = _summarize_ai_fallback_usage(page_models, ai_fallback_config)
 
     export_plan = build_export_plan(page_models, template=build_default_template())
     board_plan_dict = page_model_to_board_plan_dict(page_models, export_plan)
@@ -463,6 +495,7 @@ def run_export(
         edb_path,
         source_paths=source_paths,
         ai_fallback_config=ai_fallback_config,
+        ai_summary=ai_summary,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -477,6 +510,7 @@ def run_export(
         "ui_session_path": ui_session_path,
         "synced_ui_path": synced_ui_path,
         "ai_fallback": ai_fallback_config,
+        "ai_summary": ai_summary,
     }
 
 

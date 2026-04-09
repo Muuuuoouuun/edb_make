@@ -97,6 +97,63 @@
               </label>
             </div>
 
+            <div class="ai-fallback-panel">
+              <div class="ai-fallback-header">
+                <div>
+                  <span class="toolbar-label">AI 문항 보정</span>
+                  <p class="helper-text">문항 경계나 선지 인식이 애매할 때만 선택적으로 보정합니다.</p>
+                </div>
+                <label class="checkbox-chip checkbox-chip-wide" for="runAiFallbackEnabled">
+                  <input id="runAiFallbackEnabled" type="checkbox">
+                  <span>AI 보정 사용</span>
+                </label>
+              </div>
+
+              <div class="advanced-grid advanced-grid-ai">
+                <label class="field-stack">
+                  <span class="toolbar-label">AI 모드</span>
+                  <select id="runAiFallbackModeSelect" aria-label="AI fallback mode">
+                    <option value="auto">auto</option>
+                    <option value="force">force</option>
+                    <option value="off">off</option>
+                  </select>
+                </label>
+                <label class="field-stack">
+                  <span class="toolbar-label">공급자</span>
+                  <select id="runAiProviderSelect" aria-label="AI provider">
+                    <option value="openai">OpenAI</option>
+                    <option value="gemini">Gemini (준비중)</option>
+                  </select>
+                </label>
+                <label class="field-stack">
+                  <span class="toolbar-label">모델</span>
+                  <input id="runAiModelInput" type="text" value="gpt-5.4-mini" placeholder="gpt-5.4-mini">
+                </label>
+                <label class="field-stack">
+                  <span class="toolbar-label">Threshold</span>
+                  <input id="runAiThresholdInput" type="number" min="0" max="1" step="0.01" value="0.72">
+                </label>
+                <label class="field-stack">
+                  <span class="toolbar-label">Max regions</span>
+                  <input id="runAiMaxRegionsInput" type="number" min="1" step="1" value="18">
+                </label>
+                <label class="field-stack">
+                  <span class="toolbar-label">Timeout ms</span>
+                  <input id="runAiTimeoutInput" type="number" min="1000" step="500" value="12000">
+                </label>
+                <label class="checkbox-chip checkbox-chip-wide" for="runAiSaveDebug">
+                  <input id="runAiSaveDebug" type="checkbox">
+                  <span>AI 디버그 저장</span>
+                </label>
+              </div>
+
+              <div class="utility-actions">
+                <button class="ghost-button" id="applyOpenAiPresetButton" type="button">OpenAI 프리셋</button>
+                <button class="ghost-button" id="applyGeminiPresetButton" type="button">Gemini 자리만</button>
+                <span class="helper-inline" id="aiFallbackHelper">AI 보정이 꺼져 있습니다.</span>
+              </div>
+            </div>
+
             <div class="utility-actions">
               <button class="ghost-button" id="loadSessionButton" type="button">세션 JSON 열기</button>
               <button class="ghost-button" id="useGeneratedButton" type="button">최근 세션</button>

@@ -42,6 +42,13 @@ class SegmentOptions:
     document_near_gap_px: int = 210
     document_min_band_height_px: int = 60
     document_band_padding_px: int = 24
+    document_recursive_split_min_height_px: int = 340
+    document_recursive_split_max_depth: int = 3
+    document_split_search_margin_ratio: float = 0.18
+    document_split_valley_ratio: float = 0.16
+    document_split_min_gap_run_px: int = 22
+    document_split_padding_px: int = 20
+    document_split_min_density_ratio: float = 0.0085
 
 
 def _pil_to_gray_array(image: Image.Image):
@@ -346,17 +353,294 @@ def _document_band_box(mask: Image.Image, column_box: Box, band: tuple[int, int]
     )
 
 
+def _row_dark_projection(mask: Image.Image) -> list[int]:
+    return [
+        int(mask.crop((0, row_index, mask.width, row_index + 1)).histogram()[255])
+        for row_index in range(mask.height)
+    ]
+
+
+def _column_dark_projection(mask: Image.Image) -> list[int]:
+    return [
+        int(mask.crop((column_index, 0, column_index + 1, mask.height)).histogram()[255])
+        for column_index in range(mask.width)
+    ]
+
+
+def _find_active_runs(values: list[int], *, threshold: float) -> list[tuple[int, int]]:
+    runs: list[tuple[int, int]] = []
+    run_start: int | None = None
+    for index, value in enumerate(values):
+        if value >= threshold:
+            if run_start is None:
+                run_start = index
+            continue
+        if run_start is not None:
+            runs.append((run_start, index - 1))
+            run_start = None
+    if run_start is not None:
+        runs.append((run_start, len(values) - 1))
+    return runs
+
+
+def _fit_document_slice_box(
+    mask: Image.Image,
+    parent_box: Box,
+    slice_top: int,
+    slice_bottom: int,
+    options: SegmentOptions,
+) -> Box | None:
+    slice_top = max(0, int(slice_top))
+    slice_bottom = min(int(parent_box.height), int(slice_bottom))
+    if slice_bottom - slice_top < options.document_min_band_height_px:
+        return None
+
+    crop = mask.crop(
+        (
+            int(parent_box.left),
+            int(parent_box.top + slice_top),
+            int(parent_box.right),
+            int(parent_box.top + slice_bottom),
+        )
+    )
+    bbox = crop.getbbox()
+    if bbox is None:
+        return None
+
+    padding = float(options.document_split_padding_px)
+    left = parent_box.left + max(0.0, float(bbox[0]) - padding)
+    top = parent_box.top + float(slice_top) + max(0.0, float(bbox[1]) - padding)
+    right = parent_box.left + min(parent_box.width, float(bbox[2]) + padding)
+    bottom = parent_box.top + float(slice_top) + min(float(slice_bottom - slice_top), float(bbox[3]) + padding)
+
+    minimum_width = parent_box.width * 0.7
+    if right - left < minimum_width:
+        left = parent_box.left
+        right = parent_box.right
+
+    return Box.from_points(left, top, right, bottom).expanded(
+        6.0,
+        max_width=float(mask.width),
+        max_height=float(mask.height),
+    )
+
+
+def _looks_like_question_start(mask: Image.Image, band_box: Box) -> bool:
+    crop = mask.crop((int(band_box.left), int(band_box.top), int(band_box.right), int(band_box.bottom)))
+    if crop.width <= 1 or crop.height <= 1:
+        return False
+
+    sample_height = min(crop.height, max(88, min(148, int(crop.height * 0.12))))
+    top_crop = crop.crop((0, 0, crop.width, sample_height))
+    if top_crop.getbbox() is None:
+        return False
+
+    column_projection = _column_dark_projection(top_crop)
+    if not column_projection:
+        return False
+
+    max_score = max(column_projection)
+    if max_score <= 0:
+        return False
+
+    active_runs = _find_active_runs(column_projection, threshold=max(2.0, max_score * 0.22))
+    if len(active_runs) < 2:
+        return False
+
+    first_run = active_runs[0]
+    second_run = active_runs[1]
+    first_width = first_run[1] - first_run[0] + 1
+    second_width = second_run[1] - second_run[0] + 1
+    gap = second_run[0] - first_run[1] - 1
+
+    if first_run[0] > crop.width * 0.05:
+        return False
+    if first_width > crop.width * 0.12:
+        return False
+    if gap < max(8, int(crop.width * 0.01)):
+        return False
+    if second_width < max(42, int(crop.width * 0.12)):
+        return False
+
+    right_side_density = sum(column_projection[second_run[0] :]) / max(1.0, float((crop.width - second_run[0]) * sample_height))
+    return right_side_density >= 0.012
+
+
+def _find_question_anchor_rows(
+    mask: Image.Image,
+    band_box: Box,
+    row_projection: list[int],
+    smoothed: list[float],
+    options: SegmentOptions,
+) -> list[int]:
+    crop_height = int(band_box.height)
+    crop_width = int(band_box.width)
+    min_segment_height = max(options.document_min_band_height_px, int(crop_height * options.document_split_search_margin_ratio))
+    if crop_height - (min_segment_height * 2) <= 32:
+        return []
+
+    step = 8
+    window_height = min(crop_height, max(96, min(180, int(crop_height * 0.16))))
+    anchors: list[int] = []
+    for row_index in range(min_segment_height, crop_height - min_segment_height, step):
+        anchor_box = Box.from_points(
+            band_box.left,
+            band_box.top + float(row_index),
+            band_box.right,
+            min(band_box.bottom, band_box.top + float(row_index + window_height)),
+        )
+        if not _looks_like_question_start(mask, anchor_box):
+            continue
+
+        gap_top = max(0, row_index - max(30, int(crop_height * 0.045)))
+        gap_bottom = row_index
+        if gap_bottom - gap_top < 6:
+            continue
+        gap_density = sum(row_projection[gap_top:gap_bottom]) / max(1.0, float((gap_bottom - gap_top) * crop_width))
+        if gap_density > options.document_split_min_density_ratio * 1.55:
+            continue
+
+        local_start = max(min_segment_height, row_index - 90)
+        local_end = max(local_start + 1, row_index - 8)
+        if local_end <= local_start:
+            continue
+        local_min = min(smoothed[local_start:local_end])
+        if local_min > max(smoothed) * 0.42:
+            continue
+        anchors.append(row_index)
+    return anchors
+
+
+def _find_document_split_row(mask: Image.Image, band_box: Box, options: SegmentOptions) -> int | None:
+    crop = mask.crop((int(band_box.left), int(band_box.top), int(band_box.right), int(band_box.bottom)))
+    if crop.width <= 1 or crop.height < options.document_recursive_split_min_height_px:
+        return None
+
+    row_projection = _row_dark_projection(crop)
+    if not row_projection:
+        return None
+
+    smoothed = _smooth_projection(row_projection, max(4, options.document_projection_window_px // 2))
+    if not smoothed:
+        return None
+
+    max_score = max(smoothed)
+    if max_score <= 0:
+        return None
+
+    min_segment_height = max(options.document_min_band_height_px, int(crop.height * options.document_split_search_margin_ratio))
+    if crop.height - (min_segment_height * 2) <= options.document_split_min_gap_run_px:
+        return None
+
+    anchor_rows = _find_question_anchor_rows(mask, band_box, row_projection, smoothed, options)
+    if anchor_rows:
+        anchor_row = anchor_rows[0]
+        local_start = max(min_segment_height, anchor_row - 90)
+        local_end = max(local_start + 1, anchor_row - 8)
+        if local_end > local_start:
+            local_offset = min(range(local_end - local_start), key=lambda idx: smoothed[local_start + idx])
+            refined_row = local_start + local_offset
+            if refined_row >= min_segment_height and crop.height - refined_row >= min_segment_height:
+                return refined_row
+
+    valley_threshold = max(4.0, max_score * options.document_split_valley_ratio)
+    search_start = min_segment_height
+    search_end = crop.height - min_segment_height
+
+    low_runs: list[tuple[int, int]] = []
+    run_start: int | None = None
+    for row_index in range(search_start, search_end):
+        if smoothed[row_index] <= valley_threshold:
+            if run_start is None:
+                run_start = row_index
+            continue
+        if run_start is not None:
+            low_runs.append((run_start, row_index - 1))
+            run_start = None
+    if run_start is not None:
+        low_runs.append((run_start, search_end - 1))
+
+    candidates: list[tuple[float, int]] = []
+    min_gap = options.document_split_min_gap_run_px
+    for run_top, run_bottom in low_runs:
+        run_length = run_bottom - run_top + 1
+        if run_length < min_gap:
+            continue
+
+        split_row = (run_top + run_bottom) // 2
+        if split_row < min_segment_height or crop.height - split_row < min_segment_height:
+            continue
+
+        top_density = sum(row_projection[:split_row]) / max(1.0, float(split_row * crop.width))
+        bottom_density = sum(row_projection[split_row:]) / max(1.0, float((crop.height - split_row) * crop.width))
+        if min(top_density, bottom_density) < options.document_split_min_density_ratio:
+            continue
+
+        valley_score = sum(smoothed[run_top : run_bottom + 1]) / max(1, run_length)
+        valley_depth = 1.0 - min(1.0, valley_score / max_score)
+        centrality = abs(split_row - (crop.height / 2.0)) / max(1.0, crop.height / 2.0)
+        score = valley_depth * 2.2 + min(1.0, run_length / max(1, min_gap * 1.4)) - centrality * 0.45
+        candidates.append((score, split_row))
+
+    if not candidates:
+        return None
+
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _split_document_band_box(
+    mask: Image.Image,
+    band_box: Box,
+    options: SegmentOptions,
+    *,
+    depth: int = 0,
+) -> list[Box]:
+    if depth >= options.document_recursive_split_max_depth:
+        return [band_box]
+    if band_box.height < options.document_recursive_split_min_height_px:
+        return [band_box]
+
+    split_row = _find_document_split_row(mask, band_box, options)
+    if split_row is None:
+        return [band_box]
+
+    top_box = _fit_document_slice_box(mask, band_box, 0, split_row, options)
+    bottom_box = _fit_document_slice_box(mask, band_box, split_row, int(band_box.height), options)
+    if top_box is None or bottom_box is None:
+        return [band_box]
+
+    if top_box.area < band_box.area * 0.12 or bottom_box.area < band_box.area * 0.12:
+        return [band_box]
+    if not (_looks_like_question_start(mask, top_box) and _looks_like_question_start(mask, bottom_box)):
+        return [band_box]
+
+    return _split_document_band_box(mask, top_box, options, depth=depth + 1) + _split_document_band_box(
+        mask,
+        bottom_box,
+        options,
+        depth=depth + 1,
+    )
+
+
 def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
     mask = _dark_mask(image, options.document_dark_threshold)
     content_box = _find_document_content_box(mask, image.width, image.height)
     columns = _detect_document_columns(mask, content_box, options)
     blocks: list[ContentBlock] = []
 
+    total_split_count = 0
     for column_index, column_box in enumerate(columns, start=1):
         row_bands = _find_document_row_bands(mask, column_box, options)
         row_bands = _merge_small_document_bands(row_bands, options)
-        for band_index, band in enumerate(row_bands, start=1):
+        column_entries: list[tuple[Box, int, int, int]] = []
+        for source_band_index, band in enumerate(row_bands, start=1):
             box = _document_band_box(mask, column_box, band, options)
+            split_boxes = _split_document_band_box(mask, box, options)
+            total_split_count += max(0, len(split_boxes) - 1)
+            for local_split_index, split_box in enumerate(split_boxes, start=1):
+                column_entries.append((split_box, source_band_index, local_split_index, len(split_boxes)))
+
+        for band_index, (box, source_band_index, split_index, split_count) in enumerate(column_entries, start=1):
             blocks.append(
                 ContentBlock(
                     block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
@@ -367,6 +651,10 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
                         "segmenter": "document-bands",
                         "column_index": column_index,
                         "question_band_index": band_index,
+                        "source_band_index": source_band_index,
+                        "split_from_band": split_count > 1,
+                        "band_split_index": split_index,
+                        "band_split_count": split_count,
                     },
                 )
             )
@@ -391,6 +679,7 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
             "height": content_box.height,
         },
         "column_count": len(columns),
+        "document_band_split_count": total_split_count,
     }
 
 

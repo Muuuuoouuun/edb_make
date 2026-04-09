@@ -291,6 +291,35 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
     )
 
 
+def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not ai_fallback_config:
+        return None
+    attempted_page_count = 0
+    applied_page_count = 0
+    status_counts: dict[str, int] = {}
+
+    for page in pages:
+        ai_summary = page.metadata.get("ai_fallback")
+        if not isinstance(ai_summary, dict):
+            continue
+        if ai_summary.get("attempted"):
+            attempted_page_count += 1
+        if ai_summary.get("applied"):
+            applied_page_count += 1
+        status = str(ai_summary.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "requested": bool(ai_fallback_config.get("enabled")),
+        "mode": ai_fallback_config.get("mode"),
+        "provider": ai_fallback_config.get("provider"),
+        "model": ai_fallback_config.get("model"),
+        "attempted_page_count": attempted_page_count,
+        "applied_page_count": applied_page_count,
+        "status_counts": status_counts,
+    }
+
+
 def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
     return {
         "name": template.name,
@@ -324,6 +353,7 @@ def build_ui_session(
     *,
     record_mode: str,
     ai_fallback_config: dict[str, Any] | None = None,
+    ai_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
     warning_messages: list[str] = []
@@ -390,6 +420,7 @@ def build_ui_session(
             )
         ),
         "ai_fallback": ai_fallback_config,
+        "ai_summary": ai_summary,
         "warning_messages": warning_messages,
         "problems": problems,
     }
@@ -799,6 +830,7 @@ def run_problem_export(
         pages.extend(page_models)
 
     save_pages_json(pages, out_dir / "pages.json")
+    ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
     problem_entries = build_problem_entries(prepared_pages, pages, out_dir, template)
     records, placements, header_flag = build_records(
         problem_entries,
@@ -819,6 +851,7 @@ def run_problem_export(
         "header_flag": header_flag,
         "text_confidence_threshold": text_confidence_threshold,
         "ai_fallback": ai_fallback_config,
+        "ai_summary": ai_summary,
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": ocr,
@@ -845,6 +878,7 @@ def run_problem_export(
         source_paths,
         record_mode=record_mode,
         ai_fallback_config=ai_fallback_config,
+        ai_summary=ai_summary,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -858,6 +892,7 @@ def run_problem_export(
         "synced_ui_path": synced_ui_path.resolve() if synced_ui_path else None,
         "summary": summary,
         "ai_fallback": ai_fallback_config,
+        "ai_summary": ai_summary,
     }
 
 
@@ -895,24 +930,25 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(args.subject)
+    ai_fallback_config = _build_ai_fallback_config(
+        enabled=args.ai_fallback_enabled,
+        mode=args.ai_fallback,
+        provider=args.ai_fallback_provider,
+        model=args.ai_fallback_model,
+        prompt=args.ai_fallback_prompt,
+        max_tokens=args.ai_fallback_max_tokens,
+        temperature=args.ai_fallback_temperature,
+        threshold=args.ai_fallback_threshold,
+        max_regions=args.ai_fallback_max_regions,
+        timeout_ms=args.ai_fallback_timeout_ms,
+        save_debug=args.ai_fallback_save_debug,
+        fail_on_error=args.fail_on_ai_error,
+    )
     prepared_pages, pages = build_pages(
         args.source,
         subject=subject,
         ocr_mode=args.ocr,
-        ai_fallback_config=_build_ai_fallback_config(
-            enabled=args.ai_fallback_enabled,
-            mode=args.ai_fallback,
-            provider=args.ai_fallback_provider,
-            model=args.ai_fallback_model,
-            prompt=args.ai_fallback_prompt,
-            max_tokens=args.ai_fallback_max_tokens,
-            temperature=args.ai_fallback_temperature,
-            threshold=args.ai_fallback_threshold,
-            max_regions=args.ai_fallback_max_regions,
-            timeout_ms=args.ai_fallback_timeout_ms,
-            save_debug=args.ai_fallback_save_debug,
-            fail_on_error=args.fail_on_ai_error,
-        ),
+        ai_fallback_config=ai_fallback_config,
         pdf_dpi=args.pdf_dpi,
         detect_perspective=args.detect_perspective,
         deskew=not args.skip_deskew,
@@ -940,6 +976,7 @@ def main() -> int:
         edb_path,
         build_edb(records, header_flag=header_flag, page_count_hint=template.board_page_count),
     )
+    ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
 
     summary = {
         "source": str(args.source),
@@ -952,20 +989,8 @@ def main() -> int:
         "record_mode": args.record_mode,
         "header_flag": header_flag,
         "text_confidence_threshold": args.text_confidence_threshold,
-        "ai_fallback": _build_ai_fallback_config(
-            enabled=args.ai_fallback_enabled,
-            mode=args.ai_fallback,
-            provider=args.ai_fallback_provider,
-            model=args.ai_fallback_model,
-            prompt=args.ai_fallback_prompt,
-            max_tokens=args.ai_fallback_max_tokens,
-            temperature=args.ai_fallback_temperature,
-            threshold=args.ai_fallback_threshold,
-            max_regions=args.ai_fallback_max_regions,
-            timeout_ms=args.ai_fallback_timeout_ms,
-            save_debug=args.ai_fallback_save_debug,
-            fail_on_error=args.fail_on_ai_error,
-        ),
+        "ai_fallback": ai_fallback_config,
+        "ai_summary": ai_summary,
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": args.ocr,

@@ -1,6 +1,34 @@
 const BASE_SLOT_HEIGHT = 1.2;
 
 const DEFAULT_OUTPUT_DIR = "mvp_export_app";
+const DEFAULT_AI_FALLBACK = Object.freeze({
+  enabled: false,
+  mode: "off",
+  provider: "openai",
+  model: "gpt-5.4-mini",
+  threshold: 0.72,
+  maxRegions: 18,
+  timeoutMs: 12000,
+  saveDebug: false,
+  failOnError: false,
+  provided: false,
+});
+const AI_PROVIDER_PRESETS = Object.freeze({
+  openai: {
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    threshold: 0.72,
+    maxRegions: 18,
+    timeoutMs: 12000,
+  },
+  gemini: {
+    provider: "gemini",
+    model: "gemini-2.5-flash",
+    threshold: 0.72,
+    maxRegions: 18,
+    timeoutMs: 15000,
+  },
+});
 
 const fallbackProblems = [
   {
@@ -89,6 +117,69 @@ function normalizeTemplate(template) {
     baseSlotHeight: toNumber(template.base_slot_height_pages ?? template.baseSlotHeight, BASE_SLOT_HEIGHT),
     boardPageCount: toNumber(template.board_page_count ?? template.boardPageCount, 50),
     fixedLeftRatio: toNumber(template.fixed_left_zone_ratio ?? template.fixedLeftRatio, 0.5),
+  };
+}
+
+function normalizeAiFallbackConfig(rawConfig, rawSummary) {
+  const config = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  const summary = rawSummary && typeof rawSummary === "object" ? rawSummary : {};
+  const rawMode = String(config.mode ?? summary.mode ?? DEFAULT_AI_FALLBACK.mode).trim().toLowerCase();
+  const mode = ["auto", "force", "off"].includes(rawMode) ? rawMode : DEFAULT_AI_FALLBACK.mode;
+  const rawProvider = String(config.provider ?? summary.provider ?? DEFAULT_AI_FALLBACK.provider).trim().toLowerCase();
+  const provider = rawProvider === "gemini" ? "gemini" : "openai";
+  const defaultPreset = AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.openai;
+  const model = String(config.model ?? summary.model ?? defaultPreset.model).trim() || defaultPreset.model;
+  const threshold = Math.min(1, Math.max(0, toNumber(config.threshold ?? config.aiThreshold ?? summary.threshold, defaultPreset.threshold)));
+  const maxRegions = Math.max(1, Math.round(toNumber(config.max_regions ?? config.maxRegions ?? summary.max_regions ?? summary.maxRegions, defaultPreset.maxRegions)));
+  const timeoutMs = Math.max(1000, Math.round(toNumber(config.timeout_ms ?? config.timeoutMs ?? summary.timeout_ms ?? summary.timeoutMs, defaultPreset.timeoutMs)));
+  const enabled = Boolean(config.enabled ?? summary.requested ?? (mode !== "off"));
+
+  return {
+    enabled,
+    mode,
+    provider,
+    model,
+    threshold,
+    maxRegions,
+    timeoutMs,
+    saveDebug: Boolean(config.save_debug ?? config.saveDebug),
+    failOnError: Boolean(config.fail_on_error ?? config.failOnError),
+    provided: Boolean(rawConfig || rawSummary),
+  };
+}
+
+function normalizeAiSummary(rawSummary) {
+  if (!rawSummary || typeof rawSummary !== "object") {
+    return {
+      requested: false,
+      mode: DEFAULT_AI_FALLBACK.mode,
+      provider: DEFAULT_AI_FALLBACK.provider,
+      model: DEFAULT_AI_FALLBACK.model,
+      attemptedPageCount: 0,
+      appliedPageCount: 0,
+      statusCounts: {},
+      provided: false,
+    };
+  }
+
+  const rawStatusCounts = rawSummary.status_counts || rawSummary.statusCounts || {};
+  const statusCounts = Object.entries(rawStatusCounts).reduce((accumulator, [status, count]) => {
+    const numeric = Number(count);
+    if (status && Number.isFinite(numeric) && numeric >= 0) {
+      accumulator[String(status)] = numeric;
+    }
+    return accumulator;
+  }, {});
+
+  return {
+    requested: Boolean(rawSummary.requested),
+    mode: String(rawSummary.mode || DEFAULT_AI_FALLBACK.mode).trim().toLowerCase() || DEFAULT_AI_FALLBACK.mode,
+    provider: String(rawSummary.provider || DEFAULT_AI_FALLBACK.provider).trim().toLowerCase() || DEFAULT_AI_FALLBACK.provider,
+    model: String(rawSummary.model || DEFAULT_AI_FALLBACK.model).trim() || DEFAULT_AI_FALLBACK.model,
+    attemptedPageCount: Math.max(0, Math.round(toNumber(rawSummary.attempted_page_count ?? rawSummary.attemptedPageCount, 0))),
+    appliedPageCount: Math.max(0, Math.round(toNumber(rawSummary.applied_page_count ?? rawSummary.appliedPageCount, 0))),
+    statusCounts,
+    provided: true,
   };
 }
 
@@ -184,6 +275,8 @@ function normalizeProblem(problem, index) {
 
 function normalizeSession(rawSession, fallbackName = "불러온 세션") {
   const rawProblems = Array.isArray(rawSession?.problems) ? rawSession.problems : [];
+  const aiSummary = normalizeAiSummary(rawSession?.ai_summary || rawSession?.aiSummary);
+  const aiFallback = normalizeAiFallbackConfig(rawSession?.ai_fallback || rawSession?.aiFallback, rawSession?.ai_summary || rawSession?.aiSummary);
   return {
     sessionName: rawSession?.session_name || rawSession?.sessionName || fallbackName,
     dataSource: rawSession?.data_source || rawSession?.dataSource || "manual",
@@ -207,6 +300,8 @@ function normalizeSession(rawSession, fallbackName = "불러온 세션") {
     warningMessages: Array.isArray(rawSession?.warning_messages || rawSession?.warningMessages)
       ? (rawSession?.warning_messages || rawSession?.warningMessages)
       : [],
+    aiFallback,
+    aiSummary,
     problems: rawProblems.map(normalizeProblem),
   };
 }
@@ -257,6 +352,184 @@ function sessionSourceLabel(source) {
 
 function exportModeLabel(mode) {
   return mode === "page" ? "페이지별" : "문항별";
+}
+
+function aiProviderLabel(provider) {
+  return provider === "gemini" ? "Gemini" : "OpenAI";
+}
+
+function aiModeLabel(mode) {
+  if (mode === "force") {
+    return "강제";
+  }
+  if (mode === "auto") {
+    return "자동";
+  }
+  return "꺼짐";
+}
+
+function aiStatusLabel(status) {
+  const labels = {
+    applied: "적용됨",
+    applied_with_warnings: "적용됨",
+    disabled: "비활성",
+    missing_api_key: "키 없음",
+    not_needed: "불필요",
+    provider_pending: "제미나이 대기",
+    repair_error: "요청 실패",
+    skipped: "건너뜀",
+    too_many_blocks: "블록 과다",
+    unknown: "알 수 없음",
+  };
+  return labels[status] || status || "알 수 없음";
+}
+
+function formatAiStatusCounts(statusCounts) {
+  const entries = Object.entries(statusCounts || {}).filter(([, count]) => Number(count) > 0);
+  if (!entries.length) {
+    return "";
+  }
+  return entries.map(([status, count]) => `${aiStatusLabel(status)} ${count}p`).join(" · ");
+}
+
+function getAiControlElements() {
+  return {
+    enabled: document.getElementById("runAiFallbackEnabled"),
+    mode: document.getElementById("runAiFallbackModeSelect"),
+    provider: document.getElementById("runAiProviderSelect"),
+    model: document.getElementById("runAiModelInput"),
+    threshold: document.getElementById("runAiThresholdInput"),
+    maxRegions: document.getElementById("runAiMaxRegionsInput"),
+    timeoutMs: document.getElementById("runAiTimeoutInput"),
+    saveDebug: document.getElementById("runAiSaveDebug"),
+    openAiPresetButton: document.getElementById("applyOpenAiPresetButton"),
+    geminiPresetButton: document.getElementById("applyGeminiPresetButton"),
+    helper: document.getElementById("aiFallbackHelper"),
+  };
+}
+
+function readAiFallbackForm() {
+  const controls = getAiControlElements();
+  const provider = controls.provider?.value === "gemini" ? "gemini" : "openai";
+  const preset = AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.openai;
+  const requestedMode = String(controls.mode?.value || DEFAULT_AI_FALLBACK.mode).trim().toLowerCase();
+  const mode = controls.enabled?.checked ? requestedMode : "off";
+
+  return {
+    enabled: mode !== "off",
+    mode: ["auto", "force", "off"].includes(mode) ? mode : "off",
+    provider,
+    model: (controls.model?.value || "").trim() || preset.model,
+    threshold: Math.min(1, Math.max(0, toNumber(controls.threshold?.value, preset.threshold))),
+    maxRegions: Math.max(1, Math.round(toNumber(controls.maxRegions?.value, preset.maxRegions))),
+    timeoutMs: Math.max(1000, Math.round(toNumber(controls.timeoutMs?.value, preset.timeoutMs))),
+    saveDebug: Boolean(controls.saveDebug?.checked),
+  };
+}
+
+function writeAiFallbackForm(config) {
+  const controls = getAiControlElements();
+  const normalized = normalizeAiFallbackConfig(config, null);
+  if (controls.enabled) {
+    controls.enabled.checked = normalized.enabled;
+  }
+  if (controls.mode) {
+    controls.mode.value = normalized.mode;
+  }
+  if (controls.provider) {
+    controls.provider.value = normalized.provider;
+  }
+  if (controls.model) {
+    controls.model.value = normalized.model;
+  }
+  if (controls.threshold) {
+    controls.threshold.value = String(normalized.threshold);
+  }
+  if (controls.maxRegions) {
+    controls.maxRegions.value = String(normalized.maxRegions);
+  }
+  if (controls.timeoutMs) {
+    controls.timeoutMs.value = String(normalized.timeoutMs);
+  }
+  if (controls.saveDebug) {
+    controls.saveDebug.checked = normalized.saveDebug;
+  }
+}
+
+function syncAiFallbackControls() {
+  const controls = getAiControlElements();
+  const helper = controls.helper;
+  if (!controls.enabled || !controls.mode || !controls.provider || !controls.model) {
+    return;
+  }
+
+  const isEnabled = controls.enabled.checked;
+  const isLocked = state.runBusy;
+  [
+    controls.mode,
+    controls.provider,
+    controls.model,
+    controls.threshold,
+    controls.maxRegions,
+    controls.timeoutMs,
+    controls.saveDebug,
+  ].forEach((node) => {
+    if (node) {
+      node.disabled = isLocked || !isEnabled;
+    }
+  });
+  controls.enabled.disabled = isLocked;
+  [controls.openAiPresetButton, controls.geminiPresetButton].forEach((button) => {
+    if (button) {
+      button.disabled = isLocked;
+    }
+  });
+
+  if (!helper) {
+    return;
+  }
+
+  const config = readAiFallbackForm();
+  helper.classList.remove("is-warning", "is-success");
+
+  if (isLocked) {
+    helper.textContent = "AI settings are locked while export is running.";
+    return;
+  }
+
+  if (!isEnabled || config.mode === "off") {
+    helper.textContent = "AI 보정이 꺼져 있습니다.";
+    return;
+  }
+
+  if (config.provider === "gemini") {
+    helper.textContent = "Gemini는 자리만 준비됐습니다. 현재 실행에서는 provider_pending으로 안전하게 건너뜁니다.";
+    helper.classList.add("is-warning");
+    return;
+  }
+
+  if (config.mode === "force") {
+    helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 모든 후보 페이지를 보정 시도합니다.`;
+  } else {
+    helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 애매한 페이지만 선택 보정합니다.`;
+  }
+  helper.classList.add("is-success");
+}
+
+function applyAiPreset(provider) {
+  const normalizedProvider = provider === "gemini" ? "gemini" : "openai";
+  const preset = AI_PROVIDER_PRESETS[normalizedProvider] || AI_PROVIDER_PRESETS.openai;
+  writeAiFallbackForm({
+    enabled: true,
+    mode: "auto",
+    provider: preset.provider,
+    model: preset.model,
+    threshold: preset.threshold,
+    maxRegions: preset.maxRegions,
+    timeoutMs: preset.timeoutMs,
+    saveDebug: false,
+  });
+  syncAiFallbackControls();
 }
 
 function summarizeQueuedSources() {
@@ -469,6 +742,8 @@ function applySession(session) {
   if (layoutModeSelect) {
     layoutModeSelect.value = session.exportMode || "question";
   }
+  writeAiFallbackForm(session.aiFallback);
+  syncAiFallbackControls();
   syncTemplateSelect();
   render();
 }
@@ -501,6 +776,8 @@ function resetRunOptions() {
   if (autoParseToggle) {
     autoParseToggle.checked = true;
   }
+  writeAiFallbackForm(DEFAULT_AI_FALLBACK);
+  syncAiFallbackControls();
 }
 
 function getTemplate() {
@@ -706,6 +983,7 @@ function updateRuntimeControls() {
   }
   runExportButton.textContent = `${exportModeLabel(runLayoutModeSelect?.value)} 변환`;
   autoParseToggle.checked = state.autoParse;
+  syncAiFallbackControls();
 }
 
 async function probeApi() {
@@ -750,6 +1028,7 @@ async function runExportFromApi() {
 
     const queue = [...state.runSourceFiles];
     const containsPhoto = queue.some((file) => !isPdfFile(file));
+    const aiFallback = readAiFallbackForm();
     const filesPayload = await Promise.all(
       queue.map(async (file) => ({
         fileName: file.name,
@@ -766,6 +1045,16 @@ async function runExportFromApi() {
       exportEdb: document.getElementById("runExportEdb").checked,
       detectPerspective: containsPhoto,
       maxDimension: containsPhoto ? 2400 : null,
+      aiFallback: {
+        enabled: aiFallback.enabled,
+        mode: aiFallback.mode,
+        provider: aiFallback.provider,
+        model: aiFallback.model,
+        threshold: aiFallback.threshold,
+        maxRegions: aiFallback.maxRegions,
+        timeoutMs: aiFallback.timeoutMs,
+        saveDebug: aiFallback.saveDebug,
+      },
     };
 
     const response = await fetch("/api/export", {
@@ -995,6 +1284,8 @@ function renderInspector(selected) {
     return;
   }
   const session = state.session;
+  const aiSummary = session.aiSummary || normalizeAiSummary(null);
+  const aiFallback = session.aiFallback || normalizeAiFallbackConfig(null, null);
   const warnings = [...(session.warningMessages || [])];
   if (selected.overflowViolation) {
     warnings.push("이 문항은 1.2p보다 높지만 현재 오버플로가 꺼져 있습니다.");
@@ -1063,6 +1354,27 @@ function renderInspector(selected) {
         <button class="chip-button is-danger" id="deleteButton" type="button">삭제</button>
       </div>
     </div>
+
+    ${(aiFallback.provided || aiSummary.requested || aiSummary.attemptedPageCount > 0 || aiSummary.appliedPageCount > 0) ? `
+    <div class="inspector-card">
+      <h3>AI 문항 보정</h3>
+      <div class="inspector-row">
+        <label>설정</label>
+        <span>${aiModeLabel(aiFallback.mode)} · ${aiProviderLabel(aiFallback.provider)} · ${aiFallback.model}</span>
+      </div>
+      <div class="inspector-row">
+        <label>페이지</label>
+        <span>시도 ${aiSummary.attemptedPageCount}p / 적용 ${aiSummary.appliedPageCount}p</span>
+      </div>
+      <div class="inspector-row">
+        <label>상태</label>
+        <span>${formatAiStatusCounts(aiSummary.statusCounts) || "기록 없음"}</span>
+      </div>
+      ${aiFallback.provider === "gemini" ? `
+      <p class="helper-text">Gemini는 UI와 설정만 준비된 상태입니다. 현재 서버에서는 실제 호출 없이 안전하게 건너뜁니다.</p>
+      ` : ""}
+    </div>
+    ` : ""}
 
     ${warnings.length ? `
     <div class="inspector-card">
@@ -1219,9 +1531,21 @@ function renderSessionSummary() {
   const problemCount = state.session.detectedProblemCount || state.problems.length;
   const includedCount = activeProblems().length;
   const excludedCount = state.problems.length - includedCount;
+  const aiSummary = state.session.aiSummary || normalizeAiSummary(null);
+  const aiFallback = state.session.aiFallback || normalizeAiFallbackConfig(null, null);
   let text = `${exportModeLabel(state.session.exportMode)} 변환 · 입력 ${inputCount}개 · 렌더 페이지 ${pageCount}개 · 감지 문항 ${problemCount}개 · 현재 포함 ${includedCount}개`;
   if (excludedCount > 0) {
     text += ` · 제외 ${excludedCount}개`;
+  }
+  if (aiSummary.requested || aiFallback.provided) {
+    text += ` · AI ${aiModeLabel(aiFallback.mode)} ${aiProviderLabel(aiFallback.provider)}`;
+    if (aiSummary.attemptedPageCount > 0 || aiSummary.appliedPageCount > 0) {
+      text += ` · 시도 ${aiSummary.attemptedPageCount}p · 적용 ${aiSummary.appliedPageCount}p`;
+    }
+    const statusText = formatAiStatusCounts(aiSummary.statusCounts);
+    if (statusText) {
+      text += ` · ${statusText}`;
+    }
   }
   if (state.session.warningMessages?.length) {
     text += ` · 주의: ${state.session.warningMessages[0]}`;
@@ -1310,6 +1634,22 @@ document.getElementById("templateSelect").addEventListener("change", (event) => 
 document.getElementById("runLayoutModeSelect").addEventListener("change", () => {
   updateRuntimeControls();
 });
+
+[
+  "runAiFallbackEnabled",
+  "runAiFallbackModeSelect",
+  "runAiProviderSelect",
+  "runAiModelInput",
+  "runAiThresholdInput",
+  "runAiMaxRegionsInput",
+  "runAiTimeoutInput",
+  "runAiSaveDebug",
+].forEach((id) => {
+  document.getElementById(id)?.addEventListener("change", syncAiFallbackControls);
+});
+document.getElementById("runAiModelInput")?.addEventListener("input", syncAiFallbackControls);
+document.getElementById("applyOpenAiPresetButton")?.addEventListener("click", () => applyAiPreset("openai"));
+document.getElementById("applyGeminiPresetButton")?.addEventListener("click", () => applyAiPreset("gemini"));
 
 document.getElementById("openComposerButton").addEventListener("click", openComposerModal);
 
@@ -1428,6 +1768,8 @@ document.addEventListener("keydown", (event) => {
 });
 
 async function initializeRuntimeConnection() {
+  writeAiFallbackForm(state.session.aiFallback);
+  syncAiFallbackControls();
   syncTemplateSelect();
   render();
   await probeApi();

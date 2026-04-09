@@ -117,6 +117,12 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
+    if resolved_config.provider.strip().lower() != "openai":
+        summary["status"] = "provider_pending"
+        summary["skip_reason"] = "provider_not_implemented"
+        baseline.metadata["ai_fallback"] = summary
+        return baseline
+
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         summary["status"] = "missing_api_key"
