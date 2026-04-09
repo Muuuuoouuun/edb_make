@@ -21,6 +21,11 @@
   - `build_structured_page_json.py`
 - Added an MVP export CLI that produces JSON, placement plans, rendered board pages, and a best-effort image-only `.edb`:
   - `build_mvp_export.py`
+- Connected the preview UI to real MVP export output:
+  - `build_mvp_export.py` now writes `ui_session.json`, problem crops, and an optional auto-synced `ui_prototype/generated_session.js`
+  - `ui_prototype/index.html`
+  - `ui_prototype/app.js`
+  - `ui_prototype/styles.css`
 - Added a minimal `.edb` builder for controlled samples:
   - `edb_builder.py`
 - Added planning and pipeline documents:
@@ -54,6 +59,7 @@
 - Smoke tests were run on photographed ClassIn board images with `noop` OCR and produced fallback image-block `PageModel` JSON output.
 - Current segmentation is still conservative and often collapses a photographed board into a single large block when OCR is disabled or image quality/layout cues are weak.
 - MVP export now successfully produces `pages.json`, `placements.json`, rendered board PNGs, and an exportable board-image `.edb`.
+- The UI prototype can now open real MVP sessions instead of sample-only placeholder data.
 
 ## Next Recommended Steps
 1. Improve rule-based segmentation so one board photo splits into title/text/formula/diagram regions
@@ -62,3 +68,4 @@
 4. Evolve the image-only MVP `.edb` export into a mixed text/image writer where ClassIn behavior is stable
 5. Test generated `.edb` files directly in ClassIn
 6. Add template-driven placement for empty teaching space and board consistency
+7. Upgrade the UI from local preview/session loader to a true run/export frontend if a backend is added

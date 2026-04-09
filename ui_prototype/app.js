@@ -1,4 +1,5 @@
 const BASE_SLOT_HEIGHT = 1.2;
+
 const fallbackProblems = [
   {
     id: "math-01",
@@ -36,33 +37,7 @@ const fallbackProblems = [
     overflowAllowed: true,
     readingHeavy: true,
   },
-  {
-    id: "math-05",
-    title: "05. Sequence application",
-    subject: "math",
-    imagePath: "../out_images_sample4/record_0004_img_0.jpg",
-    actualHeightPages: 1.08,
-    overflowAllowed: false,
-    readingHeavy: false,
-  },
-  {
-    id: "korean-06",
-    title: "06. Short literature item",
-    subject: "korean",
-    imagePath: "../out_images_sample4/record_0005_img_0.jpg",
-    actualHeightPages: 0.98,
-    overflowAllowed: true,
-    readingHeavy: false,
-  },
 ];
-
-const state = {
-  problems: (window.PROTOTYPE_DATA?.problems || fallbackProblems).map((item) => ({ ...item })),
-  selectedId: (window.PROTOTYPE_DATA?.problems || fallbackProblems)[0].id,
-  previewMode: "board",
-  templateKey: "academy-default",
-  dragId: null,
-};
 
 const templatePresets = {
   "academy-default": {
@@ -84,6 +59,139 @@ const templatePresets = {
     fixedLeftRatio: 0.48,
   },
 };
+
+function toNumber(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizePath(value) {
+  if (!value) {
+    return "";
+  }
+  if (value.startsWith("file://") || value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+  if (/^[A-Za-z]:[\\/]/.test(value)) {
+    return `file:///${value.replace(/\\/g, "/")}`;
+  }
+  return value.replace(/\\/g, "/");
+}
+
+function normalizeTemplate(template) {
+  if (!template) {
+    return null;
+  }
+  return {
+    name: template.name || "Generated session",
+    baseSlotHeight: toNumber(template.base_slot_height_pages ?? template.baseSlotHeight, BASE_SLOT_HEIGHT),
+    boardPageCount: toNumber(template.board_page_count ?? template.boardPageCount, 50),
+    fixedLeftRatio: toNumber(template.fixed_left_zone_ratio ?? template.fixedLeftRatio, 0.5),
+  };
+}
+
+function normalizeProblem(problem, index) {
+  return {
+    id: problem.id || problem.problem_id || `problem-${String(index + 1).padStart(2, "0")}`,
+    title: problem.title || `Problem ${index + 1}`,
+    subject: problem.subject || "unknown",
+    imagePath: normalizePath(problem.imagePath || problem.image_path || problem.sourceImagePath || ""),
+    sourceImagePath: normalizePath(problem.sourceImagePath || problem.source_image_path || problem.imagePath || ""),
+    boardRenderPath: normalizePath(problem.boardRenderPath || problem.board_render_path || ""),
+    actualHeightPages: toNumber(problem.actualHeightPages ?? problem.actual_content_height_pages, 0.9),
+    overflowAllowed: Boolean(problem.overflowAllowed ?? problem.overflow_allowed),
+    readingHeavy: Boolean(problem.readingHeavy ?? problem.reading_heavy),
+    sourcePageId: problem.sourcePageId || problem.source_page_id || "",
+    startYPages: toNumber(problem.startYPages ?? problem.start_y_pages, 0),
+    snappedNextStartYPages: toNumber(problem.snappedNextStartYPages ?? problem.snapped_next_start_y_pages, 0),
+    overflowAmountPages: toNumber(problem.overflowAmountPages ?? problem.overflow_amount_pages, 0),
+    overflowViolation: Boolean(problem.overflowViolation ?? problem.overflow_violation),
+    slotSpanCount: toNumber(problem.slotSpanCount ?? problem.slot_span_count, 1),
+  };
+}
+
+function normalizeSession(rawSession, fallbackName = "Loaded session") {
+  const rawProblems = Array.isArray(rawSession?.problems) ? rawSession.problems : [];
+  return {
+    sessionName: rawSession?.session_name || rawSession?.sessionName || fallbackName,
+    dataSource: rawSession?.data_source || rawSession?.dataSource || "manual",
+    generatedAt: rawSession?.generated_at || rawSession?.generatedAt || "",
+    outputDir: rawSession?.output_dir || rawSession?.outputDir || "",
+    pagesJsonPath: rawSession?.pages_json_path || rawSession?.pagesJsonPath || "",
+    placementsJsonPath: rawSession?.placements_json_path || rawSession?.placementsJsonPath || "",
+    edbPath: rawSession?.edb_path || rawSession?.edbPath || "",
+    edbFileUri: normalizePath(rawSession?.edb_file_uri || rawSession?.edbFileUri || rawSession?.edb_path || ""),
+    renderedPageFileUris: (rawSession?.rendered_page_file_uris || rawSession?.renderedPageFileUris || rawSession?.rendered_page_paths || rawSession?.renderedPagePaths || []).map(normalizePath),
+    template: normalizeTemplate(rawSession?.template),
+    problems: rawProblems.map(normalizeProblem),
+  };
+}
+
+function cloneProblems(problems) {
+  return problems.map((problem) => ({ ...problem }));
+}
+
+const sampleSession = normalizeSession(
+  {
+    session_name: "Prototype sample",
+    data_source: "sample",
+    problems: window.PROTOTYPE_DATA?.problems || fallbackProblems,
+  },
+  "Prototype sample",
+);
+
+const generatedSession = window.EDB_UI_SESSION
+  ? normalizeSession(window.EDB_UI_SESSION, "Generated session")
+  : null;
+
+const state = {
+  session: generatedSession || sampleSession,
+  problems: cloneProblems((generatedSession || sampleSession).problems),
+  selectedId: (generatedSession || sampleSession).problems[0]?.id || null,
+  previewMode: "board",
+  templateKey: "academy-default",
+  dragId: null,
+};
+
+function syncTemplateSelect() {
+  const select = document.getElementById("templateSelect");
+  const sessionTemplate = state.session.template;
+  const generatedOptionValue = "generated-session";
+  const existingGeneratedOption = select.querySelector(`option[value="${generatedOptionValue}"]`);
+
+  if (sessionTemplate) {
+    templatePresets[generatedOptionValue] = {
+      name: sessionTemplate.name,
+      baseSlotHeight: sessionTemplate.baseSlotHeight,
+      boardPageCount: sessionTemplate.boardPageCount,
+      fixedLeftRatio: sessionTemplate.fixedLeftRatio,
+    };
+    if (!existingGeneratedOption) {
+      const option = document.createElement("option");
+      option.value = generatedOptionValue;
+      option.textContent = `${sessionTemplate.name} (Session)`;
+      select.prepend(option);
+    } else {
+      existingGeneratedOption.textContent = `${sessionTemplate.name} (Session)`;
+    }
+    state.templateKey = generatedOptionValue;
+  } else if (existingGeneratedOption) {
+    existingGeneratedOption.remove();
+    if (state.templateKey === generatedOptionValue) {
+      state.templateKey = "academy-default";
+    }
+  }
+
+  select.value = state.templateKey;
+}
+
+function applySession(session) {
+  state.session = session;
+  state.problems = cloneProblems(session.problems);
+  state.selectedId = session.problems[0]?.id || null;
+  syncTemplateSelect();
+  render();
+}
 
 function getTemplate() {
   return templatePresets[state.templateKey] || templatePresets["academy-default"];
@@ -118,10 +226,6 @@ function computePlacements() {
       slotSpanCount: Math.max(1, Math.round((nextStart - start) / template.baseSlotHeight)),
     };
   });
-}
-
-function getSelectedPlacement() {
-  return computePlacements().find((item) => item.id === state.selectedId) || null;
 }
 
 function moveProblem(problemId, delta) {
@@ -169,7 +273,7 @@ function deleteProblem(problemId) {
 
   state.problems = state.problems.filter((item) => item.id !== problemId);
   if (state.selectedId === problemId) {
-    state.selectedId = state.problems[Math.max(0, index - 1)].id;
+    state.selectedId = state.problems[Math.max(0, index - 1)]?.id || state.problems[0]?.id || null;
   }
   render();
 }
@@ -180,10 +284,18 @@ function addLongPassage() {
     id: nextId,
     title: "New long Korean passage",
     subject: "korean",
-    imagePath: "../out_images_sample4/record_0006_img_0.jpg",
+    imagePath: state.problems[0]?.imagePath || "",
+    sourceImagePath: state.problems[0]?.sourceImagePath || "",
+    boardRenderPath: state.problems[0]?.boardRenderPath || "",
     actualHeightPages: 1.58,
     overflowAllowed: true,
     readingHeavy: true,
+    sourcePageId: "",
+    startYPages: 0,
+    snappedNextStartYPages: 0,
+    overflowAmountPages: 0,
+    overflowViolation: false,
+    slotSpanCount: 1,
   });
   state.selectedId = nextId;
   render();
@@ -267,26 +379,47 @@ function renderFilmstrip(placements) {
   });
 }
 
-function renderSourceOrProblemPreview(selected, mode) {
-  const root = document.getElementById("previewSurface");
-  const label = mode === "source" ? "Source image" : "Problem crop";
-  root.innerHTML = `
+function renderImagePreview(title, subtitle, imagePath) {
+  if (!imagePath) {
+    return `
+      <div class="preview-card">
+        <div class="preview-image-frame preview-empty">
+          <p class="helper-text">No preview image is available for this item.</p>
+        </div>
+        <div class="preview-caption">
+          <div>
+            <strong>${title}</strong>
+            <p class="subtle">${subtitle}</p>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
     <div class="preview-card">
       <div class="preview-image-frame">
-        <img class="preview-image" src="${selected.imagePath}" alt="${selected.title}">
+        <img class="preview-image" src="${imagePath}" alt="${title}">
       </div>
       <div class="preview-caption">
         <div>
-          <strong>${selected.title}</strong>
-          <p class="subtle">${label} | ${selected.subject} | start ${selected.startYPages.toFixed(1)}p</p>
-        </div>
-        <div class="inline-meta">
-          <span class="meta-pill">${selected.actualHeightPages.toFixed(2)}p actual</span>
-          <span class="meta-pill">${selected.snappedNextStartYPages.toFixed(1)}p next</span>
+          <strong>${title}</strong>
+          <p class="subtle">${subtitle}</p>
         </div>
       </div>
     </div>
   `;
+}
+
+function renderSourceOrProblemPreview(selected, mode) {
+  const root = document.getElementById("previewSurface");
+  const imagePath = mode === "source"
+    ? (selected.sourceImagePath || selected.imagePath)
+    : (selected.imagePath || selected.sourceImagePath);
+  const subtitle = mode === "source"
+    ? `Source page | ${selected.subject} | ${selected.sourcePageId || "page unknown"}`
+    : `Problem crop | ${selected.subject} | start ${selected.startYPages.toFixed(1)}p`;
+  root.innerHTML = renderImagePreview(selected.title, subtitle, imagePath);
 }
 
 function renderBoardPreview(placements, selected) {
@@ -349,10 +482,22 @@ function renderBoardPreview(placements, selected) {
 
   root.innerHTML = "";
   root.appendChild(boardView);
+
+  if (selected.boardRenderPath) {
+    const renderLink = document.createElement("div");
+    renderLink.className = "board-render-actions";
+    renderLink.innerHTML = `
+      <a class="chip-button" href="${selected.boardRenderPath}" target="_blank" rel="noreferrer">
+        Open rendered board image
+      </a>
+    `;
+    root.appendChild(renderLink);
+  }
 }
 
 function renderInspector(selected) {
   const root = document.getElementById("inspectorContent");
+  const session = state.session;
   const warnings = [];
   if (selected.overflowViolation) {
     warnings.push("This problem is taller than 1.2p but overflow is currently disabled.");
@@ -366,11 +511,33 @@ function renderInspector(selected) {
 
   root.innerHTML = `
     <div class="inspector-card">
+      <h3>Session</h3>
+      <p class="helper-text">${session.sessionName}</p>
+      <div class="inspector-row">
+        <label>Source</label>
+        <span>${session.dataSource}</span>
+      </div>
+      <div class="inspector-row">
+        <label>Generated</label>
+        <span>${session.generatedAt || "manual"}</span>
+      </div>
+      <div class="inspector-links">
+        ${session.edbFileUri ? `<a class="text-link" href="${session.edbFileUri}" target="_blank" rel="noreferrer">Open EDB</a>` : ""}
+        ${selected.boardRenderPath ? `<a class="text-link" href="${selected.boardRenderPath}" target="_blank" rel="noreferrer">Open board render</a>` : ""}
+        ${selected.sourceImagePath ? `<a class="text-link" href="${selected.sourceImagePath}" target="_blank" rel="noreferrer">Open source image</a>` : ""}
+      </div>
+    </div>
+
+    <div class="inspector-card">
       <h3>Selected problem</h3>
       <p class="helper-text">${selected.title}</p>
       <div class="inspector-row">
         <label>Subject</label>
         <span>${selected.subject}</span>
+      </div>
+      <div class="inspector-row">
+        <label>Source page</label>
+        <span>${selected.sourcePageId || "unknown"}</span>
       </div>
       <div class="inspector-row">
         <label>Start</label>
@@ -442,6 +609,22 @@ function renderSummary(placements) {
   document.getElementById("boardUsage").textContent = `${maxBottom.toFixed(1)}p`;
 }
 
+function renderSessionHeader() {
+  const sessionBadge = document.getElementById("sessionBadge");
+  const edbStatus = document.getElementById("edbStatus");
+  sessionBadge.textContent = `${state.session.dataSource} | ${state.session.sessionName}`;
+
+  if (state.session.edbFileUri) {
+    edbStatus.textContent = "open edb";
+    edbStatus.href = state.session.edbFileUri;
+    edbStatus.classList.remove("is-disabled");
+  } else {
+    edbStatus.textContent = "no edb";
+    edbStatus.href = "#";
+    edbStatus.classList.add("is-disabled");
+  }
+}
+
 function render() {
   const placements = computePlacements();
   const selected = placements.find((item) => item.id === state.selectedId) || placements[0];
@@ -454,18 +637,19 @@ function render() {
   });
   document.getElementById("selectedSubject").textContent = selected.subject;
   document.getElementById("selectedPlacement").textContent = `start ${selected.startYPages.toFixed(1)}p | next ${selected.snappedNextStartYPages.toFixed(1)}p`;
+  renderSessionHeader();
 
   if (state.previewMode === "source") {
     document.getElementById("previewTitle").textContent = "Source preview";
-    document.getElementById("previewSubtitle").textContent = "Uploaded page or image order check.";
+    document.getElementById("previewSubtitle").textContent = "Original page or screenshot feeding the current problem.";
     renderSourceOrProblemPreview(selected, "source");
   } else if (state.previewMode === "problem") {
     document.getElementById("previewTitle").textContent = "Problem preview";
-    document.getElementById("previewSubtitle").textContent = "Cleaned problem card before board placement.";
+    document.getElementById("previewSubtitle").textContent = "Cropped problem asset generated by the MVP export.";
     renderSourceOrProblemPreview(selected, "problem");
   } else {
     document.getElementById("previewTitle").textContent = "Board preview";
-    document.getElementById("previewSubtitle").textContent = "1.2-page snapped staircase layout with writing space.";
+    document.getElementById("previewSubtitle").textContent = "Live staircase layout plus a link to the rendered board image.";
     renderBoardPreview(placements, selected);
   }
 
@@ -488,4 +672,35 @@ document.getElementById("templateSelect").addEventListener("change", (event) => 
 
 document.getElementById("addReadingHeavy").addEventListener("click", addLongPassage);
 
+const sessionFileInput = document.getElementById("sessionFileInput");
+document.getElementById("loadSessionButton").addEventListener("click", () => {
+  sessionFileInput.click();
+});
+
+sessionFileInput.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    applySession(normalizeSession(parsed, file.name));
+  } catch (error) {
+    window.alert(`Failed to load session JSON: ${error.message}`);
+  } finally {
+    sessionFileInput.value = "";
+  }
+});
+
+document.getElementById("useGeneratedButton").addEventListener("click", () => {
+  window.location.reload();
+});
+
+document.getElementById("useSampleButton").addEventListener("click", () => {
+  applySession(sampleSession);
+});
+
+syncTemplateSelect();
 render();

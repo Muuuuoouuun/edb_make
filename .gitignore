@@ -13,6 +13,7 @@ pipeline_output_perspective/
 mvp_export*/
 tmp_debug_output/
 ui_prototype/prototype_data.js
+ui_prototype/generated_session.js
 local_test_output/
 
 generated_*.edb

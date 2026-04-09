@@ -13,13 +13,14 @@
           <p class="eyebrow">EDB lesson-board builder</p>
           <h1>Preview-first sequence editor</h1>
           <p class="subtle">
-            A lightweight prototype for sorting pages like a PDF editor and checking final ClassIn board placement.
+            Open the latest MVP export session or load a `ui_session.json` file to review problem order and final ClassIn board placement.
           </p>
         </div>
         <div class="topbar-actions">
-          <button class="ghost-button" type="button">Import batch</button>
-          <button class="ghost-button" type="button">Auto split</button>
-          <button class="primary-button" type="button">Export EDB</button>
+          <input id="sessionFileInput" type="file" accept=".json,application/json" hidden>
+          <button class="ghost-button" id="loadSessionButton" type="button">Load session JSON</button>
+          <button class="ghost-button" id="useGeneratedButton" type="button">Use latest generated</button>
+          <button class="primary-button" id="useSampleButton" type="button">Use sample data</button>
         </div>
       </header>
 
@@ -41,6 +42,8 @@
           </div>
         </div>
         <div class="toolbar-group stat-group">
+          <span class="meta-pill" id="sessionBadge">sample data</span>
+          <a class="meta-pill meta-link is-disabled" id="edbStatus" href="#" target="_blank" rel="noreferrer">no edb</a>
           <div class="stat-card">
             <span class="stat-label">Problems</span>
             <strong id="problemCount">0</strong>
@@ -94,6 +97,7 @@
       </main>
     </div>
 
+    <script src="./generated_session.js"></script>
     <script src="./prototype_data.js"></script>
     <script src="./app.js"></script>
   </body>

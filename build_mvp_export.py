@@ -4,8 +4,9 @@ from __future__ import annotations
 import argparse
 import io
 import json
-from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw
 
@@ -14,7 +15,7 @@ from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_ed
 from layout_template_schema import build_default_template
 from placement_engine import build_export_plan
 from preprocess import prepare_source_pages
-from structured_schema import PageModel, Subject, save_pages_json
+from structured_schema import Box, PageModel, ProblemUnit, Subject, save_pages_json
 
 
 def _resolve_subject(name: str | None) -> Subject:
@@ -36,6 +37,90 @@ def _make_thumbnail(image: Image.Image, max_size: tuple[int, int] = (640, 640)) 
     thumb = image.copy()
     thumb.thumbnail(max_size, Image.Resampling.LANCZOS)
     return thumb
+
+
+def _to_file_uri(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    return Path(path).resolve().as_uri()
+
+
+def _problem_block_ids(problem: ProblemUnit) -> list[str]:
+    return (
+        list(problem.stem_block_ids)
+        + list(problem.choice_block_ids)
+        + list(problem.explanation_block_ids)
+        + list(problem.figure_block_ids)
+    )
+
+
+def _problem_bounds(page_model: PageModel, problem: ProblemUnit) -> Box:
+    block_lookup = {block.block_id: block for block in page_model.blocks}
+    selected = [block_lookup[block_id] for block_id in _problem_block_ids(problem) if block_id in block_lookup]
+    if not selected:
+        return Box(left=0.0, top=0.0, width=float(page_model.width_px), height=float(page_model.height_px))
+
+    left = min(block.bbox.left for block in selected)
+    top = min(block.bbox.top for block in selected)
+    right = max(block.bbox.right for block in selected)
+    bottom = max(block.bbox.bottom for block in selected)
+    return Box.from_points(left, top, right, bottom).expanded(24.0, max_width=page_model.width_px, max_height=page_model.height_px)
+
+
+def _problem_title(page_model: PageModel, problem: ProblemUnit, index: int) -> str:
+    if problem.title and problem.title.strip():
+        return problem.title.strip()
+    return f"{page_model.page_id} problem {index + 1}"
+
+
+def _problem_is_reading_heavy(problem: ProblemUnit) -> bool:
+    return (
+        problem.subject in {Subject.KOREAN, Subject.ENGLISH}
+        or len(problem.choice_block_ids) > 0
+        or len(problem.figure_block_ids) > 0
+    )
+
+
+def _render_problem_crops(
+    page_models: list[PageModel],
+    prepared_pages,
+    output_dir: Path,
+) -> dict[str, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prepared_by_page_id = {page.page_id: page for page in prepared_pages}
+    crop_paths: dict[str, Path] = {}
+
+    for page_model in page_models:
+        prepared_page = prepared_by_page_id.get(page_model.page_id)
+        if prepared_page is None:
+            continue
+        for index, problem in enumerate(page_model.problems):
+            bounds = _problem_bounds(page_model, problem)
+            crop = prepared_page.image.crop(
+                (
+                    int(bounds.left),
+                    int(bounds.top),
+                    int(bounds.right),
+                    int(bounds.bottom),
+                )
+            )
+            crop_path = output_dir / f"{problem.unit_id}.png"
+            crop.save(crop_path)
+            crop_paths[problem.unit_id] = crop_path
+
+    return crop_paths
+
+
+def _template_to_dict(template) -> dict[str, Any]:
+    return {
+        "name": template.name,
+        "board_page_count": template.board_page_count,
+        "base_slot_height_pages": template.base_slot_height_pages,
+        "fixed_left_zone_ratio": template.fixed_left_zone_ratio,
+        "preserve_right_writing_zone": template.preserve_right_writing_zone,
+        "default_overflow_subjects": [subject.value for subject in template.default_overflow_subjects],
+        "metadata": template.metadata,
+    }
 
 
 def render_board_page(page_model: PageModel, prepared_image: Image.Image, left_zone_ratio: float) -> Image.Image:
@@ -103,19 +188,82 @@ def page_model_to_board_plan_dict(page_models: list[PageModel], export_plan) -> 
             }
         )
     return {
-        "template": {
-            "name": export_plan.template.name,
-            "board_page_count": export_plan.template.board_page_count,
-            "base_slot_height_pages": export_plan.template.base_slot_height_pages,
-            "fixed_left_zone_ratio": export_plan.template.fixed_left_zone_ratio,
-            "preserve_right_writing_zone": export_plan.template.preserve_right_writing_zone,
-            "default_overflow_subjects": [subject.value for subject in export_plan.template.default_overflow_subjects],
-            "metadata": export_plan.template.metadata,
-        },
+        "template": _template_to_dict(export_plan.template),
         "placements": placements,
         "page_count": len(page_models),
         "problem_count": len(placements),
     }
+
+
+def build_ui_session(
+    page_models: list[PageModel],
+    export_plan,
+    rendered_board_paths: list[Path],
+    problem_crop_paths: dict[str, Path],
+    output_dir: Path,
+    edb_path: Path | None,
+) -> dict[str, Any]:
+    placements_by_id = {placement.problem_id: placement for placement in export_plan.placements}
+    board_path_by_page_id = {
+        page_model.page_id: rendered_board_paths[index]
+        for index, page_model in enumerate(page_models)
+        if index < len(rendered_board_paths)
+    }
+
+    problems: list[dict[str, Any]] = []
+    for page_model in page_models:
+        for index, problem in enumerate(page_model.problems):
+            placement = placements_by_id.get(problem.unit_id)
+            board_path = board_path_by_page_id.get(page_model.page_id)
+            crop_path = problem_crop_paths.get(problem.unit_id)
+            problems.append(
+                {
+                    "id": problem.unit_id,
+                    "title": _problem_title(page_model, problem, index),
+                    "subject": problem.subject.value,
+                    "imagePath": _to_file_uri(crop_path),
+                    "sourceImagePath": _to_file_uri(page_model.source_path),
+                    "boardRenderPath": _to_file_uri(board_path),
+                    "actualHeightPages": placement.actual_content_height_pages if placement else 1.0,
+                    "overflowAllowed": placement.overflow_allowed if placement else False,
+                    "readingHeavy": _problem_is_reading_heavy(problem),
+                    "sourcePageId": page_model.page_id,
+                    "startYPages": placement.start_y_pages if placement else 0.0,
+                    "snappedNextStartYPages": placement.snapped_next_start_y_pages if placement else 0.0,
+                    "overflowAmountPages": placement.overflow_amount_pages if placement else 0.0,
+                    "overflowViolation": placement.overflow_violation if placement else False,
+                    "slotSpanCount": placement.slot_span_count if placement else 1,
+                }
+            )
+
+    return {
+        "session_name": output_dir.name,
+        "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "data_source": "build_mvp_export",
+        "output_dir": str(output_dir.resolve()),
+        "pages_json_path": str((output_dir / "pages.json").resolve()),
+        "placements_json_path": str((output_dir / "placements.json").resolve()),
+        "edb_path": str(edb_path.resolve()) if edb_path else None,
+        "edb_file_uri": _to_file_uri(edb_path),
+        "rendered_page_paths": [str(path.resolve()) for path in rendered_board_paths],
+        "rendered_page_file_uris": [_to_file_uri(path) for path in rendered_board_paths],
+        "template": _template_to_dict(export_plan.template),
+        "problems": problems,
+    }
+
+
+def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, sync_ui: bool) -> tuple[Path, Path | None]:
+    session_path = output_dir / "ui_session.json"
+    session_path.write_text(json.dumps(ui_session, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    synced_path: Path | None = None
+    if sync_ui:
+        synced_path = Path(__file__).resolve().parent / "ui_prototype" / "generated_session.js"
+        synced_path.write_text(
+            "window.EDB_UI_SESSION = " + json.dumps(ui_session, ensure_ascii=False, indent=2) + ";\n",
+            encoding="utf-8",
+        )
+    return session_path, synced_path
 
 
 def main() -> int:
@@ -131,11 +279,13 @@ def main() -> int:
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     parser.add_argument("--export-edb", action="store_true", help="Also export a board-image .edb")
     parser.add_argument("--edb-name", default="mvp_board.edb", help="Output .edb filename")
+    parser.add_argument("--skip-ui-sync", action="store_true", help="Do not refresh ui_prototype/generated_session.js")
     args = parser.parse_args()
 
     out_dir = args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "board_pages").mkdir(parents=True, exist_ok=True)
+    (out_dir / "problem_crops").mkdir(parents=True, exist_ok=True)
 
     subject = _resolve_subject(args.subject)
     prepared_pages = prepare_source_pages(
@@ -157,27 +307,39 @@ def main() -> int:
     board_plan_dict = page_model_to_board_plan_dict(page_models, export_plan)
     (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    rendered_board_paths: list[str] = []
+    problem_crop_paths = _render_problem_crops(page_models, prepared_pages, out_dir / "problem_crops")
+
+    rendered_board_paths: list[Path] = []
     board_images: list[Image.Image] = []
     for index, prepared_page in enumerate(prepared_pages):
         board_image = render_board_page(page_models[index], prepared_page.image, export_plan.template.fixed_left_zone_ratio)
         board_path = out_dir / "board_pages" / f"{prepared_page.page_id}.png"
         board_image.save(board_path)
-        rendered_board_paths.append(str(board_path))
+        rendered_board_paths.append(board_path)
         board_images.append(board_image)
 
-    board_plan_dict["rendered_page_paths"] = rendered_board_paths
+    board_plan_dict["rendered_page_paths"] = [str(path) for path in rendered_board_paths]
     (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    edb_path: Path | None = None
     if args.export_edb:
         edb_path = out_dir / args.edb_name
         export_board_edb(board_images, edb_path, export_plan.template.name)
         board_plan_dict["edb_path"] = str(edb_path)
         (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"wrote pages.json, placements.json, and {len(board_images)} board page renders -> {out_dir}")
+    ui_session = build_ui_session(page_models, export_plan, rendered_board_paths, problem_crop_paths, out_dir, edb_path)
+    ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=not args.skip_ui_sync)
+
+    print(
+        f"wrote pages.json, placements.json, ui_session.json, "
+        f"{len(problem_crop_paths)} problem crops, and {len(board_images)} board page renders -> {out_dir}"
+    )
     if args.export_edb:
         print(f"exported EDB -> {out_dir / args.edb_name}")
+    print(f"wrote UI session -> {ui_session_path}")
+    if synced_ui_path is not None:
+        print(f"synced UI session -> {synced_ui_path}")
     return 0
 
 
