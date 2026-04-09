@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Sequence
 
 from PIL import Image
 
@@ -161,7 +163,8 @@ def build_problem_entries(
             if not boxes:
                 boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
             merged_box = merge_boxes(boxes, page_width=page.width_px, page_height=page.height_px)
-            if merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
+            has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
+            if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
                 merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                 blocks = list(page.sorted_blocks())
 
@@ -179,7 +182,7 @@ def build_problem_entries(
             entries.append(
                 ProblemEntry(
                     problem_id=problem.unit_id,
-                    title=problem.title or f"{page.page_id} problem {index + 1}",
+                    title=problem.title or f"문항 {len(entries) + 1}",
                     subject=problem.subject,
                     source_page_id=page.page_id,
                     source_path=prepared_page.source_path,
@@ -194,6 +197,117 @@ def build_problem_entries(
             )
 
     return entries
+
+
+def _to_file_uri(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    return Path(path).resolve().as_uri()
+
+
+def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
+    return {
+        "name": template.name,
+        "board_page_count": template.board_page_count,
+        "base_slot_height_pages": template.base_slot_height_pages,
+        "fixed_left_zone_ratio": template.fixed_left_zone_ratio,
+        "preserve_right_writing_zone": template.preserve_right_writing_zone,
+        "default_overflow_subjects": [subject.value for subject in template.default_overflow_subjects],
+        "metadata": dict(template.metadata),
+    }
+
+
+def _normalize_problem_title(title: str | None, index: int, source_page_id: str) -> str:
+    raw = (title or "").strip()
+    if raw and "problem" not in raw.lower():
+        return raw
+    return f"문항 {index + 1:02d} · {source_page_id}"
+
+
+def build_ui_session(
+    prepared_pages: list[PreparedPage],
+    placements: list[dict[str, object]],
+    output_dir: Path,
+    edb_path: Path | None,
+    source_paths: Sequence[str | Path],
+    *,
+    record_mode: str,
+) -> dict[str, Any]:
+    rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
+    warning_messages: list[str] = []
+    if placements and len(placements) <= len(prepared_pages):
+        warning_messages.append("문항 분리가 충분하지 않아 페이지 단위에 가깝게 묶인 항목이 있습니다.")
+
+    problems: list[dict[str, Any]] = []
+    for index, placement in enumerate(placements):
+        crop_path = Path(str(placement["crop_path"])).resolve()
+        source_path = Path(str(placement["source_path"])).resolve()
+        problems.append(
+            {
+                "id": placement["problem_id"],
+                "title": _normalize_problem_title(str(placement.get("title") or ""), index, str(placement["source_page_id"])),
+                "subject": str(placement["subject"]),
+                "imagePath": _to_file_uri(crop_path),
+                "sourceImagePath": _to_file_uri(source_path),
+                "sourceFileName": source_path.name,
+                "boardRenderPath": None,
+                "actualHeightPages": float(placement["actual_content_height_pages"]),
+                "overflowAllowed": bool(placement["overflow_allowed"]),
+                "readingHeavy": bool(placement["overflow_allowed"]),
+                "sourcePageId": str(placement["source_page_id"]),
+                "startYPages": float(placement["start_y_pages"]),
+                "snappedNextStartYPages": float(placement["snapped_next_start_y_pages"]),
+                "overflowAmountPages": float(placement["overflow_amount_pages"]),
+                "overflowViolation": bool(placement["overflow_violation"]),
+                "slotSpanCount": int(placement["slot_span_count"]),
+                "recordMode": str(placement.get("record_mode") or record_mode),
+                "textRecordCount": int(placement.get("text_record_count", 0)),
+                "imageRecordCount": int(placement.get("image_record_count", 0)),
+            }
+        )
+
+    return {
+        "session_name": output_dir.name,
+        "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "data_source": "question_export",
+        "output_dir": str(output_dir.resolve()),
+        "source_mode": "batch" if len(source_paths) > 1 else "single",
+        "input_file_count": len(source_paths),
+        "input_files": [str(Path(path).resolve()) for path in source_paths],
+        "source_page_count": len(prepared_pages),
+        "detected_problem_count": len(placements),
+        "export_mode": "question",
+        "record_mode": record_mode,
+        "pages_json_path": str((output_dir / "pages.json").resolve()),
+        "placements_json_path": str((output_dir / "placements.json").resolve()),
+        "edb_path": str(edb_path.resolve()) if edb_path else None,
+        "edb_file_uri": _to_file_uri(edb_path),
+        "rendered_page_paths": [str(path) for path in rendered_page_paths],
+        "rendered_page_file_uris": [_to_file_uri(path) for path in rendered_page_paths],
+        "template": _template_to_dict(
+            LayoutTemplate(
+                name="academy-default",
+                board_page_count=max(50, len(placements) * 2 or 50),
+                base_slot_height_pages=1.2,
+            )
+        ),
+        "warning_messages": warning_messages,
+        "problems": problems,
+    }
+
+
+def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, sync_ui: bool) -> tuple[Path, Path | None]:
+    session_path = output_dir / "ui_session.json"
+    session_path.write_text(json.dumps(ui_session, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    synced_path: Path | None = None
+    if sync_ui:
+        synced_path = Path(__file__).resolve().parent / "ui_prototype" / "generated_session.js"
+        synced_path.write_text(
+            "window.EDB_UI_SESSION = " + json.dumps(ui_session, ensure_ascii=False, indent=2) + ";\n",
+            encoding="utf-8",
+        )
+    return session_path, synced_path
 
 
 def normalize_text_payload(text: str | None) -> str:
@@ -506,6 +620,111 @@ def build_placement_summary(placements: list[dict[str, object]]) -> dict[str, ob
         "max_bottom_y_pages": max(float(item["actual_bottom_y_pages"]) for item in placements),
         "text_record_count": sum(int(item.get("text_record_count", 0)) for item in placements),
         "image_record_count": sum(int(item.get("image_record_count", 0)) for item in placements),
+    }
+
+
+def run_problem_export(
+    source: str | Path | Sequence[str | Path],
+    *,
+    output_dir: str | Path = "mvp_export_question",
+    subject_name: str = "unknown",
+    ocr: str = "auto",
+    pdf_dpi: int = 200,
+    detect_perspective: bool = False,
+    skip_deskew: bool = False,
+    skip_crop: bool = False,
+    max_dimension: int | None = None,
+    export_edb: bool = True,
+    edb_name: str = "mvp_board.edb",
+    record_mode: str = "mixed",
+    text_confidence_threshold: float = 0.78,
+    sync_ui: bool = False,
+) -> dict[str, Any]:
+    if isinstance(source, (str, Path)):
+        source_paths = [Path(source).resolve()]
+    else:
+        source_paths = [Path(path).resolve() for path in source]
+    if not source_paths:
+        raise ValueError("At least one source path is required")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    subject = resolve_subject(subject_name)
+    template = LayoutTemplate(name="academy-default")
+
+    prepared_pages: list[PreparedPage] = []
+    pages: list[PageModel] = []
+    for source_path in source_paths:
+        prepared, page_models = build_pages(
+            source_path,
+            subject=subject,
+            ocr_mode=ocr,
+            pdf_dpi=pdf_dpi,
+            detect_perspective=detect_perspective,
+            deskew=not skip_deskew,
+            crop_margins=not skip_crop,
+            max_dimension=max_dimension,
+        )
+        prepared_pages.extend(prepared)
+        pages.extend(page_models)
+
+    save_pages_json(pages, out_dir / "pages.json")
+    problem_entries = build_problem_entries(prepared_pages, pages, out_dir, template)
+    records, placements, header_flag = build_records(
+        problem_entries,
+        template,
+        record_mode=record_mode,
+        output_dir=out_dir,
+        text_confidence_threshold=text_confidence_threshold,
+    )
+
+    summary = {
+        "source_paths": [str(path) for path in source_paths],
+        "output_dir": str(out_dir.resolve()),
+        "pages_json_path": str((out_dir / "pages.json").resolve()),
+        "problem_crop_dir": str((out_dir / "problem_crops").resolve()),
+        "block_crop_dir": str((out_dir / "block_crops").resolve()),
+        "record_count": len(records),
+        "record_mode": record_mode,
+        "header_flag": header_flag,
+        "text_confidence_threshold": text_confidence_threshold,
+        "placement_summary": build_placement_summary(placements),
+        "placements": placements,
+        "ocr_backend_requested": ocr,
+    }
+
+    placements_path = out_dir / "placements.json"
+    placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    edb_path: Path | None = None
+    if export_edb:
+        edb_path = out_dir / edb_name
+        write_edb(
+            edb_path,
+            build_edb(records, header_flag=header_flag, page_count_hint=template.board_page_count),
+        )
+        summary["edb_path"] = str(edb_path.resolve())
+        placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    ui_session = build_ui_session(
+        prepared_pages,
+        placements,
+        out_dir,
+        edb_path if export_edb else None,
+        source_paths,
+        record_mode=record_mode,
+    )
+    ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
+
+    return {
+        "output_dir": out_dir.resolve(),
+        "edb_path": edb_path.resolve() if edb_path.exists() else None,
+        "pages_json_path": (out_dir / "pages.json").resolve(),
+        "placements_json_path": placements_path.resolve(),
+        "ui_session": ui_session,
+        "ui_session_path": ui_session_path.resolve(),
+        "synced_ui_path": synced_ui_path.resolve() if synced_ui_path else None,
+        "summary": summary,
     }
 
 

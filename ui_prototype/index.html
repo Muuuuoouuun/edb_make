@@ -3,92 +3,149 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>EDB Lesson Board Prototype</title>
+    <title>클래스인 EDB 자동 파싱</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">EDB lesson-board builder</p>
-          <h1>Preview-first sequence editor</h1>
-          <p class="subtle">
-            Open the latest MVP export session or load a `ui_session.json` file to review problem order and final ClassIn board placement.
-          </p>
-        </div>
-        <div class="topbar-actions">
-          <input id="sessionFileInput" type="file" accept=".json,application/json" hidden>
-          <button class="ghost-button" id="loadSessionButton" type="button">Load session JSON</button>
-          <button class="ghost-button" id="useGeneratedButton" type="button">Use latest generated</button>
-          <button class="primary-button" id="useSampleButton" type="button">Use sample data</button>
+      <header class="topbar topbar-compact">
+        <div class="topbar-copy compact-copy">
+          <p class="eyebrow">클래스인 EDB</p>
+          <h1>사진 넣고 바로 파싱</h1>
+          <p class="subtle">업로드, 자동 파싱, 검토 흐름만 먼저 보이고 나머지 설정은 아래 고급 설정으로 접어 둡니다.</p>
         </div>
       </header>
 
-      <section class="toolbar run-toolbar">
-        <div class="toolbar-group">
-          <span class="toolbar-label">App mode</span>
-          <span class="meta-pill" id="apiStatus">offline preview</span>
+      <section class="intake-panel">
+        <input id="sessionFileInput" type="file" accept=".json,application/json" hidden>
+        <input id="cameraFileInput" type="file" accept="image/*" capture="environment" hidden>
+        <input id="sourceFileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/*" multiple hidden>
+
+        <div class="intake-copy compact-copy">
+          <p class="eyebrow">업로드</p>
+          <h2>카메라로 찍거나 파일을 올리면 자동으로 문제를 나눕니다</h2>
+          <p class="subtle">지금 필요한 건 업로드와 검토뿐입니다. OCR, 출력 폴더, 샘플 로딩은 아래 고급 설정으로 숨겼습니다.</p>
         </div>
-        <div class="toolbar-group run-controls">
-          <input id="sourceFileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" hidden>
-          <button class="ghost-button" id="chooseSourceButton" type="button">Choose source</button>
-          <span class="meta-pill" id="selectedSourceName">no source selected</span>
-          <select id="runSubjectSelect" aria-label="Run subject">
-            <option value="unknown">unknown</option>
-            <option value="math">math</option>
-            <option value="science">science</option>
-            <option value="korean">korean</option>
-            <option value="english">english</option>
-            <option value="social">social</option>
-          </select>
-          <select id="runOcrSelect" aria-label="Run OCR">
-            <option value="none">OCR none</option>
-            <option value="auto">OCR auto</option>
-            <option value="tesseract">OCR tesseract</option>
-            <option value="paddleocr">OCR paddle</option>
-          </select>
-          <input id="outputDirInput" type="text" value="mvp_export_app" placeholder="output folder">
-          <label class="checkbox-chip" for="runExportEdb">
-            <input id="runExportEdb" type="checkbox" checked>
-            <span>export edb</span>
+
+        <div class="intake-actions primary-intake-actions">
+          <button class="primary-button" id="openCameraButton" type="button">카메라</button>
+          <button class="ghost-button" id="chooseSourceButton" type="button">파일 업로드</button>
+          <button class="primary-button" id="runExportButton" type="button">지금 파싱</button>
+          <label class="checkbox-chip" for="autoParseToggle">
+            <input id="autoParseToggle" type="checkbox" checked>
+            <span>추가 즉시 자동 파싱</span>
           </label>
-          <button class="primary-button" id="runExportButton" type="button">Run export</button>
+          <span class="meta-pill" id="apiStatus">오프라인 미리보기</span>
+          <span class="meta-pill" id="sourceQueueCount">0개 대기</span>
         </div>
-        <div class="toolbar-group run-status-group">
-          <span class="subtle" id="runStatusText">Local export API not connected yet.</span>
+
+        <div class="intake-status">
+          <span class="subtle" id="runStatusText">로컬 파싱 API 연결을 확인하는 중입니다.</span>
+        </div>
+
+        <button class="dropzone" id="sourceDropzone" type="button">
+          <div class="dropzone-copy">
+            <strong>사진이나 PDF를 여기로 놓으세요</strong>
+            <span class="subtle">여러 장 사진도 순서대로 한 번에 처리합니다.</span>
+          </div>
+        </button>
+
+        <div class="source-queue-meta">
+          <span class="meta-pill" id="selectedSourceName">선택된 소스 없음</span>
+        </div>
+        <div id="sourceQueue" class="source-queue" aria-live="polite"></div>
+
+        <details class="advanced-panel">
+          <summary>고급 설정과 보조 기능</summary>
+          <div class="advanced-content">
+            <div class="advanced-grid">
+              <label class="field-stack">
+                <span class="toolbar-label">변환 모드</span>
+                <select id="runLayoutModeSelect" aria-label="변환 모드 선택">
+                  <option value="question">문항별</option>
+                  <option value="page">페이지별</option>
+                </select>
+              </label>
+              <label class="field-stack">
+                <span class="toolbar-label">과목</span>
+                <select id="runSubjectSelect" aria-label="과목 선택">
+                  <option value="unknown">과목 자동</option>
+                  <option value="math">수학</option>
+                  <option value="science">과학</option>
+                  <option value="korean">국어</option>
+                  <option value="english">영어</option>
+                  <option value="social">사회</option>
+                </select>
+              </label>
+              <label class="field-stack">
+                <span class="toolbar-label">OCR</span>
+                <select id="runOcrSelect" aria-label="OCR 선택">
+                  <option value="auto">OCR 자동</option>
+                  <option value="none">OCR 끔</option>
+                  <option value="tesseract">Tesseract</option>
+                  <option value="paddleocr">PaddleOCR</option>
+                </select>
+              </label>
+              <label class="field-stack">
+                <span class="toolbar-label">출력 폴더</span>
+                <input id="outputDirInput" type="text" value="mvp_export_app" placeholder="출력 폴더">
+              </label>
+              <label class="checkbox-chip checkbox-chip-wide" for="runExportEdb">
+                <input id="runExportEdb" type="checkbox" checked>
+                <span>EDB 함께 생성</span>
+              </label>
+            </div>
+
+            <div class="utility-actions">
+              <button class="ghost-button" id="loadSessionButton" type="button">세션 JSON 열기</button>
+              <button class="ghost-button" id="useGeneratedButton" type="button">최근 세션</button>
+              <button class="ghost-button" id="useSampleButton" type="button">샘플 데이터</button>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section class="toolbar session-summary-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">현재 세션 요약</span>
+          <span class="subtle" id="sessionSummaryText">아직 실행 기록이 없습니다.</span>
         </div>
       </section>
 
-      <section class="toolbar">
+      <section class="toolbar context-toolbar">
         <div class="toolbar-group">
-          <span class="toolbar-label">Template</span>
+          <span class="toolbar-label">템플릿</span>
           <select id="templateSelect">
-            <option value="academy-default">Academy default</option>
-            <option value="korean-reading">Korean reading</option>
-            <option value="exam-review">Exam review</option>
+            <option value="academy-default">학원 기본형</option>
+            <option value="korean-reading">국어 지문형</option>
+            <option value="exam-review">시험 복습형</option>
           </select>
         </div>
         <div class="toolbar-group">
-          <span class="toolbar-label">Preview</span>
-          <div class="segmented-control" role="tablist" aria-label="Preview mode">
-            <button class="segmented-button is-active" type="button" data-preview-mode="source">Source</button>
-            <button class="segmented-button" type="button" data-preview-mode="problem">Problem</button>
-            <button class="segmented-button" type="button" data-preview-mode="board">Board</button>
+          <span class="toolbar-label">미리보기</span>
+          <div class="segmented-control" role="tablist" aria-label="미리보기 모드">
+            <button class="segmented-button" type="button" data-preview-mode="source">원본</button>
+            <button class="segmented-button is-active" type="button" data-preview-mode="problem">문항</button>
+            <button class="segmented-button" type="button" data-preview-mode="board">보드</button>
           </div>
         </div>
         <div class="toolbar-group stat-group">
-          <span class="meta-pill" id="sessionBadge">sample data</span>
-          <a class="meta-pill meta-link is-disabled" id="edbStatus" href="#" target="_blank" rel="noreferrer">no edb</a>
+          <span class="meta-pill" id="sessionBadge">샘플 데이터</span>
+          <a class="meta-pill meta-link is-disabled" id="edbStatus" href="#" target="_blank" rel="noreferrer">EDB 없음</a>
           <div class="stat-card">
-            <span class="stat-label">Problems</span>
+            <span class="stat-label">문항 수</span>
             <strong id="problemCount">0</strong>
           </div>
           <div class="stat-card">
-            <span class="stat-label">Overflow</span>
-            <strong id="overflowCount">0</strong>
+            <span class="stat-label">페이지 수</span>
+            <strong id="pageCount">0</strong>
           </div>
           <div class="stat-card">
-            <span class="stat-label">Board used</span>
+            <span class="stat-label">변환 모드</span>
+            <strong id="exportModeStat">문항별</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">보드 사용량</span>
             <strong id="boardUsage">0.0p</strong>
           </div>
         </div>
@@ -98,23 +155,24 @@
         <aside class="panel filmstrip-panel">
           <div class="panel-header">
             <div>
-              <h2>Filmstrip</h2>
-              <p class="subtle">Drag to reorder like a PDF sidebar.</p>
+              <h2>문항 필름스트립</h2>
+              <p class="subtle">감지된 문항 순서입니다. 문항별 변환에서는 이 순서대로 EDB가 만들어집니다.</p>
             </div>
-            <button class="small-button" id="addReadingHeavy" type="button">Add long passage</button>
           </div>
-          <div id="filmstripList" class="filmstrip-list" aria-label="Problem list"></div>
+          <div id="filmstripList" class="filmstrip-list" aria-label="문항 목록"></div>
         </aside>
 
         <section class="panel preview-panel">
           <div class="panel-header">
             <div>
-              <h2 id="previewTitle">Source preview</h2>
-              <p id="previewSubtitle" class="subtle">Selected item preview and board fit.</p>
+              <h2 id="previewTitle">문항 미리보기</h2>
+              <p id="previewSubtitle" class="subtle">
+                원본, 잘린 문항 이미지, 보드 배치를 한 화면에서 비교합니다.
+              </p>
             </div>
             <div class="inline-meta">
-              <span class="meta-pill" id="selectedSubject">unknown</span>
-              <span class="meta-pill" id="selectedPlacement">start 0.0p</span>
+              <span class="meta-pill" id="selectedSubject">자동</span>
+              <span class="meta-pill" id="selectedPlacement">시작 0.0p</span>
             </div>
           </div>
           <div id="previewSurface" class="preview-surface"></div>
@@ -123,8 +181,8 @@
         <aside class="panel inspector-panel">
           <div class="panel-header">
             <div>
-              <h2>Quick edit</h2>
-              <p class="subtle">Simple sequence and overflow controls only.</p>
+              <h2>빠른 수정</h2>
+              <p class="subtle">검토 흐름을 벗어나지 않고 맞춤, 오버플로, 순서를 바로 조정합니다.</p>
             </div>
           </div>
           <div id="inspectorContent" class="inspector-content"></div>

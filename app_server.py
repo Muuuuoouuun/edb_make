@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import url2pathname
 
 from build_mvp_export import run_export
+from build_problem_board_edb import run_problem_export
 
 
 APP_NAME = "ClassIn EDB MVP Local App"
@@ -78,6 +79,13 @@ def sanitize_output_dir_name(value: str | None) -> str:
         return f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
     return safe or f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
+
+
+def sanitize_upload_file_name(value: str | None) -> str:
+    raw = Path(value or "upload.bin").name
+    invalid = '<>:"/\\|?*'
+    safe = "".join(ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw)
+    return safe or "upload.bin"
 
 
 def decode_file_reference(value: str | None) -> Path | None:
@@ -262,54 +270,89 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _save_uploaded_source(self, payload: dict[str, Any]) -> Path:
+    def _save_uploaded_file(self, payload: dict[str, Any]) -> Path:
         file_name = payload.get("fileName") or "upload.bin"
         file_data_base64 = payload.get("fileDataBase64")
         if not file_data_base64:
             raise ValueError("fileDataBase64 is required when sourcePath is not provided")
-        safe_name = Path(file_name).name
-        stamped_name = f"{time.strftime('%Y%m%d_%H%M%S')}_{safe_name}"
+        safe_name = sanitize_upload_file_name(file_name)
+        stamped_name = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}_{safe_name}"
         target_path = UPLOAD_DIR / stamped_name
         target_path.write_bytes(base64.b64decode(file_data_base64))
         return target_path
 
-    def _resolve_source_path(self, payload: dict[str, Any]) -> Path:
+    def _resolve_source_paths(self, payload: dict[str, Any]) -> list[Path]:
+        file_payloads = payload.get("files")
+        if isinstance(file_payloads, list) and file_payloads:
+            return [self._save_uploaded_file(file_payload).resolve() for file_payload in file_payloads]
+
+        source_paths = payload.get("sources") or payload.get("sourcePaths")
+        if isinstance(source_paths, list) and source_paths:
+            resolved_paths: list[Path] = []
+            for source_path in source_paths:
+                path = decode_file_reference(str(source_path))
+                if path is None:
+                    raise FileNotFoundError(f"sourcePath does not exist: {source_path}")
+                if not path.exists():
+                    raise FileNotFoundError(f"sourcePath does not exist: {path}")
+                resolved_paths.append(path.resolve())
+            return resolved_paths
+
         source_path = payload.get("source") or payload.get("sourcePath") or payload.get("source_path")
         if source_path:
-            path = Path(source_path)
+            path = decode_file_reference(str(source_path))
+            if path is None:
+                raise FileNotFoundError(f"sourcePath does not exist: {source_path}")
             if not path.exists():
                 raise FileNotFoundError(f"sourcePath does not exist: {path}")
-            return path.resolve()
-        return self._save_uploaded_source(payload).resolve()
+            return [path.resolve()]
+        return [self._save_uploaded_file(payload).resolve()]
 
-    def _resolve_output_dir(self, payload: dict[str, Any], source_path: Path) -> Path:
+    def _resolve_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
         requested = payload.get("output_dir") or payload.get("outputDir")
         if requested:
             target = Path(str(requested))
             if not target.is_absolute():
                 target = BASE_DIR / sanitize_output_dir_name(str(requested))
             return target.resolve()
-        return (BASE_DIR / sanitize_output_dir_name(source_path.stem)).resolve()
+        if not source_paths:
+            return (BASE_DIR / sanitize_output_dir_name(None)).resolve()
+        if len(source_paths) == 1:
+            return (BASE_DIR / sanitize_output_dir_name(source_paths[0].stem)).resolve()
+        batch_name = f"{source_paths[0].stem}_{len(source_paths)}files"
+        return (BASE_DIR / sanitize_output_dir_name(batch_name)).resolve()
 
     def _handle_export(self) -> None:
         try:
             payload = self._read_json_body()
-            source_path = self._resolve_source_path(payload)
-            output_dir = self._resolve_output_dir(payload, source_path)
-            result = run_export(
-                source_path,
-                output_dir=output_dir,
-                subject_name=str(payload.get("subject") or "unknown"),
-                ocr=str(payload.get("ocr") or "auto"),
-                pdf_dpi=int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
-                detect_perspective=_coerce_bool(payload.get("detectPerspective") if "detectPerspective" in payload else payload.get("detect_perspective")),
-                skip_deskew=_coerce_bool(payload.get("skipDeskew") if "skipDeskew" in payload else payload.get("skip_deskew")),
-                skip_crop=_coerce_bool(payload.get("skipCrop") if "skipCrop" in payload else payload.get("skip_crop")),
-                max_dimension=int(payload["maxDimension"]) if payload.get("maxDimension") else int(payload["max_dimension"]) if payload.get("max_dimension") else None,
-                export_edb=_coerce_bool(payload.get("export_edb") if "export_edb" in payload else payload.get("exportEdb"), default=True),
-                edb_name=str(payload.get("edbName") or payload.get("edb_name") or "mvp_board.edb"),
-                sync_ui=False,
-            )
+            source_paths = self._resolve_source_paths(payload)
+            output_dir = self._resolve_output_dir(payload, source_paths)
+            export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
+            common_kwargs = {
+                "output_dir": output_dir,
+                "subject_name": str(payload.get("subject") or "unknown"),
+                "ocr": str(payload.get("ocr") or "auto"),
+                "pdf_dpi": int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
+                "detect_perspective": _coerce_bool(payload.get("detectPerspective") if "detectPerspective" in payload else payload.get("detect_perspective")),
+                "skip_deskew": _coerce_bool(payload.get("skipDeskew") if "skipDeskew" in payload else payload.get("skip_deskew")),
+                "skip_crop": _coerce_bool(payload.get("skipCrop") if "skipCrop" in payload else payload.get("skip_crop")),
+                "max_dimension": int(payload["maxDimension"]) if payload.get("maxDimension") else int(payload["max_dimension"]) if payload.get("max_dimension") else None,
+                "export_edb": _coerce_bool(payload.get("export_edb") if "export_edb" in payload else payload.get("exportEdb"), default=True),
+                "edb_name": str(payload.get("edbName") or payload.get("edb_name") or "mvp_board.edb"),
+                "sync_ui": False,
+            }
+            if export_mode == "page":
+                result = run_export(
+                    source_paths[0] if len(source_paths) == 1 else source_paths,
+                    **common_kwargs,
+                )
+            else:
+                result = run_problem_export(
+                    source_paths[0] if len(source_paths) == 1 else source_paths,
+                    record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "mixed"),
+                    text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
+                    **common_kwargs,
+                )
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -326,6 +369,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "uiSessionPath": str(result["ui_session_path"]),
                 "edb_path": str(result["edb_path"]) if result["edb_path"] else None,
                 "edbPath": str(result["edb_path"]) if result["edb_path"] else None,
+                "export_mode": session.get("export_mode"),
+                "exportMode": session.get("export_mode"),
             }
         )
 

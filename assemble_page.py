@@ -32,6 +32,16 @@ def infer_subject(page: PageModel) -> Subject:
 
 
 def sort_blocks_for_reading_order(blocks: list[ContentBlock]) -> list[ContentBlock]:
+    if blocks and all(block.metadata.get("column_index") is not None for block in blocks):
+        return sorted(
+            blocks,
+            key=lambda block: (
+                int(block.metadata.get("column_index", 0)),
+                int(block.metadata.get("question_band_index", block.reading_order)),
+                round(block.bbox.top, 4),
+                round(block.bbox.left, 4),
+            ),
+        )
     return sorted(blocks, key=lambda block: (round(block.bbox.top, 4), round(block.bbox.left, 4), block.reading_order))
 
 
@@ -70,6 +80,34 @@ def classify_block(block: ContentBlock) -> ContentBlock:
 def group_problem_units(page: PageModel) -> PageModel:
     relabeled = relabel_reading_order(page)
     classified_blocks = [classify_block(block) for block in relabeled.blocks]
+    has_text_markers = any(detect_problem_start(block) for block in classified_blocks if block.text)
+    has_band_metadata = any("question_band_index" in block.metadata for block in classified_blocks)
+
+    if not has_text_markers and (has_band_metadata or len(classified_blocks) > 1):
+        problems: list[ProblemUnit] = []
+        for index, block in enumerate(classified_blocks, start=1):
+            current = ProblemUnit(
+                unit_id=f"{page.page_id}-problem-{index}",
+                subject=infer_subject(relabeled),
+                title=block.metadata.get("display_title"),
+            )
+            if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
+                current.figure_block_ids.append(block.block_id)
+            elif block.block_type == BlockType.EXPLANATION:
+                current.explanation_block_ids.append(block.block_id)
+            elif block.block_type == BlockType.CHOICE:
+                current.choice_block_ids.append(block.block_id)
+            else:
+                current.stem_block_ids.append(block.block_id)
+            current.metadata.update(
+                {
+                    "fallback_grouping": True,
+                    "question_band_index": block.metadata.get("question_band_index"),
+                    "column_index": block.metadata.get("column_index"),
+                }
+            )
+            problems.append(current)
+        return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
     problems: list[ProblemUnit] = []
     current: ProblemUnit | None = None

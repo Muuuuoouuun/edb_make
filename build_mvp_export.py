@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
 from layout_template_schema import build_default_template
 from placement_engine import build_export_plan
-from preprocess import prepare_source_pages
+from preprocess import prepare_source_pages, prepare_source_pages_batch
 from structured_schema import Box, PageModel, ProblemUnit, Subject, save_pages_json
 
 
@@ -43,6 +44,15 @@ def _to_file_uri(path: str | Path | None) -> str | None:
     if path is None:
         return None
     return Path(path).resolve().as_uri()
+
+
+def _coerce_source_paths(source: str | Path | Sequence[str | Path]) -> list[Path]:
+    if isinstance(source, (str, Path)):
+        return [Path(source).resolve()]
+    resolved = [Path(item).resolve() for item in source]
+    if not resolved:
+        raise ValueError("At least one source path is required")
+    return resolved
 
 
 def _problem_block_ids(problem: ProblemUnit) -> list[str]:
@@ -202,7 +212,9 @@ def build_ui_session(
     problem_crop_paths: dict[str, Path],
     output_dir: Path,
     edb_path: Path | None,
+    source_paths: Sequence[Path] | None = None,
 ) -> dict[str, Any]:
+    resolved_source_paths = [Path(path).resolve() for path in (source_paths or [])]
     placements_by_id = {placement.problem_id: placement for placement in export_plan.placements}
     board_path_by_page_id = {
         page_model.page_id: rendered_board_paths[index]
@@ -223,6 +235,7 @@ def build_ui_session(
                     "subject": problem.subject.value,
                     "imagePath": _to_file_uri(crop_path),
                     "sourceImagePath": _to_file_uri(page_model.source_path),
+                    "sourceFileName": Path(page_model.source_path).name,
                     "boardRenderPath": _to_file_uri(board_path),
                     "actualHeightPages": placement.actual_content_height_pages if placement else 1.0,
                     "overflowAllowed": placement.overflow_allowed if placement else False,
@@ -241,6 +254,9 @@ def build_ui_session(
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "data_source": "build_mvp_export",
         "output_dir": str(output_dir.resolve()),
+        "source_mode": "batch" if len(resolved_source_paths) > 1 else "single",
+        "input_file_count": max(1, len(resolved_source_paths)) if page_models else len(resolved_source_paths),
+        "input_files": [str(path) for path in resolved_source_paths],
         "pages_json_path": str((output_dir / "pages.json").resolve()),
         "placements_json_path": str((output_dir / "placements.json").resolve()),
         "edb_path": str(edb_path.resolve()) if edb_path else None,
@@ -267,7 +283,7 @@ def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, syn
 
 
 def run_export(
-    source: str | Path,
+    source: str | Path | Sequence[str | Path],
     *,
     output_dir: str | Path = "mvp_export",
     subject_name: str = "unknown",
@@ -287,13 +303,25 @@ def run_export(
     (out_dir / "problem_crops").mkdir(parents=True, exist_ok=True)
 
     subject = _resolve_subject(subject_name)
-    prepared_pages = prepare_source_pages(
-        source,
-        pdf_dpi=pdf_dpi,
-        detect_perspective=detect_perspective,
-        deskew=not skip_deskew,
-        crop_margins=not skip_crop,
-        max_dimension=max_dimension,
+    source_paths = _coerce_source_paths(source)
+    prepared_pages = (
+        prepare_source_pages(
+            source_paths[0],
+            pdf_dpi=pdf_dpi,
+            detect_perspective=detect_perspective,
+            deskew=not skip_deskew,
+            crop_margins=not skip_crop,
+            max_dimension=max_dimension,
+        )
+        if len(source_paths) == 1
+        else prepare_source_pages_batch(
+            source_paths,
+            pdf_dpi=pdf_dpi,
+            detect_perspective=detect_perspective,
+            deskew=not skip_deskew,
+            crop_margins=not skip_crop,
+            max_dimension=max_dimension,
+        )
     )
 
     page_models: list[PageModel] = [
@@ -327,11 +355,20 @@ def run_export(
         board_plan_dict["edb_path"] = str(edb_path)
         (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    ui_session = build_ui_session(page_models, export_plan, rendered_board_paths, problem_crop_paths, out_dir, edb_path)
+    ui_session = build_ui_session(
+        page_models,
+        export_plan,
+        rendered_board_paths,
+        problem_crop_paths,
+        out_dir,
+        edb_path,
+        source_paths=source_paths,
+    )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
     return {
         "output_dir": out_dir,
+        "source_paths": [str(path) for path in source_paths],
         "page_models": page_models,
         "problem_crop_paths": problem_crop_paths,
         "rendered_board_paths": rendered_board_paths,
@@ -344,7 +381,7 @@ def run_export(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the first MVP export for ClassIn EDB.")
-    parser.add_argument("source", type=Path, help="Input image or PDF")
+    parser.add_argument("source", type=Path, nargs="+", help="Input image(s) or PDF")
     parser.add_argument("--output-dir", type=Path, default=Path("mvp_export"), help="Output directory")
     parser.add_argument("--subject", default="unknown", help="Subject override: math/science/korean/english/social")
     parser.add_argument("--ocr", default="auto", help="OCR backend: auto/paddle/tesseract/none")

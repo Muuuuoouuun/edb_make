@@ -34,6 +34,14 @@ class SegmentOptions:
     fallback_padding_px: int = 10
     fallback_board_margin_ratio: float = 0.04
     fallback_board_min_hit_ratio: float = 0.08
+    document_dark_threshold: int = 235
+    document_projection_window_px: int = 10
+    document_row_density_ratio: float = 0.11
+    document_band_merge_gap_px: int = 42
+    document_small_band_height_px: int = 150
+    document_near_gap_px: int = 210
+    document_min_band_height_px: int = 60
+    document_band_padding_px: int = 24
 
 
 def _pil_to_gray_array(image: Image.Image):
@@ -137,6 +145,253 @@ def _detect_board_region(image: Image.Image, options: SegmentOptions) -> Box:
             best_area = area
 
     return best or _detect_board_region_pil(image, options)
+
+
+def _source_metadata(image_source: Any) -> dict[str, Any]:
+    metadata = getattr(image_source, "metadata", None)
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _is_document_like_page(image_source: Any, image: Image.Image) -> bool:
+    metadata = _source_metadata(image_source)
+    source_type = str(metadata.get("source_type") or "").lower()
+    if source_type == "pdf" or metadata.get("document_like"):
+        return True
+
+    source_path = getattr(image_source, "source_path", None)
+    if source_path and str(source_path).lower().endswith(".pdf"):
+        return True
+
+    stat = ImageStat.Stat(ImageOps.grayscale(image))
+    return stat.mean[0] >= 220.0 and stat.stddev[0] <= 55.0
+
+
+def _dark_mask(image: Image.Image, threshold: int) -> Image.Image:
+    gray = ImageOps.autocontrast(ImageOps.grayscale(image))
+    return gray.point(lambda px: 255 if px < threshold else 0, mode="L")
+
+
+def _smooth_projection(values: list[float], window: int) -> list[float]:
+    if not values:
+        return []
+    smoothed: list[float] = []
+    for index in range(len(values)):
+        start = max(0, index - window)
+        end = min(len(values), index + window + 1)
+        smoothed.append(sum(values[start:end]) / max(1, end - start))
+    return smoothed
+
+
+def _find_document_content_box(mask: Image.Image, width: int, height: int) -> Box:
+    bbox = mask.getbbox()
+    if bbox is None:
+        return Box(left=0.0, top=0.0, width=float(width), height=float(height))
+    left, top, right, bottom = bbox
+    return Box.from_points(float(left), float(top), float(right), float(bottom)).expanded(
+        12.0,
+        max_width=float(width),
+        max_height=float(height),
+    )
+
+
+def _detect_document_columns(mask: Image.Image, content_box: Box, options: SegmentOptions) -> list[Box]:
+    crop = mask.crop((int(content_box.left), int(content_box.top), int(content_box.right), int(content_box.bottom)))
+    if crop.width <= 1 or crop.height <= 1:
+        return [content_box]
+
+    column_projection = [
+        int(crop.crop((x, 0, x + 1, crop.height)).histogram()[255])
+        for x in range(crop.width)
+    ]
+    smoothed = _smooth_projection(column_projection, max(12, options.document_projection_window_px * 2))
+    if not smoothed:
+        return [content_box]
+
+    search_start = int(crop.width * 0.3)
+    search_end = max(search_start + 1, int(crop.width * 0.7))
+    center_slice = smoothed[search_start:search_end]
+    if not center_slice:
+        return [content_box]
+
+    split_offset = min(range(len(center_slice)), key=lambda idx: center_slice[idx])
+    split_x = search_start + split_offset
+    valley_score = smoothed[split_x]
+    peak_score = max(smoothed)
+    if peak_score <= 0 or valley_score > peak_score * 0.22:
+        return [content_box]
+
+    left_box = Box.from_points(
+        content_box.left,
+        content_box.top,
+        content_box.left + float(split_x - 15),
+        content_box.bottom,
+    )
+    right_box = Box.from_points(
+        content_box.left + float(split_x + 15),
+        content_box.top,
+        content_box.right,
+        content_box.bottom,
+    )
+    if left_box.width < mask.width * 0.2 or right_box.width < mask.width * 0.2:
+        return [content_box]
+    return [left_box, right_box]
+
+
+def _find_document_row_bands(mask: Image.Image, column_box: Box, options: SegmentOptions) -> list[tuple[int, int]]:
+    crop = mask.crop((int(column_box.left), int(column_box.top), int(column_box.right), int(column_box.bottom)))
+    if crop.width <= 1 or crop.height <= 1:
+        return []
+
+    row_projection = [
+        int(crop.crop((0, y, crop.width, y + 1)).histogram()[255])
+        for y in range(crop.height)
+    ]
+    smoothed = _smooth_projection(row_projection, options.document_projection_window_px)
+    if not smoothed:
+        return []
+
+    threshold = max(8.0, max(smoothed) * options.document_row_density_ratio)
+    bands: list[tuple[int, int]] = []
+    band_start: int | None = None
+    last_active: int | None = None
+    for row_index, score in enumerate(smoothed):
+        if score >= threshold:
+            if band_start is None:
+                band_start = row_index
+            last_active = row_index
+            continue
+        if band_start is not None and last_active is not None and row_index - last_active <= 16:
+            continue
+        if band_start is not None and last_active is not None:
+            bands.append((band_start, last_active))
+        band_start = None
+        last_active = None
+    if band_start is not None and last_active is not None:
+        bands.append((band_start, last_active))
+
+    merged: list[list[int]] = []
+    for band_top, band_bottom in bands:
+        if not merged or band_top - merged[-1][1] > options.document_band_merge_gap_px:
+            merged.append([band_top, band_bottom])
+        else:
+            merged[-1][1] = band_bottom
+
+    return [
+        (band_top, band_bottom)
+        for band_top, band_bottom in merged
+        if band_bottom - band_top >= options.document_min_band_height_px
+    ]
+
+
+def _merge_small_document_bands(
+    bands: list[tuple[int, int]],
+    options: SegmentOptions,
+) -> list[tuple[int, int]]:
+    if len(bands) <= 1:
+        return bands
+
+    merged = [[top, bottom] for top, bottom in bands]
+    changed = True
+    while changed and len(merged) > 1:
+        changed = False
+        index = 0
+        while index < len(merged):
+            band_top, band_bottom = merged[index]
+            height = band_bottom - band_top
+            if height > options.document_small_band_height_px:
+                index += 1
+                continue
+
+            prev_gap = band_top - merged[index - 1][1] if index > 0 else 10**9
+            next_gap = merged[index + 1][0] - band_bottom if index + 1 < len(merged) else 10**9
+            if min(prev_gap, next_gap) > options.document_near_gap_px:
+                index += 1
+                continue
+
+            if next_gap < prev_gap and index + 1 < len(merged):
+                merged[index][1] = max(merged[index][1], merged[index + 1][1])
+                merged.pop(index + 1)
+            elif index > 0:
+                merged[index - 1][1] = max(merged[index - 1][1], merged[index][1])
+                merged.pop(index)
+            elif index + 1 < len(merged):
+                merged[index][1] = max(merged[index][1], merged[index + 1][1])
+                merged.pop(index + 1)
+            changed = True
+            index = 0
+    return [(top, bottom) for top, bottom in merged]
+
+
+def _document_band_box(mask: Image.Image, column_box: Box, band: tuple[int, int], options: SegmentOptions) -> Box:
+    band_top, band_bottom = band
+    crop = mask.crop((int(column_box.left), int(column_box.top + band_top), int(column_box.right), int(column_box.top + band_bottom + 1)))
+    bbox = crop.getbbox()
+    if bbox is None:
+        return Box.from_points(column_box.left, column_box.top + band_top, column_box.right, column_box.top + band_bottom)
+
+    padding = float(options.document_band_padding_px)
+    left = column_box.left + max(0.0, float(bbox[0]) - padding)
+    right = column_box.left + min(column_box.width, float(bbox[2]) + padding)
+    top = column_box.top + max(0.0, float(band_top) - padding)
+    bottom = column_box.top + min(column_box.height, float(band_bottom) + padding)
+    minimum_width = column_box.width * 0.72
+    if right - left < minimum_width:
+        left = column_box.left
+        right = column_box.right
+
+    return Box.from_points(left, top, right, bottom).expanded(
+        8.0,
+        max_width=float(mask.width),
+        max_height=float(mask.height),
+    )
+
+
+def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
+    mask = _dark_mask(image, options.document_dark_threshold)
+    content_box = _find_document_content_box(mask, image.width, image.height)
+    columns = _detect_document_columns(mask, content_box, options)
+    blocks: list[ContentBlock] = []
+
+    for column_index, column_box in enumerate(columns, start=1):
+        row_bands = _find_document_row_bands(mask, column_box, options)
+        row_bands = _merge_small_document_bands(row_bands, options)
+        for band_index, band in enumerate(row_bands, start=1):
+            box = _document_band_box(mask, column_box, band, options)
+            blocks.append(
+                ContentBlock(
+                    block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
+                    block_type=BlockType.STEM,
+                    bbox=box,
+                    reading_order=len(blocks),
+                    metadata={
+                        "segmenter": "document-bands",
+                        "column_index": column_index,
+                        "question_band_index": band_index,
+                    },
+                )
+            )
+
+    if not blocks:
+        blocks = [
+            ContentBlock(
+                block_id=f"{page_id}-block-001",
+                block_type=BlockType.IMAGE,
+                bbox=content_box,
+                reading_order=0,
+                metadata={"segmenter": "document-bands", "fallback_reason": "empty_document_segmentation"},
+            )
+        ]
+
+    return blocks, {
+        "segmenter": "document-bands",
+        "content_box": {
+            "left": content_box.left,
+            "top": content_box.top,
+            "width": content_box.width,
+            "height": content_box.height,
+        },
+        "column_count": len(columns),
+    }
 
 
 def _find_candidate_boxes_cv2(image: Image.Image, region: Box, options: SegmentOptions) -> list[tuple[Box, float]]:
@@ -423,6 +678,21 @@ def segment_page(
 ) -> PageModel:
     resolved_options = options or SegmentOptions()
     image = _load_image(image_path)
+    if _is_document_like_page(image_path, image):
+        blocks, metadata = _segment_document_page(image, page_id, resolved_options)
+        source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
+        if source_path is None and not isinstance(image_path, Image.Image):
+            source_path = str(image_path)
+        return PageModel(
+            page_id=page_id,
+            width_px=image.width,
+            height_px=image.height,
+            subject=subject,
+            source_path=source_path,
+            blocks=blocks,
+            metadata=metadata,
+        )
+
     board_region = _detect_board_region(image, resolved_options)
     candidates = _find_candidate_boxes(image, board_region, resolved_options)
     expanded_candidates: list[tuple[Box, float]] = []

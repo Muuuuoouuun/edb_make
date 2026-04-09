@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -241,13 +242,15 @@ def normalize_image(
     enable_deskew: bool = True,
     enable_margin_crop: bool = True,
     max_dimension: int | None = None,
+    base_metadata: dict[str, Any] | None = None,
 ) -> NormalizedPageImage:
     source_path = Path(source)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     image = load_image(source_path)
-    metadata: dict[str, Any] = {"source_type": "image"}
+    metadata: dict[str, Any] = dict(base_metadata or {})
+    metadata.setdefault("source_type", "image")
 
     if enable_perspective:
         image, changed = perspective_correct(image)
@@ -300,18 +303,21 @@ def prepare_pages(
         rendered = render_pdf_pages(source_path, normalized_dir / "rendered", dpi=dpi)
         normalized_pages: list[NormalizedPageImage] = []
         for page in rendered:
-            normalized_pages.append(
-                normalize_image(
-                    page.normalized_path,
-                    normalized_dir / "normalized",
-                    page_id=page.page_id,
-                    page_index=page.page_index,
-                    enable_perspective=False,
-                    enable_deskew=enable_deskew,
-                    enable_margin_crop=enable_margin_crop,
-                    max_dimension=max_dimension,
-                )
+            normalized = normalize_image(
+                page.normalized_path,
+                normalized_dir / "normalized",
+                page_id=page.page_id,
+                page_index=page.page_index,
+                enable_perspective=False,
+                enable_deskew=enable_deskew,
+                enable_margin_crop=enable_margin_crop,
+                max_dimension=max_dimension,
+                base_metadata=dict(page.metadata),
             )
+            normalized.metadata.setdefault("source_pdf_path", str(source_path))
+            normalized.metadata["source_type"] = "pdf"
+            normalized.metadata["document_like"] = True
+            normalized_pages.append(normalized)
         return normalized_pages
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
@@ -367,6 +373,69 @@ def prepare_source_pages(
             )
     )
     return prepared
+
+
+def prepare_source_pages_batch(
+    paths: Sequence[str | Path],
+    pdf_dpi: int = 200,
+    detect_perspective: bool = False,
+    deskew: bool = True,
+    crop_margins: bool = True,
+    max_dimension: int | None = None,
+) -> list[PreparedPage]:
+    source_paths = [Path(path) for path in paths]
+    if not source_paths:
+        return []
+    if len(source_paths) == 1:
+        return prepare_source_pages(
+            source_paths[0],
+            pdf_dpi=pdf_dpi,
+            detect_perspective=detect_perspective,
+            deskew=deskew,
+            crop_margins=crop_margins,
+            max_dimension=max_dimension,
+        )
+
+    prepared_pages: list[PreparedPage] = []
+    page_counter = 0
+    for source_index, source_path in enumerate(source_paths, start=1):
+        cache_dir = source_path.parent / ".pipeline_cache" / f"batch_{source_index:03d}_{source_path.stem}"
+        normalized_pages = prepare_pages(
+            source_path,
+            cache_dir,
+            dpi=pdf_dpi,
+            enable_perspective=detect_perspective,
+            enable_deskew=deskew,
+            enable_margin_crop=crop_margins,
+            max_dimension=max_dimension,
+        )
+
+        for local_page_index, page in enumerate(normalized_pages, start=1):
+            page_counter += 1
+            image = Image.open(page.normalized_path).convert("RGB")
+            if max_dimension:
+                width, height = image.size
+                scale = min(max_dimension / max(width, height), 1.0)
+                if scale < 1.0:
+                    new_size = (int(round(width * scale)), int(round(height * scale)))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+            prepared_pages.append(
+                PreparedPage(
+                    page_id=f"{source_path.stem}-{source_index:02d}-page-{local_page_index:03d}",
+                    source_path=str(source_path.resolve()),
+                    page_number=page_counter,
+                    image=image,
+                    original_size=(page.width_px, page.height_px),
+                    metadata={
+                        **dict(page.metadata),
+                        "batch_source_index": source_index,
+                        "batch_total_sources": len(source_paths),
+                        "original_page_index": page.page_index + 1,
+                    },
+                )
+            )
+    return prepared_pages
 
 
 def load_pages(source: str | Path, options: PreprocessOptions) -> list[NormalizedPageImage]:
