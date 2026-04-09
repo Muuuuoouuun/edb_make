@@ -46,7 +46,7 @@ This command does all of the following:
 - refreshes `ui_prototype/prototype_data.js`
 
 ```powershell
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\sample_run --ocr noop --subject korean
+python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\sample_run --ocr noop --subject korean --record-mode mixed
 ```
 
 Main outputs:
@@ -56,11 +56,31 @@ Main outputs:
 - `local_test_output\sample_run\record_0001_img_0.edb`
 - `ui_prototype\prototype_data.js`
 
+### Record modes
+
+`build_problem_board_edb.py` now supports two export modes:
+
+- `--record-mode image-only`
+  - one image record per placed problem crop
+  - most stable fallback
+- `--record-mode mixed`
+  - text-capable blocks become text records when OCR confidence is high enough
+  - figures, formulas, and low-confidence blocks remain image records
+
+Recommended first comparison:
+
+```powershell
+python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\image_only --ocr noop --subject korean --record-mode image-only
+python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\mixed --ocr noop --subject korean --record-mode mixed
+```
+
 ### 2. Inspect the generated EDB structure
 
 ```powershell
 python inspect_edb.py .\local_test_output\sample_run\record_0001_img_0.edb
 ```
+
+For a mixed export, check whether text and image records both appear in the summary.
 
 ### 3. Open the preview prototype
 
@@ -88,7 +108,7 @@ This writes:
 Replace the sample source with your own image or PDF path:
 
 ```powershell
-python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_test_output\my_run --ocr noop --subject unknown
+python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_test_output\my_run --ocr noop --subject unknown --record-mode mixed
 ```
 
 ## Current Recommended Defaults
@@ -101,5 +121,5 @@ python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_te
 ## Notes
 
 - Current pipeline is local-first and offline-capable
-- OCR quality is still optional and not required for the image-based export path
-- The generated `.edb` is currently image-record based for reliability
+- OCR quality is still optional and not required for fallback image export
+- `mixed` mode is now available, but real ClassIn verification should be used before treating it as stable
