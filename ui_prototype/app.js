@@ -69,7 +69,7 @@ function normalizePath(value) {
   if (!value) {
     return "";
   }
-  if (value.startsWith("file://") || value.startsWith("http://") || value.startsWith("https://")) {
+  if (value.startsWith("file://") || value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/api/")) {
     return value;
   }
   if (/^[A-Za-z]:[\\/]/.test(value)) {
@@ -131,6 +131,19 @@ function cloneProblems(problems) {
   return problems.map((problem) => ({ ...problem }));
 }
 
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const commaIndex = result.indexOf(",");
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 const sampleSession = normalizeSession(
   {
     session_name: "Prototype sample",
@@ -151,6 +164,9 @@ const state = {
   previewMode: "board",
   templateKey: "academy-default",
   dragId: null,
+  apiAvailable: false,
+  runBusy: false,
+  runSourceFile: null,
 };
 
 function syncTemplateSelect() {
@@ -324,6 +340,97 @@ function reorderProblems(dragId, dropId) {
   next.splice(toIndex, 0, moved);
   state.problems = next;
   render();
+}
+
+function setRunStatus(message, tone = "neutral") {
+  const node = document.getElementById("runStatusText");
+  node.textContent = message;
+  node.dataset.tone = tone;
+}
+
+function updateRuntimeControls() {
+  const apiStatus = document.getElementById("apiStatus");
+  const selectedSourceName = document.getElementById("selectedSourceName");
+  const runExportButton = document.getElementById("runExportButton");
+
+  apiStatus.textContent = state.apiAvailable ? "local app connected" : "offline preview";
+  apiStatus.classList.toggle("is-connected", state.apiAvailable);
+  apiStatus.classList.toggle("is-offline", !state.apiAvailable);
+
+  selectedSourceName.textContent = state.runSourceFile ? state.runSourceFile.name : "no source selected";
+  runExportButton.disabled = !state.apiAvailable || state.runBusy;
+}
+
+async function probeApi() {
+  try {
+    const response = await fetch("/api/health");
+    if (!response.ok) {
+      throw new Error(`health ${response.status}`);
+    }
+    state.apiAvailable = true;
+    setRunStatus("Local export API connected. Choose a source and run export.", "success");
+  } catch (error) {
+    state.apiAvailable = false;
+    setRunStatus("Static preview mode. Start app_server.py to enable in-browser export.", "warning");
+  }
+  updateRuntimeControls();
+}
+
+async function fetchLatestSessionFromApi() {
+  const response = await fetch("/api/session/latest");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `Failed to load latest session (${response.status})`);
+  }
+  return normalizeSession(payload.session, "Latest session");
+}
+
+async function runExportFromApi() {
+  if (!state.apiAvailable) {
+    window.alert("Local export API is not connected. Start app_server.py first.");
+    return;
+  }
+  if (!state.runSourceFile) {
+    window.alert("Choose a source image or PDF first.");
+    return;
+  }
+
+  const runExportButton = document.getElementById("runExportButton");
+  try {
+    state.runBusy = true;
+    runExportButton.disabled = true;
+    setRunStatus("Uploading source and running MVP export...", "loading");
+
+    const payload = {
+      fileName: state.runSourceFile.name,
+      fileDataBase64: await fileToBase64(state.runSourceFile),
+      outputDir: document.getElementById("outputDirInput").value.trim(),
+      subject: document.getElementById("runSubjectSelect").value,
+      ocr: document.getElementById("runOcrSelect").value,
+      exportEdb: document.getElementById("runExportEdb").checked,
+    };
+
+    const response = await fetch("/api/export", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `Export failed (${response.status})`);
+    }
+
+    applySession(normalizeSession(result.session, "Export session"));
+    setRunStatus(`Export complete: ${result.outputDir}`, "success");
+  } catch (error) {
+    setRunStatus(`Export failed: ${error.message}`, "error");
+    window.alert(`Export failed: ${error.message}`);
+  } finally {
+    state.runBusy = false;
+    updateRuntimeControls();
+  }
 }
 
 function renderFilmstrip(placements) {
@@ -628,6 +735,7 @@ function renderSessionHeader() {
 function render() {
   const placements = computePlacements();
   const selected = placements.find((item) => item.id === state.selectedId) || placements[0];
+  updateRuntimeControls();
   if (!selected) {
     return;
   }
@@ -694,13 +802,49 @@ sessionFileInput.addEventListener("change", async (event) => {
   }
 });
 
-document.getElementById("useGeneratedButton").addEventListener("click", () => {
-  window.location.reload();
+document.getElementById("useGeneratedButton").addEventListener("click", async () => {
+  if (!state.apiAvailable) {
+    window.location.reload();
+    return;
+  }
+  try {
+    applySession(await fetchLatestSessionFromApi());
+    setRunStatus("Loaded latest session from local app server.", "success");
+  } catch (error) {
+    setRunStatus(`Failed to load latest session: ${error.message}`, "error");
+  }
 });
 
 document.getElementById("useSampleButton").addEventListener("click", () => {
   applySession(sampleSession);
+  setRunStatus("Switched to bundled sample data.", "neutral");
 });
 
-syncTemplateSelect();
-render();
+const sourceFileInput = document.getElementById("sourceFileInput");
+document.getElementById("chooseSourceButton").addEventListener("click", () => {
+  sourceFileInput.click();
+});
+sourceFileInput.addEventListener("change", (event) => {
+  state.runSourceFile = event.target.files?.[0] || null;
+  updateRuntimeControls();
+});
+
+document.getElementById("runExportButton").addEventListener("click", runExportFromApi);
+
+async function initializeRuntimeConnection() {
+  syncTemplateSelect();
+  render();
+  await probeApi();
+  if (!state.apiAvailable) {
+    return;
+  }
+  try {
+    const latestSession = await fetchLatestSessionFromApi();
+    applySession(latestSession);
+    setRunStatus("Loaded latest session from local app server.", "success");
+  } catch (error) {
+    setRunStatus("Local app server is connected. Choose a source to create the first session.", "neutral");
+  }
+}
+
+initializeRuntimeConnection();

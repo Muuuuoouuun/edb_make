@@ -21,11 +21,17 @@
   - `build_structured_page_json.py`
 - Added an MVP export CLI that produces JSON, placement plans, rendered board pages, and a best-effort image-only `.edb`:
   - `build_mvp_export.py`
+- Added a local HTTP app runtime that serves the UI and runs export jobs:
+  - `app_server.py`
 - Connected the preview UI to real MVP export output:
   - `build_mvp_export.py` now writes `ui_session.json`, problem crops, and an optional auto-synced `ui_prototype/generated_session.js`
   - `ui_prototype/index.html`
   - `ui_prototype/app.js`
   - `ui_prototype/styles.css`
+- Added first-pass launcher and packaging assets:
+  - `run_local_app.ps1`
+  - `package_mvp.ps1`
+  - `PACKAGING_MVP.md`
 - Added a minimal `.edb` builder for controlled samples:
   - `edb_builder.py`
 - Added planning and pipeline documents:
@@ -60,6 +66,8 @@
 - Current segmentation is still conservative and often collapses a photographed board into a single large block when OCR is disabled or image quality/layout cues are weak.
 - MVP export now successfully produces `pages.json`, `placements.json`, rendered board PNGs, and an exportable board-image `.edb`.
 - The UI prototype can now open real MVP sessions instead of sample-only placeholder data.
+- The UI can now call the local export API, upload a source file, run the MVP export, and refresh with the new session.
+- First-pass packaging is now documented and scriptable via PowerShell, including a PyInstaller path and a source-bundle fallback.
 
 ## Next Recommended Steps
 1. Improve rule-based segmentation so one board photo splits into title/text/formula/diagram regions

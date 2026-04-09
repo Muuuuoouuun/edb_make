@@ -266,39 +266,38 @@ def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, syn
     return session_path, synced_path
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the first MVP export for ClassIn EDB.")
-    parser.add_argument("source", type=Path, help="Input image or PDF")
-    parser.add_argument("--output-dir", type=Path, default=Path("mvp_export"), help="Output directory")
-    parser.add_argument("--subject", default="unknown", help="Subject override: math/science/korean/english/social")
-    parser.add_argument("--ocr", default="auto", help="OCR backend: auto/paddle/tesseract/none")
-    parser.add_argument("--pdf-dpi", type=int, default=200, help="PDF render DPI")
-    parser.add_argument("--detect-perspective", action="store_true", help="Try perspective correction for photographed sources")
-    parser.add_argument("--skip-deskew", action="store_true", help="Disable deskew")
-    parser.add_argument("--skip-crop", action="store_true", help="Disable margin crop")
-    parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
-    parser.add_argument("--export-edb", action="store_true", help="Also export a board-image .edb")
-    parser.add_argument("--edb-name", default="mvp_board.edb", help="Output .edb filename")
-    parser.add_argument("--skip-ui-sync", action="store_true", help="Do not refresh ui_prototype/generated_session.js")
-    args = parser.parse_args()
-
-    out_dir = args.output_dir
+def run_export(
+    source: str | Path,
+    *,
+    output_dir: str | Path = "mvp_export",
+    subject_name: str = "unknown",
+    ocr: str = "auto",
+    pdf_dpi: int = 200,
+    detect_perspective: bool = False,
+    skip_deskew: bool = False,
+    skip_crop: bool = False,
+    max_dimension: int | None = None,
+    export_edb: bool = False,
+    edb_name: str = "mvp_board.edb",
+    sync_ui: bool = True,
+) -> dict[str, Any]:
+    out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "board_pages").mkdir(parents=True, exist_ok=True)
     (out_dir / "problem_crops").mkdir(parents=True, exist_ok=True)
 
-    subject = _resolve_subject(args.subject)
+    subject = _resolve_subject(subject_name)
     prepared_pages = prepare_source_pages(
-        args.source,
-        pdf_dpi=args.pdf_dpi,
-        detect_perspective=args.detect_perspective,
-        deskew=not args.skip_deskew,
-        crop_margins=not args.skip_crop,
-        max_dimension=args.max_dimension,
+        source,
+        pdf_dpi=pdf_dpi,
+        detect_perspective=detect_perspective,
+        deskew=not skip_deskew,
+        crop_margins=not skip_crop,
+        max_dimension=max_dimension,
     )
 
     page_models: list[PageModel] = [
-        build_page_model(prepared_page, subject=subject, ocr_mode=args.ocr)
+        build_page_model(prepared_page, subject=subject, ocr_mode=ocr)
         for prepared_page in prepared_pages
     ]
     save_pages_json(page_models, out_dir / "pages.json")
@@ -322,24 +321,67 @@ def main() -> int:
     (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     edb_path: Path | None = None
-    if args.export_edb:
-        edb_path = out_dir / args.edb_name
+    if export_edb:
+        edb_path = out_dir / edb_name
         export_board_edb(board_images, edb_path, export_plan.template.name)
         board_plan_dict["edb_path"] = str(edb_path)
         (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     ui_session = build_ui_session(page_models, export_plan, rendered_board_paths, problem_crop_paths, out_dir, edb_path)
-    ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=not args.skip_ui_sync)
+    ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
+
+    return {
+        "output_dir": out_dir,
+        "page_models": page_models,
+        "problem_crop_paths": problem_crop_paths,
+        "rendered_board_paths": rendered_board_paths,
+        "edb_path": edb_path,
+        "ui_session": ui_session,
+        "ui_session_path": ui_session_path,
+        "synced_ui_path": synced_ui_path,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Build the first MVP export for ClassIn EDB.")
+    parser.add_argument("source", type=Path, help="Input image or PDF")
+    parser.add_argument("--output-dir", type=Path, default=Path("mvp_export"), help="Output directory")
+    parser.add_argument("--subject", default="unknown", help="Subject override: math/science/korean/english/social")
+    parser.add_argument("--ocr", default="auto", help="OCR backend: auto/paddle/tesseract/none")
+    parser.add_argument("--pdf-dpi", type=int, default=200, help="PDF render DPI")
+    parser.add_argument("--detect-perspective", action="store_true", help="Try perspective correction for photographed sources")
+    parser.add_argument("--skip-deskew", action="store_true", help="Disable deskew")
+    parser.add_argument("--skip-crop", action="store_true", help="Disable margin crop")
+    parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
+    parser.add_argument("--export-edb", action="store_true", help="Also export a board-image .edb")
+    parser.add_argument("--edb-name", default="mvp_board.edb", help="Output .edb filename")
+    parser.add_argument("--skip-ui-sync", action="store_true", help="Do not refresh ui_prototype/generated_session.js")
+    args = parser.parse_args()
+
+    result = run_export(
+        args.source,
+        output_dir=args.output_dir,
+        subject_name=args.subject,
+        ocr=args.ocr,
+        pdf_dpi=args.pdf_dpi,
+        detect_perspective=args.detect_perspective,
+        skip_deskew=args.skip_deskew,
+        skip_crop=args.skip_crop,
+        max_dimension=args.max_dimension,
+        export_edb=args.export_edb,
+        edb_name=args.edb_name,
+        sync_ui=not args.skip_ui_sync,
+    )
 
     print(
         f"wrote pages.json, placements.json, ui_session.json, "
-        f"{len(problem_crop_paths)} problem crops, and {len(board_images)} board page renders -> {out_dir}"
+        f"{len(result['problem_crop_paths'])} problem crops, and {len(result['rendered_board_paths'])} board page renders -> {result['output_dir']}"
     )
     if args.export_edb:
-        print(f"exported EDB -> {out_dir / args.edb_name}")
-    print(f"wrote UI session -> {ui_session_path}")
-    if synced_ui_path is not None:
-        print(f"synced UI session -> {synced_ui_path}")
+        print(f"exported EDB -> {result['edb_path']}")
+    print(f"wrote UI session -> {result['ui_session_path']}")
+    if result["synced_ui_path"] is not None:
+        print(f"synced UI session -> {result['synced_ui_path']}")
     return 0
 
 

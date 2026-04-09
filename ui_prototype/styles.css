@@ -120,9 +120,22 @@ h2 {
   flex-wrap: wrap;
 }
 
+.run-toolbar {
+  align-items: flex-start;
+}
+
 .toolbar-group {
   align-items: center;
   flex-wrap: wrap;
+}
+
+.run-controls {
+  flex: 1 1 720px;
+}
+
+.run-status-group {
+  width: 100%;
+  justify-content: flex-end;
 }
 
 .toolbar-label {
@@ -136,7 +149,8 @@ select,
 .primary-button,
 .small-button,
 .segmented-button,
-.chip-button {
+.chip-button,
+#outputDirInput {
   border-radius: 999px;
   border: 1px solid var(--line);
   padding: 10px 14px;
@@ -153,6 +167,10 @@ select:hover,
 .segmented-button:hover,
 .chip-button:hover {
   transform: translateY(-1px);
+}
+
+#outputDirInput {
+  min-width: 180px;
 }
 
 .primary-button {
@@ -306,6 +324,31 @@ select:hover,
 .meta-link.is-disabled {
   opacity: 0.55;
   pointer-events: none;
+}
+
+#apiStatus.is-connected {
+  background: var(--accent-soft);
+  border-color: rgba(15, 118, 110, 0.25);
+}
+
+#apiStatus.is-offline {
+  background: #fff7ed;
+  border-color: rgba(180, 83, 9, 0.2);
+}
+
+.checkbox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.checkbox-chip input {
+  margin: 0;
 }
 
 .preview-panel {
@@ -563,6 +606,20 @@ select:hover,
   font-size: 13px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+#runStatusText[data-tone="success"] {
+  color: var(--accent);
+}
+
+#runStatusText[data-tone="warning"],
+#runStatusText[data-tone="error"] {
+  color: var(--danger);
+}
+
+#runStatusText[data-tone="loading"] {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .inspector-links {

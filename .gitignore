@@ -6,15 +6,22 @@ samples/
 out_image1/
 out_images_sample4/
 .pipeline_cache/
+.app_runtime/
 smoke_pipeline_output/
 pipeline_output_smoke/
 pipeline_output_test/
 pipeline_output_perspective/
 mvp_export*/
+smoke_server_export*/
 tmp_debug_output/
 ui_prototype/prototype_data.js
 ui_prototype/generated_session.js
 local_test_output/
+dist*/
+build/
+app_server_stdout.log
+app_server_stderr.log
+.app_runtime_server_pid.txt
 
 generated_*.edb
 smoke_pipeline_output/

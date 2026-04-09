@@ -24,6 +24,41 @@
         </div>
       </header>
 
+      <section class="toolbar run-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">App mode</span>
+          <span class="meta-pill" id="apiStatus">offline preview</span>
+        </div>
+        <div class="toolbar-group run-controls">
+          <input id="sourceFileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" hidden>
+          <button class="ghost-button" id="chooseSourceButton" type="button">Choose source</button>
+          <span class="meta-pill" id="selectedSourceName">no source selected</span>
+          <select id="runSubjectSelect" aria-label="Run subject">
+            <option value="unknown">unknown</option>
+            <option value="math">math</option>
+            <option value="science">science</option>
+            <option value="korean">korean</option>
+            <option value="english">english</option>
+            <option value="social">social</option>
+          </select>
+          <select id="runOcrSelect" aria-label="Run OCR">
+            <option value="none">OCR none</option>
+            <option value="auto">OCR auto</option>
+            <option value="tesseract">OCR tesseract</option>
+            <option value="paddleocr">OCR paddle</option>
+          </select>
+          <input id="outputDirInput" type="text" value="mvp_export_app" placeholder="output folder">
+          <label class="checkbox-chip" for="runExportEdb">
+            <input id="runExportEdb" type="checkbox" checked>
+            <span>export edb</span>
+          </label>
+          <button class="primary-button" id="runExportButton" type="button">Run export</button>
+        </div>
+        <div class="toolbar-group run-status-group">
+          <span class="subtle" id="runStatusText">Local export API not connected yet.</span>
+        </div>
+      </section>
+
       <section class="toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Template</span>
