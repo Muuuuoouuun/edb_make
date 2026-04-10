@@ -64,14 +64,14 @@ except ImportError:  # pragma: no cover - optional dependency
     pytesseract = None
 
 
-@dataclass(slots=True)
+@dataclass
 class OCRLine:
     text: str
     confidence: float
     bbox: Box
 
 
-@dataclass(slots=True)
+@dataclass
 class OCRResult:
     text: str
     confidence: float | None

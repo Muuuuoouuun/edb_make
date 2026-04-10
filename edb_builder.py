@@ -33,7 +33,7 @@ def pack_f32(value: float) -> bytes:
     return struct.pack(">f", value)
 
 
-@dataclass(slots=True)
+@dataclass
 class TextRecordSpec:
     record_id: int
     text: str
@@ -45,7 +45,7 @@ class TextRecordSpec:
     tail: bytes = b"\x03"
 
 
-@dataclass(slots=True)
+@dataclass
 class ImageRecordSpec:
     record_id: int
     image_primary: bytes
@@ -163,11 +163,13 @@ def write_edb(path: str | Path, payload: bytes) -> None:
 
 
 def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (512, 512), format_hint: str | None = None, quality: int = 88) -> bytes:
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    opened = Image.open(io.BytesIO(image_bytes))
+    ext = (format_hint or opened.format or "JPEG").upper()
+    preserve_alpha = ext == "PNG" or "A" in opened.getbands()
+    image = opened.convert("RGBA" if preserve_alpha else "RGB")
     image.thumbnail(max_size, Image.Resampling.LANCZOS)
     output = io.BytesIO()
-    ext = (format_hint or image.format or "JPEG").upper()
-    if ext == "PNG":
+    if preserve_alpha:
         image.save(output, format="PNG")
     else:
         image.save(output, format="JPEG", quality=quality, optimize=True)

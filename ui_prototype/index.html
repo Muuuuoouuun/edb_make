@@ -56,8 +56,53 @@
         </div>
         <div id="sourceQueue" class="source-queue" aria-live="polite"></div>
 
-        <details class="advanced-panel">
-          <summary>고급 설정과 보조 기능</summary>
+        <section class="ai-quick-panel" aria-labelledby="aiQuickTitle">
+          <div class="ai-quick-header">
+            <div>
+              <span class="toolbar-label" id="aiQuickTitle">AI 문항 보정</span>
+              <p class="helper-text">AI는 기본 흐름 안에서 바로 켜고 상태를 확인합니다. 세부 숫자만 아래에서 조정하세요.</p>
+            </div>
+            <button class="ghost-button" id="openAiAdvancedButton" type="button">세부 설정 펼치기</button>
+          </div>
+
+          <div class="ai-quick-status-row">
+            <span class="meta-pill" id="aiQuickModePill">권장만 표시</span>
+            <span class="meta-pill" id="aiQuickProviderPill">OpenAI</span>
+            <span class="meta-pill" id="aiQuickKeyPill">키 상태 미확인</span>
+            <span class="meta-pill" id="aiQuickResultPill">권장 없음</span>
+          </div>
+
+          <div class="ai-quick-controls">
+            <label class="checkbox-chip checkbox-chip-wide" for="runAiFallbackEnabled">
+              <input id="runAiFallbackEnabled" type="checkbox">
+              <span>AI 보정 실행</span>
+            </label>
+            <label class="field-stack ai-quick-field">
+              <span class="toolbar-label">AI 모드</span>
+              <select id="runAiFallbackModeSelect" aria-label="AI fallback mode">
+                <option value="off">권장만 표시</option>
+                <option value="auto">권장 시 실행</option>
+                <option value="force">강제 실행</option>
+              </select>
+            </label>
+            <label class="field-stack ai-quick-field">
+              <span class="toolbar-label">공급자</span>
+              <select id="runAiProviderSelect" aria-label="AI provider">
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini (준비중)</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="utility-actions">
+            <button class="ghost-button" id="applyOpenAiPresetButton" type="button">OpenAI 프리셋</button>
+            <button class="ghost-button" id="applyGeminiPresetButton" type="button">Gemini 자리만</button>
+            <span class="helper-inline" id="aiFallbackHelper">AI 보정은 기본으로 꺼져 있고, 추천 신호만 표시합니다.</span>
+          </div>
+        </section>
+
+        <details class="advanced-panel" id="advancedSettingsPanel">
+          <summary>고급 설정과 세부 조정</summary>
           <div class="advanced-content">
             <div class="advanced-grid">
               <label class="field-stack">
@@ -100,34 +145,16 @@
             <div class="ai-fallback-panel">
               <div class="ai-fallback-header">
                 <div>
-                  <span class="toolbar-label">AI 문항 보정</span>
-                  <p class="helper-text">문항 경계나 선지 인식이 애매할 때만 선택적으로 보정합니다.</p>
+                  <span class="toolbar-label">AI 세부 조정</span>
+                  <p class="helper-text">모델과 임계값만 여기서 세밀하게 조정합니다. 위쪽 빠른 패널이 기본 진입점입니다.</p>
                 </div>
-                <label class="checkbox-chip checkbox-chip-wide" for="runAiFallbackEnabled">
-                  <input id="runAiFallbackEnabled" type="checkbox">
-                  <span>AI 보정 사용</span>
-                </label>
+                <span class="meta-pill" id="aiAdvancedHintPill">세부 값 조정</span>
               </div>
 
               <div class="advanced-grid advanced-grid-ai">
                 <label class="field-stack">
-                  <span class="toolbar-label">AI 모드</span>
-                  <select id="runAiFallbackModeSelect" aria-label="AI fallback mode">
-                    <option value="auto">auto</option>
-                    <option value="force">force</option>
-                    <option value="off">off</option>
-                  </select>
-                </label>
-                <label class="field-stack">
-                  <span class="toolbar-label">공급자</span>
-                  <select id="runAiProviderSelect" aria-label="AI provider">
-                    <option value="openai">OpenAI</option>
-                    <option value="gemini">Gemini (준비중)</option>
-                  </select>
-                </label>
-                <label class="field-stack">
                   <span class="toolbar-label">모델</span>
-                  <input id="runAiModelInput" type="text" value="gpt-5.4-mini" placeholder="gpt-5.4-mini">
+                  <input id="runAiModelInput" type="text" value="gpt-4o-mini" placeholder="gpt-4o-mini">
                 </label>
                 <label class="field-stack">
                   <span class="toolbar-label">Threshold</span>
@@ -148,9 +175,7 @@
               </div>
 
               <div class="utility-actions">
-                <button class="ghost-button" id="applyOpenAiPresetButton" type="button">OpenAI 프리셋</button>
-                <button class="ghost-button" id="applyGeminiPresetButton" type="button">Gemini 자리만</button>
-                <span class="helper-inline" id="aiFallbackHelper">AI 보정이 꺼져 있습니다.</span>
+                <span class="helper-inline">빠른 모드와 공급자는 위의 메인 패널에서 바로 바꿀 수 있습니다.</span>
               </div>
             </div>
 

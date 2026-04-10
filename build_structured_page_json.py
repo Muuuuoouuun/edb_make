@@ -11,7 +11,7 @@ from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_
 from pipeline_cache import PipelineCache
 from preprocess import PreparedPage, prepare_source_pages
 from segment import crop_block_image, draw_segment_debug, segment_page
-from structured_schema import BlockType, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
+from structured_schema import Box, BlockType, ContentBlock, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
 
 
 def _resolve_subject(name: str | None) -> Subject:
@@ -21,6 +21,74 @@ def _resolve_subject(name: str | None) -> Subject:
         return Subject(name.lower())
     except ValueError:
         return Subject.UNKNOWN
+
+
+def _build_segmentation_fallback_page(
+    prepared_page: PreparedPage,
+    *,
+    page_id: str,
+    subject: Subject,
+    error: Exception,
+) -> PageModel:
+    width = prepared_page.image.width
+    height = prepared_page.image.height
+    page_area = max(width * height, 1)
+    error_message = str(error).strip() or error.__class__.__name__
+    diagnostics = {
+        "segmenter": "fallback",
+        "segmentation_mode": "fallback",
+        "page_area_px": page_area,
+        "block_count": 1,
+        "large_block_threshold": 0.72,
+        "large_block_count": 1,
+        "large_block_ratio": 1.0,
+        "max_block_area_ratio": 1.0,
+        "mean_block_area_ratio": 1.0,
+        "candidate_count": 0,
+        "expanded_candidate_count": 0,
+        "merged_candidate_count": 0,
+        "split_applied": False,
+        "document_split_applied": False,
+        "fallback_reason": "segmentation_error",
+        "fallback_reasons": ["segmentation_error"],
+        "fallback_reason_count": 1,
+        "has_fallback_reason": True,
+        "board_region_area_ratio": 1.0,
+        "content_box_area_ratio": 1.0,
+    }
+    return PageModel(
+        page_id=page_id,
+        width_px=width,
+        height_px=height,
+        subject=subject,
+        source_path=prepared_page.source_path,
+        blocks=[
+            ContentBlock(
+                block_id=f"{page_id}-block-001",
+                block_type=BlockType.IMAGE,
+                bbox=Box(left=0.0, top=0.0, width=float(width), height=float(height)),
+                reading_order=0,
+                metadata={
+                    "segmenter": "fallback",
+                    "segmentation_mode": "fallback",
+                    "fallback_reason": "segmentation_error",
+                    "segmentation_error": error_message,
+                    "segmentation_error_type": error.__class__.__name__,
+                    "large_block": True,
+                },
+            )
+        ],
+        metadata={
+            **dict(prepared_page.metadata),
+            "segmenter": "fallback",
+            "segmentation_mode": "fallback",
+            "segmentation_fallback": True,
+            "segmentation_error": error_message,
+            "segmentation_error_type": error.__class__.__name__,
+            "segmentation_stats": dict(diagnostics),
+            "segmentation_diagnostics": dict(diagnostics),
+        },
+    )
 
 
 def build_run_summary(
@@ -103,27 +171,67 @@ def build_page_model(
 ) -> PageModel:
     backend = create_ocr_backend(ocr_mode)
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
-    segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
+    try:
+        segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
+    except Exception as exc:
+        segmented_page = _build_segmentation_fallback_page(
+            prepared_page,
+            page_id=prepared_page.page_id,
+            subject=subject,
+            error=exc,
+        )
     blocks = segmented_page.blocks
+    ocr_error_count = 0
 
     for block in blocks:
+        if block.metadata.get("pdf_text_layer"):
+            block.metadata["ocr_backend"] = "pdf_text_layer"
+            block.metadata["ocr_latency_ms"] = 0
+            block.metadata["ocr_line_count"] = len(block.ocr_lines)
+            block.metadata["ocr_empty_text"] = not bool((block.text or "").strip())
+            block.metadata["ocr_text_length"] = len((block.text or "").strip())
+            block.metadata["ocr_cache_hit"] = True
+            block.metadata["ocr_cache_miss"] = False
+            if block.text and block.text.strip() and block.style is None:
+                block.style = TextStyle(
+                    font_size=max(10.0, block.bbox.height * 0.12),
+                    math_like=infer_math_like_text(block.text),
+                )
+            if block.confidence is None and block.text and block.text.strip():
+                block.confidence = 1.0
+            continue
+
         if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
             continue
 
-        crop = crop_block_image(prepared_page, block)
-        cached_ocr = pipeline_cache.load_ocr_result(crop, backend_name=backend.engine_name)
-        if cached_ocr is not None:
-            ocr_result = cached_ocr
-            block.metadata["ocr_cache_hit"] = True
-            block.metadata["ocr_cache_miss"] = False
-        else:
-            started_at = time.perf_counter()
-            ocr_result = backend.recognize(crop)
-            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
-            ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
-            pipeline_cache.save_ocr_result(crop, ocr_result, backend_name=backend.engine_name)
+        try:
+            crop = crop_block_image(prepared_page, block)
+            cached_ocr = pipeline_cache.load_ocr_result(crop, backend_name=backend.engine_name)
+            if cached_ocr is not None:
+                ocr_result = cached_ocr
+                block.metadata["ocr_cache_hit"] = True
+                block.metadata["ocr_cache_miss"] = False
+            else:
+                started_at = time.perf_counter()
+                ocr_result = backend.recognize(crop)
+                elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
+                ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
+                pipeline_cache.save_ocr_result(crop, ocr_result, backend_name=backend.engine_name)
+                block.metadata["ocr_cache_hit"] = False
+                block.metadata["ocr_cache_miss"] = True
+        except Exception as exc:
+            ocr_error_count += 1
+            block.metadata["ocr_backend"] = backend.engine_name
+            block.metadata["ocr_failed"] = True
+            block.metadata["ocr_error"] = str(exc).strip() or exc.__class__.__name__
+            block.metadata["ocr_error_type"] = exc.__class__.__name__
             block.metadata["ocr_cache_hit"] = False
-            block.metadata["ocr_cache_miss"] = True
+            block.metadata["ocr_cache_miss"] = False
+            block.metadata["ocr_line_count"] = 0
+            block.metadata["ocr_empty_text"] = True
+            block.metadata["ocr_text_length"] = 0
+            block.metadata.setdefault("fallback_reason", "ocr_error")
+            continue
 
         block.metadata["ocr_backend"] = ocr_result.backend_name
         if isinstance(ocr_result.metadata.get("backend_latency_ms"), (int, float)):
@@ -179,6 +287,7 @@ def build_page_model(
             **dict(segmented_page.metadata),
             "ocr_mode": ocr_mode,
             "pipeline_cache_dir": str(pipeline_cache.root_dir),
+            "ocr_error_count": ocr_error_count,
         },
     )
     return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config, cache=pipeline_cache)

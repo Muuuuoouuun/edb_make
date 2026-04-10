@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import os
 import sys
 import time
 import webbrowser
@@ -19,6 +20,7 @@ from urllib.request import url2pathname
 
 from build_mvp_export import run_export
 from build_problem_board_edb import run_problem_export
+from pipeline_feedback import format_pipeline_error
 
 
 APP_NAME = "ClassIn EDB MVP Local App"
@@ -118,6 +120,68 @@ def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_ai_capabilities() -> dict[str, Any]:
+    provider_specs = {
+        "openai": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "OPENAI_API_KEY",
+            "supports_vision": True,
+        },
+        "claude": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "supports_vision": True,
+        },
+        "anthropic": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "supports_vision": True,
+        },
+        "gemini": {
+            "supported": False,
+            "supported_modes": [],
+            "api_key_env": None,
+            "supports_vision": False,
+            "status": "not_implemented",
+        },
+    }
+
+    providers: dict[str, Any] = {}
+    missing_api_keys: list[str] = []
+    ready_providers: list[str] = []
+    for provider_name, spec in provider_specs.items():
+        api_key_env = spec.get("api_key_env")
+        api_key_present = bool(os.environ.get(str(api_key_env), "").strip()) if api_key_env else False
+        supported = bool(spec.get("supported"))
+        ready = supported and (api_key_present or not api_key_env)
+        status = "ready" if ready else ("missing_api_key" if supported and api_key_env and not api_key_present else str(spec.get("status") or "unsupported"))
+        providers[provider_name] = {
+            "supported": supported,
+            "supported_modes": list(spec.get("supported_modes") or []),
+            "api_key_env": api_key_env,
+            "api_key_present": api_key_present,
+            "available": ready,
+            "status": status,
+            "supports_vision": bool(spec.get("supports_vision")),
+        }
+        if api_key_env and not api_key_present and supported:
+            missing_api_keys.append(str(api_key_env))
+        if ready:
+            ready_providers.append(provider_name)
+
+    return {
+        "available": bool(ready_providers),
+        "supported_modes": ["off", "auto", "force"],
+        "providers": providers,
+        "ready_providers": ready_providers,
+        "missing_api_keys": sorted(set(missing_api_keys)),
+        "default_provider": "openai",
+    }
+
+
 def sanitize_output_dir_name(value: str | None) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -201,7 +265,7 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         add_path(value)
 
     for problem in session.get("problems", []):
-        for key in ("imagePath", "sourceImagePath", "boardRenderPath"):
+        for key in ("imagePath", "cropPath", "sourceImagePath", "boardRenderPath"):
             add_path(problem.get(key))
 
     return paths
@@ -214,6 +278,7 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
 
     for problem in rewritten.get("problems", []):
         problem["imagePath"] = path_to_api_url(problem.get("imagePath"))
+        problem["cropPath"] = path_to_api_url(problem.get("cropPath"))
         problem["sourceImagePath"] = path_to_api_url(problem.get("sourceImagePath"))
         problem["boardRenderPath"] = path_to_api_url(problem.get("boardRenderPath"))
     return rewritten
@@ -245,7 +310,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self._send_json({"ok": True, "app": APP_NAME})
+            session = self.app_server.latest_session or load_latest_session()
+            payload: dict[str, Any] = {
+                "ok": True,
+                "app": APP_NAME,
+                "ai_capabilities": _build_ai_capabilities(),
+            }
+            if session is not None:
+                payload["session"] = rewrite_session_for_http(session)
+            self._send_json(payload)
             return
         if parsed.path == "/api/session/latest":
             self._handle_latest_session()
@@ -284,7 +357,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def _handle_latest_session(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
         if session is None:
-            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "no session available",
+                    "ai_capabilities": _build_ai_capabilities(),
+                },
+                status=HTTPStatus.NOT_FOUND,
+            )
             return
         self.app_server.latest_session = session
         self.app_server.allowed_files |= collect_session_file_paths(session)
@@ -294,6 +374,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             {
                 "ok": True,
                 "session": rewrite_session_for_http(session),
+                "ai_capabilities": _build_ai_capabilities(),
             }
         )
 
@@ -408,7 +489,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     **common_kwargs,
                 )
         except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            error_detail = format_pipeline_error(exc)
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": error_detail["message"],
+                    "error_detail": error_detail,
+                    "errorDetail": error_detail,
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
             return
 
         session = result["ui_session"]
@@ -417,6 +507,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             {
                 "ok": True,
                 "session": rewrite_session_for_http(session),
+                "ai_capabilities": _build_ai_capabilities(),
                 "output_dir": str(result["output_dir"]),
                 "outputDir": str(result["output_dir"]),
                 "ui_session_path": str(result["ui_session_path"]),

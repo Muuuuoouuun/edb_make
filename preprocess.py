@@ -28,7 +28,87 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-@dataclass(slots=True)
+def _extract_pdf_text_lines(page, *, scale: float) -> list[dict[str, Any]]:
+    text_dict = page.get_text("dict")
+    lines: list[dict[str, Any]] = []
+    for block in text_dict.get("blocks", []):
+        if int(block.get("type", 1)) != 0:
+            continue
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            text = "".join(str(span.get("text", "")) for span in spans).strip()
+            if not text:
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            left, top, right, bottom = bbox
+            lines.append(
+                {
+                    "text": text,
+                    "left": float(left) * scale,
+                    "top": float(top) * scale,
+                    "width": max(0.0, float(right - left) * scale),
+                    "height": max(0.0, float(bottom - top) * scale),
+                }
+            )
+    return lines
+
+
+def _compute_uniform_margin_box(
+    image: Image.Image,
+    *,
+    background_threshold: int = 245,
+    padding: int = 12,
+) -> tuple[int, int, int, int] | None:
+    gray = ImageOps.grayscale(image)
+    mask = gray.point(lambda px: 255 if px < background_threshold else 0)
+    bbox = mask.getbbox()
+    if bbox is None:
+        return None
+    left = max(0, bbox[0] - padding)
+    top = max(0, bbox[1] - padding)
+    right = min(image.width, bbox[2] + padding)
+    bottom = min(image.height, bbox[3] + padding)
+    return left, top, right, bottom
+
+
+def _transform_pdf_text_lines(
+    lines: list[dict[str, Any]] | None,
+    *,
+    crop_box: tuple[int, int, int, int] | None = None,
+    resize_scale: float = 1.0,
+) -> list[dict[str, Any]]:
+    if not lines:
+        return []
+
+    crop_left = crop_box[0] if crop_box else 0
+    crop_top = crop_box[1] if crop_box else 0
+    transformed: list[dict[str, Any]] = []
+    for line in lines:
+        left = float(line.get("left", 0.0)) - float(crop_left)
+        top = float(line.get("top", 0.0)) - float(crop_top)
+        width = float(line.get("width", 0.0))
+        height = float(line.get("height", 0.0))
+        if width <= 0 or height <= 0:
+            continue
+        right = left + width
+        bottom = top + height
+        if right <= 0 or bottom <= 0:
+            continue
+        transformed.append(
+            {
+                "text": str(line.get("text", "")).strip(),
+                "left": max(0.0, left * resize_scale),
+                "top": max(0.0, top * resize_scale),
+                "width": max(0.0, width * resize_scale),
+                "height": max(0.0, height * resize_scale),
+            }
+        )
+    return [line for line in transformed if line["text"]]
+
+
+@dataclass
 class PreprocessOptions:
     dpi: int = 160
     enable_perspective: bool = True
@@ -37,7 +117,7 @@ class PreprocessOptions:
     max_dimension: int | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class PreparedPage:
     page_id: str
     source_path: str
@@ -51,7 +131,7 @@ class PreparedPage:
         return self.image.size
 
 
-@dataclass(slots=True)
+@dataclass
 class NormalizedPageImage:
     page_id: str
     source_path: str
@@ -99,6 +179,7 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
         for page_index in range(doc.page_count):
             page = doc.load_page(page_index)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
+            pdf_text_lines = _extract_pdf_text_lines(page, scale=scale)
             out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
             pix.save(out_path.as_posix())
             pages.append(
@@ -109,7 +190,12 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                     page_index=page_index,
                     width_px=pix.width,
                     height_px=pix.height,
-                    metadata={"source_type": "pdf", "dpi": dpi},
+                    metadata={
+                        "source_type": "pdf",
+                        "dpi": dpi,
+                        "pdf_text_lines": pdf_text_lines,
+                        "pdf_text_line_count": len(pdf_text_lines),
+                    },
                 )
             )
     finally:
@@ -122,16 +208,14 @@ def load_image(source: str | Path) -> Image.Image:
 
 
 def crop_uniform_margin(image: Image.Image, background_threshold: int = 245, padding: int = 12) -> Image.Image:
-    gray = ImageOps.grayscale(image)
-    mask = gray.point(lambda px: 255 if px < background_threshold else 0)
-    bbox = mask.getbbox()
-    if bbox is None:
+    crop_box = _compute_uniform_margin_box(
+        image,
+        background_threshold=background_threshold,
+        padding=padding,
+    )
+    if crop_box is None:
         return image
-    left = max(0, bbox[0] - padding)
-    top = max(0, bbox[1] - padding)
-    right = min(image.width, bbox[2] + padding)
-    bottom = min(image.height, bbox[3] + padding)
-    return image.crop((left, top, right, bottom))
+    return image.crop(crop_box)
 
 
 def deskew_image(image: Image.Image) -> Image.Image:
@@ -259,8 +343,18 @@ def normalize_image(
         image = deskew_image(image)
         metadata["deskewed"] = True
     if enable_margin_crop:
-        image = crop_uniform_margin(image)
-        metadata["margin_cropped"] = True
+        crop_box = _compute_uniform_margin_box(image)
+        if crop_box is not None:
+            image = image.crop(crop_box)
+            metadata["margin_cropped"] = True
+            metadata["margin_crop_box"] = {
+                "left": crop_box[0],
+                "top": crop_box[1],
+                "right": crop_box[2],
+                "bottom": crop_box[3],
+            }
+        else:
+            metadata["margin_cropped"] = False
 
     if max_dimension:
         width, height = image.size
@@ -269,6 +363,7 @@ def normalize_image(
             new_size = (int(round(width * scale)), int(round(height * scale)))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             metadata["resized_to_max_dimension"] = max_dimension
+        metadata["resize_scale"] = scale
 
     resolved_page_id = page_id or f"{source_path.stem}-page-{page_index + 1:03d}"
     out_path = out_dir / f"{resolved_page_id}.png"
@@ -303,13 +398,14 @@ def prepare_pages(
         rendered = render_pdf_pages(source_path, normalized_dir / "rendered", dpi=dpi)
         normalized_pages: list[NormalizedPageImage] = []
         for page in rendered:
+            has_pdf_text_layer = bool(page.metadata.get("pdf_text_line_count"))
             normalized = normalize_image(
                 page.normalized_path,
                 normalized_dir / "normalized",
                 page_id=page.page_id,
                 page_index=page.page_index,
                 enable_perspective=False,
-                enable_deskew=enable_deskew,
+                enable_deskew=enable_deskew and not has_pdf_text_layer,
                 enable_margin_crop=enable_margin_crop,
                 max_dimension=max_dimension,
                 base_metadata=dict(page.metadata),
@@ -317,6 +413,24 @@ def prepare_pages(
             normalized.metadata.setdefault("source_pdf_path", str(source_path))
             normalized.metadata["source_type"] = "pdf"
             normalized.metadata["document_like"] = True
+            crop_box_meta = normalized.metadata.get("margin_crop_box") or {}
+            crop_box = None
+            if crop_box_meta:
+                crop_box = (
+                    int(crop_box_meta.get("left", 0)),
+                    int(crop_box_meta.get("top", 0)),
+                    int(crop_box_meta.get("right", 0)),
+                    int(crop_box_meta.get("bottom", 0)),
+                )
+            resize_scale = float(normalized.metadata.get("resize_scale") or 1.0)
+            transformed_lines = _transform_pdf_text_lines(
+                page.metadata.get("pdf_text_lines"),
+                crop_box=crop_box,
+                resize_scale=resize_scale,
+            )
+            normalized.metadata["pdf_text_lines"] = transformed_lines
+            normalized.metadata["pdf_text_line_count"] = len(transformed_lines)
+            normalized.metadata["pdf_text_layer_available"] = bool(transformed_lines)
             normalized_pages.append(normalized)
         return normalized_pages
 

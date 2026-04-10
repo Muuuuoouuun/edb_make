@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_ed
 from layout_template_schema import build_default_template
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from placement_engine import build_export_plan
+from pipeline_feedback import build_parse_feedback
 from preprocess import prepare_source_pages, prepare_source_pages_batch
 from structured_schema import Box, PageModel, ProblemUnit, Subject, save_pages_json
 
@@ -88,7 +90,7 @@ def _build_ai_fallback_config(
         "enabled": effective_enabled,
         "mode": resolved_mode,
         "provider": provider,
-        "model": model or "gpt-5.4-mini",
+        "model": model or "gpt-4o-mini",
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -106,7 +108,7 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
     return build_page_ai_fallback_config(
         mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
         provider=str(ai_fallback_config.get("provider") or "openai"),
-        model=str(ai_fallback_config.get("model") or "gpt-5.4-mini"),
+        model=str(ai_fallback_config.get("model") or "gpt-4o-mini"),
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 18),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
@@ -116,8 +118,6 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
 
 
 def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_config: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not ai_fallback_config:
-        return None
     attempted_page_count = 0
     applied_page_count = 0
     ai_cache_hit_count = 0
@@ -156,10 +156,10 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
                 ocr_cache_miss_count += 1
 
     return {
-        "requested": bool(ai_fallback_config.get("enabled")),
-        "mode": ai_fallback_config.get("mode"),
-        "provider": ai_fallback_config.get("provider"),
-        "model": ai_fallback_config.get("model"),
+        "requested": bool(ai_fallback_config.get("enabled")) if ai_fallback_config else False,
+        "mode": (ai_fallback_config or {}).get("mode", "off"),
+        "provider": (ai_fallback_config or {}).get("provider", "openai"),
+        "model": (ai_fallback_config or {}).get("model", "gpt-4o-mini"),
         "attempted_page_count": attempted_page_count,
         "applied_page_count": applied_page_count,
         "ai_cache_hit_count": ai_cache_hit_count,
@@ -168,6 +168,71 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
         "status_counts": status_counts,
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
+        "recommended_page_count": int(status_counts.get("ai_recommended", 0)),
+        "local_retry_recommended_page_count": int(status_counts.get("local_retry_recommended", 0)),
+    }
+
+
+def _build_ai_capabilities() -> dict[str, Any]:
+    provider_specs = {
+        "openai": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "OPENAI_API_KEY",
+            "supports_vision": True,
+        },
+        "claude": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "supports_vision": True,
+        },
+        "anthropic": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "supports_vision": True,
+        },
+        "gemini": {
+            "supported": False,
+            "supported_modes": [],
+            "api_key_env": None,
+            "supports_vision": False,
+            "status": "not_implemented",
+        },
+    }
+
+    providers: dict[str, Any] = {}
+    missing_api_keys: list[str] = []
+    ready_providers: list[str] = []
+    for provider_name, spec in provider_specs.items():
+        api_key_env = spec.get("api_key_env")
+        api_key_present = bool(os.environ.get(str(api_key_env), "").strip()) if api_key_env else False
+        supported = bool(spec.get("supported"))
+        ready = supported and (api_key_present or not api_key_env)
+        status = "ready" if ready else ("missing_api_key" if supported and api_key_env and not api_key_present else str(spec.get("status") or "unsupported"))
+        provider_info = {
+            "supported": supported,
+            "supported_modes": list(spec.get("supported_modes") or []),
+            "api_key_env": api_key_env,
+            "api_key_present": api_key_present,
+            "available": ready,
+            "status": status,
+            "supports_vision": bool(spec.get("supports_vision")),
+        }
+        providers[provider_name] = provider_info
+        if api_key_env and not api_key_present and supported:
+            missing_api_keys.append(str(api_key_env))
+        if ready:
+            ready_providers.append(provider_name)
+
+    return {
+        "available": bool(ready_providers),
+        "supported_modes": ["off", "auto", "force"],
+        "providers": providers,
+        "ready_providers": ready_providers,
+        "missing_api_keys": sorted(set(missing_api_keys)),
+        "default_provider": "openai",
     }
 
 
@@ -341,6 +406,8 @@ def build_ui_session(
     source_paths: Sequence[Path] | None = None,
     ai_fallback_config: dict[str, Any] | None = None,
     ai_summary: dict[str, Any] | None = None,
+    warning_messages: list[str] | None = None,
+    parse_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved_source_paths = [Path(path).resolve() for path in (source_paths or [])]
     placements_by_id = {placement.problem_id: placement for placement in export_plan.placements}
@@ -394,6 +461,9 @@ def build_ui_session(
         "template": _template_to_dict(export_plan.template),
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        "ai_capabilities": _build_ai_capabilities(),
+        "warning_messages": list(warning_messages or []),
+        "parse_diagnostics": dict(parse_diagnostics or {}),
         "problems": problems,
     }
 
@@ -487,6 +557,7 @@ def run_export(
     ]
     save_pages_json(page_models, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(page_models, ai_fallback_config)
+    parse_feedback = build_parse_feedback(page_models, source_count=len(source_paths))
 
     export_plan = build_export_plan(page_models, template=build_default_template())
     board_plan_dict = page_model_to_board_plan_dict(page_models, export_plan)
@@ -523,6 +594,8 @@ def run_export(
         source_paths=source_paths,
         ai_fallback_config=ai_fallback_config,
         ai_summary=ai_summary,
+        warning_messages=parse_feedback["warning_messages"],
+        parse_diagnostics=parse_feedback["parse_diagnostics"],
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -538,6 +611,8 @@ def run_export(
         "synced_ui_path": synced_ui_path,
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        "ai_capabilities": _build_ai_capabilities(),
+        "parse_feedback": parse_feedback,
     }
 
 

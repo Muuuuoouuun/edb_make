@@ -63,3 +63,10 @@ python build_problem_board_edb.py "C:\path\to\input.png" --output-dir out_cutout
 ## Notes
 - Existing `board_theme` options may remain in the CLI for compatibility, but they are not the main output strategy anymore.
 - The authoritative output should be the transparent problem cutout, not a board-colored render.
+
+## Deferred Consideration
+- Keep `2-stage split` as a future architecture option rather than implementing it immediately.
+- Recommended future split:
+  - Stage 1: problem splitting, ordering, batch handling, and rectangular crop export
+  - Stage 2: background removal, white-family conversion, and final application/export
+- When revisiting parsing stability work, consider this split first if parsing, recognition, conversion, and apply logic keep colliding in one flow.

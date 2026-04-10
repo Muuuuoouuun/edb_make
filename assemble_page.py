@@ -146,6 +146,8 @@ def extract_problem_number_from_block(block: ContentBlock) -> tuple[int | None, 
 
 
 def infer_subject(page: PageModel) -> Subject:
+    if page.subject != Subject.UNKNOWN:
+        return page.subject
     text = "\n".join(block.text or "" for block in page.blocks)
     lowered = text.lower()
     if any(token in lowered for token in ("lim", "sin", "cos", "tan", "\ud655\ub960", "\ud568\uc218", "\ubbf8\ubd84", "\uc801\ubd84")):

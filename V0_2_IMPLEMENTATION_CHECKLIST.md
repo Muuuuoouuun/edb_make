@@ -202,6 +202,19 @@ Done when:
 - template-based board placement
 - multi-page PDF handling beyond smoke testing
 
+## Deferred Architecture Consideration
+- Keep `2-stage split` on the todo list for later parsing-quality work
+- Stage 1 candidate scope:
+  - problem splitting
+  - ordering
+  - batch handling
+  - rectangular crop export
+- Stage 2 candidate scope:
+  - cutout generation
+  - white-family conversion
+  - final apply/export
+- Re-evaluate this split first when parsing, recognition, conversion, and apply logic become hard to debug as one pipeline
+
 ## Recommended Next Commit Theme
 - `cleanup pipeline interfaces`
 - `stabilize single-page structured cli`

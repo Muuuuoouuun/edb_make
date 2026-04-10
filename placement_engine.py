@@ -68,6 +68,7 @@ def place_problem(
         overflow_violation=overflow_violation,
         slot_span_count=slot_span_count,
         board_capacity_exceeded=board_capacity_exceeded,
+        reading_heavy=problem.reading_heavy,
         metadata=dict(problem.metadata),
     )
 

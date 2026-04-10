@@ -1,13 +1,14 @@
 ﻿#!/usr/bin/env python3
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from PIL import Image, ImageOps, ImageStat
 
-from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
+from structured_schema import BlockType, Box, ContentBlock, OcrLine, PageModel, Subject
 
 try:
     import cv2  # type: ignore
@@ -20,7 +21,7 @@ except ImportError:  # pragma: no cover - optional dependency
     np = None
 
 
-@dataclass(slots=True)
+@dataclass
 class SegmentOptions:
     min_area_ratio: float = 0.00025
     merge_gap_px: int = 16
@@ -61,6 +62,9 @@ class SegmentOptions:
 SEGMENTATION_MODE_BOARD = "board"
 SEGMENTATION_MODE_DOCUMENT = "document"
 LARGE_BLOCK_AREA_RATIO = 0.18
+PDF_PROBLEM_MARKER_RE = re.compile(
+    r"^\s*(?:(?:문항|문제)\s*)?(?:\[(?:[1-9][0-9]{0,2})\]|(?:[1-9][0-9]{0,2})(?:[\.\)]))(?:\s+|$)"
+)
 
 
 def _pil_to_gray_array(image: Image.Image):
@@ -363,6 +367,182 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
     if left_box.width < mask.width * 0.2 or right_box.width < mask.width * 0.2:
         return [content_box]
     return [left_box, right_box]
+
+
+def _coerce_pdf_text_lines(raw_lines: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_lines, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for line in raw_lines:
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text", "")).strip()
+        width = float(line.get("width", 0.0) or 0.0)
+        height = float(line.get("height", 0.0) or 0.0)
+        if not text or width <= 0 or height <= 0:
+            continue
+        normalized.append(
+            {
+                "text": text,
+                "left": float(line.get("left", 0.0) or 0.0),
+                "top": float(line.get("top", 0.0) or 0.0),
+                "width": width,
+                "height": height,
+            }
+        )
+    return sorted(normalized, key=lambda item: (item["top"], item["left"]))
+
+
+def _pdf_text_line_box(line: dict[str, Any]) -> Box:
+    return Box(
+        left=float(line["left"]),
+        top=float(line["top"]),
+        width=float(line["width"]),
+        height=float(line["height"]),
+    )
+
+
+def _matches_pdf_problem_marker(text: str) -> bool:
+    return bool(PDF_PROBLEM_MARKER_RE.match(text.strip()))
+
+
+def _is_pdf_utility_line(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if stripped.isdigit() and len(stripped) <= 3:
+        return True
+    if "저작권은 한국교육과정평가원에 있습니다" in stripped:
+        return True
+    if stripped.startswith("* 확인 사항"):
+        return True
+    return False
+
+
+def _line_belongs_to_column(line: dict[str, Any], column_box: Box) -> bool:
+    line_box = _pdf_text_line_box(line)
+    center_x = line_box.left + (line_box.width / 2.0)
+    return column_box.left <= center_x <= column_box.right
+
+
+def _segment_pdf_text_layer_page(
+    image: Image.Image,
+    page_id: str,
+    options: SegmentOptions,
+    pdf_text_lines: list[dict[str, Any]],
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    normalized_lines = _coerce_pdf_text_lines(pdf_text_lines)
+    if not normalized_lines:
+        return None
+
+    mask = _dark_mask(image, options.document_dark_threshold)
+    content_box = _find_document_content_box(mask, image.width, image.height)
+    columns = _detect_document_columns(mask, content_box, options)
+    page_area = _page_area_px(image.width, image.height)
+
+    blocks: list[ContentBlock] = []
+    marker_count = 0
+    for column_index, column_box in enumerate(columns, start=1):
+        column_lines = [
+            line
+            for line in normalized_lines
+            if _line_belongs_to_column(line, column_box) and not _is_pdf_utility_line(line["text"])
+        ]
+        if not column_lines:
+            continue
+
+        marker_lines = [line for line in column_lines if _matches_pdf_problem_marker(line["text"])]
+        if not marker_lines:
+            continue
+
+        marker_count += len(marker_lines)
+        for marker_index, marker_line in enumerate(marker_lines, start=1):
+            marker_box = _pdf_text_line_box(marker_line)
+            next_marker_top = _pdf_text_line_box(marker_lines[marker_index]).top if marker_index < len(marker_lines) else None
+            candidate_lines = [
+                line
+                for line in column_lines
+                if _pdf_text_line_box(line).top >= marker_box.top
+                and (next_marker_top is None or _pdf_text_line_box(line).top < next_marker_top)
+            ]
+            last_line_box = _pdf_text_line_box(candidate_lines[-1]) if candidate_lines else marker_box
+            top = max(column_box.top, marker_box.top - float(options.document_band_padding_px))
+            if next_marker_top is not None:
+                bottom_padding = max(18.0, float(options.document_band_padding_px) * 0.75)
+                bottom = min(
+                    column_box.bottom,
+                    max(marker_box.bottom + 28.0, next_marker_top - bottom_padding),
+                )
+            else:
+                bottom = min(
+                    column_box.bottom,
+                    max(marker_box.bottom + 28.0, last_line_box.bottom + float(options.document_band_padding_px) * 1.4),
+                )
+            question_box = Box.from_points(column_box.left, top, column_box.right, bottom).expanded(
+                6.0,
+                max_width=float(image.width),
+                max_height=float(image.height),
+            )
+            region_lines = [
+                line
+                for line in column_lines
+                if _pdf_text_line_box(line).bottom > question_box.top and _pdf_text_line_box(line).top < question_box.bottom
+            ]
+            region_text = "\n".join(line["text"] for line in region_lines if line["text"].strip())
+            ocr_lines = [
+                OcrLine(
+                    text=line["text"],
+                    bbox=_pdf_text_line_box(line),
+                    confidence=1.0,
+                )
+                for line in region_lines
+            ]
+            metadata = _enrich_block_segmentation_metadata(
+                {
+                    "segmenter": "pdf-text-layer",
+                    "column_index": column_index,
+                    "question_band_index": marker_index,
+                    "source_band_index": marker_index,
+                    "pdf_text_layer": True,
+                    "force_problem_start": True,
+                    "problem_marker_text": marker_line["text"],
+                },
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                block_area=question_box.area,
+                page_area=page_area,
+                large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+                page_width=image.width,
+                page_height=image.height,
+            )
+            blocks.append(
+                ContentBlock(
+                    block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
+                    block_type=BlockType.TITLE,
+                    bbox=question_box,
+                    reading_order=len(blocks),
+                    text=region_text,
+                    confidence=1.0,
+                    ocr_lines=ocr_lines,
+                    metadata=metadata,
+                )
+            )
+
+    if not blocks or marker_count == 0:
+        return None
+
+    return blocks, {
+        "segmenter": "pdf-text-layer",
+        "content_box": {
+            "left": content_box.left,
+            "top": content_box.top,
+            "width": content_box.width,
+            "height": content_box.height,
+        },
+        "column_count": len(columns),
+        "pdf_text_line_count": len(normalized_lines),
+        "pdf_problem_marker_count": marker_count,
+        "content_box_area_ratio": round(content_box.area / page_area, 6),
+    }
 
 
 def _find_document_row_bands(mask: Image.Image, column_box: Box, options: SegmentOptions) -> list[tuple[int, int]]:
@@ -1120,6 +1300,32 @@ def segment_page(
     image = _load_image(image_path)
     page_area = _page_area_px(image.width, image.height)
     if _is_document_like_page(image_path, image):
+        source_metadata = _source_metadata(image_path)
+        pdf_text_lines = _coerce_pdf_text_lines(source_metadata.get("pdf_text_lines"))
+        pdf_text_result = _segment_pdf_text_layer_page(image, page_id, resolved_options, pdf_text_lines)
+        if pdf_text_result is not None:
+            blocks, metadata = pdf_text_result
+            source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
+            if source_path is None and not isinstance(image_path, Image.Image):
+                source_path = str(image_path)
+            metadata = _build_segmentation_metadata(
+                page_width=image.width,
+                page_height=image.height,
+                blocks=blocks,
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                segmenter="pdf-text-layer",
+                base_metadata=metadata,
+            )
+            return PageModel(
+                page_id=page_id,
+                width_px=image.width,
+                height_px=image.height,
+                subject=subject,
+                source_path=source_path,
+                blocks=blocks,
+                metadata=metadata,
+            )
+
         blocks, metadata = _segment_document_page(image, page_id, resolved_options)
         source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
         if source_path is None and not isinstance(image_path, Image.Image):

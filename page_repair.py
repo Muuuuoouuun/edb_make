@@ -24,7 +24,7 @@ ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 
-@dataclass(slots=True)
+@dataclass
 class AIFallbackConfig:
     mode: str = "off"
     provider: str = "openai"
@@ -129,6 +129,12 @@ def repair_page_model(
         "baseline_block_count": len(baseline.blocks),
     }
     if not resolved_config.enabled:
+        if route_decision.profile and route_decision.profile.tier == "red":
+            summary["status"] = "ai_recommended"
+            summary["next_best_action"] = "ai_recommended"
+        elif route_decision.next_best_action == "local_retry":
+            summary["status"] = "local_retry_recommended"
+            summary["next_best_action"] = route_decision.next_best_action
         baseline.metadata["ai_fallback"] = summary
         return baseline
 

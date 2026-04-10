@@ -46,14 +46,14 @@ This command does all of the following:
 - refreshes `ui_prototype/prototype_data.js`
 
 ```powershell
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\sample_run --ocr noop --subject korean --record-mode mixed
+python build_problem_board_edb.py tmp_test_inputs\earth_input.pdf --output-dir local_test_output\sample_run --ocr noop --subject science --record-mode mixed
 ```
 
 Main outputs:
 
 - `local_test_output\sample_run\pages.json`
 - `local_test_output\sample_run\board_run_summary.json`
-- `local_test_output\sample_run\record_0001_img_0.edb`
+- `local_test_output\sample_run\earth_input.edb`
 - `ui_prototype\prototype_data.js`
 
 ### Record modes
@@ -70,14 +70,14 @@ Main outputs:
 Recommended first comparison:
 
 ```powershell
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\image_only --ocr noop --subject korean --record-mode image-only
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\mixed --ocr noop --subject korean --record-mode mixed
+python build_problem_board_edb.py tmp_test_inputs\earth_input.pdf --output-dir local_test_output\image_only --ocr noop --subject science --record-mode image-only
+python build_problem_board_edb.py tmp_test_inputs\earth_input.pdf --output-dir local_test_output\mixed --ocr noop --subject science --record-mode mixed
 ```
 
 ### 2. Inspect the generated EDB structure
 
 ```powershell
-python inspect_edb.py .\local_test_output\sample_run\record_0001_img_0.edb
+python inspect_edb.py .\local_test_output\sample_run\earth_input.edb
 ```
 
 For a mixed export, check whether text and image records both appear in the summary.
@@ -95,7 +95,7 @@ The prototype will read `ui_prototype\prototype_data.js` and show the latest gen
 If you want only the page analysis output without building an EDB:
 
 ```powershell
-python build_structured_page_json.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\inspect_only --ocr noop --subject korean
+python build_structured_page_json.py tmp_test_inputs\physics_input.pdf --output-dir local_test_output\inspect_only --ocr noop --subject science
 ```
 
 This writes:

@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +20,6 @@ except ImportError:  # pragma: no cover - optional dependency
     np = None
 
 from build_structured_page_json import build_page_model
-from segment import draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -38,7 +38,9 @@ from edb_builder import (
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from placement_engine import place_problems
+from pipeline_feedback import build_parse_feedback
 from preprocess import PreparedPage, prepare_source_pages
+from segment import draw_segment_debug
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
 
 
@@ -130,6 +132,12 @@ def _prepare_image_for_dark_board(image: Image.Image, *, board_theme: str = DEFA
     return Image.alpha_composite(board, chalk_layer).convert("RGB")
 
 
+def _build_board_render_image(image: Image.Image, *, dark_board: bool, board_theme: str) -> Image.Image:
+    if not dark_board:
+        return image.convert("RGB")
+    return _prepare_image_for_dark_board(image, board_theme=board_theme)
+
+
 def _write_render_image(image: Image.Image, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, format="PNG")
@@ -164,7 +172,7 @@ IMAGE_ONLY_BLOCK_TYPES = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class ProblemEntry:
     problem_id: str
     title: str
@@ -175,6 +183,7 @@ class ProblemEntry:
     prepared_page: PreparedPage
     bounds: Box
     crop_path: Path
+    cutout_path: Path
     board_render_path: Path
     blocks: list[ContentBlock]
     actual_height_pages: float
@@ -265,12 +274,15 @@ def build_problem_entries(
     output_dir: Path,
     template: LayoutTemplate,
     *,
+    dark_board: bool = True,
     board_theme: str = DEFAULT_BOARD_THEME,
 ) -> list[ProblemEntry]:
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
     cutout_dir = output_dir / "problem_cutouts"
     cutout_dir.mkdir(parents=True, exist_ok=True)
+    board_render_dir = output_dir / "board_renders"
+    board_render_dir.mkdir(parents=True, exist_ok=True)
     prepared_by_page_id = {page.page_id: page for page in prepared_pages}
     entries: list[ProblemEntry] = []
 
@@ -311,8 +323,11 @@ def build_problem_entries(
             crop_path = crop_dir / crop_name
             crop.save(crop_path)
             cutout_image = _extract_problem_cutout(crop)
-            board_render_path = cutout_dir / crop_name
-            _write_render_image(cutout_image, board_render_path)
+            cutout_path = cutout_dir / crop_name
+            _write_render_image(cutout_image, cutout_path)
+            board_render_image = _build_board_render_image(crop, dark_board=dark_board, board_theme=board_theme)
+            board_render_path = board_render_dir / crop_name
+            _write_render_image(board_render_image, board_render_path)
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
             problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {len(entries) + 1}")
             entries.append(
@@ -326,6 +341,7 @@ def build_problem_entries(
                     prepared_page=prepared_page,
                     bounds=merged_box,
                     crop_path=crop_path,
+                    cutout_path=cutout_path,
                     board_render_path=board_render_path,
                     blocks=sorted(blocks, key=lambda block: (block.reading_order, block.bbox.top, block.bbox.left)),
                     actual_height_pages=estimate_height_pages(crop.size, template),
@@ -383,7 +399,7 @@ def _build_ai_fallback_config(
         "enabled": effective_enabled,
         "mode": resolved_mode,
         "provider": provider,
-        "model": model or "gpt-5.4-mini",
+        "model": model or "gpt-4o-mini",
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -401,7 +417,7 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
     return build_page_ai_fallback_config(
         mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
         provider=str(ai_fallback_config.get("provider") or "openai"),
-        model=str(ai_fallback_config.get("model") or "gpt-5.4-mini"),
+        model=str(ai_fallback_config.get("model") or "gpt-4o-mini"),
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 18),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
@@ -411,8 +427,6 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
 
 
 def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not ai_fallback_config:
-        return None
     attempted_page_count = 0
     applied_page_count = 0
     ai_cache_hit_count = 0
@@ -451,10 +465,10 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
                 ocr_cache_miss_count += 1
 
     return {
-        "requested": bool(ai_fallback_config.get("enabled")),
-        "mode": ai_fallback_config.get("mode"),
-        "provider": ai_fallback_config.get("provider"),
-        "model": ai_fallback_config.get("model"),
+        "requested": bool(ai_fallback_config.get("enabled")) if ai_fallback_config else False,
+        "mode": (ai_fallback_config or {}).get("mode", "off"),
+        "provider": (ai_fallback_config or {}).get("provider", "openai"),
+        "model": (ai_fallback_config or {}).get("model", "gpt-4o-mini"),
         "attempted_page_count": attempted_page_count,
         "applied_page_count": applied_page_count,
         "ai_cache_hit_count": ai_cache_hit_count,
@@ -463,6 +477,71 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
         "status_counts": status_counts,
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
+        "recommended_page_count": int(status_counts.get("ai_recommended", 0)),
+        "local_retry_recommended_page_count": int(status_counts.get("local_retry_recommended", 0)),
+    }
+
+
+def _build_ai_capabilities() -> dict[str, Any]:
+    provider_specs = {
+        "openai": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "OPENAI_API_KEY",
+            "supports_vision": True,
+        },
+        "claude": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "supports_vision": True,
+        },
+        "anthropic": {
+            "supported": True,
+            "supported_modes": ["off", "auto", "force"],
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "supports_vision": True,
+        },
+        "gemini": {
+            "supported": False,
+            "supported_modes": [],
+            "api_key_env": None,
+            "supports_vision": False,
+            "status": "not_implemented",
+        },
+    }
+
+    providers: dict[str, Any] = {}
+    missing_api_keys: list[str] = []
+    ready_providers: list[str] = []
+    for provider_name, spec in provider_specs.items():
+        api_key_env = spec.get("api_key_env")
+        api_key_present = bool(os.environ.get(str(api_key_env), "").strip()) if api_key_env else False
+        supported = bool(spec.get("supported"))
+        ready = supported and (api_key_present or not api_key_env)
+        status = "ready" if ready else ("missing_api_key" if supported and api_key_env and not api_key_present else str(spec.get("status") or "unsupported"))
+        provider_info = {
+            "supported": supported,
+            "supported_modes": list(spec.get("supported_modes") or []),
+            "api_key_env": api_key_env,
+            "api_key_present": api_key_present,
+            "available": ready,
+            "status": status,
+            "supports_vision": bool(spec.get("supports_vision")),
+        }
+        providers[provider_name] = provider_info
+        if api_key_env and not api_key_present and supported:
+            missing_api_keys.append(str(api_key_env))
+        if ready:
+            ready_providers.append(provider_name)
+
+    return {
+        "available": bool(ready_providers),
+        "supported_modes": ["off", "auto", "force"],
+        "providers": providers,
+        "ready_providers": ready_providers,
+        "missing_api_keys": sorted(set(missing_api_keys)),
+        "default_provider": "openai",
     }
 
 
@@ -478,16 +557,42 @@ def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
     }
 
 
-GENERIC_PROBLEM_TITLE_RE = re.compile(r"^\s*臾명빆\s*\d+(?:\s*[쨌:\-].*)?$")
+GENERIC_PROBLEM_TITLE_RE = re.compile(r"^\s*문항\s*\d+(?:\s*[·:\-].*)?$")
+
+
+def _compact_problem_title_text(title: str | None) -> str:
+    if not title:
+        return ""
+    compact = re.sub(r"\s+", " ", title).strip()
+    return compact
+
+
+def _prefer_generic_problem_title(title: str, *, problem_number: int | None) -> bool:
+    if not title:
+        return True
+    if "\n" in title:
+        return True
+    if len(title) >= 36:
+        return True
+    if problem_number is not None and title.startswith(f"{problem_number}."):
+        return True
+    if any(marker in title for marker in ("<보기>", "①", "②", "③", "④", "⑤")):
+        return True
+    return False
 
 
 def _normalize_problem_title(title: str | None, index: int, source_page_id: str, problem_number: int | None = None) -> str:
-    raw = (title or "").strip()
-    if raw and "problem" not in raw.lower() and not GENERIC_PROBLEM_TITLE_RE.match(raw):
+    raw = _compact_problem_title_text(title)
+    label = f"문항 {problem_number}" if isinstance(problem_number, int) and problem_number > 0 else f"문항 {index + 1}"
+    if not raw or "problem" in raw.lower() or GENERIC_PROBLEM_TITLE_RE.match(raw):
+        return label
+    if _prefer_generic_problem_title(raw, problem_number=problem_number):
+        return label
+    if raw.startswith(label):
         return raw
     if isinstance(problem_number, int) and problem_number > 0:
-        return f"臾명빆 {problem_number}"
-    return f"臾명빆 {index + 1:02d} 쨌 {source_page_id}"
+        return f"{label} · {raw}"
+    return f"{label} · {raw or source_page_id}"
 
 
 def build_ui_session(
@@ -500,15 +605,18 @@ def build_ui_session(
     record_mode: str,
     ai_fallback_config: dict[str, Any] | None = None,
     ai_summary: dict[str, Any] | None = None,
+    warning_messages: list[str] | None = None,
+    parse_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
-    warning_messages: list[str] = []
+    resolved_warnings = list(warning_messages or [])
     if placements and len(placements) <= len(prepared_pages):
-        warning_messages.append("臾명빆 遺꾨━媛 異⑸텇?섏? ?딆븘 ?섏씠吏 ?⑥쐞??媛源앷쾶 臾띠씤 ??ぉ???덉뒿?덈떎.")
+        resolved_warnings.append("문항 분리가 충분하지 않아 페이지 단위에 가깝게 묶인 항목이 있습니다.")
 
     problems: list[dict[str, Any]] = []
     for index, placement in enumerate(placements):
         crop_path = Path(str(placement["crop_path"])).resolve()
+        cutout_path = Path(str(placement.get("cutout_path") or crop_path)).resolve()
         source_path = Path(str(placement["source_path"])).resolve()
         problems.append(
             {
@@ -521,13 +629,14 @@ def build_ui_session(
                 ),
                 "problemNumber": int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
                 "subject": str(placement["subject"]),
-                "imagePath": _to_file_uri(crop_path),
+                "imagePath": _to_file_uri(cutout_path),
+                "cropPath": _to_file_uri(crop_path),
                 "sourceImagePath": _to_file_uri(source_path),
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
                 "overflowAllowed": bool(placement["overflow_allowed"]),
-                "readingHeavy": bool(placement["overflow_allowed"]),
+                "readingHeavy": bool(placement.get("reading_heavy")),
                 "sourcePageId": str(placement["source_page_id"]),
                 "startYPages": float(placement["start_y_pages"]),
                 "snappedNextStartYPages": float(placement["snapped_next_start_y_pages"]),
@@ -568,7 +677,9 @@ def build_ui_session(
         ),
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
-        "warning_messages": warning_messages,
+        "ai_capabilities": _build_ai_capabilities(),
+        "warning_messages": list(dict.fromkeys(resolved_warnings)),
+        "parse_diagnostics": dict(parse_diagnostics or {}),
         "problems": problems,
     }
 
@@ -627,6 +738,7 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
                 "title": entry.title,
                 "problem_number": entry.problem_number,
                 "crop_path": str(entry.crop_path),
+                "cutout_path": str(entry.cutout_path),
                 "board_render_path": str(entry.board_render_path),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
@@ -656,11 +768,11 @@ def build_image_only_records(
     placement_summaries: list[dict[str, object]] = []
     for record_id, placement in enumerate(placements):
         crop_path = Path(str(placement.metadata["crop_path"]))
+        cutout_path = Path(str(placement.metadata.get("cutout_path") or crop_path))
         board_render_path = Path(str(placement.metadata["board_render_path"]))
-        crop_image = Image.open(crop_path).convert("RGB")
-        board_image = Image.open(board_render_path) if dark_board else crop_image
-        image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
-        preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
+        cutout_image = Image.open(cutout_path)
+        image_bytes, image_format = _encode_image_bytes(cutout_image, quality=92)
+        preview_bytes = build_preview_image_bytes(image_bytes, max_size=(1280, 1280), format_hint=image_format, quality=92)
         height_px = placement.actual_content_height_pages * CANVAS_WIDTH
         y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
         records.append(
@@ -683,6 +795,7 @@ def build_image_only_records(
                 "problem_number": placement.metadata.get("problem_number"),
                 "subject": str(placement.subject),
                 "crop_path": str(crop_path),
+                "cutout_path": str(cutout_path),
                 "board_render_path": str(board_render_path),
                 "source_page_id": placement.metadata["source_page_id"],
                 "source_path": placement.metadata["source_path"],
@@ -691,6 +804,7 @@ def build_image_only_records(
                 "actual_bottom_y_pages": placement.actual_bottom_y_pages,
                 "snapped_next_start_y_pages": placement.snapped_next_start_y_pages,
                 "overflow_allowed": placement.overflow_allowed,
+                "reading_heavy": placement.reading_heavy,
                 "overflow_amount_pages": placement.overflow_amount_pages,
                 "overflow_violation": placement.overflow_violation,
                 "slot_span_count": placement.slot_span_count,
@@ -767,9 +881,9 @@ def build_mixed_records(
                 crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
                 crop_path = block_crop_dir / crop_name
                 crop.save(crop_path)  # Save original for UI/debugging
-                board_crop = _extract_problem_cutout(crop) if dark_board else crop.convert("RGB")
+                board_crop = _build_board_render_image(crop, dark_board=dark_board, board_theme=board_theme)
                 image_bytes, image_format = _encode_image_bytes(board_crop, quality=92)
-                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
+                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(1280, 1280), format_hint=image_format, quality=92)
                 records.append(
                     build_image_record(
                         ImageRecordSpec(
@@ -803,10 +917,9 @@ def build_mixed_records(
             next_record_id += 1
 
         if not block_summaries:
-            fallback_image = Image.open(entry.crop_path).convert("RGB")
-            board_fallback = Image.open(entry.board_render_path) if dark_board else fallback_image
-            image_bytes, image_format = _encode_image_bytes(board_fallback, quality=92)
-            preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
+            fallback_image = Image.open(entry.cutout_path)
+            image_bytes, image_format = _encode_image_bytes(fallback_image, quality=92)
+            preview_bytes = build_preview_image_bytes(image_bytes, max_size=(1280, 1280), format_hint=image_format, quality=92)
             records.append(
                 build_image_record(
                     ImageRecordSpec(
@@ -833,6 +946,7 @@ def build_mixed_records(
                 "problem_number": entry.problem_number,
                 "subject": str(entry.subject),
                 "crop_path": str(entry.crop_path),
+                "cutout_path": str(entry.cutout_path),
                 "board_render_path": str(entry.board_render_path),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
@@ -841,6 +955,7 @@ def build_mixed_records(
                 "actual_bottom_y_pages": placement.actual_bottom_y_pages,
                 "snapped_next_start_y_pages": placement.snapped_next_start_y_pages,
                 "overflow_allowed": placement.overflow_allowed,
+                "reading_heavy": placement.reading_heavy,
                 "overflow_amount_pages": placement.overflow_amount_pages,
                 "overflow_violation": placement.overflow_violation,
                 "slot_span_count": placement.slot_span_count,
@@ -901,11 +1016,12 @@ def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object
                 "id": item["problem_id"],
                 "title": item["title"],
                 "subject": item["subject"],
-                "imagePath": Path(item["crop_path"]).resolve().as_uri(),
+                "imagePath": Path(str(item.get("cutout_path") or item["crop_path"])).resolve().as_uri(),
+                "cropPath": Path(item["crop_path"]).resolve().as_uri(),
                 "boardRenderPath": Path(item["board_render_path"]).resolve().as_uri() if item.get("board_render_path") else None,
                 "actualHeightPages": item["actual_content_height_pages"],
                 "overflowAllowed": item["overflow_allowed"],
-                "readingHeavy": item["overflow_allowed"],
+                "readingHeavy": bool(item.get("reading_heavy")),
             }
             for item in placements
         ]
@@ -1013,11 +1129,13 @@ def run_problem_export(
 
     save_pages_json(pages, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
+    parse_feedback = build_parse_feedback(pages, source_count=len(source_paths))
     problem_entries = build_problem_entries(
         prepared_pages,
         pages,
         out_dir,
         template,
+        dark_board=dark_board,
         board_theme=resolved_board_theme,
     )
     records, placements, header_flag = build_records(
@@ -1035,6 +1153,7 @@ def run_problem_export(
         "output_dir": str(out_dir.resolve()),
         "pages_json_path": str((out_dir / "pages.json").resolve()),
         "problem_crop_dir": str((out_dir / "problem_crops").resolve()),
+        "problem_cutout_dir": str((out_dir / "problem_cutouts").resolve()),
         "board_render_dir": str((out_dir / "board_renders").resolve()),
         "block_crop_dir": str((out_dir / "block_crops").resolve()),
         "record_count": len(records),
@@ -1045,6 +1164,8 @@ def run_problem_export(
         "text_confidence_threshold": text_confidence_threshold,
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        "parse_diagnostics": parse_feedback["parse_diagnostics"],
+        "warning_messages": parse_feedback["warning_messages"],
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": ocr,
@@ -1072,12 +1193,14 @@ def run_problem_export(
         record_mode=record_mode,
         ai_fallback_config=ai_fallback_config,
         ai_summary=ai_summary,
+        warning_messages=parse_feedback["warning_messages"],
+        parse_diagnostics=parse_feedback["parse_diagnostics"],
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
     return {
         "output_dir": out_dir.resolve(),
-        "edb_path": edb_path.resolve() if edb_path.exists() else None,
+        "edb_path": edb_path.resolve() if edb_path and edb_path.exists() else None,
         "pages_json_path": (out_dir / "pages.json").resolve(),
         "placements_json_path": placements_path.resolve(),
         "ui_session": ui_session,
@@ -1086,6 +1209,8 @@ def run_problem_export(
         "summary": summary,
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        "ai_capabilities": ui_session.get("ai_capabilities"),
+        "parse_feedback": parse_feedback,
     }
 
 
@@ -1125,7 +1250,7 @@ def main() -> int:
     parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
-    parser.add_argument("--prototype-data-out", default="ui_prototype\\prototype_data.js", help="Path to write UI prototype data JS")
+    parser.add_argument("--prototype-data-out", default="ui_prototype/prototype_data.js", help="Path to write UI prototype data JS")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1171,6 +1296,7 @@ def main() -> int:
         pages,
         output_dir,
         template,
+        dark_board=not args.light_board,
         board_theme=resolved_board_theme,
     )
     records, placements, header_flag = build_records(
@@ -1196,6 +1322,7 @@ def main() -> int:
         "edb_path": str(edb_path),
         "pages_json_path": str(output_dir / "pages.json"),
         "problem_crop_dir": str(output_dir / "problem_crops"),
+        "problem_cutout_dir": str(output_dir / "problem_cutouts"),
         "block_crop_dir": str(output_dir / "block_crops"),
         "record_count": len(records),
         "record_mode": args.record_mode,
@@ -1205,6 +1332,7 @@ def main() -> int:
         "text_confidence_threshold": args.text_confidence_threshold,
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        "ai_capabilities": _build_ai_capabilities(),
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": args.ocr,
@@ -1215,6 +1343,17 @@ def main() -> int:
     prototype_path = Path(args.prototype_data_out)
     prototype_path.parent.mkdir(parents=True, exist_ok=True)
     write_ui_prototype_data(prototype_path, placements)
+    ui_session = build_ui_session(
+        prepared_pages,
+        placements,
+        output_dir,
+        edb_path,
+        [args.source],
+        record_mode=args.record_mode,
+        ai_fallback_config=ai_fallback_config,
+        ai_summary=ai_summary,
+    )
+    ui_session_path, synced_ui_path = write_ui_session_bundle(output_dir, ui_session, sync_ui=True)
 
     print(
         json.dumps(
@@ -1222,6 +1361,8 @@ def main() -> int:
                 "edb_path": str(edb_path),
                 "pages_json_path": str(output_dir / "pages.json"),
                 "board_run_summary_path": str(summary_path),
+                "ui_session_path": str(ui_session_path),
+                "synced_ui_path": str(synced_ui_path) if synced_ui_path else None,
                 "ui_prototype_data_path": str(prototype_path),
                 "problem_count": len(placements),
                 "record_mode": args.record_mode,

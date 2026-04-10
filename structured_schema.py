@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Any
+
+
+class StrEnum(str, Enum):
+    def __str__(self) -> str:
+        return str(self.value)
 
 
 class Subject(StrEnum):
@@ -39,7 +44,7 @@ class AssetType(StrEnum):
     DIAGRAM = "diagram"
 
 
-@dataclass(slots=True)
+@dataclass
 class Box:
     left: float
     top: float
@@ -90,7 +95,7 @@ class Box:
         return Box(left=left, top=top, width=max(0.0, right - left), height=max(0.0, bottom - top))
 
 
-@dataclass(slots=True)
+@dataclass
 class TextStyle:
     font_size: float | None = None
     weight: str | None = None
@@ -100,7 +105,7 @@ class TextStyle:
     math_like: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class AssetRef:
     asset_id: str
     asset_type: AssetType
@@ -111,14 +116,14 @@ class AssetRef:
     mime_type: str | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class OcrWord:
     text: str
     bbox: Box
     confidence: float | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class OcrLine:
     text: str
     bbox: Box
@@ -126,7 +131,7 @@ class OcrLine:
     words: list[OcrWord] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class ContentBlock:
     block_id: str
     block_type: BlockType
@@ -142,7 +147,7 @@ class ContentBlock:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class ProblemUnit:
     unit_id: str
     subject: Subject
@@ -154,7 +159,7 @@ class ProblemUnit:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class PageModel:
     page_id: str
     width_px: int

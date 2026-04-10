@@ -229,6 +229,63 @@ h2 {
   justify-content: flex-start;
 }
 
+.ai-quick-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.82)),
+    rgba(255, 253, 250, 0.92);
+}
+
+.ai-quick-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.ai-quick-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ai-quick-controls {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.15fr) minmax(180px, 0.9fr) minmax(180px, 0.9fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.ai-quick-field select {
+  min-width: 0;
+  width: 100%;
+}
+
+.meta-pill.is-success {
+  background: var(--accent-soft);
+  border-color: rgba(15, 118, 110, 0.25);
+}
+
+.meta-pill.is-warning {
+  background: var(--warning-soft);
+  border-color: rgba(180, 83, 9, 0.22);
+}
+
+.meta-pill.is-danger {
+  background: #fee2e2;
+  border-color: rgba(185, 28, 28, 0.22);
+}
+
+.meta-pill.is-neutral {
+  background: var(--panel-alt);
+}
+
 .source-queue {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -337,7 +394,7 @@ h2 {
 }
 
 .advanced-grid-ai {
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   align-items: end;
 }
 
@@ -359,6 +416,10 @@ h2 {
 
 .helper-inline.is-success {
   color: var(--accent);
+}
+
+.helper-inline.is-danger {
+  color: #b91c1c;
 }
 
 .modal-shell {
@@ -1015,8 +1076,8 @@ select:hover,
 .board-card img {
   width: 100%;
   height: calc(100% - 36px);
-  object-fit: cover;
-  object-position: top;
+  object-fit: contain;
+  object-position: top center;
   border-radius: 12px;
   background: var(--panel-alt);
 }
@@ -1169,8 +1230,8 @@ select:hover,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .advanced-grid-ai {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .ai-quick-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .composer-field-grid {
@@ -1201,6 +1262,10 @@ select:hover,
   }
 
   .advanced-grid-ai {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-quick-controls {
     grid-template-columns: 1fr;
   }
 
@@ -1245,6 +1310,16 @@ select:hover,
 
   .source-queue,
   .source-queue-list {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-quick-header,
+  .ai-fallback-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ai-quick-controls {
     grid-template-columns: 1fr;
   }
 

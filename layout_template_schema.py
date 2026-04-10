@@ -7,7 +7,7 @@ from typing import Any
 from structured_schema import Subject
 
 
-@dataclass(slots=True)
+@dataclass
 class LayoutTemplate:
     name: str
     board_page_count: int = 50
@@ -20,7 +20,7 @@ class LayoutTemplate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class ProblemLayoutInput:
     problem_id: str
     subject: Subject = Subject.UNKNOWN
@@ -30,7 +30,7 @@ class ProblemLayoutInput:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class ProblemPlacement:
     problem_id: str
     subject: Subject
@@ -44,10 +44,11 @@ class ProblemPlacement:
     overflow_violation: bool
     slot_span_count: int
     board_capacity_exceeded: bool
+    reading_heavy: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class BoardExportPlan:
     template: LayoutTemplate
     placements: list[ProblemPlacement]
