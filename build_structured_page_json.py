@@ -5,7 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
-from ocr_backend import NoOcrBackend, create_ocr_backend
+from ocr_backend import ClaudeOCRBackend, NoOcrBackend, create_ocr_backend
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from preprocess import PreparedPage, prepare_source_pages
 from segment import crop_block_image, draw_segment_debug, segment_page
@@ -85,6 +85,7 @@ def build_page_model(
         crop = crop_block_image(prepared_page, block)
         ocr_result = backend.recognize(crop)
         block.metadata["ocr_backend"] = ocr_result.backend_name
+        block_type_hint = ocr_result.metadata.get("block_type_hint", "")
         if ocr_result.text.strip():
             block.text = ocr_result.text.strip()
             block.confidence = ocr_result.confidence
@@ -93,12 +94,32 @@ def build_page_model(
                 font_size=max(10.0, block.bbox.height * 0.35),
                 math_like=infer_math_like_text(block.text),
             )
-            inferred = classify_text_block(block.text)
-            if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
-                block.block_type = inferred
-        elif isinstance(backend, NoOcrBackend) and block.block_type == BlockType.STEM:
+            # Prefer Claude's block_type_hint when available; otherwise infer from text
+            if block_type_hint and block_type_hint not in {"unknown", "stem"}:
+                hint_map = {
+                    "choice": BlockType.CHOICE,
+                    "figure": BlockType.IMAGE,
+                    "formula": BlockType.FORMULA,
+                    "title": BlockType.TITLE,
+                    "explanation": BlockType.EXPLANATION,
+                }
+                if block_type_hint in hint_map:
+                    block.block_type = hint_map[block_type_hint]
+                    block.metadata["block_type_source"] = "claude_hint"
+                else:
+                    inferred = classify_text_block(block.text)
+                    if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
+                        block.block_type = inferred
+            else:
+                inferred = classify_text_block(block.text)
+                if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
+                    block.block_type = inferred
+        elif block_type_hint == "figure":
             block.block_type = BlockType.IMAGE
-            block.metadata["fallback_reason"] = "noop_ocr"
+            block.metadata["fallback_reason"] = "claude_figure_hint"
+        elif isinstance(backend, (NoOcrBackend, ClaudeOCRBackend)) and block.block_type == BlockType.STEM:
+            block.block_type = BlockType.IMAGE
+            block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "claude_no_text"
 
     page = PageModel(
         page_id=prepared_page.page_id,
