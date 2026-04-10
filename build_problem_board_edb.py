@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 from dataclasses import dataclass
@@ -10,9 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-from PIL import Image
+from PIL import Image, ImageOps, ImageStat
 
 from build_structured_page_json import build_page_model
+from segment import draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -42,6 +44,32 @@ PROBLEM_PADDING_PX = 18.0
 MIN_HEIGHT_PAGES = 0.72
 MAX_HEIGHT_PAGES = 4.8
 MIN_PROBLEM_AREA_RATIO = 0.12
+# Brightness above this value (0-255) is treated as a light background that
+# needs inversion so the crop renders correctly on ClassIn's dark board.
+DARK_BOARD_BRIGHTNESS_THRESHOLD = 160
+
+
+def _prepare_image_for_dark_board(image: Image.Image) -> Image.Image:
+    """Convert a light-background crop so it renders on ClassIn's dark board.
+
+    If the image has a light background (e.g. a paper scan or PDF render),
+    inverts it: white background becomes dark, black text becomes white.
+    Dark-background images (diagrams already on dark) are returned unchanged.
+    """
+    rgb = image.convert("RGB")
+    mean_brightness = ImageStat.Stat(rgb.convert("L")).mean[0]
+    if mean_brightness > DARK_BOARD_BRIGHTNESS_THRESHOLD:
+        return ImageOps.invert(rgb)
+    return rgb
+
+
+def _encode_image_bytes(image: Image.Image, quality: int = 92) -> bytes:
+    """Encode a PIL image to JPEG bytes for use in an EDB image record."""
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
 TEXT_ELIGIBLE_BLOCK_TYPES = {
     BlockType.TITLE,
     BlockType.SECTION,
@@ -131,6 +159,7 @@ def build_pages(
     deskew: bool,
     crop_margins: bool,
     max_dimension: int | None,
+    debug_segments_dir: Path | None = None,
 ) -> tuple[list[PreparedPage], list[PageModel]]:
     prepared_pages = prepare_source_pages(
         source,
@@ -145,6 +174,10 @@ def build_pages(
         build_page_model(prepared_page, subject=subject, ocr_mode=ocr_mode, ai_config=page_ai_config)
         for prepared_page in prepared_pages
     ]
+    if debug_segments_dir is not None:
+        for prepared_page, page in zip(prepared_pages, page_models):
+            debug_path = debug_segments_dir / f"{page.page_id}_segments.png"
+            draw_segment_debug(prepared_page, page.blocks, debug_path)
     return prepared_pages, page_models
 
 
@@ -494,7 +527,12 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
     ]
 
 
-def build_image_only_records(problem_entries: list[ProblemEntry], template: LayoutTemplate) -> tuple[list[bytes], list[dict[str, object]]]:
+def build_image_only_records(
+    problem_entries: list[ProblemEntry],
+    template: LayoutTemplate,
+    *,
+    dark_board: bool = True,
+) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
     available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
 
@@ -502,7 +540,9 @@ def build_image_only_records(problem_entries: list[ProblemEntry], template: Layo
     placement_summaries: list[dict[str, object]] = []
     for record_id, placement in enumerate(placements):
         crop_path = Path(str(placement.metadata["crop_path"]))
-        image_bytes = crop_path.read_bytes()
+        crop_image = Image.open(crop_path).convert("RGB")
+        board_image = _prepare_image_for_dark_board(crop_image) if dark_board else crop_image
+        image_bytes = _encode_image_bytes(board_image, quality=92)
         preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), quality=88)
         height_px = placement.actual_content_height_pages * CANVAS_WIDTH
         y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
@@ -552,6 +592,7 @@ def build_mixed_records(
     *,
     output_dir: Path,
     text_confidence_threshold: float,
+    dark_board: bool = True,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
@@ -605,9 +646,10 @@ def build_mixed_records(
                 )
                 crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
                 crop_path = block_crop_dir / crop_name
-                crop.save(crop_path)
-                image_bytes = crop_path.read_bytes()
-                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint="PNG", quality=88)
+                crop.save(crop_path)  # Save original for UI/debugging
+                board_crop = _prepare_image_for_dark_board(crop) if dark_board else crop.convert("RGB")
+                image_bytes = _encode_image_bytes(board_crop, quality=92)
+                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), quality=88)
                 records.append(
                     build_image_record(
                         ImageRecordSpec(
@@ -641,7 +683,9 @@ def build_mixed_records(
             next_record_id += 1
 
         if not block_summaries:
-            image_bytes = entry.crop_path.read_bytes()
+            fallback_image = Image.open(entry.crop_path).convert("RGB")
+            board_fallback = _prepare_image_for_dark_board(fallback_image) if dark_board else fallback_image
+            image_bytes = _encode_image_bytes(board_fallback, quality=92)
             preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), quality=88)
             records.append(
                 build_image_record(
@@ -702,15 +746,17 @@ def build_records(
     record_mode: str,
     output_dir: Path,
     text_confidence_threshold: float,
+    dark_board: bool = True,
 ) -> tuple[list[bytes], list[dict[str, object]], int]:
     if record_mode == "image-only":
-        return (*build_image_only_records(problem_entries, template), 4)
+        return (*build_image_only_records(problem_entries, template, dark_board=dark_board), 4)
 
     records, placement_summaries = build_mixed_records(
         problem_entries,
         template,
         output_dir=output_dir,
         text_confidence_threshold=text_confidence_threshold,
+        dark_board=dark_board,
     )
     header_flag = 4 if any(item["image_record_count"] for item in placement_summaries) else 3
     return records, placement_summaries, header_flag
@@ -772,6 +818,7 @@ def run_problem_export(
     edb_name: str = "mvp_board.edb",
     record_mode: str = "mixed",
     text_confidence_threshold: float = 0.78,
+    dark_board: bool = True,
     sync_ui: bool = False,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
@@ -838,6 +885,7 @@ def run_problem_export(
         record_mode=record_mode,
         output_dir=out_dir,
         text_confidence_threshold=text_confidence_threshold,
+        dark_board=dark_board,
     )
 
     summary = {
@@ -912,6 +960,8 @@ def main() -> int:
     parser.add_argument("--slot-height", type=float, default=1.2, help="Base slot height in board pages")
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
     parser.add_argument("--text-confidence-threshold", type=float, default=0.78, help="Minimum OCR confidence for text records in mixed mode")
+    parser.add_argument("--light-board", action="store_true", help="Disable dark-board color conversion (keep original light background in image records)")
+    parser.add_argument("--debug-segments", action="store_true", help="Save block overlay images to <output-dir>/debug_segments/ for segmentation inspection")
     parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
     parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")
     parser.add_argument("--ai-fallback-provider", default="openai", help="AI fallback provider name")
@@ -944,6 +994,7 @@ def main() -> int:
         save_debug=args.ai_fallback_save_debug,
         fail_on_error=args.fail_on_ai_error,
     )
+    debug_segments_dir = output_dir / "debug_segments" if args.debug_segments else None
     prepared_pages, pages = build_pages(
         args.source,
         subject=subject,
@@ -954,6 +1005,7 @@ def main() -> int:
         deskew=not args.skip_deskew,
         crop_margins=not args.skip_crop,
         max_dimension=args.max_dimension,
+        debug_segments_dir=debug_segments_dir,
     )
     save_pages_json(pages, output_dir / "pages.json")
 
@@ -969,6 +1021,7 @@ def main() -> int:
         record_mode=args.record_mode,
         output_dir=output_dir,
         text_confidence_threshold=args.text_confidence_threshold,
+        dark_board=not args.light_board,
     )
 
     edb_path = output_dir / f"{Path(args.source).stem}.edb"

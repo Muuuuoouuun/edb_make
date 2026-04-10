@@ -1074,3 +1074,44 @@ def blocks_from_page(prepared_page, config: SegmentOptions | None = None) -> lis
 def crop_block_image(prepared_page, block: ContentBlock) -> Image.Image:
     image = _load_image(prepared_page)
     return image.crop((int(block.bbox.left), int(block.bbox.top), int(block.bbox.right), int(block.bbox.bottom)))
+
+
+_DEBUG_PALETTE = [
+    (220, 50, 50),   # red
+    (50, 100, 220),  # blue
+    (50, 180, 50),   # green
+    (220, 140, 0),   # orange
+    (160, 50, 200),  # purple
+    (0, 180, 180),   # cyan
+    (180, 160, 0),   # yellow
+]
+
+
+def draw_segment_debug(
+    image_source: Any,
+    blocks: Iterable[ContentBlock],
+    output_path: "str | Path",
+) -> None:
+    """Save a copy of the image with detected block bounding boxes overlaid.
+
+    Useful for diagnosing segmentation quality: each block gets a uniquely
+    colored rectangle and a short label with its index and block type.
+    """
+    from PIL import ImageDraw
+
+    image = _load_image(image_source).copy()
+    draw = ImageDraw.Draw(image)
+    for index, block in enumerate(list(blocks)):
+        color = _DEBUG_PALETTE[index % len(_DEBUG_PALETTE)]
+        left = int(block.bbox.left)
+        top = int(block.bbox.top)
+        right = int(block.bbox.right)
+        bottom = int(block.bbox.bottom)
+        draw.rectangle((left, top, right, bottom), outline=color, width=3)
+        label = f"{index + 1} {block.block_type.value}"
+        label_w = len(label) * 7 + 6
+        draw.rectangle((left + 2, top + 2, left + 2 + label_w, top + 20), fill=color)
+        draw.text((left + 5, top + 4), label, fill=(255, 255, 255))
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    image.save(out)
