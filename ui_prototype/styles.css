@@ -14,9 +14,9 @@
   --warning: #b45309;
   --warning-soft: #fff7ed;
   --shadow: 0 18px 32px rgba(43, 34, 24, 0.08);
-  --radius-lg: 24px;
-  --radius-md: 16px;
-  --radius-sm: 12px;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
   --font-sans: "Pretendard", "Noto Sans KR", "Segoe UI", sans-serif;
 }
 
@@ -79,9 +79,9 @@ strong {
 .topbar {
   display: flex;
   justify-content: space-between;
-  gap: 24px;
-  padding: 18px 22px;
-  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 20px;
+  align-items: center;
 }
 
 .topbar-copy {
@@ -100,8 +100,9 @@ strong {
 }
 
 h1 {
-  font-size: clamp(30px, 4vw, 42px);
-  line-height: 1.04;
+  font-size: clamp(22px, 2.8vw, 30px);
+  line-height: 1.1;
+  font-weight: 700;
 }
 
 h2 {
@@ -148,7 +149,7 @@ h2 {
 }
 
 .topbar-compact {
-  margin-bottom: 18px;
+  margin-bottom: 12px;
 }
 
 .compact-copy .subtle {
@@ -157,10 +158,10 @@ h2 {
 
 .intake-panel {
   margin-top: 0;
-  padding: 22px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .intake-hero {
@@ -181,7 +182,7 @@ h2 {
 }
 
 .dropzone {
-  border-radius: 22px;
+  border-radius: 14px;
   border: 1px dashed rgba(15, 118, 110, 0.35);
   background:
     linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.72)),
@@ -240,7 +241,7 @@ h2 {
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 16px;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.88);
 }
@@ -320,8 +321,8 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 16px;
-  border-radius: 20px;
+  padding: 14px;
+  border-radius: 12px;
   border: 1px solid rgba(15, 118, 110, 0.16);
   background:
     linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.72)),
@@ -380,7 +381,7 @@ h2 {
   max-height: calc(100vh - 40px);
   margin: 20px auto;
   padding: 20px;
-  border-radius: 24px;
+  border-radius: 18px;
   border: 1px solid rgba(216, 207, 192, 0.85);
   background: rgba(255, 253, 250, 0.98);
   box-shadow: 0 24px 60px rgba(30, 27, 22, 0.22);
@@ -428,7 +429,7 @@ h2 {
   grid-template-columns: 96px minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
-  border-radius: 20px;
+  border-radius: 12px;
   border: 1px solid var(--line);
   background: #fff;
 }
@@ -442,7 +443,7 @@ h2 {
   width: 100%;
   aspect-ratio: 3 / 4;
   object-fit: cover;
-  border-radius: 14px;
+  border-radius: 8px;
   background: var(--panel-alt);
   border: 1px solid rgba(216, 207, 192, 0.7);
 }
@@ -478,7 +479,7 @@ h2 {
 }
 
 .composer-text-input {
-  border-radius: 14px;
+  border-radius: 8px;
   border: 1px solid var(--line);
   padding: 10px 12px;
   background: #fff;
@@ -521,9 +522,9 @@ select,
 .segmented-button,
 .chip-button,
 #outputDirInput {
-  border-radius: 999px;
+  border-radius: 10px;
   border: 1px solid var(--line);
-  padding: 10px 14px;
+  padding: 9px 14px;
   background: #fff;
   color: var(--text);
   cursor: pointer;
@@ -559,21 +560,22 @@ select:hover,
 }
 
 .segmented-control {
-  padding: 4px;
-  border-radius: 999px;
+  padding: 3px;
+  border-radius: 11px;
   background: var(--panel-alt);
   border: 1px solid var(--line);
 }
 
 .segmented-button {
   border: 0;
+  border-radius: 8px;
   background: transparent;
   min-width: 78px;
 }
 
 .segmented-button.is-active {
   background: #fff;
-  box-shadow: 0 5px 12px rgba(44, 39, 30, 0.08);
+  box-shadow: 0 2px 8px rgba(44, 39, 30, 0.10);
 }
 
 .context-toolbar {
@@ -629,8 +631,8 @@ select:hover,
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  border-radius: 999px;
+  padding: 9px 14px;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: #fff;
   color: var(--text);
@@ -648,7 +650,7 @@ select:hover,
 
 .source-queue-empty {
   padding: 18px;
-  border-radius: 18px;
+  border-radius: 10px;
   border: 1px dashed var(--line-strong);
   background: rgba(255, 255, 255, 0.68);
 }
@@ -658,7 +660,7 @@ select:hover,
   grid-template-columns: 78px minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
-  border-radius: 18px;
+  border-radius: 12px;
   border: 1px solid var(--line);
   background: #fff;
 }
@@ -667,7 +669,7 @@ select:hover,
 .source-queue-placeholder {
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 14px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -765,7 +767,7 @@ select:hover,
 .film-item {
   border: 1px solid var(--line);
   background: #fff;
-  border-radius: 18px;
+  border-radius: 12px;
   position: relative;
   overflow: hidden;
   cursor: grab;
@@ -839,7 +841,7 @@ select:hover,
 .film-thumb-placeholder {
   aspect-ratio: 3 / 4;
   width: 100%;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--panel-alt);
 }
 
@@ -888,7 +890,7 @@ select:hover,
 .preview-surface {
   flex: 1;
   min-height: 0;
-  border-radius: 22px;
+  border-radius: 14px;
   background:
     linear-gradient(180deg, rgba(15, 118, 110, 0.05), transparent 22%),
     var(--panel-alt);
@@ -908,7 +910,7 @@ select:hover,
 .preview-image-frame {
   flex: 1;
   min-height: 280px;
-  border-radius: 18px;
+  border-radius: 12px;
   background: #fff;
   border: 1px solid var(--line);
   display: flex;
@@ -922,7 +924,7 @@ select:hover,
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
 .preview-empty {
@@ -945,7 +947,7 @@ select:hover,
   position: relative;
   height: 100%;
   min-height: 580px;
-  border-radius: 18px;
+  border-radius: 12px;
   background:
     linear-gradient(180deg, rgba(15, 118, 110, 0.05), transparent 14%),
     #f8f6f1;
@@ -981,7 +983,7 @@ select:hover,
   bottom: 20px;
   right: 24px;
   width: 36%;
-  border-radius: 20px;
+  border-radius: 12px;
   border: 1px dashed rgba(15, 118, 110, 0.35);
   background: rgba(15, 118, 110, 0.05);
   pointer-events: none;
@@ -1001,7 +1003,7 @@ select:hover,
   width: 48%;
   background: #fff;
   border: 1px solid rgba(30, 27, 22, 0.12);
-  border-radius: 18px;
+  border-radius: 12px;
   box-shadow: 0 10px 22px rgba(39, 30, 23, 0.08);
   padding: 10px;
   overflow: hidden;
@@ -1017,7 +1019,7 @@ select:hover,
   height: calc(100% - 36px);
   object-fit: cover;
   object-position: top;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--panel-alt);
 }
 
@@ -1079,7 +1081,7 @@ select:hover,
 
 .inspector-card {
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 12px;
   background: var(--panel-alt);
   padding: 12px;
 }
@@ -1124,7 +1126,7 @@ select:hover,
 
 .warning-item {
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: 8px;
   background: var(--warning-soft);
   border: 1px solid rgba(180, 83, 9, 0.22);
   font-size: 13px;

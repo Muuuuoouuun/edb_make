@@ -3,16 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>클래스인 EDB 자동 파싱</title>
+    <title>클래스인 EDB 파싱</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar topbar-compact">
         <div class="topbar-copy compact-copy">
-          <p class="eyebrow">클래스인 EDB</p>
-          <h1>사진 넣고 바로 파싱</h1>
-          <p class="subtle">업로드, 자동 파싱, 검토 흐름만 먼저 보이고 나머지 설정은 아래 고급 설정으로 접어 둡니다.</p>
+          <h1>클래스인 EDB 파싱</h1>
         </div>
       </header>
 
@@ -21,20 +19,14 @@
         <input id="cameraFileInput" type="file" accept="image/*" capture="environment" hidden>
         <input id="sourceFileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/*" multiple hidden>
 
-        <div class="intake-copy compact-copy">
-          <p class="eyebrow">업로드</p>
-          <h2>카메라로 찍거나 파일을 올리면 자동으로 문제를 나눕니다</h2>
-          <p class="subtle">지금 필요한 건 업로드와 검토뿐입니다. OCR, 출력 폴더, 샘플 로딩은 아래 고급 설정으로 숨겼습니다.</p>
-        </div>
-
         <div class="intake-actions primary-intake-actions">
           <button class="primary-button" id="openCameraButton" type="button">카메라</button>
           <button class="ghost-button" id="chooseSourceButton" type="button">파일 업로드</button>
           <button class="primary-button" id="runExportButton" type="button">지금 파싱</button>
-          <button class="ghost-button" id="clearAllButton" type="button">전체 초기화</button>
+          <button class="ghost-button" id="clearAllButton" type="button">초기화</button>
           <label class="checkbox-chip" for="autoParseToggle">
             <input id="autoParseToggle" type="checkbox" checked>
-            <span>추가 즉시 자동 파싱</span>
+            <span>자동 파싱</span>
           </label>
           <span class="meta-pill" id="apiStatus">오프라인 미리보기</span>
           <span class="meta-pill" id="sourceQueueCount">0개 대기</span>
@@ -57,7 +49,7 @@
         <div id="sourceQueue" class="source-queue" aria-live="polite"></div>
 
         <details class="advanced-panel">
-          <summary>고급 설정과 보조 기능</summary>
+          <summary>고급 설정</summary>
           <div class="advanced-content">
             <div class="advanced-grid">
               <label class="field-stack">
@@ -93,7 +85,7 @@
               </label>
               <label class="checkbox-chip checkbox-chip-wide" for="runExportEdb">
                 <input id="runExportEdb" type="checkbox" checked>
-                <span>EDB 함께 생성</span>
+                <span>EDB 생성</span>
               </label>
             </div>
 
@@ -101,11 +93,11 @@
               <div class="ai-fallback-header">
                 <div>
                   <span class="toolbar-label">AI 문항 보정</span>
-                  <p class="helper-text">문항 경계나 선지 인식이 애매할 때만 선택적으로 보정합니다.</p>
+                  <p class="helper-text">문항 경계·선지 인식이 불명확할 때 선택적으로 보정합니다.</p>
                 </div>
                 <label class="checkbox-chip checkbox-chip-wide" for="runAiFallbackEnabled">
                   <input id="runAiFallbackEnabled" type="checkbox">
-                  <span>AI 보정 사용</span>
+                  <span>AI 보정</span>
                 </label>
               </div>
 
@@ -143,7 +135,7 @@
                 </label>
                 <label class="checkbox-chip checkbox-chip-wide" for="runAiSaveDebug">
                   <input id="runAiSaveDebug" type="checkbox">
-                  <span>AI 디버그 저장</span>
+                  <span>디버그 저장</span>
                 </label>
               </div>
 
@@ -165,7 +157,7 @@
 
       <section class="toolbar session-summary-toolbar">
         <div class="toolbar-group">
-          <span class="toolbar-label">현재 세션 요약</span>
+          <span class="toolbar-label">세션</span>
           <span class="subtle" id="sessionSummaryText">아직 실행 기록이 없습니다.</span>
         </div>
       </section>
@@ -214,8 +206,7 @@
         <aside class="panel filmstrip-panel">
           <div class="panel-header">
             <div>
-              <h2>문항 필름스트립</h2>
-              <p class="subtle">감지된 문항 순서입니다. 문항별 변환에서는 이 순서대로 EDB가 만들어집니다.</p>
+              <h2>문항 목록</h2>
             </div>
           </div>
           <div id="filmstripList" class="filmstrip-list" aria-label="문항 목록"></div>
@@ -225,9 +216,7 @@
           <div class="panel-header">
             <div>
               <h2 id="previewTitle">문항 미리보기</h2>
-              <p id="previewSubtitle" class="subtle">
-                원본, 잘린 문항 이미지, 보드 배치를 한 화면에서 비교합니다.
-              </p>
+              <p id="previewSubtitle" class="subtle"></p>
             </div>
             <div class="inline-meta">
               <span class="meta-pill" id="selectedSubject">자동</span>
@@ -241,7 +230,6 @@
           <div class="panel-header">
             <div>
               <h2>빠른 수정</h2>
-              <p class="subtle">검토 흐름을 벗어나지 않고 맞춤, 오버플로, 순서를 바로 조정합니다.</p>
             </div>
           </div>
           <div id="inspectorContent" class="inspector-content"></div>
