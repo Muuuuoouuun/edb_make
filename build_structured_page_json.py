@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from ocr_backend import ClaudeOCRBackend, NoOcrBackend, create_ocr_backend
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
+from pipeline_cache import PipelineCache
 from preprocess import PreparedPage, prepare_source_pages
 from segment import crop_block_image, draw_segment_debug, segment_page
 from structured_schema import BlockType, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
@@ -34,6 +36,11 @@ def build_run_summary(
     image_block_count = 0
     ai_attempted_pages = 0
     ai_applied_pages = 0
+    ai_cache_hits = 0
+    ocr_cache_hits = 0
+    ocr_cache_misses = 0
+    route_counts: dict[str, int] = {}
+    route_tier_counts: dict[str, int] = {}
 
     for page in pages:
         ai_summary = page.metadata.get("ai_fallback")
@@ -42,6 +49,16 @@ def build_run_summary(
                 ai_attempted_pages += 1
             if ai_summary.get("applied"):
                 ai_applied_pages += 1
+            if ai_summary.get("cache_hit"):
+                ai_cache_hits += 1
+        route_summary = page.metadata.get("route_decision")
+        if isinstance(route_summary, dict):
+            route = str(route_summary.get("route") or "unknown")
+            route_counts[route] = route_counts.get(route, 0) + 1
+            profile = route_summary.get("profile")
+            if isinstance(profile, dict):
+                tier = str(profile.get("tier") or "unknown")
+                route_tier_counts[tier] = route_tier_counts.get(tier, 0) + 1
         for block in page.blocks:
             if block.text:
                 text_block_count += 1
@@ -49,6 +66,10 @@ def build_run_summary(
                 image_block_count += 1
             if block.metadata.get("fallback_reason"):
                 fallback_block_count += 1
+            if block.metadata.get("ocr_cache_hit"):
+                ocr_cache_hits += 1
+            if block.metadata.get("ocr_cache_miss"):
+                ocr_cache_misses += 1
 
     return {
         "source": str(source),
@@ -63,6 +84,11 @@ def build_run_summary(
         "ai_fallback": (ai_config or AIFallbackConfig()).to_metadata(),
         "ai_attempted_page_count": ai_attempted_pages,
         "ai_applied_page_count": ai_applied_pages,
+        "ai_cache_hit_count": ai_cache_hits,
+        "ocr_cache_hit_count": ocr_cache_hits,
+        "ocr_cache_miss_count": ocr_cache_misses,
+        "route_counts": route_counts,
+        "route_tier_counts": route_tier_counts,
         "pages_json_path": str(Path(output_dir) / "pages.json"),
     }
 
@@ -73,8 +99,10 @@ def build_page_model(
     ocr_mode: str,
     *,
     ai_config: AIFallbackConfig | None = None,
+    cache: PipelineCache | None = None,
 ) -> PageModel:
     backend = create_ocr_backend(ocr_mode)
+    pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
     segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
     blocks = segmented_page.blocks
 
@@ -83,8 +111,26 @@ def build_page_model(
             continue
 
         crop = crop_block_image(prepared_page, block)
-        ocr_result = backend.recognize(crop)
+        cached_ocr = pipeline_cache.load_ocr_result(crop, backend_name=backend.engine_name)
+        if cached_ocr is not None:
+            ocr_result = cached_ocr
+            block.metadata["ocr_cache_hit"] = True
+            block.metadata["ocr_cache_miss"] = False
+        else:
+            started_at = time.perf_counter()
+            ocr_result = backend.recognize(crop)
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
+            ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
+            pipeline_cache.save_ocr_result(crop, ocr_result, backend_name=backend.engine_name)
+            block.metadata["ocr_cache_hit"] = False
+            block.metadata["ocr_cache_miss"] = True
+
         block.metadata["ocr_backend"] = ocr_result.backend_name
+        if isinstance(ocr_result.metadata.get("backend_latency_ms"), (int, float)):
+            block.metadata["ocr_latency_ms"] = int(ocr_result.metadata["backend_latency_ms"])
+        block.metadata["ocr_line_count"] = int(ocr_result.metadata.get("line_count") or len(ocr_result.lines))
+        block.metadata["ocr_empty_text"] = bool(ocr_result.metadata.get("empty_text")) or not bool(ocr_result.text.strip())
+        block.metadata["ocr_text_length"] = int(ocr_result.metadata.get("text_length") or len((ocr_result.text or "").strip()))
         block_type_hint = ocr_result.metadata.get("block_type_hint", "")
         if ocr_result.text.strip():
             block.text = ocr_result.text.strip()
@@ -132,9 +178,10 @@ def build_page_model(
             **dict(prepared_page.metadata),
             **dict(segmented_page.metadata),
             "ocr_mode": ocr_mode,
+            "pipeline_cache_dir": str(pipeline_cache.root_dir),
         },
     )
-    return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config)
+    return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config, cache=pipeline_cache)
 
 
 def build_pages_from_source(

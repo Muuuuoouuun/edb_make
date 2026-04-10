@@ -13,6 +13,11 @@ from typing import Any, Sequence
 
 from PIL import Image, ImageOps, ImageStat
 
+try:
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    np = None
+
 from build_structured_page_json import build_page_model
 from segment import draw_segment_debug
 from edb_builder import (
@@ -45,29 +50,101 @@ MIN_HEIGHT_PAGES = 0.72
 MAX_HEIGHT_PAGES = 4.8
 MIN_PROBLEM_AREA_RATIO = 0.12
 # Brightness above this value (0-255) is treated as a light background that
-# needs inversion so the crop renders correctly on ClassIn's dark board.
+# should be removed from the exported problem image.
 DARK_BOARD_BRIGHTNESS_THRESHOLD = 160
+DEFAULT_BOARD_THEME = "charcoal"
+BOARD_THEME_PALETTES: dict[str, dict[str, tuple[int, int, int]]] = {
+    "black": {
+        "background": (10, 10, 12),
+        "chalk": (250, 250, 248),
+    },
+    "charcoal": {
+        "background": (24, 28, 32),
+        "chalk": (248, 249, 246),
+    },
+    "green": {
+        "background": (18, 42, 36),
+        "chalk": (244, 248, 241),
+    },
+}
 
 
-def _prepare_image_for_dark_board(image: Image.Image) -> Image.Image:
-    """Convert a light-background crop so it renders on ClassIn's dark board.
+def _resolve_board_theme(board_theme: str | None) -> str:
+    normalized = (board_theme or "").strip().lower()
+    if normalized in BOARD_THEME_PALETTES:
+        return normalized
+    return DEFAULT_BOARD_THEME
 
-    If the image has a light background (e.g. a paper scan or PDF render),
-    inverts it: white background becomes dark, black text becomes white.
-    Dark-background images (diagrams already on dark) are returned unchanged.
-    """
+
+def _extract_problem_cutout(image: Image.Image) -> Image.Image:
+    """Remove paper-like backgrounds and keep problem ink as an RGBA cutout."""
     rgb = image.convert("RGB")
-    mean_brightness = ImageStat.Stat(rgb.convert("L")).mean[0]
-    if mean_brightness > DARK_BOARD_BRIGHTNESS_THRESHOLD:
-        return ImageOps.invert(rgb)
-    return rgb
+    gray = ImageOps.autocontrast(rgb.convert("L"))
+    stat = ImageStat.Stat(gray)
+    mean_brightness = stat.mean[0]
+    if mean_brightness <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
+        return rgb.convert("RGBA")
+
+    if np is None:
+        rgba = rgb.convert("RGBA")
+        mask = gray.point(lambda px: 0 if px >= 242 else 255, mode="L")
+        rgba.putalpha(mask)
+        return rgba
+
+    rgb_array = np.asarray(rgb, dtype=np.float32) / 255.0
+    gray_array = np.asarray(gray, dtype=np.float32)
+    darkness = 255.0 - gray_array
+    noise_floor = max(10.0, float(np.percentile(darkness, 62)) + 4.0)
+    alpha_strength = np.clip((darkness - noise_floor) / max(1.0, 255.0 - noise_floor), 0.0, 1.0)
+    alpha_strength = np.power(np.clip(alpha_strength * 1.45, 0.0, 1.0), 0.7)
+
+    max_channel = rgb_array.max(axis=2)
+    whiteness = gray_array / 255.0
+    color_distance = np.linalg.norm(1.0 - rgb_array, axis=2) / np.sqrt(3.0)
+    keep_color = np.clip((color_distance - 0.035) / 0.42, 0.0, 1.0)
+    keep_dark = np.clip((1.0 - whiteness - 0.08) / 0.7, 0.0, 1.0)
+    alpha = np.maximum(alpha_strength, np.maximum(keep_color * 0.92, keep_dark))
+    alpha = np.where(max_channel > 0.985, alpha * 0.08, alpha)
+
+    rgba_array = np.dstack(
+        [
+            np.clip(rgb_array[:, :, 0] * 255.0, 0.0, 255.0),
+            np.clip(rgb_array[:, :, 1] * 255.0, 0.0, 255.0),
+            np.clip(rgb_array[:, :, 2] * 255.0, 0.0, 255.0),
+            np.clip(alpha * 255.0, 0.0, 255.0),
+        ]
+    ).astype("uint8")
+    return Image.fromarray(rgba_array, mode="RGBA")
 
 
-def _encode_image_bytes(image: Image.Image, quality: int = 92) -> bytes:
-    """Encode a PIL image to JPEG bytes for use in an EDB image record."""
+def _prepare_image_for_dark_board(image: Image.Image, *, board_theme: str = DEFAULT_BOARD_THEME) -> Image.Image:
+    """Composite a light-background crop onto a dark ClassIn-style board."""
+    resolved_theme = _resolve_board_theme(board_theme)
+    palette = BOARD_THEME_PALETTES[resolved_theme]
+    cutout = _extract_problem_cutout(image).convert("RGBA")
+    alpha_mask = cutout.getchannel("A")
+
+    board = Image.new("RGBA", cutout.size, palette["background"] + (255,))
+    chalk_layer = Image.new("RGBA", cutout.size, palette["chalk"] + (0,))
+    chalk_layer.putalpha(alpha_mask)
+    return Image.alpha_composite(board, chalk_layer).convert("RGB")
+
+
+def _write_render_image(image: Image.Image, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, format="PNG")
+    return path
+
+
+def _encode_image_bytes(image: Image.Image, quality: int = 92) -> tuple[bytes, str]:
+    """Encode a PIL image for use in an EDB image record."""
     buf = io.BytesIO()
+    has_alpha = "A" in image.getbands()
+    if has_alpha:
+        image.save(buf, format="PNG")
+        return buf.getvalue(), "PNG"
     image.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
-    return buf.getvalue()
+    return buf.getvalue(), "JPEG"
 
 
 TEXT_ELIGIBLE_BLOCK_TYPES = {
@@ -98,6 +175,7 @@ class ProblemEntry:
     prepared_page: PreparedPage
     bounds: Box
     crop_path: Path
+    board_render_path: Path
     blocks: list[ContentBlock]
     actual_height_pages: float
     overflow_allowed: bool
@@ -186,9 +264,13 @@ def build_problem_entries(
     pages: list[PageModel],
     output_dir: Path,
     template: LayoutTemplate,
+    *,
+    board_theme: str = DEFAULT_BOARD_THEME,
 ) -> list[ProblemEntry]:
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
+    cutout_dir = output_dir / "problem_cutouts"
+    cutout_dir.mkdir(parents=True, exist_ok=True)
     prepared_by_page_id = {page.page_id: page for page in prepared_pages}
     entries: list[ProblemEntry] = []
 
@@ -228,6 +310,9 @@ def build_problem_entries(
             crop_name = f"problem_{len(entries) + 1:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
             crop_path = crop_dir / crop_name
             crop.save(crop_path)
+            cutout_image = _extract_problem_cutout(crop)
+            board_render_path = cutout_dir / crop_name
+            _write_render_image(cutout_image, board_render_path)
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
             problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {len(entries) + 1}")
             entries.append(
@@ -241,6 +326,7 @@ def build_problem_entries(
                     prepared_page=prepared_page,
                     bounds=merged_box,
                     crop_path=crop_path,
+                    board_render_path=board_render_path,
                     blocks=sorted(blocks, key=lambda block: (block.reading_order, block.bbox.top, block.bbox.left)),
                     actual_height_pages=estimate_height_pages(crop.size, template),
                     overflow_allowed=reading_heavy,
@@ -329,18 +415,40 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
         return None
     attempted_page_count = 0
     applied_page_count = 0
+    ai_cache_hit_count = 0
+    ocr_cache_hit_count = 0
+    ocr_cache_miss_count = 0
     status_counts: dict[str, int] = {}
+    route_counts: dict[str, int] = {}
+    route_tier_counts: dict[str, int] = {}
 
     for page in pages:
         ai_summary = page.metadata.get("ai_fallback")
         if not isinstance(ai_summary, dict):
-            continue
+            ai_summary = {}
         if ai_summary.get("attempted"):
             attempted_page_count += 1
         if ai_summary.get("applied"):
             applied_page_count += 1
+        if ai_summary.get("cache_hit"):
+            ai_cache_hit_count += 1
         status = str(ai_summary.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
+
+        route_decision = page.metadata.get("route_decision")
+        if isinstance(route_decision, dict):
+            route = str(route_decision.get("route") or "unknown")
+            route_counts[route] = route_counts.get(route, 0) + 1
+            profile = route_decision.get("profile")
+            if isinstance(profile, dict):
+                tier = str(profile.get("tier") or "unknown")
+                route_tier_counts[tier] = route_tier_counts.get(tier, 0) + 1
+
+        for block in page.blocks:
+            if block.metadata.get("ocr_cache_hit"):
+                ocr_cache_hit_count += 1
+            if block.metadata.get("ocr_cache_miss"):
+                ocr_cache_miss_count += 1
 
     return {
         "requested": bool(ai_fallback_config.get("enabled")),
@@ -349,7 +457,12 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
         "model": ai_fallback_config.get("model"),
         "attempted_page_count": attempted_page_count,
         "applied_page_count": applied_page_count,
+        "ai_cache_hit_count": ai_cache_hit_count,
+        "ocr_cache_hit_count": ocr_cache_hit_count,
+        "ocr_cache_miss_count": ocr_cache_miss_count,
         "status_counts": status_counts,
+        "route_counts": route_counts,
+        "route_tier_counts": route_tier_counts,
     }
 
 
@@ -411,7 +524,7 @@ def build_ui_session(
                 "imagePath": _to_file_uri(crop_path),
                 "sourceImagePath": _to_file_uri(source_path),
                 "sourceFileName": source_path.name,
-                "boardRenderPath": None,
+                "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
                 "overflowAllowed": bool(placement["overflow_allowed"]),
                 "readingHeavy": bool(placement["overflow_allowed"]),
@@ -441,6 +554,7 @@ def build_ui_session(
         "record_mode": record_mode,
         "pages_json_path": str((output_dir / "pages.json").resolve()),
         "placements_json_path": str((output_dir / "placements.json").resolve()),
+        "board_render_dir": str((output_dir / "board_renders").resolve()),
         "edb_path": str(edb_path.resolve()) if edb_path else None,
         "edb_file_uri": _to_file_uri(edb_path),
         "rendered_page_paths": [str(path) for path in rendered_page_paths],
@@ -513,6 +627,7 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
                 "title": entry.title,
                 "problem_number": entry.problem_number,
                 "crop_path": str(entry.crop_path),
+                "board_render_path": str(entry.board_render_path),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
                 "bbox": {
@@ -532,6 +647,7 @@ def build_image_only_records(
     template: LayoutTemplate,
     *,
     dark_board: bool = True,
+    board_theme: str = DEFAULT_BOARD_THEME,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
     available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
@@ -540,10 +656,11 @@ def build_image_only_records(
     placement_summaries: list[dict[str, object]] = []
     for record_id, placement in enumerate(placements):
         crop_path = Path(str(placement.metadata["crop_path"]))
+        board_render_path = Path(str(placement.metadata["board_render_path"]))
         crop_image = Image.open(crop_path).convert("RGB")
-        board_image = _prepare_image_for_dark_board(crop_image) if dark_board else crop_image
-        image_bytes = _encode_image_bytes(board_image, quality=92)
-        preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), quality=88)
+        board_image = Image.open(board_render_path) if dark_board else crop_image
+        image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
+        preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
         height_px = placement.actual_content_height_pages * CANVAS_WIDTH
         y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
         records.append(
@@ -566,6 +683,7 @@ def build_image_only_records(
                 "problem_number": placement.metadata.get("problem_number"),
                 "subject": str(placement.subject),
                 "crop_path": str(crop_path),
+                "board_render_path": str(board_render_path),
                 "source_page_id": placement.metadata["source_page_id"],
                 "source_path": placement.metadata["source_path"],
                 "start_y_pages": placement.start_y_pages,
@@ -580,6 +698,7 @@ def build_image_only_records(
                 "record_mode": "image-only",
                 "text_record_count": 0,
                 "image_record_count": 1,
+                "board_theme": _resolve_board_theme(board_theme),
             }
         )
 
@@ -593,6 +712,7 @@ def build_mixed_records(
     output_dir: Path,
     text_confidence_threshold: float,
     dark_board: bool = True,
+    board_theme: str = DEFAULT_BOARD_THEME,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
@@ -647,9 +767,9 @@ def build_mixed_records(
                 crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
                 crop_path = block_crop_dir / crop_name
                 crop.save(crop_path)  # Save original for UI/debugging
-                board_crop = _prepare_image_for_dark_board(crop) if dark_board else crop.convert("RGB")
-                image_bytes = _encode_image_bytes(board_crop, quality=92)
-                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), quality=88)
+                board_crop = _extract_problem_cutout(crop) if dark_board else crop.convert("RGB")
+                image_bytes, image_format = _encode_image_bytes(board_crop, quality=92)
+                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
                 records.append(
                     build_image_record(
                         ImageRecordSpec(
@@ -684,9 +804,9 @@ def build_mixed_records(
 
         if not block_summaries:
             fallback_image = Image.open(entry.crop_path).convert("RGB")
-            board_fallback = _prepare_image_for_dark_board(fallback_image) if dark_board else fallback_image
-            image_bytes = _encode_image_bytes(board_fallback, quality=92)
-            preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), quality=88)
+            board_fallback = Image.open(entry.board_render_path) if dark_board else fallback_image
+            image_bytes, image_format = _encode_image_bytes(board_fallback, quality=92)
+            preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
             records.append(
                 build_image_record(
                     ImageRecordSpec(
@@ -713,6 +833,7 @@ def build_mixed_records(
                 "problem_number": entry.problem_number,
                 "subject": str(entry.subject),
                 "crop_path": str(entry.crop_path),
+                "board_render_path": str(entry.board_render_path),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
                 "start_y_pages": placement.start_y_pages,
@@ -732,6 +853,7 @@ def build_mixed_records(
                 "record_mode": "mixed",
                 "text_record_count": text_record_count,
                 "image_record_count": image_record_count,
+                "board_theme": _resolve_board_theme(board_theme),
                 "blocks": block_summaries,
             }
         )
@@ -747,9 +869,18 @@ def build_records(
     output_dir: Path,
     text_confidence_threshold: float,
     dark_board: bool = True,
+    board_theme: str = DEFAULT_BOARD_THEME,
 ) -> tuple[list[bytes], list[dict[str, object]], int]:
     if record_mode == "image-only":
-        return (*build_image_only_records(problem_entries, template, dark_board=dark_board), 4)
+        return (
+            *build_image_only_records(
+                problem_entries,
+                template,
+                dark_board=dark_board,
+                board_theme=board_theme,
+            ),
+            4,
+        )
 
     records, placement_summaries = build_mixed_records(
         problem_entries,
@@ -757,6 +888,7 @@ def build_records(
         output_dir=output_dir,
         text_confidence_threshold=text_confidence_threshold,
         dark_board=dark_board,
+        board_theme=board_theme,
     )
     header_flag = 4 if any(item["image_record_count"] for item in placement_summaries) else 3
     return records, placement_summaries, header_flag
@@ -770,6 +902,7 @@ def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object
                 "title": item["title"],
                 "subject": item["subject"],
                 "imagePath": Path(item["crop_path"]).resolve().as_uri(),
+                "boardRenderPath": Path(item["board_render_path"]).resolve().as_uri() if item.get("board_render_path") else None,
                 "actualHeightPages": item["actual_content_height_pages"],
                 "overflowAllowed": item["overflow_allowed"],
                 "readingHeavy": item["overflow_allowed"],
@@ -819,6 +952,7 @@ def run_problem_export(
     record_mode: str = "mixed",
     text_confidence_threshold: float = 0.78,
     dark_board: bool = True,
+    board_theme: str = DEFAULT_BOARD_THEME,
     sync_ui: bool = False,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
@@ -843,6 +977,7 @@ def run_problem_export(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(subject_name)
+    resolved_board_theme = _resolve_board_theme(board_theme)
     template = LayoutTemplate(name="academy-default")
     ai_fallback_config = _build_ai_fallback_config(
         enabled=ai_fallback_enabled,
@@ -878,7 +1013,13 @@ def run_problem_export(
 
     save_pages_json(pages, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
-    problem_entries = build_problem_entries(prepared_pages, pages, out_dir, template)
+    problem_entries = build_problem_entries(
+        prepared_pages,
+        pages,
+        out_dir,
+        template,
+        board_theme=resolved_board_theme,
+    )
     records, placements, header_flag = build_records(
         problem_entries,
         template,
@@ -886,6 +1027,7 @@ def run_problem_export(
         output_dir=out_dir,
         text_confidence_threshold=text_confidence_threshold,
         dark_board=dark_board,
+        board_theme=resolved_board_theme,
     )
 
     summary = {
@@ -893,9 +1035,12 @@ def run_problem_export(
         "output_dir": str(out_dir.resolve()),
         "pages_json_path": str((out_dir / "pages.json").resolve()),
         "problem_crop_dir": str((out_dir / "problem_crops").resolve()),
+        "board_render_dir": str((out_dir / "board_renders").resolve()),
         "block_crop_dir": str((out_dir / "block_crops").resolve()),
         "record_count": len(records),
         "record_mode": record_mode,
+        "dark_board": dark_board,
+        "board_theme": resolved_board_theme,
         "header_flag": header_flag,
         "text_confidence_threshold": text_confidence_threshold,
         "ai_fallback": ai_fallback_config,
@@ -960,6 +1105,12 @@ def main() -> int:
     parser.add_argument("--slot-height", type=float, default=1.2, help="Base slot height in board pages")
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
     parser.add_argument("--text-confidence-threshold", type=float, default=0.78, help="Minimum OCR confidence for text records in mixed mode")
+    parser.add_argument(
+        "--board-theme",
+        choices=tuple(BOARD_THEME_PALETTES.keys()),
+        default=DEFAULT_BOARD_THEME,
+        help="Dark board palette used when converting light-background crops",
+    )
     parser.add_argument("--light-board", action="store_true", help="Disable dark-board color conversion (keep original light background in image records)")
     parser.add_argument("--debug-segments", action="store_true", help="Save block overlay images to <output-dir>/debug_segments/ for segmentation inspection")
     parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
@@ -980,6 +1131,7 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(args.subject)
+    resolved_board_theme = _resolve_board_theme(args.board_theme)
     ai_fallback_config = _build_ai_fallback_config(
         enabled=args.ai_fallback_enabled,
         mode=args.ai_fallback,
@@ -1014,7 +1166,13 @@ def main() -> int:
         board_page_count=args.board_pages,
         base_slot_height_pages=args.slot_height,
     )
-    problem_entries = build_problem_entries(prepared_pages, pages, output_dir, template)
+    problem_entries = build_problem_entries(
+        prepared_pages,
+        pages,
+        output_dir,
+        template,
+        board_theme=resolved_board_theme,
+    )
     records, placements, header_flag = build_records(
         problem_entries,
         template,
@@ -1022,6 +1180,7 @@ def main() -> int:
         output_dir=output_dir,
         text_confidence_threshold=args.text_confidence_threshold,
         dark_board=not args.light_board,
+        board_theme=resolved_board_theme,
     )
 
     edb_path = output_dir / f"{Path(args.source).stem}.edb"
@@ -1040,6 +1199,8 @@ def main() -> int:
         "block_crop_dir": str(output_dir / "block_crops"),
         "record_count": len(records),
         "record_mode": args.record_mode,
+        "dark_board": not args.light_board,
+        "board_theme": resolved_board_theme,
         "header_flag": header_flag,
         "text_confidence_threshold": args.text_confidence_threshold,
         "ai_fallback": ai_fallback_config,

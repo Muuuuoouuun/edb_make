@@ -1,0 +1,76 @@
+[
+  {
+    "page_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001",
+    "width_px": 2160,
+    "height_px": 3840,
+    "subject": "math",
+    "source_path": "mvp_output\\page1\\preprocess\\normalized\\960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001.png",
+    "blocks": [
+      {
+        "block_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-001",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 2160.0,
+          "height": 3840.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": {
+          "asset_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-001-crop",
+          "asset_type": "crop",
+          "source_path": "mvp_output\\page1\\assets\\960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001\\960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-001.png",
+          "crop_box": {
+            "left": 0.0,
+            "top": 0.0,
+            "width": 2160.0,
+            "height": 3840.0
+          },
+          "width_px": 2160,
+          "height_px": 3840,
+          "mime_type": null
+        },
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "fill_ratio": 1.0,
+          "mean_intensity": 127.55,
+          "stddev": 65.81,
+          "aspect_ratio": 0.5625,
+          "area_ratio": 1.0
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-problem-1",
+        "subject": "math",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-001"
+        ],
+        "metadata": {}
+      }
+    ],
+    "metadata": {
+      "segmenter": "rule-based",
+      "board_region": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 2160.0,
+        "height": 3840.0
+      },
+      "source_type": "image",
+      "perspective_corrected": false,
+      "deskewed": true,
+      "margin_cropped": true
+    }
+  }
+]

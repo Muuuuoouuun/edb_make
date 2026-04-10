@@ -13,6 +13,8 @@ from urllib import error, request
 from PIL import Image
 
 from assemble_page import detect_choice_block, detect_problem_start, group_problem_units
+from pipeline_cache import PipelineCache
+from pipeline_router import decide_page_route
 from preprocess import PreparedPage
 from structured_schema import BlockType, ContentBlock, PageModel
 
@@ -97,9 +99,19 @@ def repair_page_model(
     *,
     ocr_mode: str,
     config: AIFallbackConfig | None = None,
+    cache: PipelineCache | None = None,
 ) -> PageModel:
     resolved_config = config or AIFallbackConfig()
+    pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
     baseline = group_problem_units(page)
+    route_decision = decide_page_route(
+        baseline,
+        ocr_mode=ocr_mode,
+        ai_enabled=resolved_config.enabled,
+        ai_mode=resolved_config.normalized_mode,
+    )
+    baseline.metadata["difficulty_profile"] = route_decision.profile.to_metadata() if route_decision.profile else {}
+    baseline.metadata["route_decision"] = route_decision.to_metadata()
     summary: dict[str, Any] = {
         "enabled": resolved_config.enabled,
         "mode": resolved_config.normalized_mode,
@@ -108,8 +120,11 @@ def repair_page_model(
         "ocr_mode": ocr_mode,
         "attempted": False,
         "applied": False,
+        "cache_hit": False,
         "status": "disabled" if not resolved_config.enabled else "skipped",
-        "trigger_reasons": [],
+        "route": route_decision.route,
+        "route_tier": route_decision.profile.tier if route_decision.profile else "unknown",
+        "trigger_reasons": list(route_decision.trigger_reasons),
         "baseline_problem_count": len(baseline.problems),
         "baseline_block_count": len(baseline.blocks),
     }
@@ -117,10 +132,11 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
-    trigger_reasons = _select_repair_reasons(baseline, resolved_config, ocr_mode=ocr_mode)
-    summary["trigger_reasons"] = list(trigger_reasons)
-    if not trigger_reasons:
-        summary["status"] = "not_needed"
+    trigger_reasons = list(route_decision.trigger_reasons)
+    if not route_decision.should_use_ai:
+        summary["status"] = "local_retry_recommended" if route_decision.next_best_action == "local_retry" else "not_needed"
+        if route_decision.next_best_action:
+            summary["next_best_action"] = route_decision.next_best_action
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
@@ -136,6 +152,38 @@ def repair_page_model(
         summary["skip_reason"] = "provider_not_implemented"
         baseline.metadata["ai_fallback"] = summary
         return baseline
+
+    cached_repair = pipeline_cache.load_ai_repair(
+        page=baseline,
+        provider=provider_key,
+        model=resolved_config.resolved_model,
+        trigger_reasons=trigger_reasons,
+    )
+    if cached_repair is not None:
+        repair_payload, response_id = cached_repair
+        validation_error = _validate_repair_payload(repair_payload, baseline.blocks)
+        if validation_error is None:
+            repaired = _apply_repair_payload(
+                baseline,
+                repair_payload,
+                trigger_reasons=trigger_reasons,
+            )
+            repaired = group_problem_units(replace(repaired, problems=[]))
+            summary.update(
+                {
+                    "applied": True,
+                    "cache_hit": True,
+                    "status": "cache_hit",
+                    "response_id": response_id,
+                    "repaired_problem_count": len(repaired.problems),
+                    "ai_notes": list(repair_payload.get("notes") or []),
+                }
+            )
+            repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
+            repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
+            repaired.metadata["ai_fallback"] = summary
+            _annotate_problem_metadata(repaired, trigger_reasons)
+            return repaired
 
     if resolved_config._is_claude_provider():
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -182,6 +230,14 @@ def repair_page_model(
         trigger_reasons=trigger_reasons,
     )
     repaired = group_problem_units(replace(repaired, problems=[]))
+    pipeline_cache.save_ai_repair(
+        page=baseline,
+        provider=provider_key,
+        model=resolved_config.resolved_model,
+        trigger_reasons=trigger_reasons,
+        repair_payload=repair_payload,
+        response_id=response_id,
+    )
 
     summary.update(
         {
@@ -193,6 +249,8 @@ def repair_page_model(
             "ai_notes": list(repair_payload.get("notes") or []),
         }
     )
+    repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
+    repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
     repaired.metadata["ai_fallback"] = summary
     _annotate_problem_metadata(repaired, trigger_reasons)
     _maybe_write_debug_artifacts(

@@ -1,0 +1,43 @@
+{
+  "template": {
+    "name": "MVP Board",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.52,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "english",
+      "korean"
+    ],
+    "metadata": {}
+  },
+  "placements": [
+    {
+      "problem_id": "record_0001_img_0-page-001-problem-1",
+      "subject": "unknown",
+      "start_y_pages": 0.0,
+      "nominal_slot_height_pages": 1.2,
+      "actual_content_height_pages": 0.35,
+      "actual_bottom_y_pages": 0.35,
+      "snapped_next_start_y_pages": 1.2,
+      "overflow_allowed": true,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "board_capacity_exceeded": false,
+      "metadata": {
+        "source_page_id": "record_0001_img_0-page-001",
+        "title": null,
+        "stem_block_count": 0,
+        "choice_block_count": 0,
+        "figure_block_count": 1
+      }
+    }
+  ],
+  "page_count": 1,
+  "problem_count": 1,
+  "rendered_page_paths": [
+    "mvp_output\\launcher_smoke\\board_pages\\record_0001_img_0-page-001.png"
+  ],
+  "edb_path": "mvp_output\\launcher_smoke\\mvp_board.edb"
+}

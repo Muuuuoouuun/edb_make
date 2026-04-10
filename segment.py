@@ -58,10 +58,124 @@ class SegmentOptions:
     document_split_min_density_ratio: float = 0.0085
 
 
+SEGMENTATION_MODE_BOARD = "board"
+SEGMENTATION_MODE_DOCUMENT = "document"
+LARGE_BLOCK_AREA_RATIO = 0.18
+
+
 def _pil_to_gray_array(image: Image.Image):
     if np is None:
         raise RuntimeError("numpy is required for segmentation")
     return np.array(image.convert("L"))
+
+
+def _page_area_px(width: int, height: int) -> float:
+    return max(float(width) * float(height), 1.0)
+
+
+def _unique_strings(values: Iterable[Any]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
+
+
+def _collect_fallback_reasons(blocks: Iterable[ContentBlock]) -> list[str]:
+    reasons: list[str] = []
+    for block in blocks:
+        raw_reason = block.metadata.get("fallback_reason")
+        if isinstance(raw_reason, str):
+            reasons.append(raw_reason)
+        elif isinstance(raw_reason, (list, tuple, set)):
+            reasons.extend(str(item) for item in raw_reason if str(item).strip())
+    return _unique_strings(reasons)
+
+
+def _block_area_ratio(block: ContentBlock, page_area: float) -> float:
+    return float(block.bbox.area) / max(page_area, 1.0)
+
+
+def _enrich_block_segmentation_metadata(
+    metadata: dict[str, Any],
+    *,
+    segmentation_mode: str,
+    block_area: float,
+    page_area: float,
+    large_block_threshold: float,
+    page_width: int,
+    page_height: int,
+) -> dict[str, Any]:
+    enriched = dict(metadata)
+    block_area_ratio = block_area / max(page_area, 1.0)
+    enriched["segmentation_mode"] = segmentation_mode
+    enriched["page_area_px"] = int(page_width * page_height)
+    enriched["block_area_ratio"] = round(block_area_ratio, 6)
+    enriched["large_block"] = block_area_ratio >= large_block_threshold
+    return enriched
+
+
+def _build_segmentation_metadata(
+    *,
+    page_width: int,
+    page_height: int,
+    blocks: list[ContentBlock],
+    segmentation_mode: str,
+    segmenter: str,
+    base_metadata: dict[str, Any] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+    large_block_threshold: float = LARGE_BLOCK_AREA_RATIO,
+) -> dict[str, Any]:
+    page_area = _page_area_px(page_width, page_height)
+    block_area_ratios = [_block_area_ratio(block, page_area) for block in blocks]
+    block_count = len(blocks)
+    large_block_count = sum(1 for ratio in block_area_ratios if ratio >= large_block_threshold)
+    fallback_reasons = _collect_fallback_reasons(blocks)
+    text_block_count = sum(1 for block in blocks if bool(block.text and block.text.strip()))
+    image_block_count = sum(1 for block in blocks if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE})
+
+    metadata: dict[str, Any] = dict(base_metadata or {})
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
+    metadata.update(
+        {
+            "segmenter": segmenter,
+            "segmentation_mode": segmentation_mode,
+            "page_area_px": int(page_width * page_height),
+            "block_count": block_count,
+            "text_block_count": text_block_count,
+            "image_block_count": image_block_count,
+            "large_block_threshold": large_block_threshold,
+            "large_block_count": large_block_count,
+            "large_block_ratio": round(large_block_count / max(block_count, 1), 6),
+            "max_block_area_ratio": round(max(block_area_ratios), 6) if block_area_ratios else 0.0,
+            "mean_block_area_ratio": round(sum(block_area_ratios) / max(block_count, 1), 6),
+            "fallback_reasons": fallback_reasons,
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else metadata.get("fallback_reason"),
+            "fallback_reason_count": len(fallback_reasons),
+            "has_fallback_reason": bool(fallback_reasons),
+        }
+    )
+    metadata["segmentation_stats"] = {
+        "segmenter": segmenter,
+        "segmentation_mode": segmentation_mode,
+        "page_area_px": int(page_width * page_height),
+        "block_count": block_count,
+        "text_block_count": text_block_count,
+        "image_block_count": image_block_count,
+        "large_block_threshold": large_block_threshold,
+        "large_block_count": large_block_count,
+        "large_block_ratio": round(large_block_count / max(block_count, 1), 6),
+        "max_block_area_ratio": round(max(block_area_ratios), 6) if block_area_ratios else 0.0,
+        "mean_block_area_ratio": round(sum(block_area_ratios) / max(block_count, 1), 6),
+        "fallback_reasons": fallback_reasons,
+    }
+    return metadata
 
 
 def _load_image(image_source: Any) -> Image.Image:
@@ -634,11 +748,14 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
     content_box = _find_document_content_box(mask, image.width, image.height)
     columns = _detect_document_columns(mask, content_box, options)
     blocks: list[ContentBlock] = []
+    page_area = _page_area_px(image.width, image.height)
 
     total_split_count = 0
+    row_band_count = 0
     for column_index, column_box in enumerate(columns, start=1):
         row_bands = _find_document_row_bands(mask, column_box, options)
         row_bands = _merge_small_document_bands(row_bands, options)
+        row_band_count += len(row_bands)
         column_entries: list[tuple[Box, int, int, int]] = []
         for source_band_index, band in enumerate(row_bands, start=1):
             box = _document_band_box(mask, column_box, band, options)
@@ -648,32 +765,53 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
                 column_entries.append((split_box, source_band_index, local_split_index, len(split_boxes)))
 
         for band_index, (box, source_band_index, split_index, split_count) in enumerate(column_entries, start=1):
+            metadata = _enrich_block_segmentation_metadata(
+                {
+                    "segmenter": "document-bands",
+                    "column_index": column_index,
+                    "question_band_index": band_index,
+                    "source_band_index": source_band_index,
+                    "split_from_band": split_count > 1,
+                    "band_split_index": split_index,
+                    "band_split_count": split_count,
+                },
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                block_area=box.area,
+                page_area=page_area,
+                large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+                page_width=image.width,
+                page_height=image.height,
+            )
             blocks.append(
                 ContentBlock(
                     block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
                     block_type=BlockType.STEM,
                     bbox=box,
                     reading_order=len(blocks),
-                    metadata={
-                        "segmenter": "document-bands",
-                        "column_index": column_index,
-                        "question_band_index": band_index,
-                        "source_band_index": source_band_index,
-                        "split_from_band": split_count > 1,
-                        "band_split_index": split_index,
-                        "band_split_count": split_count,
-                    },
+                    metadata=metadata,
                 )
             )
 
     if not blocks:
+        fallback_metadata = _enrich_block_segmentation_metadata(
+            {
+                "segmenter": "document-bands",
+                "fallback_reason": "empty_document_segmentation",
+            },
+            segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+            block_area=content_box.area,
+            page_area=page_area,
+            large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+            page_width=image.width,
+            page_height=image.height,
+        )
         blocks = [
             ContentBlock(
                 block_id=f"{page_id}-block-001",
                 block_type=BlockType.IMAGE,
                 bbox=content_box,
                 reading_order=0,
-                metadata={"segmenter": "document-bands", "fallback_reason": "empty_document_segmentation"},
+                metadata=fallback_metadata,
             )
         ]
 
@@ -687,6 +825,10 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
         },
         "column_count": len(columns),
         "document_band_split_count": total_split_count,
+        "document_row_band_count": row_band_count,
+        "document_split_block_count": len(blocks),
+        "document_split_applied": total_split_count > 0,
+        "content_box_area_ratio": round(content_box.area / page_area, 6),
     }
 
 
@@ -976,11 +1118,20 @@ def segment_page(
 ) -> PageModel:
     resolved_options = options or SegmentOptions()
     image = _load_image(image_path)
+    page_area = _page_area_px(image.width, image.height)
     if _is_document_like_page(image_path, image):
         blocks, metadata = _segment_document_page(image, page_id, resolved_options)
         source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
         if source_path is None and not isinstance(image_path, Image.Image):
             source_path = str(image_path)
+        metadata = _build_segmentation_metadata(
+            page_width=image.width,
+            page_height=image.height,
+            blocks=blocks,
+            segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+            segmenter="document-bands",
+            base_metadata=metadata,
+        )
         return PageModel(
             page_id=page_id,
             width_px=image.width,
@@ -993,6 +1144,7 @@ def segment_page(
 
     board_region = _detect_board_region(image, resolved_options)
     candidates = _find_candidate_boxes(image, board_region, resolved_options)
+    candidate_count = len(candidates)
     expanded_candidates: list[tuple[Box, float]] = []
     split_applied = False
     for box, fill_ratio in candidates:
@@ -1005,6 +1157,8 @@ def segment_page(
             expanded_candidates.append((box, fill_ratio))
     candidates = expanded_candidates
     merged_boxes = [box for box, _ in candidates] if split_applied else _merge_boxes([box for box, _ in candidates], resolved_options)
+    expanded_candidate_count = len(candidates)
+    merged_candidate_count = len(merged_boxes)
 
     blocks: list[ContentBlock] = []
     for index, box in enumerate(sorted(merged_boxes, key=lambda item: (item.top, item.left))):
@@ -1017,7 +1171,18 @@ def segment_page(
             0.25,
         )
         block_type, metadata = _classify_geometry(image, box, board_region, fill_ratio)
-        metadata["segmenter"] = "rule-based"
+        metadata = _enrich_block_segmentation_metadata(
+            {
+                **metadata,
+                "segmenter": "rule-based",
+            },
+            segmentation_mode=SEGMENTATION_MODE_BOARD,
+            block_area=box.area,
+            page_area=page_area,
+            large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+            page_width=image.width,
+            page_height=image.height,
+        )
         blocks.append(
             ContentBlock(
                 block_id=f"{page_id}-block-{index + 1:03d}",
@@ -1029,19 +1194,53 @@ def segment_page(
         )
 
     if not blocks:
+        fallback_metadata = _enrich_block_segmentation_metadata(
+            {
+                "fill_ratio": 1.0,
+                "fallback_reason": "empty_segmentation",
+                "segmenter": "rule-based",
+            },
+            segmentation_mode=SEGMENTATION_MODE_BOARD,
+            block_area=board_region.area,
+            page_area=page_area,
+            large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+            page_width=image.width,
+            page_height=image.height,
+        )
         blocks = [
             ContentBlock(
                 block_id=f"{page_id}-block-001",
                 block_type=BlockType.IMAGE,
                 bbox=board_region,
                 reading_order=0,
-                metadata={"fill_ratio": 1.0, "fallback_reason": "empty_segmentation", "segmenter": "rule-based"},
+                metadata=fallback_metadata,
             )
         ]
 
     source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
     if source_path is None and not isinstance(image_path, Image.Image):
         source_path = str(image_path)
+
+    metadata = _build_segmentation_metadata(
+        page_width=image.width,
+        page_height=image.height,
+        blocks=blocks,
+        segmentation_mode=SEGMENTATION_MODE_BOARD,
+        segmenter="rule-based",
+        base_metadata={
+            "board_region": {
+                "left": board_region.left,
+                "top": board_region.top,
+                "width": board_region.width,
+                "height": board_region.height,
+            },
+            "board_region_area_ratio": round(board_region.area / page_area, 6),
+            "candidate_count": candidate_count,
+            "expanded_candidate_count": expanded_candidate_count,
+            "merged_candidate_count": merged_candidate_count,
+            "split_applied": split_applied,
+        },
+    )
 
     return PageModel(
         page_id=page_id,
@@ -1050,15 +1249,7 @@ def segment_page(
         subject=subject,
         source_path=source_path,
         blocks=blocks,
-        metadata={
-            "segmenter": "rule-based",
-            "board_region": {
-                "left": board_region.left,
-                "top": board_region.top,
-                "width": board_region.width,
-                "height": board_region.height,
-            },
-        },
+        metadata=metadata,
     )
 
 

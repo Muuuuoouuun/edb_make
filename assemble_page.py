@@ -76,6 +76,31 @@ def _problem_display_title(block: ContentBlock) -> str | None:
     return strip_problem_marker(title_source) or title_source
 
 
+def _block_grouping_diagnostics(block: ContentBlock) -> dict[str, object]:
+    raw_text = block.text.strip() if block.text and block.text.strip() else None
+    title_source = _problem_title_source(block)
+    problem_marker = _matches_problem_marker(raw_text)
+    choice_marker = _matches_choice_marker(raw_text)
+    problem_number, problem_number_source = extract_problem_number_from_block(block)
+    display_title_marker = bool(title_source and title_source != raw_text and _matches_problem_marker(title_source))
+    marker_conflict = bool(problem_marker and choice_marker)
+    if problem_number is not None and choice_marker:
+        marker_conflict = True
+
+    return {
+        "raw_text_marker_source": raw_text,
+        "display_title_marker_source": title_source if title_source != raw_text else None,
+        "problem_marker": problem_marker or display_title_marker,
+        "choice_marker": choice_marker,
+        "problem_number": problem_number,
+        "problem_number_source": problem_number_source,
+        "force_problem_start": bool(block.metadata.get("force_problem_start")),
+        "marker_conflict": marker_conflict,
+        "fallback_reason": block.metadata.get("fallback_reason"),
+        "display_title_present": bool(block.metadata.get("display_title")),
+    }
+
+
 def _extract_top_left_problem_number(block: ContentBlock) -> tuple[int | None, str | None]:
     if not block.ocr_lines:
         return None, None
@@ -203,16 +228,101 @@ def classify_block(block: ContentBlock) -> ContentBlock:
     return block
 
 
+def _build_grouping_diagnostics(
+    *,
+    page: PageModel,
+    classified_blocks: list[ContentBlock],
+    block_diagnostics: list[dict[str, object]],
+    has_text_markers: bool,
+    has_band_metadata: bool,
+    fallback_grouping: bool,
+) -> dict[str, object]:
+    problem_marker_block_count = sum(1 for item in block_diagnostics if bool(item.get("problem_marker")))
+    choice_marker_block_count = sum(1 for item in block_diagnostics if bool(item.get("choice_marker")))
+    marker_conflict_block_count = sum(1 for item in block_diagnostics if bool(item.get("marker_conflict")))
+    forced_problem_start_count = sum(1 for item in block_diagnostics if bool(item.get("force_problem_start")))
+    problem_number_block_count = sum(1 for item in block_diagnostics if item.get("problem_number") is not None)
+    fallback_reason_block_count = sum(1 for item in block_diagnostics if item.get("fallback_reason"))
+    problem_number_source_counts: dict[str, int] = {}
+    for item in block_diagnostics:
+        source = item.get("problem_number_source")
+        if not source:
+            continue
+        source_key = str(source)
+        problem_number_source_counts[source_key] = problem_number_source_counts.get(source_key, 0) + 1
+
+    grouping_mode = "fallback" if fallback_grouping else "marker"
+    grouping_source = "fallback_grouping" if fallback_grouping else "marker_grouping"
+    trigger_reasons: list[str] = []
+    if fallback_grouping:
+        if not has_text_markers:
+            trigger_reasons.append("no_text_markers")
+        if has_band_metadata:
+            trigger_reasons.append("band_metadata_present")
+        if len(classified_blocks) > 1:
+            trigger_reasons.append("multi_block_page")
+    else:
+        trigger_reasons.append("text_markers_detected")
+
+    return {
+        "grouping_mode": grouping_mode,
+        "grouping_source": grouping_source,
+        "trigger_reasons": trigger_reasons,
+        "has_text_markers": has_text_markers,
+        "has_band_metadata": has_band_metadata,
+        "block_count": len(classified_blocks),
+        "problem_count": 0,
+        "fallback_grouping": fallback_grouping,
+        "fallback_grouping_stats": {
+            "used": fallback_grouping,
+            "trigger_reasons": trigger_reasons,
+            "block_count": len(classified_blocks),
+            "problem_marker_block_count": problem_marker_block_count,
+            "choice_marker_block_count": choice_marker_block_count,
+            "marker_conflict_block_count": marker_conflict_block_count,
+            "fallback_reason_block_count": fallback_reason_block_count,
+        },
+        "marker_counts": {
+            "problem_marker_block_count": problem_marker_block_count,
+            "choice_marker_block_count": choice_marker_block_count,
+            "marker_conflict_block_count": marker_conflict_block_count,
+            "forced_problem_start_block_count": forced_problem_start_count,
+            "problem_number_block_count": problem_number_block_count,
+        },
+        "problem_number_source_counts": problem_number_source_counts,
+        "block_diagnostics": block_diagnostics,
+        "problem_number_source": next(iter(problem_number_source_counts), None),
+    }
+
+
 def group_problem_units(page: PageModel) -> PageModel:
     relabeled = relabel_reading_order(page)
     classified_blocks = [classify_block(block) for block in relabeled.blocks]
+    block_diagnostics = [_block_grouping_diagnostics(block) for block in classified_blocks]
     has_text_markers = any(detect_problem_start(block) for block in classified_blocks)
     has_band_metadata = any("question_band_index" in block.metadata for block in classified_blocks)
+    fallback_grouping = not has_text_markers and (has_band_metadata or len(classified_blocks) > 1)
 
-    if not has_text_markers and (has_band_metadata or len(classified_blocks) > 1):
+    diagnostics = _build_grouping_diagnostics(
+        page=relabeled,
+        classified_blocks=classified_blocks,
+        block_diagnostics=block_diagnostics,
+        has_text_markers=has_text_markers,
+        has_band_metadata=has_band_metadata,
+        fallback_grouping=fallback_grouping,
+    )
+    relabeled.metadata["grouping_diagnostics"] = diagnostics
+    relabeled.metadata["grouping_source"] = diagnostics["grouping_source"]
+    relabeled.metadata["grouping_mode"] = diagnostics["grouping_mode"]
+    relabeled.metadata["marker_counts"] = diagnostics["marker_counts"]
+    relabeled.metadata["fallback_grouping_stats"] = diagnostics["fallback_grouping_stats"]
+    relabeled.metadata["problem_number_source_counts"] = diagnostics["problem_number_source_counts"]
+
+    if fallback_grouping:
         problems: list[ProblemUnit] = []
         for index, block in enumerate(classified_blocks, start=1):
             problem_number, number_source = extract_problem_number_from_block(block)
+            block_diag = block_diagnostics[index - 1]
             current = ProblemUnit(
                 unit_id=f"{page.page_id}-problem-{index}",
                 subject=infer_subject(relabeled),
@@ -229,20 +339,36 @@ def group_problem_units(page: PageModel) -> PageModel:
             current.metadata.update(
                 {
                     "fallback_grouping": True,
+                    "grouping_mode": diagnostics["grouping_mode"],
+                    "grouping_source": diagnostics["grouping_source"],
+                    "grouping_index": index,
                     "question_band_index": block.metadata.get("question_band_index"),
                     "column_index": block.metadata.get("column_index"),
+                    "marker_conflict": bool(block_diag.get("marker_conflict")),
+                    "problem_marker": bool(block_diag.get("problem_marker")),
+                    "choice_marker": bool(block_diag.get("choice_marker")),
+                    "problem_number_source": block_diag.get("problem_number_source"),
                 }
             )
             if problem_number is not None:
                 current.metadata["problem_number"] = problem_number
                 current.metadata["problem_number_source"] = number_source
+            current.metadata["marker_counts"] = {
+                "problem_marker": int(bool(block_diag.get("problem_marker"))),
+                "choice_marker": int(bool(block_diag.get("choice_marker"))),
+                "marker_conflict": int(bool(block_diag.get("marker_conflict"))),
+            }
             problems.append(current)
+        diagnostics["problem_count"] = len(problems)
+        relabeled.metadata["grouping_diagnostics"] = diagnostics
+        relabeled.metadata["fallback_grouping_stats"]["problem_count"] = len(problems)
         return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
     problems: list[ProblemUnit] = []
     current: ProblemUnit | None = None
 
-    for block in classified_blocks:
+    for index, block in enumerate(classified_blocks, start=1):
+        block_diag = block_diagnostics[index - 1]
         if detect_problem_start(block) or current is None:
             problem_number, number_source = extract_problem_number_from_block(block)
             current = ProblemUnit(
@@ -253,6 +379,22 @@ def group_problem_units(page: PageModel) -> PageModel:
             if problem_number is not None:
                 current.metadata["problem_number"] = problem_number
                 current.metadata["problem_number_source"] = number_source
+            current.metadata.update(
+                {
+                    "grouping_mode": diagnostics["grouping_mode"],
+                    "grouping_source": diagnostics["grouping_source"],
+                    "grouping_index": len(problems) + 1,
+                    "marker_conflict": bool(block_diag.get("marker_conflict")),
+                    "problem_marker": bool(block_diag.get("problem_marker")),
+                    "choice_marker": bool(block_diag.get("choice_marker")),
+                    "problem_number_source": number_source or block_diag.get("problem_number_source"),
+                    "marker_counts": {
+                        "problem_marker": int(bool(block_diag.get("problem_marker"))),
+                        "choice_marker": int(bool(block_diag.get("choice_marker"))),
+                        "marker_conflict": int(bool(block_diag.get("marker_conflict"))),
+                    },
+                }
+            )
             problems.append(current)
 
         if block.block_type in {BlockType.TITLE, BlockType.STEM, BlockType.FORMULA, BlockType.SECTION}:
@@ -266,6 +408,9 @@ def group_problem_units(page: PageModel) -> PageModel:
         elif block.text:
             current.stem_block_ids.append(block.block_id)
 
+    diagnostics["problem_count"] = len(problems)
+    relabeled.metadata["grouping_diagnostics"] = diagnostics
+    relabeled.metadata["fallback_grouping_stats"]["problem_count"] = len(problems)
     return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
 
@@ -276,6 +421,7 @@ def summarize_page(page: PageModel) -> dict[str, object]:
         "subject": grouped.subject,
         "block_count": len(grouped.blocks),
         "problem_count": len(grouped.problems),
+        "grouping_diagnostics": grouped.metadata.get("grouping_diagnostics"),
         "problems": [
             {
                 "unit_id": problem.unit_id,

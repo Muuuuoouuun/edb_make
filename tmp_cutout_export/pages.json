@@ -1,0 +1,747 @@
+[
+  {
+    "page_id": "6문제-page-001",
+    "width_px": 751,
+    "height_px": 1078,
+    "subject": "unknown",
+    "source_path": "C:\\Users\\aaaha\\Downloads\\클래스인 용\\수업 자료 샘플\\중3 문제들\\6문제.png",
+    "blocks": [
+      {
+        "block_id": "6문제-page-001-block-001",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 347.0,
+          "height": 334.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 809578,
+          "block_area_ratio": 0.143159,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      },
+      {
+        "block_id": "6문제-page-001-block-002",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 355.0,
+          "width": 347.0,
+          "height": 351.0
+        },
+        "reading_order": 1,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 809578,
+          "block_area_ratio": 0.150445,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      },
+      {
+        "block_id": "6문제-page-001-block-003",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 673.0,
+          "width": 347.0,
+          "height": 405.0
+        },
+        "reading_order": 2,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 809578,
+          "block_area_ratio": 0.17359,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      },
+      {
+        "block_id": "6문제-page-001-block-004",
+        "block_type": "image",
+        "bbox": {
+          "left": 361.0,
+          "top": 0.0,
+          "width": 390.0,
+          "height": 363.0
+        },
+        "reading_order": 3,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 809578,
+          "block_area_ratio": 0.174869,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      },
+      {
+        "block_id": "6문제-page-001-block-005",
+        "block_type": "image",
+        "bbox": {
+          "left": 361.0,
+          "top": 387.0,
+          "width": 390.0,
+          "height": 191.0
+        },
+        "reading_order": 4,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 809578,
+          "block_area_ratio": 0.092011,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      },
+      {
+        "block_id": "6문제-page-001-block-006",
+        "block_type": "image",
+        "bbox": {
+          "left": 361.0,
+          "top": 568.0,
+          "width": 390.0,
+          "height": 457.0
+        },
+        "reading_order": 5,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 809578,
+          "block_area_ratio": 0.220152,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "6문제-page-001-problem-1",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "6문제-page-001-block-001"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 1,
+          "question_band_index": 1,
+          "column_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "6문제-page-001-problem-2",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "6문제-page-001-block-002"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 2,
+          "question_band_index": 2,
+          "column_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "6문제-page-001-problem-3",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "6문제-page-001-block-003"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 3,
+          "question_band_index": 3,
+          "column_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "6문제-page-001-problem-4",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "6문제-page-001-block-004"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 4,
+          "question_band_index": 1,
+          "column_index": 2,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "6문제-page-001-problem-5",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "6문제-page-001-block-005"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 5,
+          "question_band_index": 2,
+          "column_index": 2,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "6문제-page-001-problem-6",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "6문제-page-001-block-006"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 6,
+          "question_band_index": 3,
+          "column_index": 2,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "deskewed": true,
+      "margin_cropped": true,
+      "segmenter": "document-bands",
+      "content_box": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 751.0,
+        "height": 1078.0
+      },
+      "column_count": 2,
+      "document_band_split_count": 0,
+      "document_row_band_count": 6,
+      "document_split_block_count": 6,
+      "document_split_applied": false,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 809578,
+      "block_count": 6,
+      "text_block_count": 0,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 1,
+      "large_block_ratio": 0.166667,
+      "max_block_area_ratio": 0.220152,
+      "mean_block_area_ratio": 0.159038,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "document-bands",
+        "segmentation_mode": "document",
+        "page_area_px": 809578,
+        "block_count": 6,
+        "text_block_count": 0,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 1,
+        "large_block_ratio": 0.166667,
+        "max_block_area_ratio": 0.220152,
+        "mean_block_area_ratio": 0.159038,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "none",
+      "pipeline_cache_dir": "C:\\Users\\aaaha\\Downloads\\클래스인 용\\수업 자료 샘플\\중3 문제들\\.pipeline_cache",
+      "grouping_diagnostics": {
+        "grouping_mode": "fallback",
+        "grouping_source": "fallback_grouping",
+        "trigger_reasons": [
+          "no_text_markers",
+          "band_metadata_present",
+          "multi_block_page"
+        ],
+        "has_text_markers": false,
+        "has_band_metadata": true,
+        "block_count": 6,
+        "problem_count": 6,
+        "fallback_grouping": true,
+        "fallback_grouping_stats": {
+          "used": true,
+          "trigger_reasons": [
+            "no_text_markers",
+            "band_metadata_present",
+            "multi_block_page"
+          ],
+          "block_count": 6,
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 6,
+          "problem_count": 6
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 0,
+          "problem_number_block_count": 0
+        },
+        "problem_number_source_counts": {},
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          }
+        ],
+        "problem_number_source": null
+      },
+      "grouping_source": "fallback_grouping",
+      "grouping_mode": "fallback",
+      "marker_counts": {
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 0,
+        "problem_number_block_count": 0
+      },
+      "fallback_grouping_stats": {
+        "used": true,
+        "trigger_reasons": [
+          "no_text_markers",
+          "band_metadata_present",
+          "multi_block_page"
+        ],
+        "block_count": 6,
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 6,
+        "problem_count": 6
+      },
+      "problem_number_source_counts": {},
+      "difficulty_profile": {
+        "page_id": "6문제-page-001",
+        "segmentation_risk": 0.0,
+        "ocr_risk": 0.34,
+        "grouping_risk": 1.0,
+        "overall_risk": 1.0,
+        "tier": "red",
+        "reasons": [
+          "ocr_disabled",
+          "no_problem_markers",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "unknown",
+            "block_count": 6,
+            "large_block_count": 1,
+            "large_block_ratio": 0.16666666666666666,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 0.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 0,
+            "document_split_applied": false,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.220152
+          },
+          "ocr": {
+            "ocr_mode": "none",
+            "text_block_count": 0,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": null,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 6,
+            "backend_counts": {
+              "none": 6
+            },
+            "backend_latency_ms_avg": 0.0
+          },
+          "grouping": {
+            "grouping_source": "fallback_grouping",
+            "grouping_mode": "fallback",
+            "problem_count": 6,
+            "block_count": 6,
+            "problem_marker_count": 0,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 6,
+            "problem_number_source_counts": {}
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "6문제-page-001",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "trigger_reasons": [
+          "ocr_disabled",
+          "no_problem_markers",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "6문제-page-001",
+          "segmentation_risk": 0.0,
+          "ocr_risk": 0.34,
+          "grouping_risk": 1.0,
+          "overall_risk": 1.0,
+          "tier": "red",
+          "reasons": [
+            "ocr_disabled",
+            "no_problem_markers",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmentation_mode": "unknown",
+              "block_count": 6,
+              "large_block_count": 1,
+              "large_block_ratio": 0.16666666666666666,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 0.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 0,
+              "document_split_applied": false,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.220152
+            },
+            "ocr": {
+              "ocr_mode": "none",
+              "text_block_count": 0,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": null,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 6,
+              "backend_counts": {
+                "none": 6
+              },
+              "backend_latency_ms_avg": 0.0
+            },
+            "grouping": {
+              "grouping_source": "fallback_grouping",
+              "grouping_mode": "fallback",
+              "problem_count": 6,
+              "block_count": 6,
+              "problem_marker_count": 0,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 6,
+              "problem_number_source_counts": {}
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "ocr_mode": "none",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "no_problem_markers",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 6,
+        "baseline_block_count": 6
+      }
+    }
+  }
+]

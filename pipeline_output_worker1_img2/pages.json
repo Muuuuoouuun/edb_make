@@ -1,0 +1,85 @@
+[
+  {
+    "page_id": "dd2c90b1-52b8-496f-9f29-c120a9475df1-page-001",
+    "width_px": 2160,
+    "height_px": 3840,
+    "subject": "science",
+    "source_path": "C:\\Users\\aaaha\\AppData\\Roaming\\Tencent\\WXWork\\Data\\1688857213809783\\Cache\\Image\\2026-04\\dd2c90b1-52b8-496f-9f29-c120a9475df1.jpg",
+    "blocks": [
+      {
+        "block_id": "dd2c90b1-52b8-496f-9f29-c120a9475df1-page-001-block-001",
+        "block_type": "image",
+        "bbox": {
+          "left": 182.0,
+          "top": 938.0,
+          "width": 1978.0,
+          "height": 1695.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "fill_ratio": 0.1628,
+          "mean_intensity": 105.55,
+          "stddev": 48.21,
+          "aspect_ratio": 1.167,
+          "area_ratio": 0.849198,
+          "segmenter": "rule-based"
+        }
+      },
+      {
+        "block_id": "dd2c90b1-52b8-496f-9f29-c120a9475df1-page-001-block-002",
+        "block_type": "image",
+        "bbox": {
+          "left": 182.0,
+          "top": 2633.0,
+          "width": 1978.0,
+          "height": 301.0
+        },
+        "reading_order": 1,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "fill_ratio": 0.1628,
+          "mean_intensity": 108.69,
+          "stddev": 67.62,
+          "aspect_ratio": 6.5714,
+          "area_ratio": 0.150802,
+          "segmenter": "rule-based",
+          "ocr_backend": "none",
+          "fallback_reason": "noop_ocr"
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "dd2c90b1-52b8-496f-9f29-c120a9475df1-page-001-problem-1",
+        "subject": "science",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "dd2c90b1-52b8-496f-9f29-c120a9475df1-page-001-block-001",
+          "dd2c90b1-52b8-496f-9f29-c120a9475df1-page-001-block-002"
+        ],
+        "metadata": {}
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "deskewed": true,
+      "margin_cropped": true
+    }
+  }
+]

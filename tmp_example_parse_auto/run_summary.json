@@ -1,0 +1,24 @@
+{
+  "source": "C:\\Users\\aaaha\\Downloads\\클래스인 용\\수업 자료 샘플\\중3 문제들\\6문제.png",
+  "output_dir": "tmp_example_parse_auto",
+  "ocr_mode": "auto",
+  "page_count": 1,
+  "problem_count": 6,
+  "block_count": 6,
+  "text_block_count": 0,
+  "image_block_count": 6,
+  "fallback_block_count": 6,
+  "ai_fallback": {
+    "mode": "off",
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "threshold": 0.72,
+    "max_regions": 18,
+    "timeout_ms": 12000,
+    "save_debug": false,
+    "fail_on_error": false
+  },
+  "ai_attempted_page_count": 0,
+  "ai_applied_page_count": 0,
+  "pages_json_path": "tmp_example_parse_auto\\pages.json"
+}

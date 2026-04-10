@@ -1,0 +1,1226 @@
+{
+  "source_paths": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0.pdf"
+  ],
+  "output_dir": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2",
+  "pages_json_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\pages.json",
+  "problem_crop_dir": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops",
+  "block_crop_dir": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\block_crops",
+  "record_count": 30,
+  "record_mode": "mixed",
+  "header_flag": 4,
+  "text_confidence_threshold": 0.78,
+  "ai_fallback": null,
+  "placement_summary": {
+    "problem_count": 30,
+    "overflow_count": 0,
+    "overflow_violation_count": 0,
+    "max_bottom_y_pages": 35.52,
+    "text_record_count": 0,
+    "image_record_count": 30
+  },
+  "placements": [
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-1",
+      "title": "문항 1",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_001_67ed0db5.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 0.0,
+      "actual_content_height_pages": 1.122142255738185,
+      "actual_bottom_y_pages": 1.122142,
+      "snapped_next_start_y_pages": 1.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 126.0,
+        "width": 926.0,
+        "height": 1162.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-001",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 144.0,
+            "width": 908.0,
+            "height": 1126.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-2",
+      "title": "문항 2",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_002_03fea123.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 1.2,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 1.92,
+      "snapped_next_start_y_pages": 2.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 1789.0,
+        "width": 926.0,
+        "height": 589.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-002",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 1807.0,
+            "width": 908.0,
+            "height": 553.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-3",
+      "title": "문항 3",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_003_277a6acc.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 2.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 3.12,
+      "snapped_next_start_y_pages": 3.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 2450.0,
+        "width": 926.0,
+        "height": 304.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-003",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 2468.0,
+            "width": 908.0,
+            "height": 268.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-4",
+      "title": "문항 4",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_004_1ec1d774.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 3.6,
+      "actual_content_height_pages": 1.0278401093694172,
+      "actual_bottom_y_pages": 4.62784,
+      "snapped_next_start_y_pages": 4.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 904.0,
+        "top": 0.0,
+        "width": 1091.0,
+        "height": 1254.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-004",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 922.0,
+            "top": 0.0,
+            "width": 1073.0,
+            "height": 1236.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-5",
+      "title": "문항 5",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_005_dd47e14a.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 4.8,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 5.52,
+      "snapped_next_start_y_pages": 6.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 904.0,
+        "top": 1237.0,
+        "width": 1010.0,
+        "height": 570.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-005",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 922.0,
+            "top": 1255.0,
+            "width": 974.0,
+            "height": 534.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-6",
+      "title": "문항 6",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_006_e36c38d4.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 6.0,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 6.72,
+      "snapped_next_start_y_pages": 7.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 904.0,
+        "top": 1786.0,
+        "width": 1011.0,
+        "height": 360.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-006",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 922.0,
+            "top": 1804.0,
+            "width": 975.0,
+            "height": 324.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-problem-7",
+      "title": "문항 7",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_007_59184fb1.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_001.png",
+      "start_y_pages": 7.2,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 7.92,
+      "snapped_next_start_y_pages": 8.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 904.0,
+        "top": 2124.0,
+        "width": 1011.0,
+        "height": 640.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-001-block-007",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 922.0,
+            "top": 2142.0,
+            "width": 975.0,
+            "height": 604.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-1",
+      "title": "문항 8",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_008_288e20e8.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 8.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 9.12,
+      "snapped_next_start_y_pages": 9.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 971.0,
+        "height": 600.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-001",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 0.0,
+            "width": 953.0,
+            "height": 582.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-2",
+      "title": "문항 9",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_009_9652c748.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 9.6,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 10.32,
+      "snapped_next_start_y_pages": 10.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 659.0,
+        "width": 971.0,
+        "height": 282.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-002",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 677.0,
+            "width": 953.0,
+            "height": 246.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-3",
+      "title": "문항 10",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_010_a4abb0ad.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 10.8,
+      "actual_content_height_pages": 0.7634631430117474,
+      "actual_bottom_y_pages": 11.563463,
+      "snapped_next_start_y_pages": 12.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 888.0,
+        "width": 971.0,
+        "height": 829.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-003",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 11.0,
+            "top": 906.0,
+            "width": 942.0,
+            "height": 793.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-4",
+      "title": "문항 11",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_011_0f1a9c5d.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 12.0,
+      "actual_content_height_pages": 0.8610832795126464,
+      "actual_bottom_y_pages": 12.861083,
+      "snapped_next_start_y_pages": 13.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 1778.0,
+        "width": 971.0,
+        "height": 935.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-004",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 1796.0,
+            "width": 953.0,
+            "height": 899.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-5",
+      "title": "문항 12",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_012_97dfdc6a.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 13.2,
+      "actual_content_height_pages": 0.7978635285852288,
+      "actual_bottom_y_pages": 13.997864,
+      "snapped_next_start_y_pages": 14.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 0.0,
+        "width": 965.0,
+        "height": 861.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-005",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 0.0,
+            "width": 930.0,
+            "height": 843.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-6",
+      "title": "문항 13",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_013_86edd0cb.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 14.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 15.12,
+      "snapped_next_start_y_pages": 15.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 961.0,
+        "width": 964.0,
+        "height": 613.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-006",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 979.0,
+            "width": 928.0,
+            "height": 577.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-problem-7",
+      "title": "문항 14",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_014_1ae51731.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_002.png",
+      "start_y_pages": 15.6,
+      "actual_content_height_pages": 0.7265098796873628,
+      "actual_bottom_y_pages": 16.32651,
+      "snapped_next_start_y_pages": 16.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 1924.0,
+        "width": 965.0,
+        "height": 784.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-002-block-007",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 1942.0,
+            "width": 929.0,
+            "height": 748.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-1",
+      "title": "문항 15",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_015_c2a30e86.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 16.8,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 17.52,
+      "snapped_next_start_y_pages": 18.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 971.0,
+        "height": 682.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-001",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 0.0,
+            "width": 953.0,
+            "height": 664.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-2",
+      "title": "문항 16",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_016_564d1d67.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 18.0,
+      "actual_content_height_pages": 1.1963071444779978,
+      "actual_bottom_y_pages": 19.196307,
+      "snapped_next_start_y_pages": 19.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 773.0,
+        "width": 971.0,
+        "height": 1299.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-002",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 791.0,
+            "width": 953.0,
+            "height": 1263.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-3",
+      "title": "문항 17",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_017_d0959170.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 19.2,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 19.92,
+      "snapped_next_start_y_pages": 20.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 2164.0,
+        "width": 971.0,
+        "height": 419.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-003",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 2182.0,
+            "width": 953.0,
+            "height": 383.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-4",
+      "title": "문항 18",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_018_369d149f.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 20.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 21.12,
+      "snapped_next_start_y_pages": 21.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 0.0,
+        "width": 965.0,
+        "height": 380.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-004",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 0.0,
+            "width": 930.0,
+            "height": 362.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-5",
+      "title": "문항 19",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_019_81c1df08.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 21.6,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 22.32,
+      "snapped_next_start_y_pages": 22.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 1022.0,
+        "top": 333.0,
+        "width": 861.0,
+        "height": 337.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-005",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 1040.0,
+            "top": 351.0,
+            "width": 825.0,
+            "height": 301.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-6",
+      "title": "문항 20",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_020_39f7993c.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 22.8,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 23.52,
+      "snapped_next_start_y_pages": 24.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 962.0,
+        "top": 737.0,
+        "width": 952.0,
+        "height": 369.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-006",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 980.0,
+            "top": 755.0,
+            "width": 916.0,
+            "height": 333.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-problem-7",
+      "title": "문항 21",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_021_81871651.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_003.png",
+      "start_y_pages": 24.0,
+      "actual_content_height_pages": 0.8970173004303151,
+      "actual_bottom_y_pages": 24.897017,
+      "snapped_next_start_y_pages": 25.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 1740.0,
+        "width": 965.0,
+        "height": 968.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-003-block-007",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 1758.0,
+            "width": 929.0,
+            "height": 932.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-1",
+      "title": "문항 22",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_022_e130a449.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 25.2,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 25.92,
+      "snapped_next_start_y_pages": 26.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 971.0,
+        "height": 515.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-001",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 0.0,
+            "width": 953.0,
+            "height": 497.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-2",
+      "title": "문항 23",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_023_3fcae627.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 26.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 27.12,
+      "snapped_next_start_y_pages": 27.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 485.0,
+        "width": 971.0,
+        "height": 749.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-002",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 11.0,
+            "top": 503.0,
+            "width": 942.0,
+            "height": 713.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-3",
+      "title": "문항 24",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_024_da238e21.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 27.6,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 28.32,
+      "snapped_next_start_y_pages": 28.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 1818.0,
+        "width": 971.0,
+        "height": 362.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-003",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 0.0,
+            "top": 1836.0,
+            "width": 953.0,
+            "height": 326.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-4",
+      "title": "문항 25",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_025_f9a003d0.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 28.8,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 29.52,
+      "snapped_next_start_y_pages": 30.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 2140.0,
+        "width": 971.0,
+        "height": 474.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-004",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 14.0,
+            "top": 2158.0,
+            "width": 939.0,
+            "height": 438.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-5",
+      "title": "문항 26",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_026_1632266e.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 30.0,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 30.72,
+      "snapped_next_start_y_pages": 31.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 0.0,
+        "width": 965.0,
+        "height": 558.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-005",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 0.0,
+            "width": 930.0,
+            "height": 540.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-6",
+      "title": "문항 27",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_027_416f37b1.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 31.2,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 31.92,
+      "snapped_next_start_y_pages": 32.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 964.0,
+        "top": 585.0,
+        "width": 949.0,
+        "height": 388.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-006",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 982.0,
+            "top": 603.0,
+            "width": 913.0,
+            "height": 352.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-7",
+      "title": "문항 28",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_028_00cff1eb.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 32.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 33.12,
+      "snapped_next_start_y_pages": 33.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 1175.0,
+        "width": 964.0,
+        "height": 557.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-007",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 1193.0,
+            "width": 928.0,
+            "height": 521.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-8",
+      "title": "문항 29",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_029_a2696b1b.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 33.6,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 34.32,
+      "snapped_next_start_y_pages": 34.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 962.0,
+        "top": 1831.0,
+        "width": 952.0,
+        "height": 525.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-008",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 980.0,
+            "top": 1849.0,
+            "width": 916.0,
+            "height": 489.0
+          }
+        }
+      ]
+    },
+    {
+      "problem_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-problem-9",
+      "title": "문항 30",
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\problem_crops\\problem_030_2d425233.png",
+      "source_page_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0_page_004.png",
+      "start_y_pages": 34.8,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 35.52,
+      "snapped_next_start_y_pages": 36.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 949.0,
+        "top": 2427.0,
+        "width": 965.0,
+        "height": 296.0
+      },
+      "record_mode": "mixed",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "blocks": [
+        {
+          "block_id": "20260409_185824_1775728704633048600_20260409_185648_1775728608653071500_20260409_185_e5abce8aa0-page-004-block-009",
+          "block_type": "image",
+          "record_mode": "image",
+          "text_present": false,
+          "confidence": null,
+          "bbox": {
+            "left": 967.0,
+            "top": 2445.0,
+            "width": 929.0,
+            "height": 260.0
+          }
+        }
+      ]
+    }
+  ],
+  "ocr_backend_requested": "none",
+  "edb_path": "C:\\Projects\\Class_project\\edb_make\\smoke_upload_pdf_question_api_check2\\mvp_board.edb"
+}

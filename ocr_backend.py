@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import time
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -83,6 +84,51 @@ class OCRResult:
         return self.backend_name
 
 
+def _line_confidence_summary(lines: list[OCRLine]) -> dict[str, Any]:
+    confidences = [line.confidence for line in lines if line.confidence is not None]
+    if not confidences:
+        return {
+            "line_confidence_count": 0,
+            "line_confidence_mean": None,
+            "line_confidence_min": None,
+            "line_confidence_max": None,
+        }
+    return {
+        "line_confidence_count": len(confidences),
+        "line_confidence_mean": sum(confidences) / len(confidences),
+        "line_confidence_min": min(confidences),
+        "line_confidence_max": max(confidences),
+    }
+
+
+def _build_ocr_metadata(
+    *,
+    backend: str,
+    started_at: float,
+    text: str,
+    confidence: float | None,
+    lines: list[OCRLine],
+    extra: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    normalized_text = text.strip()
+    diagnostics: dict[str, Any] = {
+        "backend": backend,
+        "backend_latency_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
+        "line_count": len(lines),
+        "empty_text": not bool(normalized_text),
+        "text_length": len(normalized_text),
+        "confidence_available": confidence is not None,
+        "result_confidence": confidence,
+    }
+    diagnostics.update(_line_confidence_summary(lines))
+    if error:
+        diagnostics["error"] = error
+    if extra:
+        diagnostics.update(extra)
+    return diagnostics
+
+
 class OCRBackend:
     name = "base"
 
@@ -105,7 +151,19 @@ class NoOcrBackend(OCRBackend):
     name = "none"
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
-        return OCRResult(text="", confidence=None, backend_name=self.name, metadata={"backend": self.name})
+        started_at = time.perf_counter()
+        return OCRResult(
+            text="",
+            confidence=None,
+            backend_name=self.name,
+            metadata=_build_ocr_metadata(
+                backend=self.name,
+                started_at=started_at,
+                text="",
+                confidence=None,
+                lines=[],
+            ),
+        )
 
 
 NoOpOCRBackend = NoOcrBackend
@@ -120,6 +178,7 @@ class PaddleOCRBackend(OCRBackend):
         self.engine = PaddleOCR(lang=lang, use_angle_cls=use_angle_cls, show_log=False)
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
+        started_at = time.perf_counter()
         try:
             raw = self.engine.ocr(image.convert("RGB"), cls=True)
         except Exception as exc:  # pragma: no cover - runtime fallback
@@ -128,7 +187,14 @@ class PaddleOCRBackend(OCRBackend):
                 confidence=None,
                 lines=[],
                 backend_name=self.name,
-                metadata={"backend": self.name, "error": str(exc)},
+                metadata=_build_ocr_metadata(
+                    backend=self.name,
+                    started_at=started_at,
+                    text="",
+                    confidence=None,
+                    lines=[],
+                    error=str(exc),
+                ),
             )
 
         entries = raw[0] if raw else []
@@ -160,7 +226,13 @@ class PaddleOCRBackend(OCRBackend):
             confidence=average_confidence,
             lines=lines,
             backend_name=self.name,
-            metadata={"backend": self.name},
+            metadata=_build_ocr_metadata(
+                backend=self.name,
+                started_at=started_at,
+                text="\n".join(collected),
+                confidence=average_confidence,
+                lines=lines,
+            ),
         )
 
 
@@ -173,6 +245,7 @@ class TesseractOCRBackend(OCRBackend):
         self.lang = lang
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
+        started_at = time.perf_counter()
         data = pytesseract.image_to_data(image, lang=self.lang, output_type=pytesseract.Output.DICT)
         lines: list[OCRLine] = []
         collected: list[str] = []
@@ -204,7 +277,13 @@ class TesseractOCRBackend(OCRBackend):
             confidence=average_confidence,
             lines=lines,
             backend_name=self.name,
-            metadata={"backend": self.name},
+            metadata=_build_ocr_metadata(
+                backend=self.name,
+                started_at=started_at,
+                text="\n".join(collected),
+                confidence=average_confidence,
+                lines=lines,
+            ),
         )
 
 
@@ -232,6 +311,7 @@ class ClaudeOCRBackend(OCRBackend):
         return base64.b64encode(buf.getvalue()).decode("ascii")
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
+        started_at = time.perf_counter()
         prompt = (
             "This is a cropped block from a Korean exam paper. "
             "Extract all visible text exactly as written (preserve Korean characters, math symbols, "
@@ -284,7 +364,14 @@ class ClaudeOCRBackend(OCRBackend):
                 confidence=None,
                 lines=[],
                 backend_name=self.name,
-                metadata={"backend": self.name, "error": str(exc)},
+                metadata=_build_ocr_metadata(
+                    backend=self.name,
+                    started_at=started_at,
+                    text="",
+                    confidence=None,
+                    lines=[],
+                    error=str(exc),
+                ),
             )
 
         # Extract tool_use result
@@ -300,7 +387,14 @@ class ClaudeOCRBackend(OCRBackend):
                 confidence=None,
                 lines=[],
                 backend_name=self.name,
-                metadata={"backend": self.name, "error": "no tool_use in response"},
+                metadata=_build_ocr_metadata(
+                    backend=self.name,
+                    started_at=started_at,
+                    text="",
+                    confidence=None,
+                    lines=[],
+                    error="no tool_use in response",
+                ),
             )
 
         raw_text = str(tool_result.get("text", "")).strip()
@@ -330,7 +424,14 @@ class ClaudeOCRBackend(OCRBackend):
             confidence=confidence,
             lines=lines,
             backend_name=self.name,
-            metadata={"backend": self.name, "block_type_hint": block_type_hint},
+            metadata=_build_ocr_metadata(
+                backend=self.name,
+                started_at=started_at,
+                text=raw_text,
+                confidence=confidence,
+                lines=lines,
+                extra={"block_type_hint": block_type_hint},
+            ),
         )
 
 

@@ -1,0 +1,58 @@
+[
+  {
+    "page_id": "record_0001_img_0-page-001",
+    "width_px": 1146,
+    "height_px": 733,
+    "subject": "unknown",
+    "source_path": "C:\\Projects\\Class_project\\edb_make\\out_images_sample4\\record_0001_img_0.jpg",
+    "blocks": [
+      {
+        "block_id": "record_0001_img_0-page-001-block-001",
+        "block_type": "image",
+        "bbox": {
+          "left": 904.0,
+          "top": 495.0,
+          "width": 35.0,
+          "height": 33.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "fill_ratio": 0.1299,
+          "mean_intensity": 64.34,
+          "stddev": 66.22,
+          "aspect_ratio": 1.0606,
+          "area_ratio": 0.00889,
+          "segmenter": "rule-based",
+          "ocr_backend": "none",
+          "fallback_reason": "noop_ocr"
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "record_0001_img_0-page-001-problem-1",
+        "subject": "unknown",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "record_0001_img_0-page-001-block-001"
+        ],
+        "metadata": {}
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "deskewed": true,
+      "margin_cropped": true
+    }
+  }
+]

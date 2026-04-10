@@ -120,18 +120,40 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
         return None
     attempted_page_count = 0
     applied_page_count = 0
+    ai_cache_hit_count = 0
+    ocr_cache_hit_count = 0
+    ocr_cache_miss_count = 0
     status_counts: dict[str, int] = {}
+    route_counts: dict[str, int] = {}
+    route_tier_counts: dict[str, int] = {}
 
     for page_model in page_models:
         ai_summary = page_model.metadata.get("ai_fallback")
         if not isinstance(ai_summary, dict):
-            continue
+            ai_summary = {}
         if ai_summary.get("attempted"):
             attempted_page_count += 1
         if ai_summary.get("applied"):
             applied_page_count += 1
+        if ai_summary.get("cache_hit"):
+            ai_cache_hit_count += 1
         status = str(ai_summary.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
+
+        route_decision = page_model.metadata.get("route_decision")
+        if isinstance(route_decision, dict):
+            route = str(route_decision.get("route") or "unknown")
+            route_counts[route] = route_counts.get(route, 0) + 1
+            profile = route_decision.get("profile")
+            if isinstance(profile, dict):
+                tier = str(profile.get("tier") or "unknown")
+                route_tier_counts[tier] = route_tier_counts.get(tier, 0) + 1
+
+        for block in page_model.blocks:
+            if block.metadata.get("ocr_cache_hit"):
+                ocr_cache_hit_count += 1
+            if block.metadata.get("ocr_cache_miss"):
+                ocr_cache_miss_count += 1
 
     return {
         "requested": bool(ai_fallback_config.get("enabled")),
@@ -140,7 +162,12 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
         "model": ai_fallback_config.get("model"),
         "attempted_page_count": attempted_page_count,
         "applied_page_count": applied_page_count,
+        "ai_cache_hit_count": ai_cache_hit_count,
+        "ocr_cache_hit_count": ocr_cache_hit_count,
+        "ocr_cache_miss_count": ocr_cache_miss_count,
         "status_counts": status_counts,
+        "route_counts": route_counts,
+        "route_tier_counts": route_tier_counts,
     }
 
 

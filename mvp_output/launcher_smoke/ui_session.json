@@ -1,0 +1,47 @@
+{
+  "session_name": "launcher_smoke",
+  "generated_at": "2026-04-09T16:17:46+09:00",
+  "data_source": "build_mvp_export",
+  "output_dir": "C:\\Projects\\Class_project\\edb_make\\mvp_output\\launcher_smoke",
+  "pages_json_path": "C:\\Projects\\Class_project\\edb_make\\mvp_output\\launcher_smoke\\pages.json",
+  "placements_json_path": "C:\\Projects\\Class_project\\edb_make\\mvp_output\\launcher_smoke\\placements.json",
+  "edb_path": "C:\\Projects\\Class_project\\edb_make\\mvp_output\\launcher_smoke\\mvp_board.edb",
+  "edb_file_uri": "file:///C:/Projects/Class_project/edb_make/mvp_output/launcher_smoke/mvp_board.edb",
+  "rendered_page_paths": [
+    "C:\\Projects\\Class_project\\edb_make\\mvp_output\\launcher_smoke\\board_pages\\record_0001_img_0-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///C:/Projects/Class_project/edb_make/mvp_output/launcher_smoke/board_pages/record_0001_img_0-page-001.png"
+  ],
+  "template": {
+    "name": "MVP Board",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.52,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "english",
+      "korean"
+    ],
+    "metadata": {}
+  },
+  "problems": [
+    {
+      "id": "record_0001_img_0-page-001-problem-1",
+      "title": "record_0001_img_0-page-001 problem 1",
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/mvp_output/launcher_smoke/problem_crops/record_0001_img_0-page-001-problem-1.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/out_images_sample4/record_0001_img_0.jpg",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/mvp_output/launcher_smoke/board_pages/record_0001_img_0-page-001.png",
+      "actualHeightPages": 0.35,
+      "overflowAllowed": true,
+      "readingHeavy": true,
+      "sourcePageId": "record_0001_img_0-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1
+    }
+  ]
+}

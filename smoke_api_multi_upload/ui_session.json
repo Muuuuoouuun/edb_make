@@ -1,0 +1,92 @@
+{
+  "session_name": "smoke_api_multi_upload",
+  "generated_at": "2026-04-09T17:48:48+09:00",
+  "data_source": "build_mvp_export",
+  "output_dir": "C:\\Projects\\Class_project\\edb_make\\smoke_api_multi_upload",
+  "source_mode": "batch",
+  "input_file_count": 2,
+  "input_files": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260409_174848_1775724528310575900_record_0000_img_0.jpg",
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260409_174848_1775724528322682100_record_0001_img_0.jpg"
+  ],
+  "pages_json_path": "C:\\Projects\\Class_project\\edb_make\\smoke_api_multi_upload\\pages.json",
+  "placements_json_path": "C:\\Projects\\Class_project\\edb_make\\smoke_api_multi_upload\\placements.json",
+  "edb_path": null,
+  "edb_file_uri": null,
+  "rendered_page_paths": [
+    "C:\\Projects\\Class_project\\edb_make\\smoke_api_multi_upload\\board_pages\\20260409_174848_1775724528310575900_record_0000_img_0-01-page-001.png",
+    "C:\\Projects\\Class_project\\edb_make\\smoke_api_multi_upload\\board_pages\\20260409_174848_1775724528322682100_record_0001_img_0-02-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/board_pages/20260409_174848_1775724528310575900_record_0000_img_0-01-page-001.png",
+    "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/board_pages/20260409_174848_1775724528322682100_record_0001_img_0-02-page-001.png"
+  ],
+  "template": {
+    "name": "MVP Board",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.52,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {}
+  },
+  "problems": [
+    {
+      "id": "20260409_174848_1775724528310575900_record_0000_img_0-01-page-001-problem-1",
+      "title": "20260409_174848_1775724528310575900_record_0000_img_0-01-page-001 problem 1",
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/problem_crops/20260409_174848_1775724528310575900_record_0000_img_0-01-page-001-problem-1.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/20260409_174848_1775724528310575900_record_0000_img_0.jpg",
+      "sourceFileName": "20260409_174848_1775724528310575900_record_0000_img_0.jpg",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/board_pages/20260409_174848_1775724528310575900_record_0000_img_0-01-page-001.png",
+      "actualHeightPages": 0.35,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260409_174848_1775724528310575900_record_0000_img_0-01-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1
+    },
+    {
+      "id": "20260409_174848_1775724528310575900_record_0000_img_0-01-page-001-problem-2",
+      "title": "20260409_174848_1775724528310575900_record_0000_img_0-01-page-001 problem 2",
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/problem_crops/20260409_174848_1775724528310575900_record_0000_img_0-01-page-001-problem-2.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/20260409_174848_1775724528310575900_record_0000_img_0.jpg",
+      "sourceFileName": "20260409_174848_1775724528310575900_record_0000_img_0.jpg",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/board_pages/20260409_174848_1775724528310575900_record_0000_img_0-01-page-001.png",
+      "actualHeightPages": 0.35,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260409_174848_1775724528310575900_record_0000_img_0-01-page-001",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1
+    },
+    {
+      "id": "20260409_174848_1775724528322682100_record_0001_img_0-02-page-001-problem-1",
+      "title": "20260409_174848_1775724528322682100_record_0001_img_0-02-page-001 problem 1",
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/problem_crops/20260409_174848_1775724528322682100_record_0001_img_0-02-page-001-problem-1.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/20260409_174848_1775724528322682100_record_0001_img_0.jpg",
+      "sourceFileName": "20260409_174848_1775724528322682100_record_0001_img_0.jpg",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/smoke_api_multi_upload/board_pages/20260409_174848_1775724528322682100_record_0001_img_0-02-page-001.png",
+      "actualHeightPages": 0.35,
+      "overflowAllowed": true,
+      "readingHeavy": true,
+      "sourcePageId": "20260409_174848_1775724528322682100_record_0001_img_0-02-page-001",
+      "startYPages": 2.4,
+      "snappedNextStartYPages": 3.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1
+    }
+  ]
+}

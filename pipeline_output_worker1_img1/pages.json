@@ -1,0 +1,96 @@
+[
+  {
+    "page_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001",
+    "width_px": 2160,
+    "height_px": 3840,
+    "subject": "math",
+    "source_path": "C:\\Users\\aaaha\\AppData\\Roaming\\Tencent\\WXWork\\Data\\1688857213809783\\Cache\\Image\\2026-04\\960db1af-0bc2-4cab-b103-2c13378b1ba4.jpg",
+    "blocks": [
+      {
+        "block_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 970.0,
+          "width": 1614.0,
+          "height": 78.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "fill_ratio": 0.9584,
+          "mean_intensity": 223.83,
+          "stddev": 26.47,
+          "aspect_ratio": 20.6923,
+          "area_ratio": 0.026772,
+          "segmenter": "rule-based",
+          "ocr_backend": "none"
+        }
+      },
+      {
+        "block_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 249.0,
+          "top": 970.0,
+          "width": 1364.0,
+          "height": 61.0
+        },
+        "reading_order": 1,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "fill_ratio": 0.9881,
+          "mean_intensity": 229.49,
+          "stddev": 16.93,
+          "aspect_ratio": 22.3607,
+          "area_ratio": 0.017694,
+          "segmenter": "rule-based",
+          "ocr_backend": "none"
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-problem-1",
+        "subject": "math",
+        "title": null,
+        "stem_block_ids": [
+          "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {}
+      },
+      {
+        "unit_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-problem-2",
+        "subject": "math",
+        "title": null,
+        "stem_block_ids": [
+          "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {}
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "deskewed": true,
+      "margin_cropped": true
+    }
+  }
+]

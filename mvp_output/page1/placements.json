@@ -1,0 +1,33 @@
+{
+  "template": {
+    "name": "mvp-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.52
+  },
+  "placements": [
+    {
+      "problem_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001",
+      "subject": "math",
+      "start_y_pages": 0.0,
+      "nominal_slot_height_pages": 1.2,
+      "actual_content_height_pages": 2.1954,
+      "actual_bottom_y_pages": 2.1954,
+      "snapped_next_start_y_pages": 2.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.9954,
+      "overflow_violation": true,
+      "slot_span_count": 2,
+      "board_capacity_exceeded": false,
+      "metadata": {
+        "page_id": "960db1af-0bc2-4cab-b103-2c13378b1ba4-page-001"
+      }
+    }
+  ],
+  "summary": {
+    "problem_count": 1,
+    "overflow_count": 1,
+    "overflow_violation_count": 1,
+    "max_bottom_y_pages": 2.1954
+  }
+}
