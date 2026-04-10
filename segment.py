@@ -37,9 +37,16 @@ class SegmentOptions:
     document_dark_threshold: int = 235
     document_projection_window_px: int = 10
     document_row_density_ratio: float = 0.11
-    document_band_merge_gap_px: int = 42
-    document_small_band_height_px: int = 150
-    document_near_gap_px: int = 210
+    # Gap below which consecutive row-bands are merged into one block.
+    # Smaller value → questions that are close together stay separate.
+    document_band_merge_gap_px: int = 24
+    # Bands shorter than this are candidates for merging into a neighbor.
+    # Reduced so short answer-choice groups are not absorbed into the
+    # preceding question stem.
+    document_small_band_height_px: int = 100
+    # Gap threshold used when deciding whether a small band is "near"
+    # a neighbor. Reduced to match the tighter band-merge gap.
+    document_near_gap_px: int = 130
     document_min_band_height_px: int = 60
     document_band_padding_px: int = 24
     document_recursive_split_min_height_px: int = 340
@@ -869,7 +876,9 @@ def _split_large_candidate_box(image: Image.Image, box: Box, options: SegmentOpt
     split_row = search_start + split_offset
     max_count = max(smooth_counts)
     min_count = smooth_counts[split_row]
-    if max_count <= 0 or min_count > max_count * 0.92:
+    # A valley at 82 % of the peak is already a meaningful gap between two
+    # content regions (e.g. question stem and its diagram or next question).
+    if max_count <= 0 or min_count > max_count * 0.82:
         return [box]
     if split_row < options.fallback_min_band_height_px or len(smooth_counts) - split_row < options.fallback_min_band_height_px:
         return [box]
@@ -1074,3 +1083,44 @@ def blocks_from_page(prepared_page, config: SegmentOptions | None = None) -> lis
 def crop_block_image(prepared_page, block: ContentBlock) -> Image.Image:
     image = _load_image(prepared_page)
     return image.crop((int(block.bbox.left), int(block.bbox.top), int(block.bbox.right), int(block.bbox.bottom)))
+
+
+_DEBUG_PALETTE = [
+    (220, 50, 50),   # red
+    (50, 100, 220),  # blue
+    (50, 180, 50),   # green
+    (220, 140, 0),   # orange
+    (160, 50, 200),  # purple
+    (0, 180, 180),   # cyan
+    (180, 160, 0),   # yellow
+]
+
+
+def draw_segment_debug(
+    image_source: Any,
+    blocks: Iterable[ContentBlock],
+    output_path: "str | Path",
+) -> None:
+    """Save a copy of the image with detected block bounding boxes overlaid.
+
+    Useful for diagnosing segmentation quality: each block gets a uniquely
+    colored rectangle and a short label with its index and block type.
+    """
+    from PIL import ImageDraw
+
+    image = _load_image(image_source).copy()
+    draw = ImageDraw.Draw(image)
+    for index, block in enumerate(list(blocks)):
+        color = _DEBUG_PALETTE[index % len(_DEBUG_PALETTE)]
+        left = int(block.bbox.left)
+        top = int(block.bbox.top)
+        right = int(block.bbox.right)
+        bottom = int(block.bbox.bottom)
+        draw.rectangle((left, top, right, bottom), outline=color, width=3)
+        label = f"{index + 1} {block.block_type.value}"
+        label_w = len(label) * 7 + 6
+        draw.rectangle((left + 2, top + 2, left + 2 + label_w, top + 20), fill=color)
+        draw.text((left + 5, top + 4), label, fill=(255, 255, 255))
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    image.save(out)

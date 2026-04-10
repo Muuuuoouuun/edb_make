@@ -1,12 +1,56 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
+import io
+import json
+import os
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
 from PIL import Image
 
 from structured_schema import Box
+
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_VERSION = "2023-06-01"
+
+_OCR_TOOL_SCHEMA = {
+    "name": "extract_text_and_classify",
+    "description": "Extract all text from the exam block image and classify its type.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": "Full extracted text from the image, preserving line breaks with \\n.",
+            },
+            "block_type": {
+                "type": "string",
+                "enum": ["stem", "choice", "figure", "formula", "title", "explanation", "unknown"],
+                "description": (
+                    "Classification of the block. Use 'stem' for problem body text, "
+                    "'choice' for answer options (①②③④⑤ or ㄱㄴㄷ lists), "
+                    "'figure' for diagrams/tables/images with little text, "
+                    "'formula' for math equations, "
+                    "'title' for problem number headings, "
+                    "'explanation' for solution or commentary text."
+                ),
+            },
+            "confidence": {
+                "type": "number",
+                "description": "Confidence in the OCR result, 0.0 to 1.0.",
+            },
+            "lines": {
+                "type": "array",
+                "description": "List of individual text lines recognized.",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["text", "block_type", "confidence", "lines"],
+    },
+}
 
 try:
     from paddleocr import PaddleOCR  # type: ignore
@@ -164,6 +208,132 @@ class TesseractOCRBackend(OCRBackend):
         )
 
 
+class ClaudeOCRBackend(OCRBackend):
+    """OCR backend that uses Claude vision API for text extraction and block classification."""
+
+    name = "claude"
+
+    def __init__(
+        self,
+        *,
+        model: str = "claude-haiku-4-5-20251001",
+        api_key: str | None = None,
+        timeout_ms: int = 15000,
+    ) -> None:
+        self.model = model
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        if not self.api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY environment variable is required for ClaudeOCRBackend")
+        self.timeout_s = timeout_ms / 1000.0
+
+    def _image_to_base64(self, image: Image.Image) -> str:
+        buf = io.BytesIO()
+        image.convert("RGB").save(buf, format="JPEG", quality=90)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def ocr_image(self, image: Image.Image) -> OCRResult:
+        prompt = (
+            "This is a cropped block from a Korean exam paper. "
+            "Extract all visible text exactly as written (preserve Korean characters, math symbols, "
+            "circled numbers ①②③④⑤, and special markers like ㄱ/ㄴ/ㄷ). "
+            "Then classify the block type based on its content and layout. "
+            "Return empty text and block_type='figure' if the block contains only a diagram or table with no significant text."
+        )
+
+        payload = {
+            "model": self.model,
+            "max_tokens": 512,
+            "tools": [_OCR_TOOL_SCHEMA],
+            "tool_choice": {"type": "tool", "name": "extract_text_and_classify"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": self._image_to_base64(image),
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        }
+
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            ANTHROPIC_MESSAGES_URL,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": ANTHROPIC_API_VERSION,
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                response_data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            return OCRResult(
+                text="",
+                confidence=None,
+                lines=[],
+                backend_name=self.name,
+                metadata={"backend": self.name, "error": str(exc)},
+            )
+
+        # Extract tool_use result
+        tool_result: dict[str, Any] = {}
+        for content_block in response_data.get("content", []):
+            if content_block.get("type") == "tool_use":
+                tool_result = content_block.get("input", {})
+                break
+
+        if not tool_result:
+            return OCRResult(
+                text="",
+                confidence=None,
+                lines=[],
+                backend_name=self.name,
+                metadata={"backend": self.name, "error": "no tool_use in response"},
+            )
+
+        raw_text = str(tool_result.get("text", "")).strip()
+        raw_lines = tool_result.get("lines", [])
+        confidence = float(tool_result.get("confidence", 0.8))
+        block_type_hint = str(tool_result.get("block_type", "unknown"))
+
+        # Build OCRLine list from returned lines (no bbox info from Claude, use dummy bbox)
+        lines: list[OCRLine] = []
+        image_h = float(image.height) or 1.0
+        image_w = float(image.width) or 1.0
+        for idx, line_text in enumerate(raw_lines):
+            cleaned = str(line_text).strip()
+            if not cleaned:
+                continue
+            line_h = image_h / max(len(raw_lines), 1)
+            lines.append(
+                OCRLine(
+                    text=cleaned,
+                    confidence=confidence,
+                    bbox=Box(left=0.0, top=idx * line_h, width=image_w, height=line_h),
+                )
+            )
+
+        return OCRResult(
+            text=raw_text,
+            confidence=confidence,
+            lines=lines,
+            backend_name=self.name,
+            metadata={"backend": self.name, "block_type_hint": block_type_hint},
+        )
+
+
 def build_ocr_backend(name: str = "auto") -> OCRBackend:
     normalized = name.lower()
     if normalized in {"none", "noop"}:
@@ -172,6 +342,8 @@ def build_ocr_backend(name: str = "auto") -> OCRBackend:
         return PaddleOCRBackend()
     if normalized == "tesseract":
         return TesseractOCRBackend()
+    if normalized in {"claude", "anthropic"}:
+        return ClaudeOCRBackend()
 
     if PaddleOCR is not None:
         return PaddleOCRBackend()

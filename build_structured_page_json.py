@@ -5,10 +5,10 @@ import argparse
 import json
 from pathlib import Path
 
-from ocr_backend import NoOcrBackend, create_ocr_backend
+from ocr_backend import ClaudeOCRBackend, NoOcrBackend, create_ocr_backend
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from preprocess import PreparedPage, prepare_source_pages
-from segment import crop_block_image, segment_page
+from segment import crop_block_image, draw_segment_debug, segment_page
 from structured_schema import BlockType, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
 
 
@@ -85,6 +85,7 @@ def build_page_model(
         crop = crop_block_image(prepared_page, block)
         ocr_result = backend.recognize(crop)
         block.metadata["ocr_backend"] = ocr_result.backend_name
+        block_type_hint = ocr_result.metadata.get("block_type_hint", "")
         if ocr_result.text.strip():
             block.text = ocr_result.text.strip()
             block.confidence = ocr_result.confidence
@@ -93,12 +94,32 @@ def build_page_model(
                 font_size=max(10.0, block.bbox.height * 0.35),
                 math_like=infer_math_like_text(block.text),
             )
-            inferred = classify_text_block(block.text)
-            if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
-                block.block_type = inferred
-        elif isinstance(backend, NoOcrBackend) and block.block_type == BlockType.STEM:
+            # Prefer Claude's block_type_hint when available; otherwise infer from text
+            if block_type_hint and block_type_hint not in {"unknown", "stem"}:
+                hint_map = {
+                    "choice": BlockType.CHOICE,
+                    "figure": BlockType.IMAGE,
+                    "formula": BlockType.FORMULA,
+                    "title": BlockType.TITLE,
+                    "explanation": BlockType.EXPLANATION,
+                }
+                if block_type_hint in hint_map:
+                    block.block_type = hint_map[block_type_hint]
+                    block.metadata["block_type_source"] = "claude_hint"
+                else:
+                    inferred = classify_text_block(block.text)
+                    if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
+                        block.block_type = inferred
+            else:
+                inferred = classify_text_block(block.text)
+                if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
+                    block.block_type = inferred
+        elif block_type_hint == "figure":
             block.block_type = BlockType.IMAGE
-            block.metadata["fallback_reason"] = "noop_ocr"
+            block.metadata["fallback_reason"] = "claude_figure_hint"
+        elif isinstance(backend, (NoOcrBackend, ClaudeOCRBackend)) and block.block_type == BlockType.STEM:
+            block.block_type = BlockType.IMAGE
+            block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "claude_no_text"
 
     page = PageModel(
         page_id=prepared_page.page_id,
@@ -159,24 +180,38 @@ def process_source(
     deskew: bool = True,
     crop_margins: bool = True,
     max_dimension: int | None = None,
+    debug_segments: bool = False,
 ) -> list[PageModel]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pages = build_pages_from_source(
+    prepared_pages = prepare_source_pages(
         source,
-        subject=subject,
-        ocr_mode=ocr_mode,
-        ai_config=ai_config,
         pdf_dpi=pdf_dpi,
         detect_perspective=detect_perspective,
         deskew=deskew,
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
+    pages = [
+        build_page_model(
+            prepared_page,
+            subject=subject,
+            ocr_mode=ocr_mode,
+            ai_config=ai_config,
+        )
+        for prepared_page in prepared_pages
+    ]
     for page in pages:
         page.metadata["schema_version"] = "v0.2"
         page.metadata["ocr_mode"] = ocr_mode
         page.metadata["ai_config"] = (ai_config or AIFallbackConfig()).to_metadata()
+
+    if debug_segments:
+        debug_dir = out_dir / "debug_segments"
+        for prepared_page, page in zip(prepared_pages, pages):
+            debug_path = debug_dir / f"{page.page_id}_segments.png"
+            draw_segment_debug(prepared_page, page.blocks, debug_path)
+
     save_pages_json(pages, out_dir / "pages.json")
     return pages
 
@@ -193,13 +228,14 @@ def main() -> int:
     parser.add_argument("--skip-crop", action="store_true", help="Disable margin crop")
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     parser.add_argument("--ai-fallback", default="off", help="AI fallback mode: off, auto, force")
-    parser.add_argument("--ai-provider", default="openai", help="AI fallback provider")
-    parser.add_argument("--ai-model", default="gpt-5.4-mini", help="AI fallback model")
+    parser.add_argument("--ai-provider", default="openai", help="AI fallback provider: openai, claude (ANTHROPIC_API_KEY required)")
+    parser.add_argument("--ai-model", default="", help="AI model override (default: claude-sonnet-4-6 for Claude, gpt-4o-mini for OpenAI)")
     parser.add_argument("--ai-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
     parser.add_argument("--ai-max-regions", type=int, default=18, help="Maximum number of blocks to send to AI fallback")
     parser.add_argument("--ai-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback requests")
     parser.add_argument("--ai-save-debug", action="store_true", help="Write AI fallback debug artifacts under .pipeline_cache/ai_debug")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error instead of silently skipping on AI fallback failures")
+    parser.add_argument("--debug-segments", action="store_true", help="Save block overlay images to <output-dir>/debug_segments/ for segmentation inspection")
     args = parser.parse_args()
     ai_config = build_ai_fallback_config(
         mode=args.ai_fallback,
@@ -223,6 +259,7 @@ def main() -> int:
         deskew=not args.skip_deskew,
         crop_margins=not args.skip_crop,
         max_dimension=args.max_dimension,
+        debug_segments=args.debug_segments,
     )
     run_summary = build_run_summary(
         pages,

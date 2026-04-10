@@ -28,3 +28,8 @@ smoke_pipeline_output/
 pipeline_output_smoke/
 pipeline_output_test/
 tmp_debug_output/
+test_output*/
+test_output_*/
+*.png
+*.jpg
+*.jpeg
