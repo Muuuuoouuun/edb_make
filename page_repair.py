@@ -18,18 +18,31 @@ from structured_schema import BlockType, ContentBlock, PageModel
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_VERSION = "2023-06-01"
 
 
 @dataclass(slots=True)
 class AIFallbackConfig:
     mode: str = "off"
     provider: str = "openai"
-    model: str = "gpt-5.4-mini"
+    model: str = ""
     threshold: float = 0.72
     max_regions: int = 18
-    timeout_ms: int = 12000
+    timeout_ms: int = 18000
     save_debug: bool = False
     fail_on_error: bool = False
+
+    @property
+    def resolved_model(self) -> str:
+        if self.model.strip():
+            return self.model.strip()
+        if self._is_claude_provider():
+            return "claude-sonnet-4-6"
+        return "gpt-4o-mini"
+
+    def _is_claude_provider(self) -> bool:
+        return self.provider.strip().lower() in {"claude", "anthropic"}
 
     @property
     def normalized_mode(self) -> str:
@@ -46,7 +59,7 @@ class AIFallbackConfig:
         return {
             "mode": self.normalized_mode,
             "provider": self.provider,
-            "model": self.model,
+            "model": self.resolved_model,
             "threshold": self.threshold,
             "max_regions": self.max_regions,
             "timeout_ms": self.timeout_ms,
@@ -59,10 +72,10 @@ def build_ai_fallback_config(
     *,
     mode: str = "off",
     provider: str = "openai",
-    model: str = "gpt-5.4-mini",
+    model: str = "",
     threshold: float = 0.72,
     max_regions: int = 18,
-    timeout_ms: int = 12000,
+    timeout_ms: int = 18000,
     save_debug: bool = False,
     fail_on_error: bool = False,
 ) -> AIFallbackConfig:
@@ -91,7 +104,7 @@ def repair_page_model(
         "enabled": resolved_config.enabled,
         "mode": resolved_config.normalized_mode,
         "provider": resolved_config.provider,
-        "model": resolved_config.model,
+        "model": resolved_config.resolved_model,
         "ocr_mode": ocr_mode,
         "attempted": False,
         "applied": False,
@@ -117,22 +130,30 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
-    if resolved_config.provider.strip().lower() != "openai":
+    provider_key = resolved_config.provider.strip().lower()
+    if provider_key not in {"openai", "claude", "anthropic"}:
         summary["status"] = "provider_pending"
         summary["skip_reason"] = "provider_not_implemented"
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if resolved_config._is_claude_provider():
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        key_env = "ANTHROPIC_API_KEY"
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        key_env = "OPENAI_API_KEY"
+
     if not api_key:
         summary["status"] = "missing_api_key"
+        summary["skip_reason"] = f"{key_env} not set"
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
     summary["attempted"] = True
     start_time = time.perf_counter()
     try:
-        repair_payload, response_id = _request_openai_repair(
+        repair_payload, response_id = _request_ai_repair_with_retry(
             prepared_page=prepared_page,
             page=baseline,
             config=resolved_config,
@@ -250,6 +271,40 @@ def _looks_like_full_page_image(page: PageModel) -> bool:
     return block.bbox.area >= float(page.width_px * page.height_px) * 0.75
 
 
+def _request_ai_repair_with_retry(
+    *,
+    prepared_page: PreparedPage,
+    page: PageModel,
+    config: AIFallbackConfig,
+    trigger_reasons: list[str],
+    api_key: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Route to the correct AI provider and retry once on transient failure."""
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        if attempt > 0:
+            time.sleep(2.0)
+        try:
+            if config._is_claude_provider():
+                return _request_anthropic_repair(
+                    prepared_page=prepared_page,
+                    page=page,
+                    config=config,
+                    trigger_reasons=trigger_reasons,
+                    api_key=api_key,
+                )
+            return _request_openai_repair(
+                prepared_page=prepared_page,
+                page=page,
+                config=config,
+                trigger_reasons=trigger_reasons,
+                api_key=api_key,
+            )
+        except Exception as exc:
+            last_exc = exc
+    raise RuntimeError(f"AI repair failed after retries: {last_exc}") from last_exc
+
+
 def _request_openai_repair(
     *,
     prepared_page: PreparedPage,
@@ -259,7 +314,7 @@ def _request_openai_repair(
     api_key: str,
 ) -> tuple[dict[str, Any], str | None]:
     payload = {
-        "model": config.model,
+        "model": config.resolved_model,
         "store": False,
         "input": [
             {
@@ -295,6 +350,65 @@ def _request_openai_repair(
     content_text = _extract_response_text(raw_response)
     parsed = json.loads(content_text)
     return parsed, raw_response.get("id")
+
+
+def _request_anthropic_repair(
+    *,
+    prepared_page: PreparedPage,
+    page: PageModel,
+    config: AIFallbackConfig,
+    trigger_reasons: list[str],
+    api_key: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Call the Claude Messages API using tool_use for structured JSON output."""
+    tool_spec = {
+        "name": "repair_question_grouping",
+        "description": (
+            "Classify exam page blocks into problem starts, answer-choice blocks, "
+            "and figure blocks based on the page image and block metadata."
+        ),
+        "input_schema": _repair_schema(),
+    }
+    payload = {
+        "model": config.resolved_model,
+        "max_tokens": 1024,
+        "tools": [tool_spec],
+        "tool_choice": {"type": "tool", "name": "repair_question_grouping"},
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": _image_to_base64(prepared_page.image),
+                        },
+                    },
+                    {"type": "text", "text": _build_repair_prompt(page, trigger_reasons)},
+                ],
+            }
+        ],
+    }
+    raw_response = _post_json(
+        ANTHROPIC_MESSAGES_URL,
+        payload,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_API_VERSION,
+            "content-type": "application/json",
+        },
+        timeout_ms=config.timeout_ms,
+    )
+    for content_block in raw_response.get("content") or []:
+        if (
+            isinstance(content_block, dict)
+            and content_block.get("type") == "tool_use"
+            and content_block.get("name") == "repair_question_grouping"
+        ):
+            return content_block["input"], raw_response.get("id")
+    raise RuntimeError("Claude response did not contain expected tool_use block")
 
 
 def _repair_schema() -> dict[str, Any]:
@@ -344,52 +458,71 @@ def _repair_schema() -> dict[str, Any]:
 def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
     block_lines = []
     for index, block in enumerate(page.blocks, start=1):
-        block_lines.append(
-            json.dumps(
-                {
-                    "order": index,
-                    "block_id": block.block_id,
-                    "block_type": block.block_type.value,
-                    "text": (block.text or "")[:180],
-                    "confidence": block.confidence,
-                    "bbox": {
-                        "left": round(block.bbox.left, 1),
-                        "top": round(block.bbox.top, 1),
-                        "width": round(block.bbox.width, 1),
-                        "height": round(block.bbox.height, 1),
-                    },
-                    "metadata": {
-                        key: block.metadata.get(key)
-                        for key in ("segmenter", "column_index", "question_band_index", "fallback_reason")
-                        if key in block.metadata
-                    },
-                },
-                ensure_ascii=False,
-            )
-        )
+        # Include up to 3 top OCR lines for richer spatial context
+        ocr_preview: list[str] = []
+        for line in (block.ocr_lines or [])[:3]:
+            if line.text and line.text.strip():
+                ocr_preview.append(line.text.strip()[:80])
+
+        entry: dict[str, Any] = {
+            "order": index,
+            "block_id": block.block_id,
+            "block_type": block.block_type.value,
+            "text": (block.text or "")[:300],
+            "confidence": round(block.confidence, 3) if block.confidence is not None else None,
+            "bbox": {
+                "left": round(block.bbox.left, 1),
+                "top": round(block.bbox.top, 1),
+                "width": round(block.bbox.width, 1),
+                "height": round(block.bbox.height, 1),
+            },
+        }
+        if ocr_preview:
+            entry["ocr_lines"] = ocr_preview
+        meta_keys = ("segmenter", "column_index", "question_band_index", "fallback_reason", "split_from_band")
+        meta = {k: block.metadata[k] for k in meta_keys if k in block.metadata}
+        if meta:
+            entry["meta"] = meta
+        block_lines.append(json.dumps(entry, ensure_ascii=False))
+
     return "\n".join(
         [
-            "You repair OCR-based question grouping for scanned exam pages.",
-            "Use only the provided block_ids. Never invent or reorder blocks.",
-            "Return the first block_id for each question in reading order.",
-            "Mark answer-choice blocks only when they are standalone options, not the start of a question stem.",
-            "Mark figure blocks only for image/diagram/table-style content.",
-            "If the whole page is one question, include only the first block in problem_start_block_ids.",
-            "Prefer minimal changes over aggressive rewrites.",
-            f"Trigger reasons: {', '.join(trigger_reasons)}",
-            "Blocks:",
+            "You analyze a scanned Korean exam page and classify its text blocks.",
+            f"Page size: {page.width_px}×{page.height_px}px  |  Subject: {page.subject.value}",
+            "",
+            "Korean exam conventions:",
+            "  - Problems are numbered: '1.', '2)', '문제 3', '[4]', '문항5' etc.",
+            "  - Answer choices: ① ② ③ ④ ⑤  or  (1) (2) … or  ㄱ) ㄴ) ㄷ) style",
+            "  - A ㄱ/ㄴ/ㄷ enumerated list inside the stem is NOT a choice block—",
+            "    it is part of the question. Choice blocks are the final ①–⑤ options.",
+            "  - Figures / diagrams / physics–chemistry drawings appear below the stem.",
+            "",
+            "Output rules (STRICT):",
+            "  - Use ONLY the block_ids listed below. Do NOT invent IDs.",
+            "  - problem_start_block_ids: first block of each numbered question, reading order.",
+            "  - choice_block_ids: standalone ①–⑤ (or A–E) answer-option blocks.",
+            "  - figure_block_ids: image, diagram, graph, or table content blocks.",
+            "  - If the page contains a single question, return only its first block as a problem start.",
+            "  - Prefer minimal reassignment—only reclassify when clearly wrong.",
+            f"  - Trigger reasons: {', '.join(trigger_reasons)}",
+            "",
+            "Blocks (JSON, reading order top→bottom):",
             *block_lines,
         ]
     )
 
 
-def _image_to_data_url(image: Image.Image) -> str:
+def _image_to_base64(image: Image.Image) -> str:
+    """Return a base64-encoded JPEG string (no data-URL prefix)."""
     from io import BytesIO
 
     buffer = BytesIO()
     image.convert("RGB").save(buffer, format="JPEG", quality=86, optimize=True)
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _image_to_data_url(image: Image.Image) -> str:
+    return f"data:image/jpeg;base64,{_image_to_base64(image)}"
 
 
 def _post_json(

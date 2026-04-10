@@ -37,9 +37,16 @@ class SegmentOptions:
     document_dark_threshold: int = 235
     document_projection_window_px: int = 10
     document_row_density_ratio: float = 0.11
-    document_band_merge_gap_px: int = 42
-    document_small_band_height_px: int = 150
-    document_near_gap_px: int = 210
+    # Gap below which consecutive row-bands are merged into one block.
+    # Smaller value → questions that are close together stay separate.
+    document_band_merge_gap_px: int = 24
+    # Bands shorter than this are candidates for merging into a neighbor.
+    # Reduced so short answer-choice groups are not absorbed into the
+    # preceding question stem.
+    document_small_band_height_px: int = 100
+    # Gap threshold used when deciding whether a small band is "near"
+    # a neighbor. Reduced to match the tighter band-merge gap.
+    document_near_gap_px: int = 130
     document_min_band_height_px: int = 60
     document_band_padding_px: int = 24
     document_recursive_split_min_height_px: int = 340
@@ -869,7 +876,9 @@ def _split_large_candidate_box(image: Image.Image, box: Box, options: SegmentOpt
     split_row = search_start + split_offset
     max_count = max(smooth_counts)
     min_count = smooth_counts[split_row]
-    if max_count <= 0 or min_count > max_count * 0.92:
+    # A valley at 82 % of the peak is already a meaningful gap between two
+    # content regions (e.g. question stem and its diagram or next question).
+    if max_count <= 0 or min_count > max_count * 0.82:
         return [box]
     if split_row < options.fallback_min_band_height_px or len(smooth_counts) - split_row < options.fallback_min_band_height_px:
         return [box]

@@ -7,14 +7,23 @@ from dataclasses import replace
 from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit, Subject
 
 
-PROBLEM_MARKER_RE = re.compile(r"^\s*(?:문항\s*)?(?P<number>[1-9][0-9]{0,2})(?:[\.\)])(?:\s+|$)")
+# Matches problem number prefixes used in Korean exams:
+#   "1.", "2)", "문항 1.", "문제 3.", "문항1)", "[1]", "[2]"
+PROBLEM_MARKER_RE = re.compile(
+    r"^\s*"
+    r"(?:(?:문항|문제)\s*)?"
+    r"(?:\[(?P<number_bracket>[1-9][0-9]{0,2})\]"
+    r"|(?P<number>[1-9][0-9]{0,2})(?:[\.\)]))"
+    r"(?:\s+|$)"
+)
+# Matches answer-choice prefixes: ①②③④⑤, (1)…(5), 1)…5), A)…H), ㄱ)…ㄷ) etc.
 CHOICE_MARKER_RE = re.compile(
     r"^\s*(?:"
-    r"[\u2460-\u2469]|"
-    r"\([1-9][0-9]?\)|"
-    r"[1-9][0-9]?\)|"
-    r"[A-Ha-h][\.\)]|"
-    r"[\u3131-\u314e][\.\)]"
+    r"[\u2460-\u2469]|"          # ①–⑨ circled numbers
+    r"\([1-9][0-9]?\)|"          # (1) (2) …
+    r"[1-9][0-9]?\)|"            # 1) 2) …
+    r"[A-Ha-h][\.\)]|"           # A) B) …
+    r"[\u3131-\u314e][\.\)]"     # ㄱ) ㄴ) ㄷ) …
     r")\s*"
 )
 
@@ -34,7 +43,8 @@ def extract_problem_number(text: str | None) -> int | None:
     if not match:
         return None
     try:
-        return int(match.group("number"))
+        raw = match.group("number") or match.group("number_bracket")
+        return int(raw) if raw else None
     except (TypeError, ValueError):
         return None
 
