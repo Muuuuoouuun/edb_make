@@ -115,8 +115,10 @@ def _extract_top_left_problem_number(block: ContentBlock) -> tuple[int | None, s
         if number is None:
             continue
 
-        top_ratio = max(0.0, line.bbox.top / block_height)
-        left_ratio = max(0.0, line.bbox.left / block_width)
+        relative_top = max(0.0, line.bbox.top - block.bbox.top)
+        relative_left = max(0.0, line.bbox.left - block.bbox.left)
+        top_ratio = max(0.0, relative_top / block_height)
+        left_ratio = max(0.0, relative_left / block_width)
         score = top_ratio * 2.4 + left_ratio + index * 0.05
         in_top_left_zone = top_ratio <= 0.32 and left_ratio <= 0.18
 

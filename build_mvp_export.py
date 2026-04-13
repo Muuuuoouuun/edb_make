@@ -16,7 +16,14 @@ from PIL import Image, ImageDraw
 from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
 from layout_template_schema import build_default_template
-from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
+from page_repair import (
+    AIFallbackConfig,
+    ai_intervention_label,
+    ai_intervention_metadata,
+    build_ai_capabilities as build_runtime_ai_capabilities,
+    build_ai_fallback_config as build_page_ai_fallback_config,
+    normalize_ai_intervention_level,
+)
 from placement_engine import build_export_plan
 from pipeline_feedback import build_parse_feedback
 from preprocess import prepare_source_pages, prepare_source_pages_batch
@@ -64,10 +71,12 @@ def _build_ai_fallback_config(
     timeout_ms: int,
     save_debug: bool,
     fail_on_error: bool,
+    intervention_level: int = 0,
 ) -> dict[str, Any] | None:
     threshold = 0.72 if threshold is None else float(threshold)
     max_regions = 18 if max_regions is None else int(max_regions)
     timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
+    normalized_intervention_level = normalize_ai_intervention_level(intervention_level)
     resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
     if resolved_mode not in {"off", "auto", "force"}:
         resolved_mode = "auto" if enabled else "off"
@@ -84,13 +93,19 @@ def _build_ai_fallback_config(
         and timeout_ms == 12000
         and not save_debug
         and not fail_on_error
+        and normalized_intervention_level == 0
     ):
         return None
+    resolved_model = build_page_ai_fallback_config(
+        provider=provider,
+        model=model,
+        intervention_level=normalized_intervention_level,
+    ).resolved_model
     return {
         "enabled": effective_enabled,
         "mode": resolved_mode,
         "provider": provider,
-        "model": model or "gpt-4o-mini",
+        "model": resolved_model,
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -99,21 +114,28 @@ def _build_ai_fallback_config(
         "timeout_ms": timeout_ms,
         "save_debug": save_debug,
         "fail_on_error": fail_on_error,
+        **ai_intervention_metadata(normalized_intervention_level),
     }
 
 
-def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackConfig:
+def _to_page_ai_config(
+    ai_fallback_config: dict[str, Any] | None,
+    *,
+    api_key: str = "",
+) -> AIFallbackConfig:
     if not ai_fallback_config:
-        return build_page_ai_fallback_config()
+        return build_page_ai_fallback_config(api_key=api_key)
     return build_page_ai_fallback_config(
         mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
         provider=str(ai_fallback_config.get("provider") or "openai"),
-        model=str(ai_fallback_config.get("model") or "gpt-4o-mini"),
+        model=str(ai_fallback_config.get("model") or ""),
+        api_key=api_key,
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 18),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
+        intervention_level=normalize_ai_intervention_level(ai_fallback_config.get("intervention_level")),
     )
 
 
@@ -155,11 +177,19 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
             if block.metadata.get("ocr_cache_miss"):
                 ocr_cache_miss_count += 1
 
+    provider_name = (ai_fallback_config or {}).get("provider", "openai")
+    resolved_model = build_page_ai_fallback_config(
+        provider=str(provider_name or "openai"),
+        model=str((ai_fallback_config or {}).get("model") or ""),
+    ).resolved_model
+    intervention_level = normalize_ai_intervention_level((ai_fallback_config or {}).get("intervention_level"))
     return {
         "requested": bool(ai_fallback_config.get("enabled")) if ai_fallback_config else False,
         "mode": (ai_fallback_config or {}).get("mode", "off"),
-        "provider": (ai_fallback_config or {}).get("provider", "openai"),
-        "model": (ai_fallback_config or {}).get("model", "gpt-4o-mini"),
+        "provider": provider_name,
+        "model": resolved_model,
+        "intervention_level": intervention_level,
+        "intervention_label": ai_intervention_label(intervention_level),
         "attempted_page_count": attempted_page_count,
         "applied_page_count": applied_page_count,
         "ai_cache_hit_count": ai_cache_hit_count,
@@ -174,66 +204,7 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
 
 
 def _build_ai_capabilities() -> dict[str, Any]:
-    provider_specs = {
-        "openai": {
-            "supported": True,
-            "supported_modes": ["off", "auto", "force"],
-            "api_key_env": "OPENAI_API_KEY",
-            "supports_vision": True,
-        },
-        "claude": {
-            "supported": True,
-            "supported_modes": ["off", "auto", "force"],
-            "api_key_env": "ANTHROPIC_API_KEY",
-            "supports_vision": True,
-        },
-        "anthropic": {
-            "supported": True,
-            "supported_modes": ["off", "auto", "force"],
-            "api_key_env": "ANTHROPIC_API_KEY",
-            "supports_vision": True,
-        },
-        "gemini": {
-            "supported": False,
-            "supported_modes": [],
-            "api_key_env": None,
-            "supports_vision": False,
-            "status": "not_implemented",
-        },
-    }
-
-    providers: dict[str, Any] = {}
-    missing_api_keys: list[str] = []
-    ready_providers: list[str] = []
-    for provider_name, spec in provider_specs.items():
-        api_key_env = spec.get("api_key_env")
-        api_key_present = bool(os.environ.get(str(api_key_env), "").strip()) if api_key_env else False
-        supported = bool(spec.get("supported"))
-        ready = supported and (api_key_present or not api_key_env)
-        status = "ready" if ready else ("missing_api_key" if supported and api_key_env and not api_key_present else str(spec.get("status") or "unsupported"))
-        provider_info = {
-            "supported": supported,
-            "supported_modes": list(spec.get("supported_modes") or []),
-            "api_key_env": api_key_env,
-            "api_key_present": api_key_present,
-            "available": ready,
-            "status": status,
-            "supports_vision": bool(spec.get("supports_vision")),
-        }
-        providers[provider_name] = provider_info
-        if api_key_env and not api_key_present and supported:
-            missing_api_keys.append(str(api_key_env))
-        if ready:
-            ready_providers.append(provider_name)
-
-    return {
-        "available": bool(ready_providers),
-        "supported_modes": ["off", "auto", "force"],
-        "providers": providers,
-        "ready_providers": ready_providers,
-        "missing_api_keys": sorted(set(missing_api_keys)),
-        "default_provider": "openai",
-    }
+    return build_runtime_ai_capabilities()
 
 
 def _coerce_source_paths(source: str | Path | Sequence[str | Path]) -> list[Path]:
@@ -507,6 +478,8 @@ def run_export(
     ai_fallback_max_regions: int = 18,
     ai_fallback_timeout_ms: int = 12000,
     ai_fallback_save_debug: bool = False,
+    ai_intervention_level: int = 0,
+    ai_fallback_api_key: str = "",
     fail_on_ai_error: bool = False,
 ) -> dict[str, Any]:
     out_dir = Path(output_dir)
@@ -529,8 +502,9 @@ def run_export(
         timeout_ms=ai_fallback_timeout_ms,
         save_debug=ai_fallback_save_debug,
         fail_on_error=fail_on_ai_error,
+        intervention_level=ai_intervention_level,
     )
-    page_ai_config = _to_page_ai_config(ai_fallback_config)
+    page_ai_config = _to_page_ai_config(ai_fallback_config, api_key=ai_fallback_api_key)
     prepared_pages = (
         prepare_source_pages(
             source_paths[0],
@@ -641,6 +615,7 @@ def main() -> int:
     parser.add_argument("--ai-fallback-max-regions", type=int, default=18, help="Maximum number of regions sent to AI fallback")
     parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
+    parser.add_argument("--ai-intervention-level", type=int, choices=(0, 1, 2), default=0, help="AI intervention stage: 0 structure/crop/layout, 1 parse/recolor, 2 rebuild/upscale")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
     args = parser.parse_args()
 
@@ -668,6 +643,7 @@ def main() -> int:
         ai_fallback_max_regions=args.ai_fallback_max_regions,
         ai_fallback_timeout_ms=args.ai_fallback_timeout_ms,
         ai_fallback_save_debug=args.ai_fallback_save_debug,
+        ai_intervention_level=args.ai_intervention_level,
         fail_on_ai_error=args.fail_on_ai_error,
     )
 

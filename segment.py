@@ -63,7 +63,7 @@ SEGMENTATION_MODE_BOARD = "board"
 SEGMENTATION_MODE_DOCUMENT = "document"
 LARGE_BLOCK_AREA_RATIO = 0.18
 PDF_PROBLEM_MARKER_RE = re.compile(
-    r"^\s*(?:(?:문항|문제)\s*)?(?:\[(?:[1-9][0-9]{0,2})\]|(?:[1-9][0-9]{0,2})(?:[\.\)]))(?:\s+|$)"
+    r"^\s*(?:(?:문항|문제)\s*)?(?:\[(?:[1-9][0-9]{0,2})\]|(?:0[1-9][0-9]?)(?=\s|$)|(?:[1-9][0-9]{0,2})(?:[\.\)]))(?:\s+|$)"
 )
 
 
@@ -326,31 +326,36 @@ def _find_document_content_box(mask: Image.Image, width: int, height: int) -> Bo
     )
 
 
-def _detect_document_columns(mask: Image.Image, content_box: Box, options: SegmentOptions) -> list[Box]:
-    crop = mask.crop((int(content_box.left), int(content_box.top), int(content_box.right), int(content_box.bottom)))
+def _detect_document_columns_in_crop(
+    crop: Image.Image,
+    *,
+    content_box: Box,
+    mask_width: int,
+    options: SegmentOptions,
+) -> tuple[list[Box] | None, float | None]:
     if crop.width <= 1 or crop.height <= 1:
-        return [content_box]
-
+        return None, None
     column_projection = [
         int(crop.crop((x, 0, x + 1, crop.height)).histogram()[255])
         for x in range(crop.width)
     ]
     smoothed = _smooth_projection(column_projection, max(12, options.document_projection_window_px * 2))
     if not smoothed:
-        return [content_box]
+        return None, None
 
     search_start = int(crop.width * 0.3)
     search_end = max(search_start + 1, int(crop.width * 0.7))
     center_slice = smoothed[search_start:search_end]
     if not center_slice:
-        return [content_box]
+        return None, None
 
     split_offset = min(range(len(center_slice)), key=lambda idx: center_slice[idx])
     split_x = search_start + split_offset
     valley_score = smoothed[split_x]
     peak_score = max(smoothed)
+    valley_ratio = valley_score / peak_score if peak_score > 0 else None
     if peak_score <= 0 or valley_score > peak_score * 0.22:
-        return [content_box]
+        return None, valley_ratio
 
     left_box = Box.from_points(
         content_box.left,
@@ -364,9 +369,44 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
         content_box.right,
         content_box.bottom,
     )
-    if left_box.width < mask.width * 0.2 or right_box.width < mask.width * 0.2:
-        return [content_box]
-    return [left_box, right_box]
+    if left_box.width < mask_width * 0.2 or right_box.width < mask_width * 0.2:
+        return None, valley_ratio
+    return [left_box, right_box], valley_ratio
+
+
+def _detect_document_columns(mask: Image.Image, content_box: Box, options: SegmentOptions) -> list[Box]:
+    crop = mask.crop((int(content_box.left), int(content_box.top), int(content_box.right), int(content_box.bottom)))
+    columns, valley_ratio = _detect_document_columns_in_crop(
+        crop,
+        content_box=content_box,
+        mask_width=mask.width,
+        options=options,
+    )
+    if columns:
+        return columns
+
+    if valley_ratio is not None and 0.22 < valley_ratio <= 0.32 and crop.height >= 240:
+        header_trim_px = min(crop.height // 3, max(48, int(round(crop.height * 0.12))))
+        trimmed_crop = crop.crop((0, header_trim_px, crop.width, crop.height))
+        trimmed_content_box = Box.from_points(
+            content_box.left,
+            content_box.top + header_trim_px,
+            content_box.right,
+            content_box.bottom,
+        )
+        trimmed_columns, _ = _detect_document_columns_in_crop(
+            trimmed_crop,
+            content_box=trimmed_content_box,
+            mask_width=mask.width,
+            options=options,
+        )
+        if trimmed_columns:
+            return [
+                Box.from_points(column.left, content_box.top, column.right, content_box.bottom)
+                for column in trimmed_columns
+            ]
+
+    return [content_box]
 
 
 def _coerce_pdf_text_lines(raw_lines: Any) -> list[dict[str, Any]]:
@@ -406,6 +446,21 @@ def _matches_pdf_problem_marker(text: str) -> bool:
     return bool(PDF_PROBLEM_MARKER_RE.match(text.strip()))
 
 
+def _is_pdf_utility_section_start(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("* 확인 사항"):
+        return True
+    if stripped.startswith("◦답안지의 해당란"):
+        return True
+    if stripped.startswith("답안지의 해당란"):
+        return True
+    if "답안지의 해당란에 필요한 내용을 정확히 기입" in stripped:
+        return True
+    return False
+
+
 def _is_pdf_utility_line(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
@@ -414,7 +469,7 @@ def _is_pdf_utility_line(text: str) -> bool:
         return True
     if "저작권은 한국교육과정평가원에 있습니다" in stripped:
         return True
-    if stripped.startswith("* 확인 사항"):
+    if _is_pdf_utility_section_start(stripped):
         return True
     return False
 
@@ -423,6 +478,41 @@ def _line_belongs_to_column(line: dict[str, Any], column_box: Box) -> bool:
     line_box = _pdf_text_line_box(line)
     center_x = line_box.left + (line_box.width / 2.0)
     return column_box.left <= center_x <= column_box.right
+
+
+def _infer_pdf_marker_columns(normalized_lines: list[dict[str, Any]], content_box: Box, *, image_width: int) -> list[Box] | None:
+    marker_lines = [line for line in normalized_lines if _matches_pdf_problem_marker(line["text"]) and not _is_pdf_utility_line(line["text"])]
+    if len(marker_lines) < 4:
+        return None
+
+    marker_centers = sorted(
+        _pdf_text_line_box(line).left + (_pdf_text_line_box(line).width / 2.0)
+        for line in marker_lines
+    )
+    if len(marker_centers) < 4:
+        return None
+
+    gaps = [
+        (marker_centers[index + 1] - marker_centers[index], index)
+        for index in range(len(marker_centers) - 1)
+    ]
+    largest_gap, gap_index = max(gaps, key=lambda item: item[0])
+    if largest_gap < max(content_box.width * 0.18, image_width * 0.1):
+        return None
+
+    split_x = (marker_centers[gap_index] + marker_centers[gap_index + 1]) / 2.0
+    if split_x <= content_box.left + image_width * 0.2 or split_x >= content_box.right - image_width * 0.2:
+        return None
+
+    left_count = sum(1 for center in marker_centers if center < split_x)
+    right_count = sum(1 for center in marker_centers if center >= split_x)
+    if left_count < 2 or right_count < 2:
+        return None
+
+    return [
+        Box.from_points(content_box.left, content_box.top, split_x - 12.0, content_box.bottom),
+        Box.from_points(split_x + 12.0, content_box.top, content_box.right, content_box.bottom),
+    ]
 
 
 def _segment_pdf_text_layer_page(
@@ -437,7 +527,11 @@ def _segment_pdf_text_layer_page(
 
     mask = _dark_mask(image, options.document_dark_threshold)
     content_box = _find_document_content_box(mask, image.width, image.height)
-    columns = _detect_document_columns(mask, content_box, options)
+    columns = _infer_pdf_marker_columns(normalized_lines, content_box, image_width=image.width) or _detect_document_columns(
+        mask,
+        content_box,
+        options,
+    )
     page_area = _page_area_px(image.width, image.height)
 
     blocks: list[ContentBlock] = []
@@ -456,6 +550,10 @@ def _segment_pdf_text_layer_page(
             continue
 
         marker_count += len(marker_lines)
+        marker_top_padding = max(8.0, float(options.document_band_padding_px) * 0.35)
+        inter_problem_guard = max(14.0, float(options.document_band_padding_px) * 0.58)
+        trailing_content_padding = max(12.0, float(options.document_band_padding_px) * 0.5)
+        horizontal_padding = 6.0
         for marker_index, marker_line in enumerate(marker_lines, start=1):
             marker_box = _pdf_text_line_box(marker_line)
             next_marker_top = _pdf_text_line_box(marker_lines[marker_index]).top if marker_index < len(marker_lines) else None
@@ -466,22 +564,25 @@ def _segment_pdf_text_layer_page(
                 and (next_marker_top is None or _pdf_text_line_box(line).top < next_marker_top)
             ]
             last_line_box = _pdf_text_line_box(candidate_lines[-1]) if candidate_lines else marker_box
-            top = max(column_box.top, marker_box.top - float(options.document_band_padding_px))
+            candidate_line_boxes = [_pdf_text_line_box(line) for line in candidate_lines] or [marker_box]
+            content_left = min([marker_box.left, *[box.left for box in candidate_line_boxes]])
+            content_right = max([marker_box.right, *[box.right for box in candidate_line_boxes]])
+            top = max(column_box.top, marker_box.top - marker_top_padding)
             if next_marker_top is not None:
-                bottom_padding = max(18.0, float(options.document_band_padding_px) * 0.75)
                 bottom = min(
                     column_box.bottom,
-                    max(marker_box.bottom + 28.0, next_marker_top - bottom_padding),
+                    max(marker_box.bottom + 28.0, next_marker_top - inter_problem_guard),
                 )
             else:
                 bottom = min(
                     column_box.bottom,
-                    max(marker_box.bottom + 28.0, last_line_box.bottom + float(options.document_band_padding_px) * 1.4),
+                    max(marker_box.bottom + 28.0, last_line_box.bottom + trailing_content_padding),
                 )
-            question_box = Box.from_points(column_box.left, top, column_box.right, bottom).expanded(
-                6.0,
-                max_width=float(image.width),
-                max_height=float(image.height),
+            question_box = Box.from_points(
+                max(0.0, max(column_box.left - horizontal_padding, content_left - horizontal_padding)),
+                max(0.0, top),
+                min(float(image.width), min(column_box.right + horizontal_padding, content_right + horizontal_padding)),
+                min(float(image.height), bottom),
             )
             region_lines = [
                 line
@@ -726,6 +827,48 @@ def _fit_document_slice_box(
     )
 
 
+def _fit_document_vertical_slice_box(
+    mask: Image.Image,
+    parent_box: Box,
+    slice_left: int,
+    slice_right: int,
+    options: SegmentOptions,
+) -> Box | None:
+    slice_left = max(0, int(slice_left))
+    slice_right = min(int(parent_box.width), int(slice_right))
+    if slice_right - slice_left < max(options.document_min_band_height_px, 96):
+        return None
+
+    crop = mask.crop(
+        (
+            int(parent_box.left + slice_left),
+            int(parent_box.top),
+            int(parent_box.left + slice_right),
+            int(parent_box.bottom),
+        )
+    )
+    bbox = crop.getbbox()
+    if bbox is None:
+        return None
+
+    padding = float(options.document_split_padding_px)
+    left = parent_box.left + float(slice_left) + max(0.0, float(bbox[0]) - padding)
+    top = parent_box.top + max(0.0, float(bbox[1]) - padding)
+    right = parent_box.left + float(slice_left) + min(float(slice_right - slice_left), float(bbox[2]) + padding)
+    bottom = parent_box.top + min(parent_box.height, float(bbox[3]) + padding)
+
+    minimum_height = parent_box.height * 0.62
+    if bottom - top < minimum_height:
+        top = parent_box.top
+        bottom = parent_box.bottom
+
+    return Box.from_points(left, top, right, bottom).expanded(
+        6.0,
+        max_width=float(mask.width),
+        max_height=float(mask.height),
+    )
+
+
 def _looks_like_question_start(mask: Image.Image, band_box: Box) -> bool:
     crop = mask.crop((int(band_box.left), int(band_box.top), int(band_box.right), int(band_box.bottom)))
     if crop.width <= 1 or crop.height <= 1:
@@ -889,15 +1032,99 @@ def _find_document_split_row(mask: Image.Image, band_box: Box, options: SegmentO
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def _find_document_split_column(mask: Image.Image, band_box: Box, options: SegmentOptions) -> int | None:
+    crop = mask.crop((int(band_box.left), int(band_box.top), int(band_box.right), int(band_box.bottom)))
+    if crop.width <= 1 or crop.height <= 1:
+        return None
+    if crop.width < max(320, int(crop.height * 1.3)):
+        return None
+
+    sample_top = min(crop.height - 1, max(0, int(crop.height * 0.12)))
+    sample_bottom = max(sample_top + 1, crop.height - max(0, int(crop.height * 0.05)))
+    sample = crop.crop((0, sample_top, crop.width, sample_bottom))
+    column_projection = _column_dark_projection(sample)
+    if not column_projection:
+        return None
+
+    smoothed = _smooth_projection(column_projection, max(4, options.document_projection_window_px // 2))
+    if not smoothed:
+        return None
+
+    max_score = max(smoothed)
+    if max_score <= 0:
+        return None
+
+    min_slice_width = max(int(crop.width * 0.22), 120)
+    if crop.width - (min_slice_width * 2) <= 12:
+        return None
+
+    search_start = max(min_slice_width, int(crop.width * 0.36))
+    search_end = min(crop.width - min_slice_width, int(crop.width * 0.64))
+    center_slice = smoothed[search_start:search_end]
+    if not center_slice:
+        return None
+
+    center_x = crop.width / 2.0
+    candidate_indices = sorted(
+        range(len(center_slice)),
+        key=lambda idx: (
+            abs((search_start + idx) - center_x),
+            center_slice[idx],
+        ),
+    )[:10]
+    density_threshold = options.document_split_min_density_ratio * 0.72
+
+    for candidate_index in candidate_indices:
+        split_x = search_start + candidate_index
+        valley_score = smoothed[split_x]
+        if valley_score > max_score * 0.74:
+            continue
+
+        left_density = sum(column_projection[:split_x]) / max(1.0, float(split_x * crop.height))
+        right_density = sum(column_projection[split_x:]) / max(1.0, float((crop.width - split_x) * crop.height))
+        if min(left_density, right_density) < density_threshold:
+            continue
+
+        return split_x
+
+    return None
+
+
 def _split_document_band_box(
     mask: Image.Image,
     band_box: Box,
     options: SegmentOptions,
     *,
     depth: int = 0,
+    allow_vertical_split: bool = True,
 ) -> list[Box]:
     if depth >= options.document_recursive_split_max_depth:
         return [band_box]
+    if band_box.height < options.document_recursive_split_min_height_px:
+        if band_box.width <= band_box.height * 1.35:
+            return [band_box]
+
+    if allow_vertical_split and band_box.width > band_box.height * 1.35:
+        split_x = _find_document_split_column(mask, band_box, options)
+        if split_x is not None:
+            left_box = _fit_document_vertical_slice_box(mask, band_box, 0, split_x, options)
+            right_box = _fit_document_vertical_slice_box(mask, band_box, split_x, int(band_box.width), options)
+            if left_box is not None and right_box is not None:
+                if left_box.area >= band_box.area * 0.12 and right_box.area >= band_box.area * 0.12:
+                    return _split_document_band_box(
+                        mask,
+                        left_box,
+                        options,
+                        depth=depth + 1,
+                        allow_vertical_split=False,
+                    ) + _split_document_band_box(
+                        mask,
+                        right_box,
+                        options,
+                        depth=depth + 1,
+                        allow_vertical_split=False,
+                    )
+
     if band_box.height < options.document_recursive_split_min_height_px:
         return [band_box]
 
@@ -915,11 +1142,12 @@ def _split_document_band_box(
     if not (_looks_like_question_start(mask, top_box) and _looks_like_question_start(mask, bottom_box)):
         return [band_box]
 
-    return _split_document_band_box(mask, top_box, options, depth=depth + 1) + _split_document_band_box(
+    return _split_document_band_box(mask, top_box, options, depth=depth + 1, allow_vertical_split=allow_vertical_split) + _split_document_band_box(
         mask,
         bottom_box,
         options,
         depth=depth + 1,
+        allow_vertical_split=allow_vertical_split,
     )
 
 

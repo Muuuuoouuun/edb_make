@@ -15,6 +15,8 @@ OUTER_PREFIX = bytes.fromhex("00 00 00 04 65 64 62 00 00 32 01")
 CANVAS_WIDTH = 590.0
 CANVAS_HEIGHT = 1280.0
 DEFAULT_PAGE_COUNT_HINT = 50
+DEFAULT_EDB_VERSION = "6.0.5.3913"
+NON_FINAL_IMAGE_RECORD_TRAILER = b"\x04"
 
 
 def pack_u16(value: int) -> bytes:
@@ -58,7 +60,7 @@ class ImageRecordSpec:
 
 def build_inner_header(
     record_count_hint: int,
-    version: str = "6.0.5.3911",
+    version: str = DEFAULT_EDB_VERSION,
     timestamp_epoch: int | None = None,
     header_flag: int = 3,
     page_count_hint: int = 50,
@@ -141,11 +143,14 @@ def _bump_record_size_by_one(record: bytes) -> bytes:
 def build_edb(
     records: list[bytes],
     header_flag: int,
-    version: str = "6.0.5.3911",
+    version: str = DEFAULT_EDB_VERSION,
     terminal_eof_plus_one: bool = True,
     page_count_hint: int = DEFAULT_PAGE_COUNT_HINT,
 ) -> bytes:
     final_records = list(records)
+    for index, record in enumerate(final_records[:-1]):
+        if _looks_like_image_record(record):
+            final_records[index] = _append_record_trailer(record, NON_FINAL_IMAGE_RECORD_TRAILER)
     if terminal_eof_plus_one and final_records:
         final_records[-1] = _bump_record_size_by_one(final_records[-1])
 
@@ -160,6 +165,26 @@ def build_edb(
 
 def write_edb(path: str | Path, payload: bytes) -> None:
     Path(path).write_bytes(payload)
+
+
+def _looks_like_image_record(record: bytes) -> bool:
+    if len(record) < 57:
+        return False
+    primary_length = struct.unpack(">I", record[45:49])[0]
+    if primary_length <= 0:
+        return False
+    primary_start = 49
+    primary_end = primary_start + primary_length
+    if primary_end + 4 > len(record):
+        return False
+    return record[primary_start:primary_start + 3] in {b"\xff\xd8\xff", b"\x89PN"}
+
+
+def _append_record_trailer(record: bytes, trailer: bytes) -> bytes:
+    if not trailer:
+        return record
+    size = struct.unpack(">I", record[:4])[0] + len(trailer)
+    return pack_u32(size) + record[4:] + trailer
 
 
 def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (512, 512), format_hint: str | None = None, quality: int = 88) -> bytes:

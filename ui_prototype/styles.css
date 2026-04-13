@@ -229,6 +229,103 @@ h2 {
   justify-content: flex-start;
 }
 
+.quick-run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(197, 184, 160, 0.9);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(240, 231, 215, 0.72)),
+    rgba(255, 253, 250, 0.92);
+}
+
+.quick-run-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.quick-run-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.preset-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 104px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(197, 184, 160, 0.9);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.preset-button:hover,
+.preset-button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(15, 118, 110, 0.32);
+  box-shadow: 0 12px 28px rgba(43, 34, 24, 0.08);
+}
+
+.preset-button.is-active {
+  border-color: var(--accent);
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(255, 255, 255, 0.96)),
+    rgba(255, 255, 255, 0.96);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.preset-button strong {
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.preset-button span {
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 13px;
+}
+
+.quick-run-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.quick-run-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  border: 1px solid rgba(197, 184, 160, 0.9);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  font-weight: 700;
+}
+
 .ai-quick-panel {
   display: flex;
   flex-direction: column;
@@ -257,9 +354,24 @@ h2 {
 
 .ai-quick-controls {
   display: grid;
-  grid-template-columns: minmax(200px, 1.15fr) minmax(180px, 0.9fr) minmax(180px, 0.9fr);
+  grid-template-columns: minmax(200px, 1.1fr) repeat(3, minmax(160px, 0.9fr));
   gap: 12px;
   align-items: end;
+}
+
+.ai-quick-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+
+.ai-key-field {
+  flex: 1 1 340px;
+}
+
+.ai-key-field .field-input {
+  width: 100%;
 }
 
 .ai-quick-field select {
@@ -576,6 +688,10 @@ h2 {
 }
 
 select,
+input[type="text"],
+input[type="number"],
+input[type="password"],
+.field-input,
 .ghost-button,
 .primary-button,
 .small-button,
@@ -598,6 +714,20 @@ select:hover,
 .segmented-button:hover,
 .chip-button:hover {
   transform: translateY(-1px);
+}
+
+input[type="text"],
+input[type="number"],
+input[type="password"],
+.field-input {
+  cursor: text;
+}
+
+input[type="text"]:hover,
+input[type="number"]:hover,
+input[type="password"]:hover,
+.field-input:hover {
+  transform: none;
 }
 
 #outputDirInput {
@@ -1230,6 +1360,10 @@ select:hover,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .quick-run-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ai-quick-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1261,6 +1395,10 @@ select:hover,
     grid-template-columns: 1fr;
   }
 
+  .quick-run-grid {
+    grid-template-columns: 1fr;
+  }
+
   .advanced-grid-ai {
     grid-template-columns: 1fr;
   }
@@ -1270,6 +1408,11 @@ select:hover,
   }
 
   .ai-fallback-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .quick-run-toolbar {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1314,7 +1457,8 @@ select:hover,
   }
 
   .ai-quick-header,
-  .ai-fallback-header {
+  .ai-fallback-header,
+  .quick-run-header {
     flex-direction: column;
     align-items: stretch;
   }

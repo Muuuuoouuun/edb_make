@@ -115,10 +115,14 @@ def format_pipeline_error(exc: Exception) -> dict[str, str]:
         stage = "환경"
         code = "dependency_missing"
         hint = "전처리 또는 PDF 렌더에 필요한 패키지가 설치되지 않았습니다."
-    elif "ocr" in lowered or "openai" in lowered or "anthropic" in lowered:
+    elif "ocr" in lowered or "openai" in lowered or "anthropic" in lowered or "gemini" in lowered:
         stage = "문자 인식"
         code = "ocr_failed"
         hint = "OCR 모드를 바꾸거나 AI 보정을 끄고 다시 시도해보세요."
+    elif "edb validation failed" in lowered or "header_flag" in lowered or "record_count_hint" in lowered:
+        stage = "EDB 패키징"
+        code = "edb_validation_failed"
+        hint = "내보낸 칠판 파일 구조를 다시 점검했습니다. 미리보기 크기나 record 구성이 불안정한 경우입니다."
     elif "segment" in lowered or "candidate" in lowered or "grouping" in lowered:
         stage = "문항 분리"
         code = "segmentation_failed"

@@ -1,0 +1,353 @@
+{
+  "session_name": "run_complex_tuned2",
+  "generated_at": "2026-04-13T17:57:23+09:00",
+  "data_source": "question_export",
+  "output_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2",
+  "source_mode": "single",
+  "input_file_count": 1,
+  "input_files": [
+    "/Users/clmagi/Downloads/문제 모음집/고1 복소수 4문제.png"
+  ],
+  "source_page_count": 1,
+  "detected_problem_count": 7,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "pages_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/pages.json",
+  "placements_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/placements.json",
+  "board_render_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders",
+  "edb_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/고1 복소수 4문제.edb",
+  "edb_file_uri": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.edb",
+  "rendered_page_paths": [
+    "/Users/clmagi/Downloads/문제 모음집/고1 복소수 4문제.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.52,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "english",
+      "korean"
+    ],
+    "metadata": {}
+  },
+  "ai_fallback": null,
+  "ai_summary": {
+    "requested": false,
+    "mode": "off",
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "intervention_level": 0,
+    "intervention_label": "structure_crop_layout",
+    "attempted_page_count": 0,
+    "applied_page_count": 0,
+    "ai_cache_hit_count": 0,
+    "ocr_cache_hit_count": 0,
+    "ocr_cache_miss_count": 7,
+    "status_counts": {
+      "ai_recommended": 1
+    },
+    "route_counts": {
+      "local_only": 1
+    },
+    "route_tier_counts": {
+      "red": 1
+    },
+    "recommended_page_count": 1,
+    "local_retry_recommended_page_count": 0
+  },
+  "ai_capabilities": {
+    "available": false,
+    "supported_modes": [
+      "off",
+      "auto",
+      "force"
+    ],
+    "providers": {
+      "openai": {
+        "supported": true,
+        "supported_modes": [
+          "off",
+          "auto",
+          "force"
+        ],
+        "api_key_env": "OPENAI_API_KEY",
+        "api_key_envs": [
+          "OPENAI_API_KEY"
+        ],
+        "api_key_present": false,
+        "available": false,
+        "status": "missing_api_key",
+        "supports_vision": true
+      },
+      "claude": {
+        "supported": true,
+        "supported_modes": [
+          "off",
+          "auto",
+          "force"
+        ],
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "api_key_envs": [
+          "ANTHROPIC_API_KEY"
+        ],
+        "api_key_present": false,
+        "available": false,
+        "status": "missing_api_key",
+        "supports_vision": true
+      },
+      "anthropic": {
+        "supported": true,
+        "supported_modes": [
+          "off",
+          "auto",
+          "force"
+        ],
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "api_key_envs": [
+          "ANTHROPIC_API_KEY"
+        ],
+        "api_key_present": false,
+        "available": false,
+        "status": "missing_api_key",
+        "supports_vision": true
+      },
+      "gemini": {
+        "supported": true,
+        "supported_modes": [
+          "off",
+          "auto",
+          "force"
+        ],
+        "api_key_env": "GEMINI_API_KEY or GOOGLE_API_KEY",
+        "api_key_envs": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "api_key_present": false,
+        "available": false,
+        "status": "missing_api_key",
+        "supports_vision": true
+      }
+    },
+    "ready_providers": [],
+    "missing_api_keys": [
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "OPENAI_API_KEY"
+    ],
+    "default_provider": "openai"
+  },
+  "warning_messages": [
+    "문제 번호나 선택지 표지가 약해 임시 규칙으로 문항을 묶은 페이지가 있습니다.",
+    "이미지 record가 총 7개라 다중 이미지 ClassIn 안정성 검증이 함께 수행됩니다."
+  ],
+  "parse_diagnostics": {
+    "page_count": 1,
+    "problem_count": 7,
+    "source_count": 1,
+    "ocr_error_count": 0,
+    "ocr_error_page_count": 0,
+    "segmentation_fallback_count": 0,
+    "route_tier_counts": {
+      "red": 1
+    },
+    "issue_counts": {
+      "noop_ocr": 1,
+      "no_problem_markers": 1,
+      "no_problem_or_choice_markers": 1,
+      "fallback_grouping": 2,
+      "fallback_grouping_mode": 1,
+      "problem_per_block": 1
+    }
+  },
+  "problems": [
+    {
+      "id": "고1 복소수 4문제-page-001-problem-1",
+      "title": "문항 1",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_001_53519363.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_001_53519363.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_001_53519363.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    },
+    {
+      "id": "고1 복소수 4문제-page-001-problem-2",
+      "title": "문항 2",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_002_96bd08fd.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_002_96bd08fd.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_002_96bd08fd.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    },
+    {
+      "id": "고1 복소수 4문제-page-001-problem-3",
+      "title": "문항 3",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_003_ab6b5303.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_003_ab6b5303.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_003_ab6b5303.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 2.4,
+      "snappedNextStartYPages": 3.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    },
+    {
+      "id": "고1 복소수 4문제-page-001-problem-4",
+      "title": "문항 4",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_004_1df885c3.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_004_1df885c3.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_004_1df885c3.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 3.6,
+      "snappedNextStartYPages": 4.8,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    },
+    {
+      "id": "고1 복소수 4문제-page-001-problem-5",
+      "title": "문항 5",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_005_a7667d9f.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_005_a7667d9f.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_005_a7667d9f.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 4.8,
+      "snappedNextStartYPages": 6.0,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    },
+    {
+      "id": "고1 복소수 4문제-page-001-problem-6",
+      "title": "문항 6",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_006_0975783a.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_006_0975783a.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_006_0975783a.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 6.0,
+      "snappedNextStartYPages": 7.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    },
+    {
+      "id": "고1 복소수 4문제-page-001-problem-7",
+      "title": "문항 7",
+      "problemNumber": null,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_cutouts/problem_007_7324d546.png",
+      "cropPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/problem_crops/problem_007_7324d546.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%EB%AC%B8%EC%A0%9C%20%EB%AA%A8%EC%9D%8C%EC%A7%91/%EA%B3%A01%20%EB%B3%B5%EC%86%8C%EC%88%98%204%EB%AC%B8%EC%A0%9C.png",
+      "sourceFileName": "고1 복소수 4문제.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/run_complex_tuned2/board_renders/problem_007_7324d546.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "고1 복소수 4문제-page-001",
+      "startYPages": 7.2,
+      "snappedNextStartYPages": 8.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "aiInterventionLevel": 0,
+      "aiInterventionLabel": "structure_crop_layout",
+      "renderScaleFactor": 1.0
+    }
+  ]
+}

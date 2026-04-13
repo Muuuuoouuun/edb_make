@@ -6,6 +6,8 @@ const DEFAULT_AI_FALLBACK = Object.freeze({
   mode: "off",
   provider: "openai",
   model: "gpt-4o-mini",
+  apiKey: "",
+  interventionLevel: 0,
   threshold: 0.72,
   maxRegions: 18,
   timeoutMs: 12000,
@@ -24,19 +26,21 @@ const DEFAULT_AI_CAPABILITIES = Object.freeze({
       supported: true,
       supportedModes: ["off", "auto", "force"],
       apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyEnvs: ["OPENAI_API_KEY"],
       apiKeyPresent: false,
       available: false,
       status: "missing_api_key",
       supportsVision: true,
     },
     gemini: {
-      supported: false,
-      supportedModes: [],
-      apiKeyEnv: "",
+      supported: true,
+      supportedModes: ["off", "auto", "force"],
+      apiKeyEnv: "GEMINI_API_KEY or GOOGLE_API_KEY",
+      apiKeyEnvs: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       apiKeyPresent: false,
       available: false,
-      status: "not_implemented",
-      supportsVision: false,
+      status: "missing_api_key",
+      supportsVision: true,
     },
   },
   provided: false,
@@ -45,6 +49,7 @@ const AI_PROVIDER_PRESETS = Object.freeze({
   openai: {
     provider: "openai",
     model: "gpt-4o-mini",
+    interventionLevel: 0,
     threshold: 0.72,
     maxRegions: 18,
     timeoutMs: 12000,
@@ -52,6 +57,7 @@ const AI_PROVIDER_PRESETS = Object.freeze({
   gemini: {
     provider: "gemini",
     model: "gemini-2.5-flash",
+    interventionLevel: 0,
     threshold: 0.72,
     maxRegions: 18,
     timeoutMs: 15000,
@@ -118,6 +124,65 @@ const templatePresets = {
   },
 };
 
+const RUN_PRESETS = Object.freeze({
+  "quick-check": {
+    label: "빠른 확인",
+    badge: "빠른 확인 프리셋",
+    description: "OCR 없이 문항 분리와 크롭만 먼저 확인",
+    exportMode: "question",
+    subject: "unknown",
+    ocr: "none",
+    exportEdb: false,
+    ai: {
+      enabled: false,
+      mode: "off",
+      interventionLevel: 0,
+    },
+  },
+  "default-parse": {
+    label: "기본 파싱",
+    badge: "기본 파싱 프리셋",
+    description: "문항별 자동 파싱의 기본값",
+    exportMode: "question",
+    subject: "unknown",
+    ocr: "auto",
+    exportEdb: true,
+    ai: {
+      enabled: false,
+      mode: "off",
+      interventionLevel: 0,
+    },
+  },
+  "ai-structure": {
+    label: "AI 구조 보정",
+    badge: "AI 구조 보정 프리셋",
+    description: "애매한 페이지는 AI가 구조와 배치를 먼저 보정",
+    exportMode: "question",
+    subject: "unknown",
+    ocr: "auto",
+    exportEdb: true,
+    ai: {
+      enabled: true,
+      mode: "auto",
+      interventionLevel: 0,
+    },
+  },
+  "ai-rebuild": {
+    label: "AI 재구성",
+    badge: "AI 재구성 프리셋",
+    description: "최종 출력 품질과 업스케일을 우선",
+    exportMode: "question",
+    subject: "unknown",
+    ocr: "auto",
+    exportEdb: true,
+    ai: {
+      enabled: true,
+      mode: "auto",
+      interventionLevel: 2,
+    },
+  },
+});
+
 function toNumber(value, fallback) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
@@ -157,6 +222,13 @@ function normalizeAiFallbackConfig(rawConfig, rawSummary) {
   const provider = rawProvider === "gemini" ? "gemini" : "openai";
   const defaultPreset = AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.openai;
   const model = String(config.model ?? summary.model ?? defaultPreset.model).trim() || defaultPreset.model;
+  const interventionLevel = Math.min(
+    2,
+    Math.max(
+      0,
+      Math.round(toNumber(config.intervention_level ?? config.interventionLevel ?? summary.intervention_level ?? summary.interventionLevel, DEFAULT_AI_FALLBACK.interventionLevel)),
+    ),
+  );
   const threshold = Math.min(1, Math.max(0, toNumber(config.threshold ?? config.aiThreshold ?? summary.threshold, defaultPreset.threshold)));
   const maxRegions = Math.max(1, Math.round(toNumber(config.max_regions ?? config.maxRegions ?? summary.max_regions ?? summary.maxRegions, defaultPreset.maxRegions)));
   const timeoutMs = Math.max(1000, Math.round(toNumber(config.timeout_ms ?? config.timeoutMs ?? summary.timeout_ms ?? summary.timeoutMs, defaultPreset.timeoutMs)));
@@ -167,6 +239,8 @@ function normalizeAiFallbackConfig(rawConfig, rawSummary) {
     mode,
     provider,
     model,
+    apiKey: String(config.api_key ?? config.apiKey ?? "").trim(),
+    interventionLevel,
     threshold,
     maxRegions,
     timeoutMs,
@@ -183,6 +257,7 @@ function normalizeAiSummary(rawSummary) {
       mode: DEFAULT_AI_FALLBACK.mode,
       provider: DEFAULT_AI_FALLBACK.provider,
       model: DEFAULT_AI_FALLBACK.model,
+      interventionLevel: DEFAULT_AI_FALLBACK.interventionLevel,
       attemptedPageCount: 0,
       appliedPageCount: 0,
       recommendedPageCount: 0,
@@ -208,6 +283,13 @@ function normalizeAiSummary(rawSummary) {
     mode: String(rawSummary.mode || DEFAULT_AI_FALLBACK.mode).trim().toLowerCase() || DEFAULT_AI_FALLBACK.mode,
     provider: String(rawSummary.provider || DEFAULT_AI_FALLBACK.provider).trim().toLowerCase() || DEFAULT_AI_FALLBACK.provider,
     model: String(rawSummary.model || DEFAULT_AI_FALLBACK.model).trim() || DEFAULT_AI_FALLBACK.model,
+    interventionLevel: Math.min(
+      2,
+      Math.max(
+        0,
+        Math.round(toNumber(rawSummary.intervention_level ?? rawSummary.interventionLevel, DEFAULT_AI_FALLBACK.interventionLevel)),
+      ),
+    ),
     attemptedPageCount: Math.max(0, Math.round(toNumber(rawSummary.attempted_page_count ?? rawSummary.attemptedPageCount, 0))),
     appliedPageCount: Math.max(0, Math.round(toNumber(rawSummary.applied_page_count ?? rawSummary.appliedPageCount, 0))),
     recommendedPageCount: Math.max(
@@ -259,6 +341,9 @@ function normalizeAiCapabilities(rawCapabilities) {
         ? (info.supported_modes || info.supportedModes).map(String)
         : [],
       apiKeyEnv: String(info.api_key_env || info.apiKeyEnv || ""),
+      apiKeyEnvs: Array.isArray(info.api_key_envs || info.apiKeyEnvs)
+        ? (info.api_key_envs || info.apiKeyEnvs).map(String)
+        : [],
       apiKeyPresent: Boolean(info.api_key_present ?? info.apiKeyPresent),
       available: Boolean(info.available),
       status: String(info.status || "unknown"),
@@ -285,6 +370,20 @@ function normalizeAiCapabilities(rawCapabilities) {
     },
     provided: true,
   };
+}
+
+function formatApiKeyEnvLabel(providerInfo) {
+  if (!providerInfo) {
+    return "API 키";
+  }
+  if (Array.isArray(providerInfo.apiKeyEnvs) && providerInfo.apiKeyEnvs.length) {
+    return providerInfo.apiKeyEnvs.join(" or ");
+  }
+  return providerInfo.apiKeyEnv || "API 키";
+}
+
+function hasLiveProviderKey(liveConfig, providerInfo) {
+  return Boolean((liveConfig.apiKey || "").trim() || providerInfo?.apiKeyPresent);
 }
 
 function formatAiRecommendationSummary(aiSummary) {
@@ -336,9 +435,13 @@ function resolveAiQuickState() {
   const { liveConfig, sessionSummary, aiCapabilities } = getAiUiSnapshot();
   const providerLabel = aiProviderLabel(liveConfig.provider);
   const modeLabel = aiModeLabel(liveConfig.mode);
+  const interventionLabel = aiInterventionLabel(liveConfig.interventionLevel);
   const recommendationText = formatAiRecommendationSummary(sessionSummary);
   const statusCounts = sessionSummary.statusCounts || {};
   const providerInfo = aiCapabilities.providers?.[liveConfig.provider] || normalizeAiCapabilities(null).providers.openai;
+  const apiKeyLabel = formatApiKeyEnvLabel(providerInfo);
+  const localApiKeyPresent = Boolean((liveConfig.apiKey || "").trim());
+  const providerHasKey = hasLiveProviderKey(liveConfig, providerInfo);
 
   let keyLabel = "키 상태 미확인";
   let keyTone = "neutral";
@@ -349,39 +452,39 @@ function resolveAiQuickState() {
     keyTone = "warning";
     statusLine = "로컬 앱 서버에 연결되면 현재 AI 가능 여부와 키 상태를 바로 확인합니다.";
   } else if (!providerInfo.supported) {
-    keyLabel = "공급자 대기";
+    keyLabel = "공급자 미지원";
     keyTone = "warning";
-    statusLine = `${providerLabel}는 아직 실제 호출이 구현되지 않았습니다.`;
-  } else if (!providerInfo.apiKeyPresent) {
+    statusLine = `${providerLabel}는 현재 이 앱 빌드에서 지원하지 않습니다.`;
+  } else if (!providerHasKey) {
     keyLabel = "API 키 없음";
     keyTone = "warning";
-    statusLine = providerInfo.apiKeyEnv
-      ? `${providerInfo.apiKeyEnv}가 없어 ${providerLabel} AI 보정을 실행할 수 없습니다.`
-      : `${providerLabel} AI 보정을 실행할 수 없습니다.`;
-  } else if (statusCounts.missing_api_key > 0) {
-    keyLabel = "API 키 없음";
-    keyTone = "warning";
-    statusLine = "지난 실행에서 API 키가 없어 AI 보정이 건너뛰어졌습니다.";
-  } else if (statusCounts.provider_pending > 0) {
-    keyLabel = "공급자 대기";
-    keyTone = "warning";
-    statusLine = "Gemini는 현재 서버에서 실제 호출 없이 준비 상태로만 표시됩니다.";
-  } else if (statusCounts.applied > 0 || statusCounts.cache_hit > 0) {
-    keyLabel = "AI 적용 완료";
+    statusLine = `${apiKeyLabel}를 환경변수, .env/.app_runtime/ai.env, 또는 위 입력칸으로 제공해야 ${providerLabel} AI 보정을 실행할 수 있습니다.`;
+  } else if (localApiKeyPresent) {
+    keyLabel = "탭 키 사용";
     keyTone = "success";
-    statusLine = "지난 실행에서 AI 보정이 적용되었습니다.";
-  } else if (liveConfig.enabled && liveConfig.mode === "force") {
-    keyLabel = "강제 실행";
-    keyTone = "danger";
-    statusLine = `${providerLabel} ${liveConfig.model}로 가능한 후보를 모두 보정합니다.`;
-  } else if (liveConfig.enabled && liveConfig.provider === "gemini") {
-    keyLabel = "Gemini 준비";
-    keyTone = "warning";
-    statusLine = "Gemini는 UI 상에서만 준비되어 있고 실제 호출은 아직 건너뜁니다.";
-  } else if (liveConfig.enabled && liveConfig.mode === "auto") {
-    keyLabel = "권장 시 실행";
+  } else if (providerInfo.apiKeyPresent) {
+    keyLabel = "로컬 키 연결";
     keyTone = "success";
-    statusLine = `${providerLabel} ${liveConfig.model}로 권장 문항만 먼저 보정합니다.`;
+  }
+
+  if (state.apiAvailable && providerInfo.supported && providerHasKey) {
+    if (statusCounts.applied > 0 || statusCounts.cache_hit > 0) {
+      statusLine = "지난 실행에서 AI 보정이 적용되었습니다.";
+    } else if (statusCounts.missing_api_key > 0) {
+      statusLine = "지난 실행에서는 API 키가 없어 AI 보정이 건너뛰어졌지만, 지금은 다시 실행할 준비가 됐습니다.";
+    } else if (statusCounts.provider_pending > 0) {
+      statusLine = "지난 실행에서는 지원되지 않는 공급자로 건너뛴 기록이 있습니다.";
+    } else if (liveConfig.enabled && liveConfig.mode === "force") {
+      statusLine = `${interventionLabel} · ${providerLabel} ${liveConfig.model}로 가능한 후보를 모두 보정합니다.`;
+    } else if (liveConfig.enabled && liveConfig.mode === "auto") {
+      statusLine = `${interventionLabel} · ${providerLabel} ${liveConfig.model}로 권장 문항만 먼저 보정합니다.`;
+    } else {
+      statusLine = localApiKeyPresent
+        ? "현재 탭에 입력한 키가 준비되어 있습니다. 필요할 때 바로 AI 보정을 켤 수 있습니다."
+        : "AI 보정은 꺼져 있습니다. 필요할 때만 켜세요.";
+    }
+  } else if (!state.apiAvailable || !providerInfo.supported || !providerHasKey) {
+    // The more specific status messages above already describe the blocking reason.
   } else {
     statusLine = "AI 보정은 꺼져 있습니다. 필요할 때만 켜세요.";
   }
@@ -402,6 +505,7 @@ function resolveAiQuickState() {
     sessionSummary,
     sessionFallback,
     aiCapabilities,
+    interventionLabel,
   };
 }
 
@@ -414,8 +518,8 @@ function renderAiQuickPanel() {
     elements.modePill.className = `meta-pill ${aiToneClass(snapshot.liveConfig.enabled && snapshot.liveConfig.mode === "force" ? "danger" : snapshot.liveConfig.enabled ? "success" : "neutral")}`.trim();
   }
   if (elements.providerPill) {
-    elements.providerPill.textContent = snapshot.liveConfig.provider === "gemini" ? "Gemini (준비중)" : snapshot.providerLabel;
-    elements.providerPill.className = `meta-pill ${aiToneClass(snapshot.liveConfig.provider === "gemini" ? "warning" : "neutral")}`.trim();
+    elements.providerPill.textContent = snapshot.providerLabel;
+    elements.providerPill.className = "meta-pill";
   }
   if (elements.keyPill) {
     elements.keyPill.textContent = snapshot.keyLabel;
@@ -426,7 +530,7 @@ function renderAiQuickPanel() {
     elements.resultPill.className = `meta-pill ${aiToneClass(snapshot.resultTone)}`.trim();
   }
   if (elements.advancedHintPill) {
-    elements.advancedHintPill.textContent = snapshot.liveConfig.enabled ? `${snapshot.providerLabel} · ${snapshot.modeLabel}` : "세부 값 조정";
+    elements.advancedHintPill.textContent = snapshot.liveConfig.enabled ? `${snapshot.interventionLabel} · ${snapshot.providerLabel}` : "세부 값 조정";
     elements.advancedHintPill.className = `meta-pill ${aiToneClass(snapshot.liveConfig.enabled ? "success" : "neutral")}`.trim();
   }
   if (elements.quickStatusText) {
@@ -522,7 +626,11 @@ function normalizeProblem(problem, index) {
     problemNumber,
     subject: problem.subject || "unknown",
     imagePath: normalizePath(
-      problem.imagePath
+      problem.finalImagePath
+        || problem.final_image_path
+        || problem.presentationPath
+        || problem.presentation_path
+        || problem.imagePath
         || problem.image_path
         || problem.cutoutPath
         || problem.cutout_path
@@ -554,6 +662,9 @@ function normalizeProblem(problem, index) {
     recordMode: problem.recordMode || problem.record_mode || "",
     textRecordCount: toNumber(problem.textRecordCount ?? problem.text_record_count, 0),
     imageRecordCount: toNumber(problem.imageRecordCount ?? problem.image_record_count, 0),
+    aiInterventionLevel: Math.min(2, Math.max(0, Math.round(toNumber(problem.aiInterventionLevel ?? problem.ai_intervention_level, 0)))),
+    aiInterventionLabel: String(problem.aiInterventionLabel || problem.ai_intervention_label || ""),
+    renderScaleFactor: toNumber(problem.renderScaleFactor ?? problem.render_scale_factor, 1),
     excluded: Boolean(problem.excluded ?? problem.isExcluded),
   };
 }
@@ -616,6 +727,16 @@ function formatFileSize(bytes) {
   return `${Math.max(1, Math.round(bytes / 1024))}KB`;
 }
 
+function buildApiErrorMessage(payload, fallbackMessage) {
+  const detail = payload?.error_detail || payload?.errorDetail || {};
+  const primary = String(detail.message || payload?.error || fallbackMessage || "요청 처리에 실패했습니다.").trim();
+  const hint = String(detail.hint || "").trim();
+  if (!hint || primary.includes(hint)) {
+    return primary;
+  }
+  return `${primary} ${hint}`;
+}
+
 function subjectLabel(subject) {
   const labels = {
     unknown: "자동",
@@ -630,6 +751,7 @@ function subjectLabel(subject) {
 
 function sessionSourceLabel(source) {
   const labels = {
+    empty: "대기 중",
     sample: "샘플",
     manual: "수동",
     build_mvp_export: "자동 파싱",
@@ -643,7 +765,13 @@ function exportModeLabel(mode) {
 }
 
 function aiProviderLabel(provider) {
-  return provider === "gemini" ? "Gemini" : "OpenAI";
+  if (provider === "gemini") {
+    return "Gemini";
+  }
+  if (provider === "claude" || provider === "anthropic") {
+    return "Claude";
+  }
+  return "OpenAI";
 }
 
 function aiModeLabel(mode) {
@@ -656,16 +784,29 @@ function aiModeLabel(mode) {
   return "권장만 표시";
 }
 
+function aiInterventionLabel(level) {
+  if (level === 2) {
+    return "2단계 재구성/업스케일";
+  }
+  if (level === 1) {
+    return "1단계 파싱/색보정";
+  }
+  return "0단계 구조/크롭/배치";
+}
+
 function aiStatusLabel(status) {
   const labels = {
     applied: "적용됨",
     applied_with_warnings: "적용됨",
     ai_recommended: "AI 권장",
+    cache_hit: "캐시 사용",
     disabled: "비활성",
+    error: "요청 실패",
+    invalid_response: "응답 오류",
     local_retry_recommended: "로컬 재시도 권장",
     missing_api_key: "키 없음",
     not_needed: "불필요",
-    provider_pending: "제미나이 대기",
+    provider_pending: "공급자 미지원",
     repair_error: "요청 실패",
     skipped: "건너뜀",
     too_many_blocks: "블록 과다",
@@ -687,6 +828,8 @@ function getAiControlElements() {
     enabled: document.getElementById("runAiFallbackEnabled"),
     mode: document.getElementById("runAiFallbackModeSelect"),
     provider: document.getElementById("runAiProviderSelect"),
+    interventionLevel: document.getElementById("runAiInterventionLevelSelect"),
+    apiKey: document.getElementById("runAiApiKeyInput"),
     model: document.getElementById("runAiModelInput"),
     threshold: document.getElementById("runAiThresholdInput"),
     maxRegions: document.getElementById("runAiMaxRegionsInput"),
@@ -694,6 +837,7 @@ function getAiControlElements() {
     saveDebug: document.getElementById("runAiSaveDebug"),
     openAiPresetButton: document.getElementById("applyOpenAiPresetButton"),
     geminiPresetButton: document.getElementById("applyGeminiPresetButton"),
+    clearApiKeyButton: document.getElementById("clearAiApiKeyButton"),
     helper: document.getElementById("aiFallbackHelper"),
   };
 }
@@ -709,7 +853,9 @@ function readAiFallbackForm() {
     enabled: mode !== "off",
     mode: ["auto", "force", "off"].includes(mode) ? mode : "off",
     provider,
+    apiKey: (controls.apiKey?.value || "").trim(),
     model: (controls.model?.value || "").trim() || preset.model,
+    interventionLevel: Math.min(2, Math.max(0, Math.round(toNumber(controls.interventionLevel?.value, DEFAULT_AI_FALLBACK.interventionLevel)))),
     threshold: Math.min(1, Math.max(0, toNumber(controls.threshold?.value, preset.threshold))),
     maxRegions: Math.max(1, Math.round(toNumber(controls.maxRegions?.value, preset.maxRegions))),
     timeoutMs: Math.max(1000, Math.round(toNumber(controls.timeoutMs?.value, preset.timeoutMs))),
@@ -717,9 +863,11 @@ function readAiFallbackForm() {
   };
 }
 
-function writeAiFallbackForm(config) {
+function writeAiFallbackForm(config, options = {}) {
   const controls = getAiControlElements();
   const normalized = normalizeAiFallbackConfig(config, null);
+  const preserveApiKey = options.preserveApiKey !== false;
+  const existingApiKey = controls.apiKey?.value || "";
   if (controls.enabled) {
     controls.enabled.checked = normalized.enabled;
   }
@@ -728,6 +876,12 @@ function writeAiFallbackForm(config) {
   }
   if (controls.provider) {
     controls.provider.value = normalized.provider;
+  }
+  if (controls.interventionLevel) {
+    controls.interventionLevel.value = String(normalized.interventionLevel);
+  }
+  if (controls.apiKey) {
+    controls.apiKey.value = normalized.apiKey || (preserveApiKey ? existingApiKey : "");
   }
   if (controls.model) {
     controls.model.value = normalized.model;
@@ -758,6 +912,7 @@ function syncAiFallbackControls() {
   [
     controls.mode,
     controls.provider,
+    controls.interventionLevel,
     controls.model,
     controls.threshold,
     controls.maxRegions,
@@ -768,10 +923,13 @@ function syncAiFallbackControls() {
       node.disabled = isLocked || !isEnabled;
     }
   });
+  if (controls.apiKey) {
+    controls.apiKey.disabled = isLocked;
+  }
   controls.enabled.disabled = isLocked;
-  [controls.openAiPresetButton, controls.geminiPresetButton].forEach((button) => {
+  [controls.openAiPresetButton, controls.geminiPresetButton, controls.clearApiKeyButton].forEach((button) => {
     if (button) {
-      button.disabled = isLocked;
+      button.disabled = isLocked || (button === controls.clearApiKeyButton && !(controls.apiKey?.value || "").trim());
     }
   });
 
@@ -781,10 +939,13 @@ function syncAiFallbackControls() {
   }
 
   const config = readAiFallbackForm();
+  const providerInfo = state.aiCapabilities.providers?.[config.provider] || normalizeAiCapabilities(null).providers.openai;
+  const apiKeyLabel = formatApiKeyEnvLabel(providerInfo);
+  const hasProviderKey = hasLiveProviderKey(config, providerInfo);
   helper.classList.remove("is-warning", "is-success");
 
   if (isLocked) {
-    helper.textContent = "AI settings are locked while export is running.";
+    helper.textContent = "내보내기 실행 중에는 AI 설정을 잠시 잠급니다.";
     renderAiQuickPanel();
     return;
   }
@@ -795,17 +956,17 @@ function syncAiFallbackControls() {
     return;
   }
 
-  if (config.provider === "gemini") {
-    helper.textContent = "Gemini는 자리만 준비됐습니다. 현재 실행에서는 provider_pending으로 안전하게 건너뜁니다.";
+  if (!hasProviderKey) {
+    helper.textContent = `${apiKeyLabel}를 환경변수, .env/.app_runtime/ai.env, 또는 위 입력칸으로 제공해야 ${aiProviderLabel(config.provider)} AI 보정을 실행할 수 있습니다. 입력한 키는 이 탭에서만 사용합니다.`;
     helper.classList.add("is-warning");
     renderAiQuickPanel();
     return;
   }
 
   if (config.mode === "force") {
-    helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 모든 후보 페이지를 보정 시도합니다.`;
+    helper.textContent = `${aiInterventionLabel(config.interventionLevel)} · ${aiProviderLabel(config.provider)} ${config.model}로 모든 후보 페이지를 보정 시도합니다.`;
   } else {
-    helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 권장된 페이지만 선택 보정합니다.`;
+    helper.textContent = `${aiInterventionLabel(config.interventionLevel)} · ${aiProviderLabel(config.provider)} ${config.model}로 권장된 페이지만 선택 보정합니다.`;
   }
   helper.classList.add("is-success");
   renderAiQuickPanel();
@@ -819,6 +980,7 @@ function applyAiPreset(provider) {
     mode: "auto",
     provider: preset.provider,
     model: preset.model,
+    interventionLevel: preset.interventionLevel ?? DEFAULT_AI_FALLBACK.interventionLevel,
     threshold: preset.threshold,
     maxRegions: preset.maxRegions,
     timeoutMs: preset.timeoutMs,
@@ -920,7 +1082,7 @@ function clearQueuedFiles() {
 
 function clearAllState() {
   if (state.runBusy) {
-    window.alert("현재 파싱 중에는 전체 초기화를 할 수 없습니다.");
+    setRunStatus("현재 파싱 중에는 전체 초기화를 할 수 없습니다. 완료 후 다시 시도해주세요.", "warning");
     return;
   }
 
@@ -963,8 +1125,8 @@ const sampleSession = normalizeSession(
 function createEmptySession() {
   return normalizeSession(
     {
-      session_name: "빈 세션",
-      data_source: "manual",
+      session_name: "새 세션",
+      data_source: "empty",
       export_mode: "question",
       record_mode: "mixed",
       input_file_count: 0,
@@ -981,20 +1143,22 @@ function createEmptySession() {
 const generatedSession = window.EDB_UI_SESSION
   ? normalizeSession(window.EDB_UI_SESSION, "생성된 세션")
   : null;
+const initialSession = generatedSession || createEmptySession();
 
 const state = {
-  session: generatedSession || sampleSession,
-  problems: cloneProblems((generatedSession || sampleSession).problems),
-  selectedId: (generatedSession || sampleSession).problems[0]?.id || null,
+  session: initialSession,
+  problems: cloneProblems(initialSession.problems),
+  selectedId: initialSession.problems[0]?.id || null,
   previewMode: "problem",
   templateKey: "academy-default",
   dragId: null,
   composerOpen: false,
   apiAvailable: false,
-  aiCapabilities: (generatedSession || sampleSession).aiCapabilities || normalizeAiCapabilities(null),
+  aiCapabilities: initialSession.aiCapabilities || normalizeAiCapabilities(null),
   runBusy: false,
   autoParse: true,
   runSourceFiles: [],
+  runPresetKey: "default-parse",
 };
 
 function syncTemplateSelect() {
@@ -1035,6 +1199,7 @@ function applySession(session) {
   state.problems = cloneProblems(session.problems);
   state.selectedId = session.problems.find((problem) => !problem.excluded)?.id || session.problems[0]?.id || null;
   state.composerOpen = false;
+  state.runPresetKey = null;
   const layoutModeSelect = document.getElementById("runLayoutModeSelect");
   if (layoutModeSelect) {
     layoutModeSelect.value = session.exportMode || "question";
@@ -1073,8 +1238,111 @@ function resetRunOptions() {
   if (autoParseToggle) {
     autoParseToggle.checked = true;
   }
-  writeAiFallbackForm(DEFAULT_AI_FALLBACK);
-  syncAiFallbackControls();
+  applyRunPreset("default-parse", { runAfterApply: false, silent: true });
+}
+
+function applyRunPreset(presetKey, options = {}) {
+  const preset = RUN_PRESETS[presetKey];
+  if (!preset) {
+    return Promise.resolve();
+  }
+
+  const { runAfterApply = false, silent = false } = options;
+  const runLayoutModeSelect = document.getElementById("runLayoutModeSelect");
+  const runSubjectSelect = document.getElementById("runSubjectSelect");
+  const runOcrSelect = document.getElementById("runOcrSelect");
+  const runExportEdb = document.getElementById("runExportEdb");
+  const currentAi = readAiFallbackForm();
+  const provider = currentAi.provider || DEFAULT_AI_FALLBACK.provider;
+  const providerPreset = AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.openai;
+
+  if (runLayoutModeSelect) {
+    runLayoutModeSelect.value = preset.exportMode;
+  }
+  if (runSubjectSelect) {
+    runSubjectSelect.value = preset.subject;
+  }
+  if (runOcrSelect) {
+    runOcrSelect.value = preset.ocr;
+  }
+  if (runExportEdb) {
+    runExportEdb.checked = Boolean(preset.exportEdb);
+  }
+
+  writeAiFallbackForm({
+    enabled: Boolean(preset.ai.enabled),
+    mode: preset.ai.mode,
+    provider,
+    apiKey: currentAi.apiKey,
+    model: currentAi.model || providerPreset.model,
+    interventionLevel: preset.ai.interventionLevel,
+    threshold: currentAi.threshold,
+    maxRegions: currentAi.maxRegions,
+    timeoutMs: currentAi.timeoutMs,
+    saveDebug: currentAi.saveDebug,
+  }, { preserveApiKey: true });
+
+  state.runPresetKey = presetKey;
+  updateRuntimeControls();
+  renderQuickRunPanel();
+
+  if (!runAfterApply) {
+    if (!silent) {
+      setRunStatus(`${preset.label} 프리셋을 적용했습니다. ${state.runSourceFiles.length ? "현재 선택된 파일에 바로 적용할 수 있습니다." : "파일을 추가하면 이 설정으로 실행됩니다."}`, "neutral");
+    }
+    return Promise.resolve();
+  }
+
+  if (!state.runSourceFiles.length) {
+    if (!silent) {
+      setRunStatus(`${preset.label} 프리셋을 적용했습니다. 이제 파일만 추가하면 바로 실행됩니다.`, "neutral");
+    }
+    return Promise.resolve();
+  }
+
+  if (!state.apiAvailable) {
+    if (!silent) {
+      setRunStatus(`${preset.label} 프리셋을 적용했습니다. 로컬 앱 서버 연결 뒤 실행할 수 있습니다.`, "warning");
+    }
+    return Promise.resolve();
+  }
+
+  return runExportFromApi();
+}
+
+function clearRunPresetSelection() {
+  if (!state.runPresetKey) {
+    return;
+  }
+  state.runPresetKey = null;
+  renderQuickRunPanel();
+}
+
+function renderQuickRunPanel() {
+  const badge = document.getElementById("quickRunPresetBadge");
+  const helper = document.getElementById("quickRunHelper");
+  const activePreset = state.runPresetKey ? RUN_PRESETS[state.runPresetKey] : null;
+
+  document.querySelectorAll("[data-run-preset]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.runPreset === state.runPresetKey);
+    button.disabled = state.runBusy;
+  });
+  ["quickUseGeneratedButton", "quickUseSampleButton", "quickOpenAdvancedButton"].forEach((id) => {
+    const button = document.getElementById(id);
+    if (button) {
+      button.disabled = state.runBusy;
+    }
+  });
+
+  if (badge) {
+    badge.textContent = activePreset ? activePreset.badge : "사용자 지정 설정";
+  }
+  if (helper) {
+    const queueHint = state.runSourceFiles.length
+      ? `현재 ${state.runSourceFiles.length}개 파일이 선택되어 있어 프리셋 버튼을 누르면 즉시 실행됩니다.`
+      : "먼저 파일을 추가하면 프리셋 버튼으로 바로 실행할 수 있습니다.";
+    helper.innerHTML = `${queueHint} 단축키: <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>O</kbd> 파일 열기, <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>Enter</kbd> 현재 설정 실행`;
+  }
 }
 
 function getTemplate() {
@@ -1272,15 +1540,25 @@ function updateRuntimeControls() {
 
   selectedSourceName.textContent = summarizeQueuedSources();
   sourceQueueCount.textContent = state.runSourceFiles.length
-    ? `${state.runSourceFiles.length}개 대기`
-    : "0개 대기";
+    ? `${state.runSourceFiles.length}개 선택됨`
+    : "0개 선택됨";
   runExportButton.disabled = !state.apiAvailable || state.runBusy || !state.runSourceFiles.length;
   if (clearAllButton) {
     clearAllButton.disabled = state.runBusy;
   }
-  runExportButton.textContent = `${exportModeLabel(runLayoutModeSelect?.value)} 변환`;
+  if (state.runBusy) {
+    runExportButton.textContent = "실행 중...";
+    runExportButton.title = "현재 파싱 작업을 실행 중입니다.";
+  } else if (state.runPresetKey && RUN_PRESETS[state.runPresetKey]) {
+    runExportButton.textContent = `${RUN_PRESETS[state.runPresetKey].label} 실행`;
+    runExportButton.title = RUN_PRESETS[state.runPresetKey].description;
+  } else {
+    runExportButton.textContent = `${exportModeLabel(runLayoutModeSelect?.value)} 변환`;
+    runExportButton.title = "현재 선택된 설정으로 파싱을 실행합니다.";
+  }
   autoParseToggle.checked = state.autoParse;
   syncAiFallbackControls();
+  renderQuickRunPanel();
 }
 
 async function probeApi() {
@@ -1309,18 +1587,18 @@ async function fetchLatestSessionFromApi() {
   const response = await fetch("/api/session/latest");
   const payload = await response.json();
   if (!response.ok || !payload.ok) {
-    throw new Error(payload.error || `최근 세션을 불러오지 못했습니다 (${response.status})`);
+    throw new Error(buildApiErrorMessage(payload, `최근 세션을 불러오지 못했습니다 (${response.status})`));
   }
   return normalizeSession(payload.session, "최근 세션");
 }
 
 async function runExportFromApi() {
   if (!state.apiAvailable) {
-    window.alert("로컬 파싱 API가 연결되지 않았습니다. 먼저 `app_server.py`를 실행해주세요.");
+    setRunStatus("로컬 파싱 API가 연결되지 않았습니다. 먼저 `app_server.py`를 실행해주세요.", "warning");
     return;
   }
   if (!state.runSourceFiles.length) {
-    window.alert("먼저 사진이나 PDF를 선택해주세요.");
+    setRunStatus("먼저 사진이나 PDF를 선택해주세요.", "warning");
     return;
   }
 
@@ -1354,6 +1632,8 @@ async function runExportFromApi() {
         mode: aiFallback.mode,
         provider: aiFallback.provider,
         model: aiFallback.model,
+        apiKey: aiFallback.apiKey,
+        interventionLevel: aiFallback.interventionLevel,
         threshold: aiFallback.threshold,
         maxRegions: aiFallback.maxRegions,
         timeoutMs: aiFallback.timeoutMs,
@@ -1370,7 +1650,7 @@ async function runExportFromApi() {
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
-      throw new Error(result.error || `파싱 실행 실패 (${response.status})`);
+      throw new Error(buildApiErrorMessage(result, `파싱 실행 실패 (${response.status})`));
     }
 
     state.previewMode = "problem";
@@ -1389,7 +1669,6 @@ async function runExportFromApi() {
     );
   } catch (error) {
     setRunStatus(`파싱 실패: ${error.message}`, "error");
-    window.alert(`파싱 실패: ${error.message}`);
   } finally {
     state.runBusy = false;
     updateRuntimeControls();
@@ -1588,8 +1867,8 @@ function renderInspector(selected) {
   if (!selected) {
     root.innerHTML = `
       <div class="inspector-card">
-        <h3>구성 비어 있음</h3>
-        <p class="helper-text">현재 포함된 문항이 없습니다. 구성 편집 팝업에서 제외를 풀거나 새 파싱을 실행해주세요.</p>
+        <h3>아직 파싱 결과가 없습니다</h3>
+        <p class="helper-text">사진이나 PDF를 추가한 뒤 파싱을 실행하면 여기에서 문항 정보와 경고를 함께 검토할 수 있습니다.</p>
       </div>
     `;
     return;
@@ -1641,6 +1920,7 @@ function renderInspector(selected) {
 
     <div class="inspector-card">
       <h3>빠른 조정</h3>
+      <p class="helper-text">현재 조정은 브라우저 미리보기 기준입니다. 실제 EDB를 다시 만들려면 export를 다시 실행해야 합니다.</p>
       <div class="inspector-row">
         <label for="heightRange">실제 콘텐츠 높이</label>
         <span id="heightOutput" class="range-output">${selected.actualHeightPages.toFixed(2)}p</span>
@@ -1671,7 +1951,7 @@ function renderInspector(selected) {
       <h3>AI 문항 보정</h3>
       <div class="inspector-row">
         <label>설정</label>
-        <span>${aiModeLabel(aiFallback.mode)} · ${aiProviderLabel(aiFallback.provider)} · ${aiFallback.model}</span>
+        <span>${aiInterventionLabel(aiFallback.interventionLevel)} · ${aiModeLabel(aiFallback.mode)} · ${aiProviderLabel(aiFallback.provider)} · ${aiFallback.model}</span>
       </div>
       <div class="inspector-row">
         <label>권장</label>
@@ -1682,12 +1962,13 @@ function renderInspector(selected) {
         <span>시도 ${aiSummary.attemptedPageCount}p / 적용 ${aiSummary.appliedPageCount}p</span>
       </div>
       <div class="inspector-row">
+        <label>출력 프로필</label>
+        <span>${selected.aiInterventionLabel || aiInterventionLabel(selected.aiInterventionLevel || aiFallback.interventionLevel)}${selected.renderScaleFactor > 1 ? ` · ${selected.renderScaleFactor.toFixed(1)}x` : ""}</span>
+      </div>
+      <div class="inspector-row">
         <label>상태</label>
         <span>${formatAiStatusCounts(aiSummary.statusCounts) || "기록 없음"}</span>
       </div>
-      ${aiFallback.provider === "gemini" ? `
-      <p class="helper-text">Gemini는 UI와 설정만 준비된 상태입니다. 현재 서버에서는 실제 호출 없이 안전하게 건너뜁니다.</p>
-      ` : ""}
     </div>
     ` : ""}
 
@@ -1742,7 +2023,7 @@ function renderComposerModal() {
         <div>
           <p class="eyebrow">EDB 구성 편집</p>
           <h2 id="composerTitle">문항 순서와 포함 여부를 조정합니다</h2>
-          <p class="subtle">순서 변경, 제목 수정, 제외/복원, 삭제를 팝업에서 바로 처리할 수 있습니다.</p>
+          <p class="subtle">순서 변경, 제목 수정, 제외/복원, 삭제를 미리보기 기준으로 조정할 수 있습니다. 실제 파일 반영은 다음 export 때 이루어집니다.</p>
         </div>
         <button class="modal-close-button" id="closeComposerButton" type="button" aria-label="닫기">×</button>
       </div>
@@ -1844,6 +2125,10 @@ function renderSessionSummary() {
   const inputCount = state.session.inputFileCount || 0;
   const pageCount = state.session.sourcePageCount || state.session.renderedPageFileUris.length || 0;
   const problemCount = state.session.detectedProblemCount || state.problems.length;
+  if (!inputCount && !pageCount && !problemCount) {
+    node.textContent = "아직 파싱 결과가 없습니다. 사진이나 PDF를 추가해 첫 실행을 시작하세요. 필요하면 샘플 데이터 버튼으로 UI만 먼저 확인할 수 있습니다.";
+    return;
+  }
   const includedCount = activeProblems().length;
   const excludedCount = state.problems.length - includedCount;
   const aiSnapshot = getAiUiSnapshot();
@@ -1855,7 +2140,7 @@ function renderSessionSummary() {
   }
   const recommendationText = formatAiRecommendationSummary(aiSummary);
   if (aiFallback.enabled || aiSummary.requested) {
-    text += ` · AI ${aiModeLabel(aiFallback.mode)} ${aiProviderLabel(aiFallback.provider)}`;
+    text += ` · AI ${aiInterventionLabel(aiFallback.interventionLevel)} · ${aiModeLabel(aiFallback.mode)} ${aiProviderLabel(aiFallback.provider)}`;
     if (aiSummary.attemptedPageCount > 0 || aiSummary.appliedPageCount > 0) {
       text += ` · 시도 ${aiSummary.attemptedPageCount}p · 적용 ${aiSummary.appliedPageCount}p`;
     }
@@ -1910,12 +2195,12 @@ function render() {
   renderSourceQueue();
 
   if (!selected) {
-    document.getElementById("previewTitle").textContent = "구성 비어 있음";
-    document.getElementById("previewSubtitle").textContent = "구성 편집 팝업에서 제외를 풀거나 새 파싱을 실행해주세요.";
+    document.getElementById("previewTitle").textContent = "아직 파싱 결과가 없습니다";
+    document.getElementById("previewSubtitle").textContent = "사진이나 PDF를 추가해 첫 파싱을 시작하거나 샘플 데이터를 눌러 미리보기를 확인하세요.";
     document.getElementById("previewSurface").innerHTML = `
       <div class="preview-card">
         <div class="preview-image-frame preview-empty">
-          <p class="helper-text">현재 포함된 문항이 없습니다.</p>
+          <p class="helper-text">업로드 후 파싱을 실행하면 문항 크롭과 보드 미리보기가 여기에 표시됩니다.</p>
         </div>
       </div>
     `;
@@ -1939,6 +2224,24 @@ function render() {
   renderComposerModal();
 }
 
+async function loadLatestSessionIntoView() {
+  if (!state.apiAvailable) {
+    setRunStatus("로컬 앱 서버가 연결되어 있지 않습니다. `app_server.py`를 실행한 뒤 다시 시도해주세요.", "warning");
+    return;
+  }
+  try {
+    applySession(await fetchLatestSessionFromApi());
+    setRunStatus("로컬 앱 서버에서 최근 세션을 불러왔습니다.", "success");
+  } catch (error) {
+    setRunStatus(`최근 세션 불러오기 실패: ${error.message}`, "error");
+  }
+}
+
+function switchToSampleSession() {
+  applySession(sampleSession);
+  setRunStatus("번들된 샘플 데이터로 전환했습니다. 이 화면은 실제 export 결과와 분리된 미리보기입니다.", "neutral");
+}
+
 document.querySelectorAll("[data-preview-mode]").forEach((button) => {
   button.addEventListener("click", () => {
     state.previewMode = button.dataset.previewMode;
@@ -1952,26 +2255,54 @@ document.getElementById("templateSelect").addEventListener("change", (event) => 
 });
 
 document.getElementById("runLayoutModeSelect").addEventListener("change", () => {
+  clearRunPresetSelection();
   updateRuntimeControls();
+});
+["runSubjectSelect", "runOcrSelect", "runExportEdb"].forEach((id) => {
+  document.getElementById(id)?.addEventListener("change", () => {
+    clearRunPresetSelection();
+    updateRuntimeControls();
+  });
 });
 
 [
   "runAiFallbackEnabled",
   "runAiFallbackModeSelect",
   "runAiProviderSelect",
+  "runAiInterventionLevelSelect",
   "runAiModelInput",
   "runAiThresholdInput",
   "runAiMaxRegionsInput",
   "runAiTimeoutInput",
   "runAiSaveDebug",
 ].forEach((id) => {
-  document.getElementById(id)?.addEventListener("change", syncAiFallbackControls);
+  document.getElementById(id)?.addEventListener("change", () => {
+    clearRunPresetSelection();
+    syncAiFallbackControls();
+  });
 });
-document.getElementById("runAiModelInput")?.addEventListener("input", syncAiFallbackControls);
+document.getElementById("runAiModelInput")?.addEventListener("input", () => {
+  clearRunPresetSelection();
+  syncAiFallbackControls();
+});
+document.getElementById("runAiApiKeyInput")?.addEventListener("input", syncAiFallbackControls);
 document.getElementById("applyOpenAiPresetButton")?.addEventListener("click", () => applyAiPreset("openai"));
 document.getElementById("applyGeminiPresetButton")?.addEventListener("click", () => applyAiPreset("gemini"));
+document.getElementById("clearAiApiKeyButton")?.addEventListener("click", () => {
+  const input = document.getElementById("runAiApiKeyInput");
+  if (input) {
+    input.value = "";
+  }
+  syncAiFallbackControls();
+});
 document.getElementById("openAiAdvancedButton")?.addEventListener("click", openAiAdvancedSettings);
 document.getElementById("advancedSettingsPanel")?.addEventListener("toggle", renderAiQuickPanel);
+document.getElementById("quickOpenAdvancedButton")?.addEventListener("click", openAiAdvancedSettings);
+document.querySelectorAll("[data-run-preset]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    await applyRunPreset(button.dataset.runPreset, { runAfterApply: true });
+  });
+});
 
 document.getElementById("openComposerButton").addEventListener("click", openComposerModal);
 
@@ -1995,30 +2326,19 @@ sessionFileInput.addEventListener("change", async (event) => {
     const text = await file.text();
     const parsed = JSON.parse(text);
     applySession(normalizeSession(parsed, file.name));
+    setRunStatus(`세션 JSON을 불러왔습니다: ${file.name}`, "success");
   } catch (error) {
-    window.alert(`세션 JSON을 불러오지 못했습니다: ${error.message}`);
+    setRunStatus(`세션 JSON을 불러오지 못했습니다: ${error.message}`, "error");
   } finally {
     sessionFileInput.value = "";
   }
 });
 
-document.getElementById("useGeneratedButton").addEventListener("click", async () => {
-  if (!state.apiAvailable) {
-    window.location.reload();
-    return;
-  }
-  try {
-    applySession(await fetchLatestSessionFromApi());
-    setRunStatus("로컬 앱 서버에서 최근 세션을 불러왔습니다.", "success");
-  } catch (error) {
-    setRunStatus(`최근 세션 불러오기 실패: ${error.message}`, "error");
-  }
-});
+document.getElementById("useGeneratedButton").addEventListener("click", loadLatestSessionIntoView);
+document.getElementById("quickUseGeneratedButton")?.addEventListener("click", loadLatestSessionIntoView);
 
-document.getElementById("useSampleButton").addEventListener("click", () => {
-  applySession(sampleSession);
-  setRunStatus("번들된 샘플 데이터로 전환했습니다.", "neutral");
-});
+document.getElementById("useSampleButton").addEventListener("click", switchToSampleSession);
+document.getElementById("quickUseSampleButton")?.addEventListener("click", switchToSampleSession);
 
 document.getElementById("clearAllButton").addEventListener("click", clearAllState);
 
@@ -2083,9 +2403,36 @@ sourceDropzone.addEventListener("drop", async (event) => {
 
 document.getElementById("runExportButton").addEventListener("click", runExportFromApi);
 
+function isEditableTarget(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.composerOpen) {
     closeComposerModal();
+    return;
+  }
+  if (isEditableTarget(event.target)) {
+    return;
+  }
+  const hasModifier = event.metaKey || event.ctrlKey;
+  if (!hasModifier) {
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void runExportFromApi();
+    return;
+  }
+  if (event.key.toLowerCase() === "o") {
+    event.preventDefault();
+    sourceFileInput.click();
   }
 });
 

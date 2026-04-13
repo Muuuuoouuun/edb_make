@@ -1,0 +1,531 @@
+[
+  {
+    "page_id": "고1 복소수 4문제-page-001",
+    "width_px": 830,
+    "height_px": 627,
+    "subject": "math",
+    "source_path": "/Users/clmagi/Downloads/문제 모음집/고1 복소수 4문제.png",
+    "blocks": [
+      {
+        "block_id": "고1 복소수 4문제-page-001-block-001",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 830.0,
+          "height": 313.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 520410,
+          "block_area_ratio": 0.499203,
+          "large_block": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      },
+      {
+        "block_id": "고1 복소수 4문제-page-001-block-002",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 363.0,
+          "width": 830.0,
+          "height": 264.0
+        },
+        "reading_order": 1,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "segmentation_mode": "document",
+          "page_area_px": 520410,
+          "block_area_ratio": 0.421053,
+          "large_block": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "none",
+          "ocr_latency_ms": 0,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "noop_ocr"
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "고1 복소수 4문제-page-001-problem-1",
+        "subject": "math",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "고1 복소수 4문제-page-001-block-001"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 1,
+          "question_band_index": 1,
+          "column_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "고1 복소수 4문제-page-001-problem-2",
+        "subject": "math",
+        "title": null,
+        "stem_block_ids": [],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "고1 복소수 4문제-page-001-block-002"
+        ],
+        "metadata": {
+          "fallback_grouping": true,
+          "grouping_mode": "fallback",
+          "grouping_source": "fallback_grouping",
+          "grouping_index": 2,
+          "question_band_index": 2,
+          "column_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "deskewed": true,
+      "margin_cropped": true,
+      "margin_crop_box": {
+        "left": 18,
+        "top": 15,
+        "right": 848,
+        "bottom": 642
+      },
+      "segmenter": "document-bands",
+      "content_box": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 830.0,
+        "height": 627.0
+      },
+      "column_count": 1,
+      "document_band_split_count": 0,
+      "document_row_band_count": 2,
+      "document_split_block_count": 2,
+      "document_split_applied": false,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 520410,
+      "block_count": 2,
+      "text_block_count": 0,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 2,
+      "large_block_ratio": 1.0,
+      "max_block_area_ratio": 0.499203,
+      "mean_block_area_ratio": 0.460128,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "document-bands",
+        "segmentation_mode": "document",
+        "page_area_px": 520410,
+        "block_count": 2,
+        "text_block_count": 0,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 2,
+        "large_block_ratio": 1.0,
+        "max_block_area_ratio": 0.499203,
+        "mean_block_area_ratio": 0.460128,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Downloads/문제 모음집/.pipeline_cache",
+      "ocr_error_count": 0,
+      "grouping_diagnostics": {
+        "grouping_mode": "fallback",
+        "grouping_source": "fallback_grouping",
+        "trigger_reasons": [
+          "no_text_markers",
+          "band_metadata_present",
+          "multi_block_page"
+        ],
+        "has_text_markers": false,
+        "has_band_metadata": true,
+        "block_count": 2,
+        "problem_count": 2,
+        "fallback_grouping": true,
+        "fallback_grouping_stats": {
+          "used": true,
+          "trigger_reasons": [
+            "no_text_markers",
+            "band_metadata_present",
+            "multi_block_page"
+          ],
+          "block_count": 2,
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 2,
+          "problem_count": 2
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 0,
+          "problem_number_block_count": 0
+        },
+        "problem_number_source_counts": {},
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "noop_ocr",
+            "display_title_present": false
+          }
+        ],
+        "problem_number_source": null
+      },
+      "grouping_source": "fallback_grouping",
+      "grouping_mode": "fallback",
+      "marker_counts": {
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 0,
+        "problem_number_block_count": 0
+      },
+      "fallback_grouping_stats": {
+        "used": true,
+        "trigger_reasons": [
+          "no_text_markers",
+          "band_metadata_present",
+          "multi_block_page"
+        ],
+        "block_count": 2,
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 2,
+        "problem_count": 2
+      },
+      "problem_number_source_counts": {},
+      "difficulty_profile": {
+        "page_id": "고1 복소수 4문제-page-001",
+        "segmentation_risk": 0.9,
+        "ocr_risk": 0.0,
+        "grouping_risk": 1.0,
+        "overall_risk": 1.0,
+        "tier": "red",
+        "reasons": [
+          "large_block_dominance",
+          "noop_ocr",
+          "no_problem_markers",
+          "no_problem_or_choice_markers",
+          "fallback_grouping",
+          "fallback_grouping_mode",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "document",
+            "segmenter": "document-bands",
+            "block_count": 2,
+            "large_block_count": 2,
+            "large_block_ratio": 1.0,
+            "fallback_reasons": [
+              "noop_ocr"
+            ],
+            "fallback_reason": "noop_ocr",
+            "fallback_reason_count": 0,
+            "has_fallback_reason": true,
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 2,
+            "document_split_applied": false,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "split_applied": false,
+            "page_area_px": 520410,
+            "max_block_area_ratio": 0.499203,
+            "mean_block_area_ratio": 0.460128
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 0,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": null,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 2,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "none": 2
+            },
+            "backend_latency_ms_avg": 0.0
+          },
+          "grouping": {
+            "grouping_source": "fallback_grouping",
+            "grouping_mode": "fallback",
+            "problem_count": 2,
+            "block_count": 2,
+            "problem_marker_count": 0,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "forced_problem_start_count": 0,
+            "problem_number_block_count": 0,
+            "fallback_grouping_problem_count": 2,
+            "fallback_grouping": true,
+            "marker_counts": {
+              "problem_marker_block_count": 0,
+              "choice_marker_block_count": 0,
+              "marker_conflict_block_count": 0,
+              "forced_problem_start_block_count": 0,
+              "problem_number_block_count": 0
+            },
+            "fallback_grouping_stats": {
+              "used": true,
+              "trigger_reasons": [
+                "no_text_markers",
+                "band_metadata_present",
+                "multi_block_page"
+              ],
+              "block_count": 2,
+              "problem_count": 2,
+              "problem_marker_block_count": 0,
+              "choice_marker_block_count": 0,
+              "marker_conflict_block_count": 0,
+              "fallback_reason_block_count": 2
+            },
+            "problem_number_source_counts": {}
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "고1 복소수 4문제-page-001",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "trigger_reasons": [
+          "large_block_dominance",
+          "noop_ocr",
+          "no_problem_markers",
+          "no_problem_or_choice_markers",
+          "fallback_grouping",
+          "fallback_grouping_mode",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "고1 복소수 4문제-page-001",
+          "segmentation_risk": 0.9,
+          "ocr_risk": 0.0,
+          "grouping_risk": 1.0,
+          "overall_risk": 1.0,
+          "tier": "red",
+          "reasons": [
+            "large_block_dominance",
+            "noop_ocr",
+            "no_problem_markers",
+            "no_problem_or_choice_markers",
+            "fallback_grouping",
+            "fallback_grouping_mode",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmentation_mode": "document",
+              "segmenter": "document-bands",
+              "block_count": 2,
+              "large_block_count": 2,
+              "large_block_ratio": 1.0,
+              "fallback_reasons": [
+                "noop_ocr"
+              ],
+              "fallback_reason": "noop_ocr",
+              "fallback_reason_count": 0,
+              "has_fallback_reason": true,
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 2,
+              "document_split_applied": false,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "split_applied": false,
+              "page_area_px": 520410,
+              "max_block_area_ratio": 0.499203,
+              "mean_block_area_ratio": 0.460128
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 0,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": null,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 2,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "none": 2
+              },
+              "backend_latency_ms_avg": 0.0
+            },
+            "grouping": {
+              "grouping_source": "fallback_grouping",
+              "grouping_mode": "fallback",
+              "problem_count": 2,
+              "block_count": 2,
+              "problem_marker_count": 0,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "forced_problem_start_count": 0,
+              "problem_number_block_count": 0,
+              "fallback_grouping_problem_count": 2,
+              "fallback_grouping": true,
+              "marker_counts": {
+                "problem_marker_block_count": 0,
+                "choice_marker_block_count": 0,
+                "marker_conflict_block_count": 0,
+                "forced_problem_start_block_count": 0,
+                "problem_number_block_count": 0
+              },
+              "fallback_grouping_stats": {
+                "used": true,
+                "trigger_reasons": [
+                  "no_text_markers",
+                  "band_metadata_present",
+                  "multi_block_page"
+                ],
+                "block_count": 2,
+                "problem_count": 2,
+                "problem_marker_block_count": 0,
+                "choice_marker_block_count": 0,
+                "marker_conflict_block_count": 0,
+                "fallback_reason_block_count": 2
+              },
+              "problem_number_source_counts": {}
+            }
+          }
+        }
+      },
+      "ai_intervention": {
+        "intervention_level": 0,
+        "intervention_label": "structure_crop_layout",
+        "supports_grouping_repair": true,
+        "supports_parse_cleanup": false,
+        "supports_output_rebuild": false,
+        "description": "문제 인식, 크롭, 배치 보정 중심"
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "ai_recommended",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "large_block_dominance",
+          "noop_ocr",
+          "no_problem_markers",
+          "no_problem_or_choice_markers",
+          "fallback_grouping",
+          "fallback_grouping_mode",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 2,
+        "baseline_block_count": 2,
+        "intervention_level": 0,
+        "intervention_label": "structure_crop_layout",
+        "supports_grouping_repair": true,
+        "supports_parse_cleanup": false,
+        "supports_output_rebuild": false,
+        "description": "문제 인식, 크롭, 배치 보정 중심",
+        "next_best_action": "ai_recommended"
+      }
+    }
+  }
+]

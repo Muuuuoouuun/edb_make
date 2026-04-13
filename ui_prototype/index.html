@@ -37,7 +37,7 @@
             <span>추가 즉시 자동 파싱</span>
           </label>
           <span class="meta-pill" id="apiStatus">오프라인 미리보기</span>
-          <span class="meta-pill" id="sourceQueueCount">0개 대기</span>
+          <span class="meta-pill" id="sourceQueueCount">0개 선택됨</span>
         </div>
 
         <div class="intake-status">
@@ -55,6 +55,44 @@
           <span class="meta-pill" id="selectedSourceName">선택된 소스 없음</span>
         </div>
         <div id="sourceQueue" class="source-queue" aria-live="polite"></div>
+
+        <section class="quick-run-panel" aria-labelledby="quickRunTitle">
+          <div class="quick-run-header">
+            <div>
+              <span class="toolbar-label" id="quickRunTitle">빠른 실행</span>
+              <p class="helper-text">자주 쓰는 조합을 버튼 한 번으로 적용합니다. 파일이 이미 선택되어 있으면 즉시 실행됩니다.</p>
+            </div>
+            <span class="meta-pill" id="quickRunPresetBadge">기본 파싱 프리셋</span>
+          </div>
+
+          <div class="quick-run-grid">
+            <button class="preset-button" id="presetQuickCheckButton" type="button" data-run-preset="quick-check">
+              <strong>빠른 확인</strong>
+              <span>OCR 없이 문항 경계와 크롭만 빠르게 점검</span>
+            </button>
+            <button class="preset-button" id="presetDefaultParseButton" type="button" data-run-preset="default-parse">
+              <strong>기본 파싱</strong>
+              <span>가장 무난한 기본값으로 문항별 자동 파싱</span>
+            </button>
+            <button class="preset-button" id="presetAiStructureButton" type="button" data-run-preset="ai-structure">
+              <strong>AI 구조 보정</strong>
+              <span>애매한 페이지는 AI가 문제 인식과 배치를 먼저 보정</span>
+            </button>
+            <button class="preset-button" id="presetAiRebuildButton" type="button" data-run-preset="ai-rebuild">
+              <strong>AI 재구성</strong>
+              <span>최종 출력 품질과 업스케일을 우선하는 고급 모드</span>
+            </button>
+          </div>
+
+          <div class="quick-run-toolbar">
+            <div class="quick-run-shortcuts">
+              <button class="ghost-button" id="quickUseGeneratedButton" type="button">최근 세션</button>
+              <button class="ghost-button" id="quickUseSampleButton" type="button">샘플 데이터</button>
+              <button class="ghost-button" id="quickOpenAdvancedButton" type="button">고급 설정</button>
+            </div>
+            <span class="helper-inline" id="quickRunHelper">먼저 파일을 추가하면 프리셋 버튼으로 바로 실행할 수 있습니다.</span>
+          </div>
+        </section>
 
         <section class="ai-quick-panel" aria-labelledby="aiQuickTitle">
           <div class="ai-quick-header">
@@ -89,14 +127,38 @@
               <span class="toolbar-label">공급자</span>
               <select id="runAiProviderSelect" aria-label="AI provider">
                 <option value="openai">OpenAI</option>
-                <option value="gemini">Gemini (준비중)</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+            <label class="field-stack ai-quick-field">
+              <span class="toolbar-label">개입 단계</span>
+              <select id="runAiInterventionLevelSelect" aria-label="AI intervention level">
+                <option value="0">0. 구조/크롭/배치</option>
+                <option value="1">1. 파싱/색보정</option>
+                <option value="2">2. 재구성/업스케일</option>
               </select>
             </label>
           </div>
 
+          <div class="ai-quick-key-row">
+            <label class="field-stack ai-key-field">
+              <span class="toolbar-label">API 키</span>
+              <input
+                id="runAiApiKeyInput"
+                class="field-input"
+                type="password"
+                placeholder="현재 탭에서만 사용하고 저장하지 않음"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="AI API key"
+              >
+            </label>
+            <button class="ghost-button" id="clearAiApiKeyButton" type="button">키 지우기</button>
+          </div>
+
           <div class="utility-actions">
             <button class="ghost-button" id="applyOpenAiPresetButton" type="button">OpenAI 프리셋</button>
-            <button class="ghost-button" id="applyGeminiPresetButton" type="button">Gemini 자리만</button>
+            <button class="ghost-button" id="applyGeminiPresetButton" type="button">Gemini 프리셋</button>
             <span class="helper-inline" id="aiFallbackHelper">AI 보정은 기본으로 꺼져 있고, 추천 신호만 표시합니다.</span>
           </div>
         </section>
@@ -175,7 +237,7 @@
               </div>
 
               <div class="utility-actions">
-                <span class="helper-inline">빠른 모드와 공급자는 위의 메인 패널에서 바로 바꿀 수 있습니다.</span>
+                <span class="helper-inline">빠른 모드, 공급자, 개입 단계는 위의 메인 패널에서 바로 바꿀 수 있습니다.</span>
               </div>
             </div>
 

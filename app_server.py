@@ -20,6 +20,7 @@ from urllib.request import url2pathname
 
 from build_mvp_export import run_export
 from build_problem_board_edb import run_problem_export
+from page_repair import build_ai_capabilities as build_runtime_ai_capabilities
 from pipeline_feedback import format_pipeline_error
 
 
@@ -116,70 +117,14 @@ def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
         "ai_fallback_max_regions": _coerce_optional_int(_field("aiFallbackMaxRegions", "ai_fallback_max_regions", "maxRegions", "max_regions")),
         "ai_fallback_timeout_ms": _coerce_optional_int(_field("aiFallbackTimeoutMs", "ai_fallback_timeout_ms", "timeoutMs", "timeout_ms")),
         "ai_fallback_save_debug": _coerce_bool(_field("aiFallbackSaveDebug", "ai_fallback_save_debug", "saveDebug", "save_debug"), default=False),
+        "ai_fallback_api_key": str(_field("aiFallbackApiKey", "ai_fallback_api_key", "apiKey", default="")).strip(),
+        "ai_intervention_level": _coerce_optional_int(_field("aiInterventionLevel", "ai_intervention_level", "interventionLevel", "intervention_level")) or 0,
         "fail_on_ai_error": _coerce_bool(_field("failOnAiError", "fail_on_ai_error"), default=False),
     }
 
 
 def _build_ai_capabilities() -> dict[str, Any]:
-    provider_specs = {
-        "openai": {
-            "supported": True,
-            "supported_modes": ["off", "auto", "force"],
-            "api_key_env": "OPENAI_API_KEY",
-            "supports_vision": True,
-        },
-        "claude": {
-            "supported": True,
-            "supported_modes": ["off", "auto", "force"],
-            "api_key_env": "ANTHROPIC_API_KEY",
-            "supports_vision": True,
-        },
-        "anthropic": {
-            "supported": True,
-            "supported_modes": ["off", "auto", "force"],
-            "api_key_env": "ANTHROPIC_API_KEY",
-            "supports_vision": True,
-        },
-        "gemini": {
-            "supported": False,
-            "supported_modes": [],
-            "api_key_env": None,
-            "supports_vision": False,
-            "status": "not_implemented",
-        },
-    }
-
-    providers: dict[str, Any] = {}
-    missing_api_keys: list[str] = []
-    ready_providers: list[str] = []
-    for provider_name, spec in provider_specs.items():
-        api_key_env = spec.get("api_key_env")
-        api_key_present = bool(os.environ.get(str(api_key_env), "").strip()) if api_key_env else False
-        supported = bool(spec.get("supported"))
-        ready = supported and (api_key_present or not api_key_env)
-        status = "ready" if ready else ("missing_api_key" if supported and api_key_env and not api_key_present else str(spec.get("status") or "unsupported"))
-        providers[provider_name] = {
-            "supported": supported,
-            "supported_modes": list(spec.get("supported_modes") or []),
-            "api_key_env": api_key_env,
-            "api_key_present": api_key_present,
-            "available": ready,
-            "status": status,
-            "supports_vision": bool(spec.get("supports_vision")),
-        }
-        if api_key_env and not api_key_present and supported:
-            missing_api_keys.append(str(api_key_env))
-        if ready:
-            ready_providers.append(provider_name)
-
-    return {
-        "available": bool(ready_providers),
-        "supported_modes": ["off", "auto", "force"],
-        "providers": providers,
-        "ready_providers": ready_providers,
-        "missing_api_keys": sorted(set(missing_api_keys)),
-        "default_provider": "openai",
-    }
+    return build_runtime_ai_capabilities()
 
 
 def sanitize_output_dir_name(value: str | None) -> str:
@@ -484,7 +429,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             else:
                 result = run_problem_export(
                     source_paths[0] if len(source_paths) == 1 else source_paths,
-                    record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "mixed"),
+                    record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "image-only"),
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     **common_kwargs,
                 )

@@ -4,11 +4,13 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from urllib.parse import quote
 
 from PIL import Image
 
@@ -22,6 +24,257 @@ from structured_schema import BlockType, ContentBlock, PageModel
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_API_VERSION = "2023-06-01"
+GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+AI_INTERVENTION_LABELS = {
+    0: "structure_crop_layout",
+    1: "parse_recolor",
+    2: "rebuild_upscale",
+}
+AI_PROVIDER_SPECS: dict[str, dict[str, Any]] = {
+    "openai": {
+        "supported": True,
+        "supported_modes": ["off", "auto", "force"],
+        "api_key_envs": ("OPENAI_API_KEY",),
+        "supports_vision": True,
+        "default_model": "gpt-4o-mini",
+    },
+    "claude": {
+        "supported": True,
+        "supported_modes": ["off", "auto", "force"],
+        "api_key_envs": ("ANTHROPIC_API_KEY",),
+        "supports_vision": True,
+        "default_model": "claude-sonnet-4-6",
+    },
+    "anthropic": {
+        "supported": True,
+        "supported_modes": ["off", "auto", "force"],
+        "api_key_envs": ("ANTHROPIC_API_KEY",),
+        "supports_vision": True,
+        "default_model": "claude-sonnet-4-6",
+    },
+    "gemini": {
+        "supported": True,
+        "supported_modes": ["off", "auto", "force"],
+        "api_key_envs": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        "supports_vision": True,
+        "default_model": "gemini-2.5-flash",
+    },
+}
+AI_PROVIDER_ENV_NAMES = tuple(
+    dict.fromkeys(
+        env_name
+        for spec in AI_PROVIDER_SPECS.values()
+        for env_name in spec.get("api_key_envs", ())
+    )
+)
+AI_ENV_FILE_CANDIDATES = (
+    Path(".app_runtime/ai.env"),
+    Path(".app_runtime/.env"),
+    Path(".env.local"),
+    Path(".env"),
+    Path("ai.env"),
+)
+
+
+def normalize_ai_intervention_level(value: Any, default: int = 0) -> int:
+    try:
+        level = int(value)
+    except (TypeError, ValueError):
+        level = default
+    return max(0, min(2, level))
+
+
+def ai_intervention_label(level: int) -> str:
+    return AI_INTERVENTION_LABELS.get(normalize_ai_intervention_level(level), AI_INTERVENTION_LABELS[0])
+
+
+def ai_intervention_metadata(level: int) -> dict[str, Any]:
+    normalized_level = normalize_ai_intervention_level(level)
+    metadata = {
+        "intervention_level": normalized_level,
+        "intervention_label": ai_intervention_label(normalized_level),
+        "supports_grouping_repair": True,
+        "supports_parse_cleanup": normalized_level >= 1,
+        "supports_output_rebuild": normalized_level >= 2,
+    }
+    if normalized_level == 0:
+        metadata["description"] = "문제 인식, 크롭, 배치 보정 중심"
+    elif normalized_level == 1:
+        metadata["description"] = "파싱 안정화와 색/출력 보정까지 포함"
+    else:
+        metadata["description"] = "재구성 우선 판단과 업스케일 출력까지 포함"
+    return metadata
+
+
+def canonical_ai_provider_name(value: Any, default: str = "openai") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"claude", "anthropic"}:
+        return "anthropic"
+    if normalized in {"gemini", "google"}:
+        return "gemini"
+    if normalized in {"openai"}:
+        return normalized
+    return default
+
+
+def ai_provider_api_key_envs(provider_name: Any) -> tuple[str, ...]:
+    canonical = canonical_ai_provider_name(provider_name, default="")
+    if canonical == "anthropic":
+        return tuple(AI_PROVIDER_SPECS["anthropic"]["api_key_envs"])
+    if canonical == "gemini":
+        return tuple(AI_PROVIDER_SPECS["gemini"]["api_key_envs"])
+    if canonical == "openai":
+        return tuple(AI_PROVIDER_SPECS["openai"]["api_key_envs"])
+    return ()
+
+
+def _candidate_ai_env_roots() -> list[Path]:
+    roots: list[Path] = [Path.cwd(), Path(__file__).resolve().parent]
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+
+    unique_roots: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            resolved = root
+        key = str(resolved)
+        if key in seen:
+            continue
+        unique_roots.append(resolved)
+        seen.add(key)
+    return unique_roots
+
+
+def _candidate_ai_env_files() -> list[Path]:
+    files: list[Path] = []
+    seen: set[str] = set()
+    for root in _candidate_ai_env_roots():
+        for relative_path in AI_ENV_FILE_CANDIDATES:
+            candidate = (root / relative_path).resolve()
+            if not candidate.is_file():
+                continue
+            key = str(candidate)
+            if key in seen:
+                continue
+            files.append(candidate)
+            seen.add(key)
+    return files
+
+
+def _parse_env_assignment(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if stripped.startswith("export "):
+        stripped = stripped[7:].lstrip()
+    if "=" not in stripped:
+        return None
+
+    key, raw_value = stripped.split("=", 1)
+    key = key.strip()
+    if not key or any(char.isspace() for char in key):
+        return None
+
+    value = raw_value.strip()
+    if value[:1] in {'"', "'"} and value[-1:] == value[:1]:
+        value = value[1:-1]
+    elif " #" in value:
+        value = value.split(" #", 1)[0].rstrip()
+    return key, value
+
+
+def load_runtime_ai_env() -> dict[str, str]:
+    loaded: dict[str, str] = {}
+    recognized_names = set(AI_PROVIDER_ENV_NAMES)
+    for env_file in _candidate_ai_env_files():
+        try:
+            lines = env_file.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            parsed = _parse_env_assignment(line)
+            if parsed is None:
+                continue
+            key, value = parsed
+            value = value.strip()
+            if key not in recognized_names or not value:
+                continue
+            loaded.setdefault(key, value)
+
+    for key, value in loaded.items():
+        if not os.environ.get(key, "").strip():
+            os.environ[key] = value
+    return loaded
+
+
+def resolve_ai_provider_api_key(
+    provider_name: Any,
+    *,
+    explicit_api_key: str | None = None,
+) -> tuple[str, str, list[str]]:
+    envs = list(ai_provider_api_key_envs(provider_name))
+    provided_key = (explicit_api_key or "").strip()
+    if provided_key:
+        return provided_key, "request", envs
+
+    load_runtime_ai_env()
+    for env_name in envs:
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            return value, env_name, envs
+
+    if not envs:
+        return "", "", envs
+    if len(envs) == 1:
+        return "", envs[0], envs
+    return "", " or ".join(envs), envs
+
+
+def build_ai_capabilities() -> dict[str, Any]:
+    loaded_runtime_env = load_runtime_ai_env()
+    providers: dict[str, Any] = {}
+    missing_api_keys: list[str] = []
+    ready_providers: list[str] = []
+
+    for provider_name, spec in AI_PROVIDER_SPECS.items():
+        envs = list(spec.get("api_key_envs") or [])
+        api_key_present = any(os.environ.get(env_name, "").strip() for env_name in envs)
+        api_key_source = ""
+        for env_name in envs:
+            if not os.environ.get(env_name, "").strip():
+                continue
+            api_key_source = "env_file" if env_name in loaded_runtime_env else "environment"
+            break
+        supported = bool(spec.get("supported"))
+        ready = supported and (api_key_present or not envs)
+        status = "ready" if ready else ("missing_api_key" if supported and envs else str(spec.get("status") or "unsupported"))
+        providers[provider_name] = {
+            "supported": supported,
+            "supported_modes": list(spec.get("supported_modes") or []),
+            "api_key_env": envs[0] if len(envs) == 1 else " or ".join(envs),
+            "api_key_envs": envs,
+            "api_key_present": api_key_present,
+            "api_key_source": api_key_source,
+            "available": ready,
+            "status": status,
+            "supports_vision": bool(spec.get("supports_vision")),
+        }
+        if envs and not api_key_present and supported:
+            missing_api_keys.extend(envs)
+        if ready:
+            ready_providers.append(provider_name)
+
+    return {
+        "available": bool(ready_providers),
+        "supported_modes": ["off", "auto", "force"],
+        "providers": providers,
+        "ready_providers": ready_providers,
+        "missing_api_keys": sorted(set(missing_api_keys)),
+        "default_provider": "openai",
+    }
 
 
 @dataclass
@@ -29,22 +282,34 @@ class AIFallbackConfig:
     mode: str = "off"
     provider: str = "openai"
     model: str = ""
+    api_key: str = ""
     threshold: float = 0.72
     max_regions: int = 18
     timeout_ms: int = 18000
     save_debug: bool = False
     fail_on_error: bool = False
+    intervention_level: int = 0
 
     @property
     def resolved_model(self) -> str:
         if self.model.strip():
             return self.model.strip()
-        if self._is_claude_provider():
-            return "claude-sonnet-4-6"
-        return "gpt-4o-mini"
+        provider_key = self.provider_key
+        if provider_key == "anthropic":
+            return str(AI_PROVIDER_SPECS["anthropic"]["default_model"])
+        if provider_key == "gemini":
+            return str(AI_PROVIDER_SPECS["gemini"]["default_model"])
+        return str(AI_PROVIDER_SPECS["openai"]["default_model"])
+
+    @property
+    def provider_key(self) -> str:
+        return canonical_ai_provider_name(self.provider)
 
     def _is_claude_provider(self) -> bool:
-        return self.provider.strip().lower() in {"claude", "anthropic"}
+        return self.provider_key == "anthropic"
+
+    def _is_gemini_provider(self) -> bool:
+        return self.provider_key == "gemini"
 
     @property
     def normalized_mode(self) -> str:
@@ -67,6 +332,7 @@ class AIFallbackConfig:
             "timeout_ms": self.timeout_ms,
             "save_debug": self.save_debug,
             "fail_on_error": self.fail_on_error,
+            **ai_intervention_metadata(self.intervention_level),
         }
 
 
@@ -75,21 +341,25 @@ def build_ai_fallback_config(
     mode: str = "off",
     provider: str = "openai",
     model: str = "",
+    api_key: str = "",
     threshold: float = 0.72,
     max_regions: int = 18,
     timeout_ms: int = 18000,
     save_debug: bool = False,
     fail_on_error: bool = False,
+    intervention_level: int = 0,
 ) -> AIFallbackConfig:
     return AIFallbackConfig(
         mode=mode,
         provider=provider,
         model=model,
+        api_key=api_key or "",
         threshold=threshold,
         max_regions=max_regions,
         timeout_ms=timeout_ms,
         save_debug=save_debug,
         fail_on_error=fail_on_error,
+        intervention_level=normalize_ai_intervention_level(intervention_level),
     )
 
 
@@ -112,6 +382,7 @@ def repair_page_model(
     )
     baseline.metadata["difficulty_profile"] = route_decision.profile.to_metadata() if route_decision.profile else {}
     baseline.metadata["route_decision"] = route_decision.to_metadata()
+    baseline.metadata["ai_intervention"] = ai_intervention_metadata(resolved_config.intervention_level)
     summary: dict[str, Any] = {
         "enabled": resolved_config.enabled,
         "mode": resolved_config.normalized_mode,
@@ -127,6 +398,7 @@ def repair_page_model(
         "trigger_reasons": list(route_decision.trigger_reasons),
         "baseline_problem_count": len(baseline.problems),
         "baseline_block_count": len(baseline.blocks),
+        **ai_intervention_metadata(resolved_config.intervention_level),
     }
     if not resolved_config.enabled:
         if route_decision.profile and route_decision.profile.tier == "red":
@@ -152,8 +424,8 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
-    provider_key = resolved_config.provider.strip().lower()
-    if provider_key not in {"openai", "claude", "anthropic"}:
+    provider_key = resolved_config.provider_key
+    if provider_key not in {"openai", "anthropic", "gemini"}:
         summary["status"] = "provider_pending"
         summary["skip_reason"] = "provider_not_implemented"
         baseline.metadata["ai_fallback"] = summary
@@ -187,17 +459,15 @@ def repair_page_model(
             )
             repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
             repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
+            repaired.metadata["ai_intervention"] = baseline.metadata.get("ai_intervention", {})
             repaired.metadata["ai_fallback"] = summary
             _annotate_problem_metadata(repaired, trigger_reasons)
             return repaired
 
-    if resolved_config._is_claude_provider():
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        key_env = "ANTHROPIC_API_KEY"
-    else:
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        key_env = "OPENAI_API_KEY"
-
+    api_key, key_env, _ = resolve_ai_provider_api_key(
+        provider_key,
+        explicit_api_key=resolved_config.api_key,
+    )
     if not api_key:
         summary["status"] = "missing_api_key"
         summary["skip_reason"] = f"{key_env} not set"
@@ -257,6 +527,7 @@ def repair_page_model(
     )
     repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
     repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
+    repaired.metadata["ai_intervention"] = baseline.metadata.get("ai_intervention", {})
     repaired.metadata["ai_fallback"] = summary
     _annotate_problem_metadata(repaired, trigger_reasons)
     _maybe_write_debug_artifacts(
@@ -357,6 +628,14 @@ def _request_ai_repair_with_retry(
                     trigger_reasons=trigger_reasons,
                     api_key=api_key,
                 )
+            if config._is_gemini_provider():
+                return _request_gemini_repair(
+                    prepared_page=prepared_page,
+                    page=page,
+                    config=config,
+                    trigger_reasons=trigger_reasons,
+                    api_key=api_key,
+                )
             return _request_openai_repair(
                 prepared_page=prepared_page,
                 page=page,
@@ -384,7 +663,7 @@ def _request_openai_repair(
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": _build_repair_prompt(page, trigger_reasons)},
+                    {"type": "input_text", "text": _build_repair_prompt(page, trigger_reasons, config)},
                     {
                         "type": "input_image",
                         "image_url": _image_to_data_url(prepared_page.image),
@@ -450,7 +729,7 @@ def _request_anthropic_repair(
                             "data": _image_to_base64(prepared_page.image),
                         },
                     },
-                    {"type": "text", "text": _build_repair_prompt(page, trigger_reasons)},
+                    {"type": "text", "text": _build_repair_prompt(page, trigger_reasons, config)},
                 ],
             }
         ],
@@ -475,6 +754,50 @@ def _request_anthropic_repair(
     raise RuntimeError("Claude response did not contain expected tool_use block")
 
 
+def _request_gemini_repair(
+    *,
+    prepared_page: PreparedPage,
+    page: PageModel,
+    config: AIFallbackConfig,
+    trigger_reasons: list[str],
+    api_key: str,
+) -> tuple[dict[str, Any], str | None]:
+    model_name = quote(config.resolved_model, safe="")
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": _build_repair_prompt(page, trigger_reasons, config)},
+                    {
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": _image_to_base64(prepared_page.image),
+                        }
+                    },
+                ],
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseJsonSchema": _repair_schema(),
+        },
+    }
+    raw_response = _post_json(
+        GEMINI_GENERATE_CONTENT_URL.format(model=model_name),
+        payload,
+        headers={
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        },
+        timeout_ms=config.timeout_ms,
+        service_name="Gemini",
+    )
+    content_text = _extract_gemini_response_text(raw_response)
+    parsed = json.loads(content_text)
+    return parsed, raw_response.get("responseId")
+
+
 def _repair_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -488,6 +811,10 @@ def _repair_schema() -> dict[str, Any]:
                 "items": {"type": "string"},
             },
             "figure_block_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "image_fallback_block_ids": {
                 "type": "array",
                 "items": {"type": "string"},
             },
@@ -512,6 +839,7 @@ def _repair_schema() -> dict[str, Any]:
             "problem_start_block_ids",
             "choice_block_ids",
             "figure_block_ids",
+            "image_fallback_block_ids",
             "display_titles",
             "notes",
         ],
@@ -519,7 +847,7 @@ def _repair_schema() -> dict[str, Any]:
     }
 
 
-def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
+def _build_repair_prompt(page: PageModel, trigger_reasons: list[str], config: AIFallbackConfig) -> str:
     block_lines = []
     for index, block in enumerate(page.blocks, start=1):
         # Include up to 3 top OCR lines for richer spatial context
@@ -566,8 +894,13 @@ def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
             "  - problem_start_block_ids: first block of each numbered question, reading order.",
             "  - choice_block_ids: standalone ①–⑤ (or A–E) answer-option blocks.",
             "  - figure_block_ids: image, diagram, graph, or table content blocks.",
+            "  - image_fallback_block_ids: blocks that should stay as image records because editable text reconstruction would be unsafe.",
             "  - If the page contains a single question, return only its first block as a problem start.",
             "  - Prefer minimal reassignment—only reclassify when clearly wrong.",
+            f"  - Requested intervention level: {config.intervention_level} ({ai_intervention_label(config.intervention_level)})",
+            "  - Level 0: focus on problem starts, grouping, and layout only.",
+            "  - Level 1: additionally flag damaged formula/choice/text blocks for image fallback when parse quality looks risky.",
+            "  - Level 2: be stricter about unsafe text reconstruction and aggressively mark complex blocks for image fallback.",
             f"  - Trigger reasons: {', '.join(trigger_reasons)}",
             "",
             "Blocks (JSON, reading order top→bottom):",
@@ -595,6 +928,7 @@ def _post_json(
     *,
     headers: dict[str, str],
     timeout_ms: int,
+    service_name: str = "AI",
 ) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=body, headers=headers, method="POST")
@@ -604,9 +938,9 @@ def _post_json(
             return json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI request failed with HTTP {exc.code}: {response_body}") from exc
+        raise RuntimeError(f"{service_name} request failed with HTTP {exc.code}: {response_body}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"OpenAI request failed: {exc.reason}") from exc
+        raise RuntimeError(f"{service_name} request failed: {exc.reason}") from exc
 
 
 def _extract_response_text(payload: dict[str, Any]) -> str:
@@ -632,18 +966,55 @@ def _extract_response_text(payload: dict[str, Any]) -> str:
     raise RuntimeError("OpenAI response did not include structured text output")
 
 
+def _extract_gemini_response_text(payload: dict[str, Any]) -> str:
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list):
+        collected: list[str] = []
+        finish_reasons: list[str] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            finish_reason = str(candidate.get("finishReason") or "").strip()
+            if finish_reason:
+                finish_reasons.append(finish_reason)
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    collected.append(text)
+        if collected:
+            return "\n".join(collected)
+        if finish_reasons:
+            raise RuntimeError(
+                f"Gemini response did not include structured text output (finish reason: {', '.join(sorted(set(finish_reasons)))})"
+            )
+
+    prompt_feedback = payload.get("promptFeedback")
+    if prompt_feedback:
+        raise RuntimeError(f"Gemini blocked the request: {json.dumps(prompt_feedback, ensure_ascii=False)}")
+    raise RuntimeError("Gemini response did not include structured text output")
+
+
 def _validate_repair_payload(payload: dict[str, Any], blocks: list[ContentBlock]) -> str | None:
     known_ids = {block.block_id for block in blocks}
     start_ids = list(payload.get("problem_start_block_ids") or [])
     choice_ids = list(payload.get("choice_block_ids") or [])
     figure_ids = list(payload.get("figure_block_ids") or [])
+    image_fallback_ids = list(payload.get("image_fallback_block_ids") or [])
 
     if not start_ids:
         return "problem_start_block_ids must include at least one block"
 
     invalid_ids = {
         block_id
-        for block_id in [*start_ids, *choice_ids, *figure_ids]
+        for block_id in [*start_ids, *choice_ids, *figure_ids, *image_fallback_ids]
         if block_id not in known_ids
     }
     if invalid_ids:
@@ -672,6 +1043,7 @@ def _apply_repair_payload(
     start_ids = set(payload.get("problem_start_block_ids") or [])
     choice_ids = set(payload.get("choice_block_ids") or [])
     figure_ids = set(payload.get("figure_block_ids") or [])
+    image_fallback_ids = set(payload.get("image_fallback_block_ids") or [])
     display_titles = {
         str(item["block_id"]): str(item["title"]).strip()
         for item in payload.get("display_titles") or []
@@ -686,6 +1058,12 @@ def _apply_repair_payload(
 
         if block.block_id in display_titles:
             block.metadata["display_title"] = display_titles[block.block_id]
+        if block.block_id in image_fallback_ids:
+            block.metadata["ai_prefer_image_fallback"] = True
+            block.metadata["ai_image_fallback_reason"] = "repair_recommendation"
+        else:
+            block.metadata.pop("ai_prefer_image_fallback", None)
+            block.metadata.pop("ai_image_fallback_reason", None)
 
         if block.block_id in start_ids:
             block.metadata["force_problem_start"] = True
