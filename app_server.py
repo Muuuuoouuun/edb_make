@@ -403,7 +403,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             else:
                 result = run_problem_export(
                     source_paths[0] if len(source_paths) == 1 else source_paths,
-                    record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "mixed"),
+                    record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "image-only"),
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     **common_kwargs,
                 )

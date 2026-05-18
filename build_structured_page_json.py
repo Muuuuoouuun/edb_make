@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
+import os
 import time
 from pathlib import Path
 
-from ocr_backend import ClaudeOCRBackend, NoOcrBackend, create_ocr_backend
+from ocr_backend import GeminiOCRBackend, NoOcrBackend, create_ocr_backend
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from pipeline_cache import PipelineCache
 from preprocess import PreparedPage, prepare_source_pages
@@ -93,6 +95,37 @@ def build_run_summary(
     }
 
 
+def _maybe_build_gemini_escalation(
+    *, ai_config: AIFallbackConfig | None, primary_backend_name: str
+) -> GeminiOCRBackend | None:
+    """Build a Gemini OCR backend for per-block escalation when AI fallback is
+    enabled and the primary backend isn't already Gemini. Returns None when
+    escalation is unavailable (no API key) or unnecessary."""
+    if ai_config is None or not ai_config.enabled:
+        return None
+    if primary_backend_name == "gemini":
+        return None
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
+        return None
+    try:
+        return GeminiOCRBackend()
+    except Exception:
+        return None
+
+
+def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
+    """A block should be re-OCRed by Claude when the primary engine returned
+    empty text or low confidence — both strong signals the local engine
+    struggled with this crop."""
+    text = (ocr_result.text or "").strip()
+    if not text:
+        return True
+    confidence = ocr_result.confidence
+    if confidence is None:
+        return False
+    return float(confidence) < float(threshold)
+
+
 def build_page_model(
     prepared_page: PreparedPage,
     subject: Subject,
@@ -105,10 +138,14 @@ def build_page_model(
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
     segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
     blocks = segmented_page.blocks
+    escalation_backend = _maybe_build_gemini_escalation(
+        ai_config=ai_config, primary_backend_name=backend.engine_name
+    )
+    escalation_threshold = float(ai_config.threshold) if ai_config else 0.0
 
-    for block in blocks:
+    def _process_block(block):
         if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
-            continue
+            return
 
         crop = crop_block_image(prepared_page, block)
         cached_ocr = pipeline_cache.load_ocr_result(crop, backend_name=backend.engine_name)
@@ -125,6 +162,46 @@ def build_page_model(
             block.metadata["ocr_cache_hit"] = False
             block.metadata["ocr_cache_miss"] = True
 
+        if escalation_backend is not None and _ocr_needs_escalation(
+            ocr_result, threshold=escalation_threshold
+        ):
+            escalated_cached = pipeline_cache.load_ocr_result(
+                crop, backend_name="gemini_escalated"
+            )
+            if escalated_cached is not None:
+                escalated_result = escalated_cached
+                block.metadata["ocr_escalation_cache_hit"] = True
+            else:
+                escalation_started = time.perf_counter()
+                escalated_result = escalation_backend.recognize(crop)
+                escalation_elapsed_ms = int(
+                    round((time.perf_counter() - escalation_started) * 1000.0)
+                )
+                escalated_result.metadata.setdefault(
+                    "backend_latency_ms", escalation_elapsed_ms
+                )
+                pipeline_cache.save_ocr_result(
+                    crop, escalated_result, backend_name="gemini_escalated"
+                )
+                block.metadata["ocr_escalation_cache_hit"] = False
+
+            primary_text = (ocr_result.text or "").strip()
+            escalated_text = (escalated_result.text or "").strip()
+            primary_conf = ocr_result.confidence if ocr_result.confidence is not None else 0.0
+            escalated_conf = (
+                escalated_result.confidence if escalated_result.confidence is not None else 0.0
+            )
+            # Accept escalation when it produced text and either the primary
+            # produced nothing, or the escalation is at least as confident.
+            if escalated_text and (not primary_text or escalated_conf >= primary_conf):
+                ocr_result = escalated_result
+                block.metadata["ocr_escalated"] = True
+                block.metadata["ocr_escalation_reason"] = (
+                    "empty_primary" if not primary_text else "low_confidence_primary"
+                )
+            else:
+                block.metadata["ocr_escalated"] = False
+
         block.metadata["ocr_backend"] = ocr_result.backend_name
         if isinstance(ocr_result.metadata.get("backend_latency_ms"), (int, float)):
             block.metadata["ocr_latency_ms"] = int(ocr_result.metadata["backend_latency_ms"])
@@ -140,7 +217,8 @@ def build_page_model(
                 font_size=max(10.0, block.bbox.height * 0.35),
                 math_like=infer_math_like_text(block.text),
             )
-            # Prefer Claude's block_type_hint when available; otherwise infer from text
+            # Prefer the vision backend's block_type_hint when available;
+            # otherwise infer from text.
             if block_type_hint and block_type_hint not in {"unknown", "stem"}:
                 hint_map = {
                     "choice": BlockType.CHOICE,
@@ -151,7 +229,7 @@ def build_page_model(
                 }
                 if block_type_hint in hint_map:
                     block.block_type = hint_map[block_type_hint]
-                    block.metadata["block_type_source"] = "claude_hint"
+                    block.metadata["block_type_source"] = "vision_hint"
                 else:
                     inferred = classify_text_block(block.text)
                     if inferred != BlockType.STEM or block.block_type == BlockType.STEM:
@@ -162,10 +240,13 @@ def build_page_model(
                     block.block_type = inferred
         elif block_type_hint == "figure":
             block.block_type = BlockType.IMAGE
-            block.metadata["fallback_reason"] = "claude_figure_hint"
-        elif isinstance(backend, (NoOcrBackend, ClaudeOCRBackend)) and block.block_type == BlockType.STEM:
+            block.metadata["fallback_reason"] = "vision_figure_hint"
+        elif isinstance(backend, (NoOcrBackend, GeminiOCRBackend)) and block.block_type == BlockType.STEM:
             block.block_type = BlockType.IMAGE
-            block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "claude_no_text"
+            block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "gemini_no_text"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(_process_block, blocks))
 
     page = PageModel(
         page_id=prepared_page.page_id,
@@ -268,17 +349,17 @@ def main() -> int:
     parser.add_argument("source", help="Path to a PDF or image file")
     parser.add_argument("--output-dir", default="pipeline_output", help="Directory for generated JSON and assets")
     parser.add_argument("--subject", default="unknown", help="Subject hint: math, science, korean, english, social, unknown")
-    parser.add_argument("--ocr", default="auto", help="OCR backend: auto, paddleocr, tesseract, none")
+    parser.add_argument("--ocr", default="auto", help="OCR backend: auto, paddleocr, tesseract, gemini, none")
     parser.add_argument("--pdf-dpi", type=int, default=200, help="PDF render DPI")
     parser.add_argument("--detect-perspective", action="store_true", help="Try perspective correction for photographed sources")
     parser.add_argument("--skip-deskew", action="store_true", help="Disable deskew")
     parser.add_argument("--skip-crop", action="store_true", help="Disable margin crop")
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     parser.add_argument("--ai-fallback", default="off", help="AI fallback mode: off, auto, force")
-    parser.add_argument("--ai-provider", default="openai", help="AI fallback provider: openai, claude (ANTHROPIC_API_KEY required)")
-    parser.add_argument("--ai-model", default="", help="AI model override (default: claude-sonnet-4-6 for Claude, gpt-4o-mini for OpenAI)")
+    parser.add_argument("--ai-provider", default="gemini", help="AI fallback provider: gemini (GEMINI_API_KEY required)")
+    parser.add_argument("--ai-model", default="", help="AI model override (default: gemini-2.5-pro for page repair)")
     parser.add_argument("--ai-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
-    parser.add_argument("--ai-max-regions", type=int, default=18, help="Maximum number of blocks to send to AI fallback")
+    parser.add_argument("--ai-max-regions", type=int, default=30, help="Maximum number of blocks to send to AI fallback")
     parser.add_argument("--ai-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback requests")
     parser.add_argument("--ai-save-debug", action="store_true", help="Write AI fallback debug artifacts under .pipeline_cache/ai_debug")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error instead of silently skipping on AI fallback failures")

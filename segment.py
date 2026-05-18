@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,21 +39,21 @@ class SegmentOptions:
     document_row_density_ratio: float = 0.11
     # Gap below which consecutive row-bands are merged into one block.
     # Smaller value → questions that are close together stay separate.
-    document_band_merge_gap_px: int = 24
+    document_band_merge_gap_px: int = 12
     # Bands shorter than this are candidates for merging into a neighbor.
     # Reduced so short answer-choice groups are not absorbed into the
     # preceding question stem.
-    document_small_band_height_px: int = 100
+    document_small_band_height_px: int = 80
     # Gap threshold used when deciding whether a small band is "near"
     # a neighbor. Reduced to match the tighter band-merge gap.
-    document_near_gap_px: int = 130
-    document_min_band_height_px: int = 60
+    document_near_gap_px: int = 60
+    document_min_band_height_px: int = 40
     document_band_padding_px: int = 24
-    document_recursive_split_min_height_px: int = 340
-    document_recursive_split_max_depth: int = 3
-    document_split_search_margin_ratio: float = 0.18
-    document_split_valley_ratio: float = 0.16
-    document_split_min_gap_run_px: int = 22
+    document_recursive_split_min_height_px: int = 160
+    document_recursive_split_max_depth: int = 4
+    document_split_search_margin_ratio: float = 0.12
+    document_split_valley_ratio: float = 0.35
+    document_split_min_gap_run_px: int = 12
     document_split_padding_px: int = 20
     document_split_min_density_ratio: float = 0.0085
 

@@ -2,19 +2,34 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import replace
 
 from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit, Subject
 
 
-# Matches problem number prefixes used in Korean exams:
-#   "1.", "2)", "문항 1.", "문제 3.", "문항1)", "[1]", "[2]"
+# Matches problem-number prefixes used in Korean exams. Supports:
+#   "1.", "2)", "문항 1.", "문제 3.", "문항1)", "[1]", "[2]", "<1>"
+#   "Q1.", "Q 1)", "제1번", "제 1 번"
+#   Full-width variants: "１．", "２）", "［１］", "＜１＞"
+_DIGIT_PATTERN = r"[1-9１-９][0-9０-９]{0,2}"
 PROBLEM_MARKER_RE = re.compile(
     r"^\s*"
-    r"(?:(?:문항|문제)\s*)?"
-    r"(?:\[(?P<number_bracket>[1-9][0-9]{0,2})\]"
-    r"|(?P<number>[1-9][0-9]{0,2})(?:[\.\)]))"
-    r"(?:\s+|$)"
+    r"(?:"
+    # 제 N 번 — "Problem N" in Korean; no trailing punctuation required.
+    rf"제\s*(?P<number_je>{_DIGIT_PATTERN})\s*번"
+    # 문항/문제 prefix with bracket/paren/period.
+    rf"|(?:문항|문제)\s*(?P<number_prefix>{_DIGIT_PATTERN})\s*[\.\)．）]?"
+    # [N] / <N> / ［N］ / ＜N＞ — bracket-only style.
+    rf"|[\[\<［＜](?P<number_bracket>{_DIGIT_PATTERN})[\]\>］＞]"
+    # Q1. / Q 1) — English-prefixed style.
+    rf"|[QqＱｑ]\s?(?P<number_q>{_DIGIT_PATTERN})[\.\)．）]"
+    # Plain N. / N) / N． / N）.
+    rf"|(?P<number>{_DIGIT_PATTERN})[\.\)．）]"
+    r")"
+    # Trailing: whitespace, end-of-string, or any non-digit char. Excluding
+    # digits prevents false matches against decimals like "1.5".
+    r"(?:\s+|$|(?=[^\d０-９]))"
 )
 # Matches answer-choice prefixes: ①②③④⑤, (1)…(5), 1)…5), A)…H), ㄱ)…ㄷ) etc.
 CHOICE_MARKER_RE = re.compile(
@@ -43,10 +58,35 @@ def extract_problem_number(text: str | None) -> int | None:
     if not match:
         return None
     try:
-        raw = match.group("number") or match.group("number_bracket")
-        return int(raw) if raw else None
+        raw = (
+            match.group("number")
+            or match.group("number_bracket")
+            or match.group("number_q")
+            or match.group("number_je")
+            or match.group("number_prefix")
+        )
+        if raw is None:
+            return None
+        return int(unicodedata.normalize("NFKC", raw))
     except (TypeError, ValueError):
         return None
+
+
+def find_internal_problem_markers(text: str | None) -> list[int]:
+    """Return problem numbers appearing at the start of any line inside ``text``.
+
+    Used to flag blocks that should have been split into multiple problems but
+    were merged by segmentation. Two or more entries is a strong signal that
+    routing should escalate this page to AI repair.
+    """
+    if not text:
+        return []
+    numbers: list[int] = []
+    for line in text.splitlines():
+        candidate = extract_problem_number(line)
+        if candidate is not None:
+            numbers.append(candidate)
+    return numbers
 
 
 def strip_problem_marker(text: str | None) -> str | None:
@@ -87,6 +127,15 @@ def _block_grouping_diagnostics(block: ContentBlock) -> dict[str, object]:
     if problem_number is not None and choice_marker:
         marker_conflict = True
 
+    internal_markers = find_internal_problem_markers(raw_text)
+    # Skip the first marker — that one belongs to this block's own problem.
+    # Two or more remaining markers indicate the segmentation merged what
+    # should have been separate problem blocks.
+    excess_markers = internal_markers[1:] if len(internal_markers) > 1 else []
+    if excess_markers:
+        block.metadata["internal_problem_markers"] = list(internal_markers)
+        block.metadata["internal_problem_marker_count"] = len(internal_markers)
+
     return {
         "raw_text_marker_source": raw_text,
         "display_title_marker_source": title_source if title_source != raw_text else None,
@@ -98,6 +147,9 @@ def _block_grouping_diagnostics(block: ContentBlock) -> dict[str, object]:
         "marker_conflict": marker_conflict,
         "fallback_reason": block.metadata.get("fallback_reason"),
         "display_title_present": bool(block.metadata.get("display_title")),
+        "internal_problem_markers": list(internal_markers),
+        "internal_problem_marker_count": len(internal_markers),
+        "excess_problem_marker_count": len(excess_markers),
     }
 
 
@@ -243,6 +295,12 @@ def _build_grouping_diagnostics(
     forced_problem_start_count = sum(1 for item in block_diagnostics if bool(item.get("force_problem_start")))
     problem_number_block_count = sum(1 for item in block_diagnostics if item.get("problem_number") is not None)
     fallback_reason_block_count = sum(1 for item in block_diagnostics if item.get("fallback_reason"))
+    excess_problem_marker_block_count = sum(
+        1 for item in block_diagnostics if int(item.get("excess_problem_marker_count") or 0) > 0
+    )
+    excess_problem_marker_total = sum(
+        int(item.get("excess_problem_marker_count") or 0) for item in block_diagnostics
+    )
     problem_number_source_counts: dict[str, int] = {}
     for item in block_diagnostics:
         source = item.get("problem_number_source")
@@ -288,7 +346,11 @@ def _build_grouping_diagnostics(
             "marker_conflict_block_count": marker_conflict_block_count,
             "forced_problem_start_block_count": forced_problem_start_count,
             "problem_number_block_count": problem_number_block_count,
+            "excess_problem_marker_block_count": excess_problem_marker_block_count,
+            "excess_problem_marker_total": excess_problem_marker_total,
         },
+        "excess_problem_marker_block_count": excess_problem_marker_block_count,
+        "excess_problem_marker_total": excess_problem_marker_total,
         "problem_number_source_counts": problem_number_source_counts,
         "block_diagnostics": block_diagnostics,
         "problem_number_source": next(iter(problem_number_source_counts), None),

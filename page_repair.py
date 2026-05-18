@@ -19,18 +19,18 @@ from preprocess import PreparedPage
 from structured_schema import BlockType, ContentBlock, PageModel
 
 
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_API_VERSION = "2023-06-01"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+_SUPPORTED_PROVIDER_ALIASES = {"gemini", "google", "claude", "anthropic", "openai"}
 
 
 @dataclass(slots=True)
 class AIFallbackConfig:
     mode: str = "off"
-    provider: str = "openai"
+    provider: str = "gemini"
     model: str = ""
     threshold: float = 0.72
-    max_regions: int = 18
+    max_regions: int = 30
     timeout_ms: int = 18000
     save_debug: bool = False
     fail_on_error: bool = False
@@ -39,12 +39,13 @@ class AIFallbackConfig:
     def resolved_model(self) -> str:
         if self.model.strip():
             return self.model.strip()
-        if self._is_claude_provider():
-            return "claude-sonnet-4-6"
-        return "gpt-4o-mini"
+        return "gemini-2.5-pro"
 
-    def _is_claude_provider(self) -> bool:
-        return self.provider.strip().lower() in {"claude", "anthropic"}
+    @property
+    def normalized_provider(self) -> str:
+        # All AI repair traffic is served by Gemini now. Legacy provider
+        # values are accepted but normalized to keep existing configs working.
+        return "gemini"
 
     @property
     def normalized_mode(self) -> str:
@@ -60,7 +61,7 @@ class AIFallbackConfig:
     def to_metadata(self) -> dict[str, Any]:
         return {
             "mode": self.normalized_mode,
-            "provider": self.provider,
+            "provider": self.normalized_provider,
             "model": self.resolved_model,
             "threshold": self.threshold,
             "max_regions": self.max_regions,
@@ -73,10 +74,10 @@ class AIFallbackConfig:
 def build_ai_fallback_config(
     *,
     mode: str = "off",
-    provider: str = "openai",
+    provider: str = "gemini",
     model: str = "",
     threshold: float = 0.72,
-    max_regions: int = 18,
+    max_regions: int = 30,
     timeout_ms: int = 18000,
     save_debug: bool = False,
     fail_on_error: bool = False,
@@ -146,8 +147,9 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
-    provider_key = resolved_config.provider.strip().lower()
-    if provider_key not in {"openai", "claude", "anthropic"}:
+    provider_key = resolved_config.normalized_provider
+    summary["provider"] = provider_key
+    if resolved_config.provider.strip().lower() not in _SUPPORTED_PROVIDER_ALIASES:
         summary["status"] = "provider_pending"
         summary["skip_reason"] = "provider_not_implemented"
         baseline.metadata["ai_fallback"] = summary
@@ -185,16 +187,10 @@ def repair_page_model(
             _annotate_problem_metadata(repaired, trigger_reasons)
             return repaired
 
-    if resolved_config._is_claude_provider():
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        key_env = "ANTHROPIC_API_KEY"
-    else:
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        key_env = "OPENAI_API_KEY"
-
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         summary["status"] = "missing_api_key"
-        summary["skip_reason"] = f"{key_env} not set"
+        summary["skip_reason"] = "GEMINI_API_KEY not set"
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
@@ -337,21 +333,13 @@ def _request_ai_repair_with_retry(
     trigger_reasons: list[str],
     api_key: str,
 ) -> tuple[dict[str, Any], str | None]:
-    """Route to the correct AI provider and retry once on transient failure."""
+    """Call Gemini for the repair. Retry once on transient failure."""
     last_exc: Exception | None = None
     for attempt in range(2):
         if attempt > 0:
             time.sleep(2.0)
         try:
-            if config._is_claude_provider():
-                return _request_anthropic_repair(
-                    prepared_page=prepared_page,
-                    page=page,
-                    config=config,
-                    trigger_reasons=trigger_reasons,
-                    api_key=api_key,
-                )
-            return _request_openai_repair(
+            return _request_gemini_repair(
                 prepared_page=prepared_page,
                 page=page,
                 config=config,
@@ -363,7 +351,7 @@ def _request_ai_repair_with_retry(
     raise RuntimeError(f"AI repair failed after retries: {last_exc}") from last_exc
 
 
-def _request_openai_repair(
+def _request_gemini_repair(
     *,
     prepared_page: PreparedPage,
     page: PageModel,
@@ -371,105 +359,58 @@ def _request_openai_repair(
     trigger_reasons: list[str],
     api_key: str,
 ) -> tuple[dict[str, Any], str | None]:
+    """Call the Gemini generateContent API with a JSON response schema."""
     payload = {
-        "model": config.resolved_model,
-        "store": False,
-        "input": [
+        "contents": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": _build_repair_prompt(page, trigger_reasons)},
+                "parts": [
                     {
-                        "type": "input_image",
-                        "image_url": _image_to_data_url(prepared_page.image),
-                        "detail": "high",
-                    },
-                ],
-            }
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "question_page_repair",
-                "strict": True,
-                "schema": _repair_schema(),
-            }
-        },
-    }
-    raw_response = _post_json(
-        OPENAI_RESPONSES_URL,
-        payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        timeout_ms=config.timeout_ms,
-    )
-    content_text = _extract_response_text(raw_response)
-    parsed = json.loads(content_text)
-    return parsed, raw_response.get("id")
-
-
-def _request_anthropic_repair(
-    *,
-    prepared_page: PreparedPage,
-    page: PageModel,
-    config: AIFallbackConfig,
-    trigger_reasons: list[str],
-    api_key: str,
-) -> tuple[dict[str, Any], str | None]:
-    """Call the Claude Messages API using tool_use for structured JSON output."""
-    tool_spec = {
-        "name": "repair_question_grouping",
-        "description": (
-            "Classify exam page blocks into problem starts, answer-choice blocks, "
-            "and figure blocks based on the page image and block metadata."
-        ),
-        "input_schema": _repair_schema(),
-    }
-    payload = {
-        "model": config.resolved_model,
-        "max_tokens": 1024,
-        "tools": [tool_spec],
-        "tool_choice": {"type": "tool", "name": "repair_question_grouping"},
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
                             "data": _image_to_base64(prepared_page.image),
-                        },
+                        }
                     },
-                    {"type": "text", "text": _build_repair_prompt(page, trigger_reasons)},
+                    {"text": _build_repair_prompt(page, trigger_reasons)},
                 ],
             }
         ],
-    }
-    raw_response = _post_json(
-        ANTHROPIC_MESSAGES_URL,
-        payload,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": ANTHROPIC_API_VERSION,
-            "content-type": "application/json",
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _repair_schema(),
+            "maxOutputTokens": 1536,
+            "temperature": 0.0,
         },
+    }
+    url = f"{GEMINI_API_BASE}/{config.resolved_model}:generateContent?key={api_key}"
+    raw_response = _post_json(
+        url,
+        payload,
+        headers={"Content-Type": "application/json"},
         timeout_ms=config.timeout_ms,
     )
-    for content_block in raw_response.get("content") or []:
-        if (
-            isinstance(content_block, dict)
-            and content_block.get("type") == "tool_use"
-            and content_block.get("name") == "repair_question_grouping"
-        ):
-            return content_block["input"], raw_response.get("id")
-    raise RuntimeError("Claude response did not contain expected tool_use block")
+    candidates = raw_response.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini response did not include any candidates")
+
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    json_text = "".join(
+        part.get("text", "") for part in parts if isinstance(part, dict) and part.get("text")
+    )
+    if not json_text:
+        finish_reason = candidates[0].get("finishReason") or "unknown"
+        raise RuntimeError(f"Gemini response contained no text (finish={finish_reason})")
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Gemini response JSON decode failed: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Gemini response was not a JSON object")
+    return parsed, raw_response.get("responseId") or raw_response.get("id")
 
 
 def _repair_schema() -> dict[str, Any]:
+    # Schema follows Gemini's OpenAPI 3.0 subset — no additionalProperties.
     return {
         "type": "object",
         "properties": {
@@ -494,7 +435,6 @@ def _repair_schema() -> dict[str, Any]:
                         "title": {"type": "string"},
                     },
                     "required": ["block_id", "title"],
-                    "additionalProperties": False,
                 },
             },
             "notes": {
@@ -509,7 +449,6 @@ def _repair_schema() -> dict[str, Any]:
             "display_titles",
             "notes",
         ],
-        "additionalProperties": False,
     }
 
 
@@ -550,14 +489,16 @@ def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
             "",
             "Korean exam conventions:",
             "  - Problems are numbered: '1.', '2)', '문제 3', '[4]', '문항5' etc.",
-            "  - Answer choices: ① ② ③ ④ ⑤  or  (1) (2) … or  ㄱ) ㄴ) ㄷ) style",
+            "  - Boxed texts like <보기> or [조건] are NEVER the start of a problem.",
             "  - A ㄱ/ㄴ/ㄷ enumerated list inside the stem is NOT a choice block—",
             "    it is part of the question. Choice blocks are the final ①–⑤ options.",
+            "  - Answer choices MUST BE final options like ① ② ③ ④ ⑤  or  (1) (2) …",
             "  - Figures / diagrams / physics–chemistry drawings appear below the stem.",
+            "  - Never mix the choices of Problem 1 with Problem 2.",
             "",
             "Output rules (STRICT):",
             "  - Use ONLY the block_ids listed below. Do NOT invent IDs.",
-            "  - problem_start_block_ids: first block of each numbered question, reading order.",
+            "  - problem_start_block_ids: first block of each NUMBERED question, reading order.",
             "  - choice_block_ids: standalone ①–⑤ (or A–E) answer-option blocks.",
             "  - figure_block_ids: image, diagram, graph, or table content blocks.",
             "  - If the page contains a single question, return only its first block as a problem start.",
@@ -579,10 +520,6 @@ def _image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def _image_to_data_url(image: Image.Image) -> str:
-    return f"data:image/jpeg;base64,{_image_to_base64(image)}"
-
-
 def _post_json(
     url: str,
     payload: dict[str, Any],
@@ -598,32 +535,9 @@ def _post_json(
             return json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI request failed with HTTP {exc.code}: {response_body}") from exc
+        raise RuntimeError(f"Gemini request failed with HTTP {exc.code}: {response_body}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"OpenAI request failed: {exc.reason}") from exc
-
-
-def _extract_response_text(payload: dict[str, Any]) -> str:
-    output_text = payload.get("output_text")
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text
-
-    output = payload.get("output")
-    if isinstance(output, list):
-        collected: list[str] = []
-        for item in output:
-            if not isinstance(item, dict) or item.get("type") != "message":
-                continue
-            for content in item.get("content", []):
-                if not isinstance(content, dict):
-                    continue
-                text = content.get("text")
-                if isinstance(text, str) and text.strip():
-                    collected.append(text)
-        if collected:
-            return "\n".join(collected)
-
-    raise RuntimeError("OpenAI response did not include structured text output")
+        raise RuntimeError(f"Gemini request failed: {exc.reason}") from exc
 
 
 def _validate_repair_payload(payload: dict[str, Any], blocks: list[ContentBlock]) -> str | None:

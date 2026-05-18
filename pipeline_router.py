@@ -194,6 +194,11 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
     choice_marker_count = sum(1 for block in page.blocks if block.metadata.get("choice_marker"))
     marker_conflict_count = sum(1 for block in page.blocks if block.metadata.get("marker_conflict"))
     fallback_grouping_problem_count = sum(1 for problem in page.problems if problem.metadata.get("fallback_grouping"))
+    excess_marker_block_count_blocks = sum(
+        1
+        for block in page.blocks
+        if int(block.metadata.get("internal_problem_marker_count") or 0) > 1
+    )
     problem_number_source_counts: dict[str, int] = {}
     for problem in page.problems:
         source = str(problem.metadata.get("problem_number_source") or "")
@@ -209,6 +214,10 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
         "marker_conflict_count": int(metadata.get("marker_conflict_count") or marker_conflict_count),
         "fallback_grouping_problem_count": int(metadata.get("fallback_grouping_problem_count") or fallback_grouping_problem_count),
         "problem_number_source_counts": metadata.get("problem_number_source_counts") or problem_number_source_counts,
+        "excess_problem_marker_block_count": int(
+            metadata.get("excess_problem_marker_block_count") or excess_marker_block_count_blocks
+        ),
+        "excess_problem_marker_total": int(metadata.get("excess_problem_marker_total") or 0),
     }
 
 
@@ -268,6 +277,7 @@ def _score_grouping(diagnostics: dict[str, Any], page: PageModel) -> tuple[float
     problem_marker_count = int(diagnostics.get("problem_marker_count") or 0)
     marker_conflict_count = int(diagnostics.get("marker_conflict_count") or 0)
     fallback_grouping_problem_count = int(diagnostics.get("fallback_grouping_problem_count") or 0)
+    excess_marker_block_count = int(diagnostics.get("excess_problem_marker_block_count") or 0)
 
     if block_count > 1 and problem_marker_count == 0:
         score += 0.45
@@ -281,6 +291,12 @@ def _score_grouping(diagnostics: dict[str, Any], page: PageModel) -> tuple[float
     if block_count > 1 and problem_count == block_count:
         score += 0.42
         reasons.append("problem_per_block")
+    if excess_marker_block_count > 0:
+        # A block whose own OCR text contains more than one problem marker is
+        # strong evidence segmentation merged distinct questions. Push the
+        # page into red so AI repair can re-split it.
+        score += 0.7
+        reasons.append("merged_problem_block")
     if _looks_like_full_page_image(page):
         score += 0.6
         reasons.append("full_page_image")

@@ -155,7 +155,7 @@ def estimate_problem_height_pages(page: PageModel, problem: ProblemUnit, *, min_
     choice_bonus = 0.08 if problem.choice_block_ids else 0.0
     reading_bonus = 0.08 if problem.subject in {Subject.KOREAN, Subject.ENGLISH} else 0.0
     estimated = normalized_height * 1.2 + figure_bonus + choice_bonus + reading_bonus
-    return round(max(min_height_pages, min(2.4, estimated)), 6)
+    return round(max(min_height_pages, min(10.0, estimated)), 6)
 
 
 def is_reading_heavy(problem: ProblemUnit) -> bool:
