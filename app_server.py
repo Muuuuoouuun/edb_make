@@ -53,7 +53,7 @@ def load_env_local() -> None:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 key, val = line.split("=", 1)
-                os.environ.setdefault(key.strip(), val.strip())
+                os.environ[key.strip()] = val.strip()
 
 load_env_local()
 
@@ -563,7 +563,7 @@ def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, 
         tops.append(top)
         rights.append(left + width)
         bottoms.append(top + height)
-    merged = Box.from_points(min(lefts), min(tops), max(rights), max(bottoms))
+    merged = Box(left=min(lefts), top=min(tops), width=max(rights) - min(lefts), height=max(bottoms) - min(tops))
 
     first_index = min(idx for idx, _ in targets)
     primary = targets[0][1]  # take the first listed problem as the metadata source

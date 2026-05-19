@@ -141,7 +141,13 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
-    if resolved_config.max_regions > 0 and len(baseline.blocks) > resolved_config.max_regions:
+    # `force` mode is an explicit user opt-in to always attempt AI repair —
+    # don't suppress it on busy pages.
+    if (
+        resolved_config.normalized_mode != "force"
+        and resolved_config.max_regions > 0
+        and len(baseline.blocks) > resolved_config.max_regions
+    ):
         summary["status"] = "too_many_blocks"
         summary["skip_reason"] = "max_regions_exceeded"
         baseline.metadata["ai_fallback"] = summary

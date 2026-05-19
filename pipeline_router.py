@@ -105,6 +105,13 @@ def decide_page_route(
     elif ai_enabled and profile.tier == "red":
         should_use_ai = True
         route = "ai_patch"
+    elif ai_enabled and profile.tier == "yellow":
+        # Yellow tier signals at least one diagnostic flagged the page —
+        # send it to AI repair instead of leaving "local_retry" as a no-op,
+        # since the rest of the pipeline has no retry hook.
+        should_use_ai = True
+        route = "ai_patch"
+        next_best_action = "local_retry"
     elif profile.tier == "yellow":
         route = "local_only"
         next_best_action = "local_retry"
