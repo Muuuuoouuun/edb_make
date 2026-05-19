@@ -294,7 +294,7 @@ def export_board_edb(board_images: list[Image.Image], output_path: Path, templat
                     image_secondary=secondary,
                     x=0.0,
                     y=round(index * 0.024, 6),
-                    width_hint=0.52,
+                    width_hint=1 / 3,
                     height_hint=0.024,
                 )
             )

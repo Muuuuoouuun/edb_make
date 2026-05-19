@@ -9,8 +9,8 @@ This document turns the UX rule into an implementation-ready layout rule.
 ## Core Constraints
 
 - The board is treated as a vertical sequence of about `50 pages`
-- The visible problem area is the fixed left content zone
-- The right side remains open for live teaching and handwriting
+- The visible problem area is the fixed left content zone, occupying the left `1/3` (≈`0.3333`) of each page by default (`fixed_left_zone_ratio = 1/3`)
+- The right `2/3` remains open for live teaching and handwriting
 - The base vertical rhythm is `1.2 page`
 
 ## Placement Model
@@ -30,7 +30,8 @@ Each problem should track at least these values:
 
 - Use `nominal_slot_height_pages = 1.2`
 - Start each problem on a snapped `1.2` boundary
-- Keep the problem inside the fixed left zone
+- Keep the problem inside the fixed left zone (left `1/3` of the page)
+- The default `fixed_left_zone_ratio` is `1/3`; presets may widen this for reading-heavy subjects (e.g. Korean passages)
 
 ## Overflow Rule
 

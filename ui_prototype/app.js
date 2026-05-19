@@ -67,7 +67,7 @@ const templatePresets = {
     name: "학원 기본형",
     baseSlotHeight: 1.2,
     boardPageCount: 50,
-    fixedLeftRatio: 0.5,
+    fixedLeftRatio: 1 / 3,
   },
   "korean-reading": {
     name: "국어 지문형",
@@ -109,7 +109,7 @@ function normalizeTemplate(template) {
     name: template.name || "생성 세션",
     baseSlotHeight: toNumber(template.base_slot_height_pages ?? template.baseSlotHeight, BASE_SLOT_HEIGHT),
     boardPageCount: toNumber(template.board_page_count ?? template.boardPageCount, 50),
-    fixedLeftRatio: toNumber(template.fixed_left_zone_ratio ?? template.fixedLeftRatio, 0.5),
+    fixedLeftRatio: toNumber(template.fixed_left_zone_ratio ?? template.fixedLeftRatio, 1 / 3),
   };
 }
 
