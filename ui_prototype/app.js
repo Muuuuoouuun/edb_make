@@ -1163,9 +1163,10 @@ async function runExportFromApi() {
     applySession(normalizedSession);
     clearQueuedFiles();
     setRunStatus(
-      `파싱 완료: ${exportModeLabel(normalizedSession.exportMode)} · ${normalizedSession.sourcePageCount || 0}페이지 · ${normalizedSession.detectedProblemCount || normalizedSession.problems.length}문항`,
+      `파싱 완료: ${exportModeLabel(normalizedSession.exportMode)} · ${normalizedSession.sourcePageCount || 0}페이지 · ${normalizedSession.detectedProblemCount || normalizedSession.problems.length}문항 · 칠판 편집기로 이동합니다...`,
       "success",
     );
+    setTimeout(() => { window.location.href = "/board.html"; }, 900);
   } catch (error) {
     setRunStatus(`파싱 실패: ${error.message}`, "error");
     window.alert(`파싱 실패: ${error.message}`);

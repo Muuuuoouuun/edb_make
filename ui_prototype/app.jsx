@@ -82,7 +82,7 @@ const Icon = {
 const stepLabel = s => s === 's1' ? '1단계' : s === 's2' ? '2단계 · AI' : '대기';
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published }){
+function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, hasSession }){
   return (
     <div className="topbar">
       <div className="brand">
@@ -98,19 +98,20 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
         <span>{processed}/{total} 처리됨</span>
       </div>
+      <button className="btn ghost" onClick={onReset} disabled={!hasSession} title="현재 세션 비우기">새 세션</button>
       <button className="btn ghost icon" title="실행 취소">{Icon.undo}</button>
-      <button className="btn">미리보기</button>
       <button className={`btn primary ${published ? 'done' : ''}`} onClick={onPublish}>
-        {published ? <>{Icon.check} 칠판에 올림</> : <>{Icon.board} 칠판에 올리기</>}
+        {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
       </button>
     </div>
   );
 }
 
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
-function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample, bulkApply }){
+function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles }){
   const dragId = useRef(null);
   const [overId, setOverId] = useState(null);
+  const [dropZoneActive, setDropZoneActive] = useState(false);
   const railRef = useRef(null);
   const itemRefs = useRef({});
 
@@ -141,7 +142,32 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
       </div>
 
       <div className="items" ref={railRef}>
-        <div className="drop-zone" onClick={addSample}>
+        <div
+          className={`drop-zone ${dropZoneActive ? 'is-active' : ''}`}
+          onClick={addSample}
+          onDragEnter={e => {
+            if (!e.dataTransfer?.types?.includes('Files')) return;
+            e.preventDefault();
+            setDropZoneActive(true);
+          }}
+          onDragOver={e => {
+            if (!e.dataTransfer?.types?.includes('Files')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setDropZoneActive(true);
+          }}
+          onDragLeave={e => {
+            // only clear when truly leaving (relatedTarget outside the zone)
+            if (e.currentTarget.contains(e.relatedTarget)) return;
+            setDropZoneActive(false);
+          }}
+          onDrop={e => {
+            e.preventDefault();
+            setDropZoneActive(false);
+            const files = Array.from(e.dataTransfer?.files || []);
+            if (files.length && handleFiles) handleFiles(files);
+          }}
+        >
           {Icon.upload}
           <strong style={{marginTop:6}}>이미지·PDF 끌어다 놓기</strong>
           <small>JPG · PNG · HEIC · PDF · 최대 50MB</small>
@@ -168,7 +194,7 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
             </div>
             <div className="thumb">
-              <ItemArt kind={it.kind} mode="raw" />
+              <TileImage item={it} forceMode="raw" />
             </div>
             <div className="meta">
               <div className="name">{it.name}</div>
@@ -192,10 +218,13 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
 }
 
 // ─── CENTER: big scrollable board stage (page-flow: 1 problem per page) ──
-function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample }){
+function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, reorder }){
   const scrollRef = useRef(null);
   const tileRefs = useRef({});
   const syncLock = useRef(0);
+  const dragId = useRef(null);
+  const [overId, setOverId] = useState(null);
+  const [draggingId, setDraggingId] = useState(null);
   const [pageH, setPageH] = useState(400);
 
   // measure page (viewport) height
@@ -308,10 +337,37 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''}`}
+                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${draggingId === it.id ? 'dragging' : ''} ${overId === it.id ? 'drop-target' : ''}`}
                       onClick={() => onTileClick(it.id)}
                       title={it.name}
                       style={{ top: p.top, height: p.height }}
+                      draggable
+                      onDragStart={e => {
+                        dragId.current = it.id;
+                        setDraggingId(it.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragOver={e => {
+                        e.preventDefault();
+                        if (dragId.current && dragId.current !== it.id) {
+                          setOverId(it.id);
+                        }
+                      }}
+                      onDragLeave={() => setOverId(prev => prev === it.id ? null : prev)}
+                      onDrop={e => {
+                        e.preventDefault();
+                        if (dragId.current && dragId.current !== it.id && reorder) {
+                          reorder(dragId.current, it.id);
+                        }
+                        dragId.current = null;
+                        setOverId(null);
+                        setDraggingId(null);
+                      }}
+                      onDragEnd={() => {
+                        dragId.current = null;
+                        setOverId(null);
+                        setDraggingId(null);
+                      }}
                     >
                       <div className="tile-hd">
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
@@ -324,7 +380,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                         </span>
                       </div>
                       <div className="tile-art">
-                        <ItemArt kind={it.kind} mode={it.step === 's1' ? 'raw' : 'chalk'} />
+                        <TileImage item={it} />
                       </div>
                     </button>
                   );
@@ -385,10 +441,14 @@ function SidePanel({
   boardColor, setBoardColor,
   accent, setAccent,
   onConfirm,
+  userSettings, onSaveGeminiKey,
+  aiEnabled, setAiEnabled,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
   const [compareX, setCompareX] = useState(50);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const dragging = useRef(false);
   const wrapRef = useRef(null);
 
@@ -443,13 +503,13 @@ function SidePanel({
 
                   {previewMode === 'compare' ? (
                     <div className="canvas-mini" style={{ background: 'white' }}>
-                      <div className="inner"><ItemArt kind={item.kind} mode="raw" /></div>
+                      <div className="inner"><TileImage item={item} forceMode="raw" /></div>
                       <div style={{
                         position: 'absolute', inset: 0,
                         clipPath: `inset(0 0 0 ${compareX}%)`,
                         background: boardColor,
                       }}>
-                        <div className="inner"><ItemArt kind={item.kind} mode="chalk" /></div>
+                        <div className="inner"><TileImage item={item} forceMode="chalk" /></div>
                       </div>
                       <div className="compare-handle"
                            style={{ left: `${compareX}%` }}
@@ -458,7 +518,7 @@ function SidePanel({
                   ) : (
                     <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
                          style={previewMode==='chalk' ? { background: boardColor } : null}>
-                      <div className="inner"><ItemArt kind={item.kind} mode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
+                      <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
                     </div>
                   )}
 
@@ -591,11 +651,241 @@ function SidePanel({
               <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
               <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
             </button>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
+
+            <div className="row-control">
+              <div className="lbl">
+                AI 보정 사용
+                <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
+              </div>
+              <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
+                <input
+                  type="checkbox"
+                  checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
+                  disabled={!userSettings?.hasGeminiApiKey}
+                  onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
+                />
+                <span style={{fontSize: 12, color: 'var(--muted)'}}>
+                  {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
+                </span>
+              </label>
+            </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>Gemini API 키 <span className="line" /></div>
+
+            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
+              <div className="lbl">
+                <span style={{display:'flex', alignItems:'center', gap:8}}>
+                  <span className={`pos-tag`} style={{background: userSettings?.hasGeminiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
+                    {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
+                  </span>
+                  {userSettings?.hasGeminiApiKey && (
+                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
+                      {userSettings.geminiApiKeyPreview}
+                    </span>
+                  )}
+                </span>
+                <small>
+                  {userSettings?.geminiApiKeySource === 'env'
+                    ? '환경변수의 GEMINI_API_KEY 사용 중. 저장하면 그 값이 우선.'
+                    : 'GEMINI_API_KEY로 자동 적용. .app_runtime/user_settings.json에 저장.'}
+                </small>
+              </div>
+            </div>
+            <div className="key-input-row">
+              <input
+                type={showKey ? 'text' : 'password'}
+                className="key-input"
+                placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
+                value={keyDraft}
+                onChange={e => setKeyDraft(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <button className="btn icon" type="button" onClick={() => setShowKey(s => !s)} title={showKey ? '숨기기' : '보기'}>
+                {showKey ? '🙈' : '👁'}
+              </button>
+            </div>
+            <div style={{display: 'flex', gap: 6}}>
+              <button
+                className="btn primary"
+                style={{flex: 1, justifyContent: 'center'}}
+                onClick={() => { onSaveGeminiKey?.(keyDraft.trim()); setKeyDraft(''); }}
+                disabled={!keyDraft.trim()}
+              >
+                키 저장
+              </button>
+              <button
+                className="btn"
+                style={{flex: 1, justifyContent: 'center'}}
+                onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
+                disabled={!userSettings?.hasStoredGeminiApiKey}
+              >
+                저장된 키 삭제
+              </button>
+            </div>
           </div>
         </>
       )}
     </div>
   );
+}
+
+function LoadingOverlay({ label, hint, startedAt }){
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!startedAt) { setElapsed(0); return; }
+    const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  const fmt = (s) => s >= 60 ? `${Math.floor(s/60)}분 ${s%60}초` : `${s}초`;
+  return (
+    <div className="loading-overlay">
+      <div className="loading-card">
+        <div className="loading-spinner" />
+        <div className="loading-label">{label}</div>
+        {startedAt && <div className="loading-elapsed">{fmt(elapsed)} 경과</div>}
+        {hint && <div className="loading-hint">{hint}</div>}
+      </div>
+    </div>
+  );
+}
+
+// renders a real image when the item came from the backend; falls back to
+// the SVG ItemArt for mock data. forceMode overrides the step→variant mapping
+// (useful for side-panel preview tabs).
+function TileImage({ item, forceMode }){
+  const wantChalk = forceMode ? forceMode === 'chalk' : item.step !== 's1';
+  const chalk = item.chalkUrl;
+  const raw = item.imageUrl;
+  const url = wantChalk
+    ? (chalk || raw)
+    : (raw || chalk);
+  if (url) {
+    return (
+      <img src={url} alt={item.name || ''}
+           className={`tile-img ${wantChalk ? 'is-chalk' : 'is-raw'}`}
+           draggable={false} />
+    );
+  }
+  return <ItemArt kind={item.kind} mode={wantChalk ? 'chalk' : 'raw'} />;
+}
+
+// ─── backend helpers ──────────────────────────────────────────────────────
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('file read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+const KIND_BY_SUBJECT = {
+  math: 'equation',
+  science: 'graph',
+  korean: 'paragraph',
+  english: 'paragraph',
+  social: 'paragraph',
+};
+
+function mapProblemToItem(problem, idx){
+  const title = (problem.title || '').trim();
+  const fallbackName = `문항 ${idx + 1}`;
+  // strip the noisy "...page-001 problem 1" suffix when present
+  const cleanTitle = title.replace(/page-\d+\s+problem\s+\d+\s*$/i, '').trim();
+  const name = cleanTitle || `문항 ${idx + 1}`;
+  return {
+    id: problem.id || `p${idx + 1}`,
+    name: name === '' ? fallbackName : name,
+    source: problem.sourcePageId || problem.subject || '업로드',
+    type: 'image',
+    kind: KIND_BY_SUBJECT[problem.subject] || 'paragraph',
+    step: 'raw',
+    heightFrac: typeof problem.actualHeightPages === 'number' && problem.actualHeightPages > 0
+      ? problem.actualHeightPages
+      : 0.8,
+    imageUrl: problem.imagePath || null,
+    chalkUrl: problem.boardRenderPath || null,
+    subject: problem.subject || 'unknown',
+  };
+}
+
+async function fetchLatestSession(){
+  const resp = await fetch('/api/session/latest');
+  if (resp.status === 404) return null;
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `세션 로드 실패 (${resp.status})`);
+  return json.session;
+}
+
+const AI_FALLBACK_OFF = { enabled: false, mode: 'off' };
+const AI_FALLBACK_ON = {
+  enabled: true,
+  mode: 'auto',
+  provider: 'gemini',
+  model: 'gemini-2.5-pro',
+  threshold: 0.72,
+  maxRegions: 30,
+  timeoutMs: 18000,
+  saveDebug: false,
+};
+
+async function postExport(files, aiFallback){
+  const filesPayload = await Promise.all(files.map(async (f) => ({
+    fileName: f.name,
+    fileDataBase64: await fileToBase64(f),
+  })));
+  const resp = await fetch('/api/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      files: filesPayload,
+      exportMode: 'question',
+      subject: 'unknown',
+      ocr: 'auto',
+      exportEdb: true,
+      detectPerspective: files.some(f => !/\.pdf$/i.test(f.name)),
+      maxDimension: 2400,
+      aiFallback: aiFallback || AI_FALLBACK_OFF,
+    }),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `파싱 실행 실패 (${resp.status})`);
+  return json.session;
+}
+
+async function fetchUserSettings(){
+  const resp = await fetch('/api/user-settings');
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `설정 로드 실패 (${resp.status})`);
+  return json.settings;
+}
+
+async function clearSession(){
+  const resp = await fetch('/api/session/latest', { method: 'DELETE' });
+  if (resp.status === 404) return; // already cleared
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `세션 초기화 실패 (${resp.status})`);
+}
+
+async function saveUserSettings(geminiApiKey){
+  const resp = await fetch('/api/user-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ geminiApiKey }),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `설정 저장 실패 (${resp.status})`);
+  return json.settings;
 }
 
 // ─── APP ──────────────────────────────────────────────────────────────────
@@ -613,6 +903,12 @@ function App(){
   const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(null); // {label, hint, startedAt} when busy
+  const [usingMock, setUsingMock] = useState(true);
+  const [userSettings, setUserSettings] = useState(null);
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const fileInputRef = useRef(null);
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
@@ -622,6 +918,105 @@ function App(){
   const showToast = msg => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
+  };
+
+  const applySession = useCallback((rawSession) => {
+    if (!rawSession || !Array.isArray(rawSession.problems) || rawSession.problems.length === 0) {
+      return false;
+    }
+    const mapped = rawSession.problems.map((p, idx) => mapProblemToItem(p, idx));
+    setItems(mapped);
+    setActiveId(mapped[0].id);
+    setSession(rawSession);
+    setUsingMock(false);
+    setPublished(false);
+    if (rawSession.session_name) setFileName(rawSession.session_name);
+    return true;
+  }, []);
+
+  // initial session fetch — falls back silently to INITIAL_ITEMS on 404
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await fetchLatestSession();
+        if (cancelled) return;
+        if (s) applySession(s);
+      } catch (e) {
+        if (!cancelled) console.warn('[board] session load skipped:', e.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [applySession]);
+
+  // load user settings (Gemini key status) on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await fetchUserSettings();
+        if (cancelled) return;
+        setUserSettings(s);
+        // default AI on if key is present
+        setAiEnabled(!!s?.hasGeminiApiKey);
+      } catch (e) {
+        if (!cancelled) console.warn('[board] user-settings load skipped:', e.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const onSaveGeminiKey = useCallback(async (key) => {
+    try {
+      const s = await saveUserSettings(key || '');
+      setUserSettings(s);
+      showToast(key ? 'Gemini 키 저장됨' : 'Gemini 키 삭제됨');
+    } catch (e) {
+      showToast('저장 실패: ' + e.message);
+    }
+  }, []);
+
+  const resetSession = useCallback(async () => {
+    if (!window.confirm('현재 세션을 비우고 새로 시작할까요? 업로드한 자료가 보드에서 사라집니다.')) return;
+    try {
+      await clearSession();
+      setSession(null);
+      setItems(INITIAL_ITEMS);
+      setActiveId(INITIAL_ITEMS[0]?.id || null);
+      setUsingMock(true);
+      setPublished(false);
+      setFileName('새 세션');
+      showToast('새 세션을 시작했습니다');
+    } catch (e) {
+      showToast('초기화 실패: ' + e.message);
+    }
+  }, []);
+
+  const triggerUpload = () => fileInputRef.current?.click();
+
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const aiFallback = aiEnabled && userSettings?.hasGeminiApiKey
+      ? AI_FALLBACK_ON
+      : AI_FALLBACK_OFF;
+    setLoading({
+      label: `${files.length}개 파일 파싱 중...`,
+      hint: aiFallback.enabled
+        ? 'AI 보정 사용. 사진 한 장당 15~40초.'
+        : 'AI 없이 빠른 파싱. 사진 한 장당 5~15초.',
+      startedAt: Date.now(),
+    });
+    try {
+      const s = await postExport(files, aiFallback);
+      applySession(s);
+      showToast(`파싱 완료 · ${(s.problems || []).length}개 문항`);
+    } catch (e) {
+      showToast(`파싱 실패: ${e.message}`);
+    } finally {
+      setLoading(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const setStep = (id, step) => {
@@ -650,23 +1045,70 @@ function App(){
       setActiveId(next ? next.id : null);
     }
   };
-  const addSample = () => {
+  // mock-only fallback: when no backend session, addSample stays as a visual mock
+  const addMockSample = () => {
     const pool = ['geometry-circle','equation','table','graph','geometry-triangles','paragraph'];
     const kind = pool[Math.floor(Math.random() * pool.length)];
     const id = 'i' + (Date.now() % 100000);
     const name = '새 자료 ' + (items.length + 1);
-    setItems(it => [...it, { id, name, source: '방금 업로드', type: 'image', kind, step: 'raw' }]);
+    setItems(it => [...it, { id, name, source: '방금 업로드', type: 'image', kind, step: 'raw', heightFrac: heightForKind(kind) }]);
     setActiveId(id);
-    showToast('자료 1개 추가됨');
+    showToast('자료 1개 추가됨 (mock)');
+  };
+
+  // when backend is reachable, addSample opens the real file picker → /api/export
+  const addSample = () => {
+    if (usingMock && !session) {
+      // still try real upload — picker will be a no-op if user cancels
+    }
+    triggerUpload();
   };
 
   const onConfirm = (id) => {
     showToast(`"${items.find(i=>i.id===id)?.name}" 처리 완료`);
   };
 
-  const onPublish = () => {
-    setPublished(true);
-    showToast(`칠판에 ${items.length}개 자료를 올렸어요`);
+  const onPublish = async () => {
+    if (!session || !Array.isArray(session.problems)) {
+      showToast('내보낼 자료가 없습니다. 먼저 파싱해 주세요.');
+      return;
+    }
+    const sessionIds = new Set(session.problems.map(p => p.id));
+    const currentIds = items.map(i => i.id);
+    const order = currentIds.filter(id => sessionIds.has(id));
+    const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
+    setLoading({
+      label: '편집된 .edb 파일 생성 중...',
+      hint: order.length === sessionIds.size
+        ? `${order.length}개 자료를 칠판 순서대로 재배치합니다.`
+        : `${order.length}개 자료 (${excluded.length}개 제외)`,
+      startedAt: Date.now(),
+    });
+    try {
+      const resp = await fetch('/api/session/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order, excluded }),
+      });
+      const json = await resp.json();
+      if (!resp.ok || !json.ok) throw new Error(json.error || `publish 실패 (${resp.status})`);
+      setSession(json.session);
+      const url = json.session?.edb_file_uri;
+      if (url) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (json.session.session_name || 'classin') + '.edb';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      setPublished(true);
+      showToast(`${order.length}개 자료로 EDB 제작 완료 · 다운로드 시작`);
+    } catch (e) {
+      showToast('제작 실패: ' + e.message);
+    } finally {
+      setLoading(null);
+    }
   };
 
   return (
@@ -679,6 +1121,8 @@ function App(){
         total={items.length}
         onPublish={onPublish}
         published={published}
+        onReset={resetSession}
+        hasSession={!!session}
       />
       <div className="main">
         <ItemsRail
@@ -689,6 +1133,7 @@ function App(){
           removeItem={removeItem}
           addSample={addSample}
           bulkApply={applyToAll}
+          handleFiles={handleFiles}
         />
         <BoardStage
           items={items}
@@ -698,6 +1143,7 @@ function App(){
           boardColumns={t.boardColumns}
           fileName={fileName}
           addSample={addSample}
+          reorder={reorder}
         />
         <SidePanel
           item={active}
@@ -714,10 +1160,31 @@ function App(){
           accent={t.accent}
           setAccent={v => setTweak('accent', v)}
           onConfirm={onConfirm}
+          userSettings={userSettings}
+          onSaveGeminiKey={onSaveGeminiKey}
+          aiEnabled={aiEnabled}
+          setAiEnabled={setAiEnabled}
         />
       </div>
 
       {toast && <div className="toast">{Icon.check}<span>{toast}</span></div>}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={e => handleFiles(e.target.files)}
+      />
+
+      {loading && (
+        <LoadingOverlay
+          label={loading.label}
+          hint={loading.hint}
+          startedAt={loading.startedAt}
+        />
+      )}
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="테마" />

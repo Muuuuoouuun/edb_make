@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import os
 import sys
 import time
 import webbrowser
@@ -18,7 +19,22 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import url2pathname
 
 from build_mvp_export import run_export
-from build_problem_board_edb import run_problem_export
+from build_problem_board_edb import (
+    DEFAULT_BOARD_THEME,
+    ProblemEntry,
+    build_records,
+    build_ui_session,
+    resolve_subject,
+    run_problem_export,
+)
+from edb_builder import (
+    DEFAULT_CROP_FORMAT,
+    build_edb,
+    version_string_for_crop_format,
+    write_edb,
+)
+from layout_template_schema import LayoutTemplate
+from structured_schema import Box, Subject
 from user_settings import (
     apply_to_env as apply_user_settings_to_env,
     load_user_settings,
@@ -26,6 +42,18 @@ from user_settings import (
     update_gemini_api_key,
 )
 
+
+def load_env_local() -> None:
+    # edb_make 전용 .env.local 만 읽어옵니다. (Classin_Home 프로젝트와 완전히 분리)
+    env_path = Path(__file__).resolve().parent / ".env.local"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ.setdefault(key.strip(), val.strip())
+
+load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
 
@@ -219,6 +247,77 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
     return paths
 
 
+def _file_uri_to_path(value: Any) -> Path | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.startswith("file://"):
+        parsed = urlparse(text)
+        # url2pathname expects a path with a leading slash for absolute paths;
+        # urlparse preserves that on Windows (`/C:/...`).
+        return Path(url2pathname(parsed.path))
+    if text.startswith("/api/file"):
+        # session was already rewritten; pull the underlying path back out.
+        parsed = urlparse(text)
+        params = parse_qs(parsed.query)
+        raw = params.get("path", [None])[0]
+        return Path(unquote(raw)) if raw else None
+    # bare filesystem path
+    return Path(text)
+
+
+def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
+    entries: list[ProblemEntry] = []
+    for problem in problems:
+        crop_path = _file_uri_to_path(problem.get("imagePath"))
+        board_render_path = _file_uri_to_path(problem.get("boardRenderPath")) or crop_path
+        if crop_path is None or not crop_path.exists():
+            raise FileNotFoundError(f"problem {problem.get('id')} crop missing at {crop_path}")
+        if not board_render_path.exists():
+            board_render_path = crop_path
+        bbox = problem.get("bbox") or {}
+        entries.append(
+            ProblemEntry(
+                problem_id=str(problem.get("id") or ""),
+                title=str(problem.get("title") or ""),
+                problem_number=(int(problem["problemNumber"])
+                                if isinstance(problem.get("problemNumber"), (int, float, str))
+                                and str(problem.get("problemNumber")).isdigit()
+                                else None),
+                subject=resolve_subject(problem.get("subject")),
+                source_page_id=str(problem.get("sourcePageId") or ""),
+                source_path=str(problem.get("sourceFileName") or problem.get("sourcePageId") or ""),
+                prepared_page=None,  # image-only mode never touches this
+                bounds=Box(
+                    left=float(bbox.get("left", 0.0)),
+                    top=float(bbox.get("top", 0.0)),
+                    width=float(bbox.get("width", 1000.0)),
+                    height=float(bbox.get("height", 1000.0)),
+                ),
+                crop_path=crop_path,
+                board_render_path=board_render_path,
+                blocks=[],  # image-only mode doesn't use OCR blocks
+                actual_height_pages=float(problem.get("actualHeightPages") or 1.2),
+                overflow_allowed=bool(problem.get("overflowAllowed", True)),
+                reading_heavy=bool(problem.get("readingHeavy", False)),
+            )
+        )
+    return entries
+
+
+def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
+    template_data = session.get("template") or {}
+    kwargs: dict[str, Any] = {"name": str(template_data.get("name") or "academy-default")}
+    for key in ("board_page_count", "base_slot_height_pages", "fixed_left_zone_ratio"):
+        if key in template_data and template_data[key] is not None:
+            kwargs[key] = template_data[key]
+    if "preserve_right_writing_zone" in template_data:
+        kwargs["preserve_right_writing_zone"] = bool(template_data["preserve_right_writing_zone"])
+    return LayoutTemplate(**kwargs)
+
+
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten = json.loads(json.dumps(session))
     rewritten["edb_file_uri"] = path_to_api_url(session.get("edb_path") or session.get("edb_file_uri"))
@@ -282,7 +381,131 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/user-settings":
             self._handle_user_settings_post()
             return
+        if parsed.path == "/api/session/publish":
+            self._handle_session_publish()
+            return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/session/latest":
+            self._handle_session_clear()
+            return
+        self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
+
+    def _handle_session_publish(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        order = list(payload.get("order") or [])
+        excluded = set(payload.get("excluded") or [])
+
+        by_id = {p["id"]: p for p in session.get("problems", []) if isinstance(p, dict) and p.get("id")}
+        sequence: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for pid in order:
+            if pid in by_id and pid not in excluded and pid not in seen:
+                sequence.append(by_id[pid])
+                seen.add(pid)
+        for pid, problem in by_id.items():
+            if pid in excluded or pid in seen:
+                continue
+            sequence.append(problem)
+            seen.add(pid)
+
+        if not sequence:
+            self._send_json({"ok": False, "error": "after exclusion nothing remains to publish"},
+                            status=HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            entries = _problems_to_entries(sequence)
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": f"missing asset: {exc}"}, status=HTTPStatus.CONFLICT)
+            return
+        except (KeyError, ValueError) as exc:
+            self._send_json({"ok": False, "error": f"session is missing fields needed for publish: {exc}"},
+                            status=HTTPStatus.CONFLICT)
+            return
+
+        template = _template_from_session(session)
+        output_dir = Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            records, placements, header_flag = build_records(
+                entries,
+                template,
+                record_mode="image-only",
+                output_dir=output_dir,
+                text_confidence_threshold=0.78,
+                dark_board=True,
+                board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
+                crop_format=session.get("crop_format") or DEFAULT_CROP_FORMAT,
+            )
+        except Exception as exc:  # noqa: BLE001 — bubble up pipeline errors verbatim
+            self._send_json({"ok": False, "error": f"publish build failed: {exc}"},
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        edb_name = (session.get("session_name") or "classin") + f"-published-{stamp}.edb"
+        edb_path = output_dir / edb_name
+        try:
+            write_edb(
+                edb_path,
+                build_edb(
+                    records,
+                    header_flag=header_flag,
+                    version=version_string_for_crop_format(
+                        session.get("crop_format") or DEFAULT_CROP_FORMAT
+                    ),
+                    page_count_hint=template.board_page_count,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"ok": False, "error": f"failed to write edb: {exc}"},
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        new_session = build_ui_session(
+            prepared_pages=[],
+            placements=placements,
+            output_dir=output_dir,
+            edb_path=edb_path,
+            source_paths=session.get("input_files") or [],
+            record_mode="image-only",
+            ai_fallback_config=session.get("ai_fallback"),
+            ai_summary=session.get("ai_summary"),
+        )
+        # carry over user-facing labels so the rename doesn't get lost
+        if session.get("session_name"):
+            new_session["session_name"] = session["session_name"]
+        self.app_server.remember_session(new_session)
+        self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+
+    def _handle_session_clear(self) -> None:
+        self.app_server.latest_session = None
+        self.app_server.allowed_files = set()
+        try:
+            if LATEST_SESSION_JSON.exists():
+                LATEST_SESSION_JSON.unlink()
+        except OSError as exc:
+            self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        # also blank out the generated_session.js bridge so a refresh shows empty state
+        try:
+            GENERATED_SESSION_JS.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
+        except OSError:
+            pass
+        self._send_json({"ok": True})
 
     def _handle_user_settings_get(self) -> None:
         self._send_json(
