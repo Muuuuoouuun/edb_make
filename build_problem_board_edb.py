@@ -83,6 +83,13 @@ def _resolve_board_theme(board_theme: str | None) -> str:
     return DEFAULT_BOARD_THEME
 
 
+def _resolve_chalk_color(board_theme: str | None) -> tuple[int, int, int]:
+    """Return the chalk RGB for ``board_theme``. ClassIn paints its own dark
+    chalkboard under transparent PNGs, so the only color we need to bake into
+    each problem image is this chalk tone."""
+    return BOARD_THEME_PALETTES[_resolve_board_theme(board_theme)]["chalk"]
+
+
 # Minimum width (px) for a problem crop before chalk rendering. Smaller crops
 # get upscaled with LANCZOS so OCR and the dark-board composite have enough
 # pixel-detail to render legibly. Chosen empirically: 1024 px wide is roughly
@@ -117,20 +124,41 @@ def _enhance_problem_crop(image: Image.Image) -> Image.Image:
     return rgb.filter(ImageFilter.UnsharpMask(radius=1.4, percent=140, threshold=2))
 
 
-def _extract_problem_cutout(image: Image.Image) -> Image.Image:
-    """Remove paper-like backgrounds and keep problem ink as an RGBA cutout."""
+def _extract_problem_cutout(
+    image: Image.Image,
+    *,
+    chalk_color: tuple[int, int, int] | None = None,
+) -> Image.Image:
+    """Recolor problem ink as chalk on a transparent canvas.
+
+    The output is an RGBA PNG where ``alpha`` encodes how much ink the source
+    crop has at each pixel and the RGB channels are uniformly the chalk
+    color. ClassIn paints its own chalkboard background under transparent
+    PNGs, so shipping the chalk-on-transparent cutout directly removes the
+    legacy "composite onto a fake dark board" step — the original ink color
+    would otherwise be invisible against ClassIn's real chalkboard.
+    """
+    resolved_chalk = (
+        tuple(int(c) for c in chalk_color)
+        if chalk_color is not None
+        else BOARD_THEME_PALETTES[DEFAULT_BOARD_THEME]["chalk"]
+    )
     rgb = image.convert("RGB")
     gray = ImageOps.autocontrast(rgb.convert("L"))
     stat = ImageStat.Stat(gray)
     mean_brightness = stat.mean[0]
+
     if mean_brightness <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
-        return rgb.convert("RGBA")
+        # Source is already dark-background (e.g. a screen capture of a
+        # chalkboard) — bright pixels are the ink so alpha follows brightness.
+        if np is not None:
+            np_alpha = np.asarray(gray, dtype=np.float32) / 255.0
+            return _compose_chalk_rgba(np_alpha, resolved_chalk)
+        return _compose_chalk_rgba_pil(gray, image.size, resolved_chalk)
 
     if np is None:
-        rgba = rgb.convert("RGBA")
-        mask = gray.point(lambda px: 0 if px >= 242 else 255, mode="L")
-        rgba.putalpha(mask)
-        return rgba
+        mask = gray.point(lambda px: 255 if px < 242 else 0, mode="L")
+        return _compose_chalk_rgba_pil(mask, image.size, resolved_chalk)
 
     rgb_array = np.asarray(rgb, dtype=np.float32) / 255.0
     gray_array = np.asarray(gray, dtype=np.float32)
@@ -147,29 +175,37 @@ def _extract_problem_cutout(image: Image.Image) -> Image.Image:
     alpha = np.maximum(alpha_strength, np.maximum(keep_color * 0.92, keep_dark))
     alpha = np.where(max_channel > 0.985, alpha * 0.08, alpha)
 
-    rgba_array = np.dstack(
-        [
-            np.clip(rgb_array[:, :, 0] * 255.0, 0.0, 255.0),
-            np.clip(rgb_array[:, :, 1] * 255.0, 0.0, 255.0),
-            np.clip(rgb_array[:, :, 2] * 255.0, 0.0, 255.0),
-            np.clip(alpha * 255.0, 0.0, 255.0),
-        ]
-    ).astype("uint8")
-    return Image.fromarray(rgba_array, mode="RGBA")
+    return _compose_chalk_rgba(alpha, resolved_chalk)
+
+
+def _compose_chalk_rgba(alpha_array, chalk_color: tuple[int, int, int]) -> Image.Image:
+    """RGBA from a numpy alpha array (values 0..1) + uniform chalk RGB."""
+    if np is None:
+        raise RuntimeError("numpy is required for _compose_chalk_rgba")
+    height, width = alpha_array.shape
+    rgba = np.empty((height, width, 4), dtype=np.uint8)
+    rgba[..., 0] = int(chalk_color[0])
+    rgba[..., 1] = int(chalk_color[1])
+    rgba[..., 2] = int(chalk_color[2])
+    rgba[..., 3] = np.clip(alpha_array * 255.0, 0.0, 255.0).astype(np.uint8)
+    return Image.fromarray(rgba, mode="RGBA")
+
+
+def _compose_chalk_rgba_pil(
+    alpha_mask: Image.Image, size: tuple[int, int], chalk_color: tuple[int, int, int]
+) -> Image.Image:
+    """PIL-only fallback for :func:`_compose_chalk_rgba`."""
+    chalk = Image.new("RGBA", size, chalk_color + (0,))
+    alpha = alpha_mask if alpha_mask.size == size else alpha_mask.resize(size)
+    chalk.putalpha(alpha)
+    return chalk
 
 
 def _prepare_image_for_dark_board(image: Image.Image, *, board_theme: str = DEFAULT_BOARD_THEME) -> Image.Image:
-    """Composite a light-background crop onto a dark ClassIn-style board."""
-    resolved_theme = _resolve_board_theme(board_theme)
-    palette = BOARD_THEME_PALETTES[resolved_theme]
-    enhanced = _enhance_problem_crop(image)
-    cutout = _extract_problem_cutout(enhanced).convert("RGBA")
-    alpha_mask = cutout.getchannel("A")
-
-    board = Image.new("RGBA", cutout.size, palette["background"] + (255,))
-    chalk_layer = Image.new("RGBA", cutout.size, palette["chalk"] + (0,))
-    chalk_layer.putalpha(alpha_mask)
-    return Image.alpha_composite(board, chalk_layer).convert("RGB")
+    """Deprecated. ClassIn paints its own chalkboard background under
+    transparent PNGs, so we ship the chalk-on-transparent cutout directly.
+    Kept as a thin shim so any external callers keep working."""
+    return _extract_problem_cutout(_enhance_problem_crop(image), chalk_color=_resolve_chalk_color(board_theme))
 
 
 def _write_render_image(image: Image.Image, path: Path) -> Path:
@@ -364,6 +400,39 @@ def _expand_problem_blocks_by_gap(
     return included
 
 
+def _drop_pre_first_problem_headers(
+    problems: list[ProblemUnit],
+    block_by_id: dict[str, ContentBlock],
+) -> list[ProblemUnit]:
+    """Strip page-chrome ProblemUnits that precede the first numbered problem.
+
+    Cover-page titles, exam form fields (성명 / 수험번호), and subject
+    headers (물리학I / 과학탐구 / 수학II) often surface as their own
+    ProblemUnits — especially in fallback grouping where every band becomes a
+    pseudo-problem. They land above the first real numbered problem and have
+    no ``problem_number``, so we trim them. If the page has no numbered
+    problem at all we leave the list untouched: that's the best-effort
+    behaviour while OCR is unavailable.
+    """
+    if not problems:
+        return problems
+
+    first_numbered_index: int | None = None
+    for index, problem in enumerate(problems):
+        raw = problem.metadata.get("problem_number")
+        if isinstance(raw, int) and raw >= 1:
+            first_numbered_index = index
+            break
+        if isinstance(raw, str) and raw.isdigit():
+            first_numbered_index = index
+            break
+
+    if first_numbered_index is None or first_numbered_index == 0:
+        return problems
+
+    return problems[first_numbered_index:]
+
+
 def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
     """Patch in problem_number for entries whose marker OCR failed.
 
@@ -420,6 +489,7 @@ def build_problem_entries(
     crop_dir.mkdir(parents=True, exist_ok=True)
     cutout_dir = output_dir / "problem_cutouts"
     cutout_dir.mkdir(parents=True, exist_ok=True)
+    chalk_color = _resolve_chalk_color(board_theme)
     prepared_by_page_id = {page.page_id: page for page in prepared_pages}
     entries: list[ProblemEntry] = []
 
@@ -436,6 +506,14 @@ def build_problem_entries(
             page.problems,
             key=lambda p: (_problem_top_y(p, block_by_id), p.unit_id),
         )
+
+        # Drop pre-first-problem header bands (e.g. cover-page title, 성명 /
+        # 수험번호 form, "물리학I" / "과학탐구" subject header). When the page
+        # contains a numbered problem, anything that lands above the first
+        # numbered problem with no number of its own and no choice marker is
+        # treated as page chrome — it would otherwise get bundled into the
+        # first problem's crop (or worse, surface as its own pseudo-problem).
+        ordered_problems = _drop_pre_first_problem_headers(ordered_problems, block_by_id)
 
         _fill_missing_problem_numbers(ordered_problems)
 
@@ -484,7 +562,7 @@ def build_problem_entries(
             # small or low-DPI crops produce a legible alpha mask on the dark
             # board.
             enhanced_crop = _enhance_problem_crop(crop)
-            cutout_image = _extract_problem_cutout(enhanced_crop)
+            cutout_image = _extract_problem_cutout(enhanced_crop, chalk_color=chalk_color)
             board_render_path = cutout_dir / crop_name
             _write_render_image(cutout_image, board_render_path)
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
@@ -1045,6 +1123,7 @@ def build_mixed_records(
     available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
     block_crop_dir = output_dir / "block_crops"
     block_crop_dir.mkdir(parents=True, exist_ok=True)
+    chalk_color = _resolve_chalk_color(board_theme)
 
     records: list[bytes] = []
     placement_summaries: list[dict[str, object]] = []
@@ -1093,7 +1172,7 @@ def build_mixed_records(
                 crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
                 crop_path = block_crop_dir / crop_name
                 crop.save(crop_path)  # Save original for UI/debugging
-                board_crop = _extract_problem_cutout(crop) if dark_board else crop.convert("RGB")
+                board_crop = _extract_problem_cutout(crop, chalk_color=chalk_color) if dark_board else crop.convert("RGB")
                 image_bytes, image_format = _encode_image_bytes(board_crop, quality=92)
                 preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
                 records.append(
