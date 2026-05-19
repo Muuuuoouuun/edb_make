@@ -282,6 +282,14 @@ def render_board_page(page_model: PageModel, prepared_image: Image.Image, left_z
 
 
 def export_board_edb(board_images: list[Image.Image], output_path: Path, template_name: str) -> None:
+    # Each board page record advances by ~1.2 logical pages (matches the
+    # 0.024 norm step used previously when page_count_hint was hard-coded to 50).
+    # Scale page_count_hint with the record count so ClassIn allocates a logical
+    # canvas tall enough to contain every page record — same convention real
+    # published EDBs use (~2x record count, floor 50).
+    page_count_hint = max(50, len(board_images) * 2)
+    step_pages = 1.2  # 0.024 * 50 — preserves the legacy 708px vertical step
+    y_step = step_pages / page_count_hint
     records: list[bytes] = []
     for index, image in enumerate(board_images):
         primary = _encode_jpeg(image, quality=92)
@@ -293,13 +301,18 @@ def export_board_edb(board_images: list[Image.Image], output_path: Path, templat
                     image_primary=primary,
                     image_secondary=secondary,
                     x=0.0,
-                    y=round(index * 0.024, 6),
-                    width_hint=0.52,
-                    height_hint=0.024,
+                    y=round(index * y_step, 6),
+                    width_hint=1 / 3,
+                    height_hint=round(y_step, 6),
                 )
             )
         )
-    payload = build_edb(records, header_flag=4, version="6.0.5.3911")
+    payload = build_edb(
+        records,
+        header_flag=4,
+        version="6.0.5.3911",
+        page_count_hint=page_count_hint,
+    )
     write_edb(output_path, payload)
 
 
