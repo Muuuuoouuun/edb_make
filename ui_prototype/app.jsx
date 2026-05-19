@@ -1,0 +1,734 @@
+// 칠판 자료 편집기 — main app
+const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "dark": false,
+  "boardColor": "#1d3a2c",
+  "accent": "#2f6fed",
+  "boardColumns": 2
+}/*EDITMODE-END*/;
+
+const BOARD_COLORS = ['#1d3a2c', '#101418', '#264653', '#3a2f24'];
+const ACCENTS = ['#2f6fed', '#6d3df0', '#1f7a4a', '#d97757'];
+
+const SAMPLE_NAMES = [
+  '원과 접선의 성질', '근의 공식 유도', '삼각비 특수각 표', '이차함수 그래프', '닮음 도형 예제',
+  '영어 24번 지문', '함수의 극한', '미분계수의 정의', '적분 기본 정리', '벡터 내적 활용',
+  '확률 조건부', '이항분포 표', '수열의 합', '점화식 풀이', '복소평면 회전',
+  '도함수와 접선', '함수의 연속', '평균값의 정리', '곱의 미분법', '몫의 미분법',
+  '삼각함수 합성', '로그 성질', '지수 방정식', '부등식 영역', '원의 방정식',
+];
+const SAMPLE_SOURCES = ['고1 기하 · p.42', '개념원리 · p.15', 'PDF · 3쪽', '함수 단원 · p.78', '교재 자체 촬영', '모의고사 · 6월', '쎈 · 78번', '마플 · 단원평가', '판서노트 · 4/12', '학생 질문 캡처'];
+const SAMPLE_KINDS = ['geometry-circle','equation','table','graph','geometry-triangles','paragraph'];
+const SAMPLE_STEPS = ['raw','raw','raw','s1','s2','raw'];
+
+// 자료별 자연 높이 (1.0 = 한 페이지)
+const HEIGHT_BY_KIND = {
+  'equation': 0.55,
+  'geometry-triangles': 0.75,
+  'graph': 0.85,
+  'geometry-circle': 0.95,
+  'table': 1.4,
+  'paragraph': 1.85,
+};
+const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
+
+const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
+  const kind = SAMPLE_KINDS[i % SAMPLE_KINDS.length];
+  return {
+    id: 'i' + (i + 1),
+    name: SAMPLE_NAMES[i % SAMPLE_NAMES.length],
+    source: SAMPLE_SOURCES[i % SAMPLE_SOURCES.length],
+    type: i % 4 === 2 ? 'pdf' : 'image',
+    kind,
+    step: SAMPLE_STEPS[i % SAMPLE_STEPS.length],
+    heightFrac: heightForKind(kind),
+  };
+});
+
+// ─── icons ────────────────────────────────────────────────────────────────
+// smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
+function smoothScrollTo(el, top, duration = 380){
+  if (!el) return;
+  const start = el.scrollTop;
+  const delta = top - start;
+  if (Math.abs(delta) < 4){ el.scrollTop = top; return; }
+  if (el.__scrollRaf) cancelAnimationFrame(el.__scrollRaf);
+  const t0 = performance.now();
+  const ease = u => 1 - Math.pow(1 - u, 3);
+  const step = (now) => {
+    const u = Math.min(1, (now - t0) / duration);
+    el.scrollTop = start + delta * ease(u);
+    if (u < 1) el.__scrollRaf = requestAnimationFrame(step);
+    else el.__scrollRaf = null;
+  };
+  el.__scrollRaf = requestAnimationFrame(step);
+}
+
+const Icon = {
+  upload: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>,
+  trash:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 002 2h8a2 2 0 002-2l1-13M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>,
+  crop:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 2v15h15M2 7h15v15"/></svg>,
+  rotate: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0114.5-7.2M21 4v5h-5"/></svg>,
+  wand:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4l1.5 3L20 8.5 16.5 10 15 13l-1.5-3L10 8.5 13.5 7 15 4zM5 19l8-8M5 19l1.5-1.5"/></svg>,
+  check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
+  board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
+  zoomIn: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>,
+  undo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3"/></svg>,
+  pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
+  align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
+};
+
+const stepLabel = s => s === 's1' ? '1단계' : s === 's2' ? '2단계 · AI' : '대기';
+
+// ─── TOP BAR ──────────────────────────────────────────────────────────────
+function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published }){
+  return (
+    <div className="topbar">
+      <div className="brand">
+        <span className="logo">板</span>
+        칠판 자료 편집기
+      </div>
+      <div className="crumb">
+        <span>수업 ›</span>
+        <input value={fileName} onChange={e => setFileName(e.target.value)} />
+      </div>
+      <div className="spacer" />
+      <div className="progress" title={`${processed} / ${total} 처리됨`}>
+        <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
+        <span>{processed}/{total} 처리됨</span>
+      </div>
+      <button className="btn ghost icon" title="실행 취소">{Icon.undo}</button>
+      <button className="btn">미리보기</button>
+      <button className={`btn primary ${published ? 'done' : ''}`} onClick={onPublish}>
+        {published ? <>{Icon.check} 칠판에 올림</> : <>{Icon.board} 칠판에 올리기</>}
+      </button>
+    </div>
+  );
+}
+
+// ─── LEFT: items rail ─────────────────────────────────────────────────────
+function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample, bulkApply }){
+  const dragId = useRef(null);
+  const [overId, setOverId] = useState(null);
+  const railRef = useRef(null);
+  const itemRefs = useRef({});
+
+  // keep active item visible
+  useEffect(() => {
+    const el = itemRefs.current[activeId];
+    const rail = railRef.current;
+    if (!el || !rail) return;
+    const top = el.offsetTop;
+    const bot = top + el.offsetHeight;
+    const vTop = rail.scrollTop;
+    const vBot = vTop + rail.clientHeight;
+    if (top < vTop + 16) {
+      smoothScrollTo(rail, top - 16);
+    } else if (bot > vBot - 16) {
+      smoothScrollTo(rail, bot - rail.clientHeight + 24);
+    }
+  }, [activeId]);
+
+  return (
+    <div className="col left">
+      <div className="col-hd">
+        <h2>자료</h2>
+        <span className="count">{items.length}</span>
+        <div className="spacer" />
+        <button className="icon-btn" title="모두 2단계로 변환" onClick={() => bulkApply('s2')}>{Icon.wand}</button>
+        <button className="icon-btn" title="추가" onClick={addSample}>{Icon.upload}</button>
+      </div>
+
+      <div className="items" ref={railRef}>
+        <div className="drop-zone" onClick={addSample}>
+          {Icon.upload}
+          <strong style={{marginTop:6}}>이미지·PDF 끌어다 놓기</strong>
+          <small>JPG · PNG · HEIC · PDF · 최대 50MB</small>
+        </div>
+
+        {items.map((it, i) => (
+          <div
+            key={it.id}
+            ref={el => { itemRefs.current[it.id] = el; }}
+            className={`item ${activeId === it.id ? 'active' : ''} ${dragId.current === it.id ? 'dragging' : ''} ${overId === it.id ? 'drop-target' : ''}`}
+            draggable
+            onClick={() => setActive(it.id)}
+            onDragStart={e => { dragId.current = it.id; e.dataTransfer.effectAllowed = 'move'; }}
+            onDragOver={e => { e.preventDefault(); setOverId(it.id); }}
+            onDragLeave={() => setOverId(null)}
+            onDrop={e => {
+              e.preventDefault();
+              if (dragId.current && dragId.current !== it.id) reorder(dragId.current, it.id);
+              dragId.current = null; setOverId(null);
+            }}
+            onDragEnd={() => { dragId.current = null; setOverId(null); }}
+          >
+            <div className="grip" title="끌어 옮기기">
+              <span className="idx">{String(i+1).padStart(2,'0')}</span>
+            </div>
+            <div className="thumb">
+              <ItemArt kind={it.kind} mode="raw" />
+            </div>
+            <div className="meta">
+              <div className="name">{it.name}</div>
+              <div className="sub">
+                {it.step === 's1' && <span className="tag s1">1단계</span>}
+                {it.step === 's2' && <span className="tag s2">AI</span>}
+                {it.step === 'raw' && <span className="tag">대기</span>}
+                <span style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{it.source}</span>
+              </div>
+            </div>
+            <div className="actions">
+              <button className="icon-btn" title="삭제" onClick={e => { e.stopPropagation(); removeItem(it.id); }}>
+                {Icon.trash}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── CENTER: big scrollable board stage (page-flow: 1 problem per page) ──
+function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample }){
+  const scrollRef = useRef(null);
+  const tileRefs = useRef({});
+  const syncLock = useRef(0);
+  const [pageH, setPageH] = useState(400);
+
+  // measure page (viewport) height
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setPageH(el.clientHeight || 400);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // compute page-flow positions: each item starts at next page boundary
+  // after the previous item ends.  e.g. item ending at 1.8p → next at 2p.
+  const layout = useMemo(() => {
+    const EPS = 0.001;
+    const positions = [];
+    let cursor = 0;
+    items.forEach((it, i) => {
+      const top = i === 0 ? 0 : Math.ceil(cursor / pageH - EPS) * pageH;
+      const height = (it.heightFrac || 0.8) * pageH;
+      positions.push({ top, height, page: Math.floor(top / pageH) + 1, spans: Math.ceil(height / pageH) });
+      cursor = top + height;
+    });
+    const endTop = items.length === 0 ? 0 : Math.ceil(cursor / pageH - EPS) * pageH;
+    const endH = pageH * 0.42;
+    const totalH = endTop + endH;
+    const totalPages = Math.max(1, Math.ceil(totalH / pageH));
+    return { positions, endTop, endH, totalH, totalPages };
+  }, [items, pageH]);
+
+  const [scrollTop, setScrollTop] = useState(0);
+  const currentPage = Math.min(layout.totalPages, Math.floor(scrollTop / pageH) + 1);
+
+  // when activeId changes externally, scroll the board to it
+  useEffect(() => {
+    if (Date.now() - syncLock.current < 450) return;
+    const container = scrollRef.current;
+    const idx = items.findIndex(x => x.id === activeId);
+    if (!container || idx < 0) return;
+    const target = Math.max(0, layout.positions[idx].top - 8);
+    if (Math.abs(container.scrollTop - target) < 6) return;
+    smoothScrollTo(container, target);
+  }, [activeId, layout]);
+
+  const onScroll = () => {
+    const c = scrollRef.current;
+    if (!c) return;
+    setScrollTop(c.scrollTop);
+    // find item whose start is closest to (just below) scrollTop
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    layout.positions.forEach((p, idx) => {
+      const dist = Math.abs(p.top - c.scrollTop - 24);
+      if (dist < nearestDist){ nearestDist = dist; nearestIdx = idx; }
+    });
+    const id = items[nearestIdx]?.id;
+    if (id && id !== activeId){
+      syncLock.current = Date.now();
+      setActive(id);
+    }
+  };
+
+  const onTileClick = (id) => {
+    syncLock.current = Date.now();
+    setActive(id);
+  };
+
+  const processedCount = items.filter(i => i.step !== 'raw').length;
+  const aiCount = items.filter(i => i.step === 's2').length;
+  const rawCount = items.filter(i => i.step === 'raw').length;
+  const s1Count = items.filter(i => i.step === 's1').length;
+
+  // page-boundary divider lines (between page N and N+1)
+  const dividers = [];
+  for (let i = 1; i < Math.min(layout.totalPages, 50); i++){
+    dividers.push(i * pageH);
+  }
+
+  return (
+    <div className="col center">
+      <div className="stage">
+        <div className="stage-toolbar">
+          <span className="name">실시간 칠판 미리보기</span>
+          <span className="pill"><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
+          <div className="spacer" />
+          <button className="btn ghost icon" title="자동 정렬">{Icon.align}</button>
+          <button className="btn ghost icon" title="확대">{Icon.zoomIn}</button>
+          <div style={{ width: 1, height: 22, background: 'var(--line)', margin: '0 4px' }} />
+          <button className="btn ghost"><span style={{opacity:.6, marginRight:4}}>화면</span>맞춤</button>
+        </div>
+
+        <div className="stage-wrap">
+          <div className="stage-board" style={{ background: boardColor }}>
+
+            <div className="stage-scroll" ref={scrollRef} onScroll={onScroll}>
+              <div className="stage-content" style={{ height: layout.totalH }}>
+                {/* page boundary dividers — scroll with content */}
+                {dividers.map((top, i) => (
+                  <div key={i} className="page-divider" style={{ top }}>
+                    <span className="label">— {i + 2} 페이지 —</span>
+                  </div>
+                ))}
+
+                {items.map((it, i) => {
+                  const p = layout.positions[i];
+                  if (!p) return null;
+                  return (
+                    <button
+                      key={it.id}
+                      ref={el => { tileRefs.current[it.id] = el; }}
+                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''}`}
+                      onClick={() => onTileClick(it.id)}
+                      title={it.name}
+                      style={{ top: p.top, height: p.height }}
+                    >
+                      <div className="tile-hd">
+                        <span className="n">{String(i+1).padStart(2,'0')}</span>
+                        <span className="nm">{it.name}</span>
+                        {p.spans > 1 && (
+                          <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
+                        )}
+                        <span className={`step-mark ${it.step}`}>
+                          {it.step === 's1' ? '1' : it.step === 's2' ? 'AI' : '··'}
+                        </span>
+                      </div>
+                      <div className="tile-art">
+                        <ItemArt kind={it.kind} mode={it.step === 's1' ? 'raw' : 'chalk'} />
+                      </div>
+                    </button>
+                  );
+                })}
+
+                {/* end slot */}
+                <div
+                  className="stage-tile-end"
+                  onClick={addSample}
+                  style={{ top: layout.endTop, height: layout.endH }}
+                >
+                  <span className="plus">＋</span>
+                  자료 추가
+                  <small>최대 50 페이지</small>
+                </div>
+              </div>
+            </div>
+
+            <div className="board-pageind">
+              <span>{String(currentPage).padStart(2,'0')}</span>
+              <span className="sep">/</span>
+              <span className="total">{String(layout.totalPages).padStart(2,'0')}</span>
+              <span style={{marginLeft:6, opacity:.6}}>p</span>
+            </div>
+
+            <div className="vignette" />
+          </div>
+        </div>
+
+        <div className="stage-status">
+          <span className="chip">1문제 / 1페이지 · 자동 페이지 나눔</span>
+          <span className="chip">
+            <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
+            1단계 {s1Count}
+          </span>
+          <span className="chip">
+            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
+            AI {aiCount}
+          </span>
+          {rawCount > 0 && (
+            <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
+              미처리 {rawCount}
+            </span>
+          )}
+          <div className="spacer" />
+          <span style={{fontFamily:'JetBrains Mono, monospace'}}>{processedCount}/{items.length} 처리됨 · {layout.totalPages}p</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
+function SidePanel({
+  item, items, activeIndex,
+  setStep, applyToAll, bulk, setBulk,
+  boardColumns, setBoardColumns,
+  boardColor, setBoardColor,
+  accent, setAccent,
+  onConfirm,
+}){
+  const [tab, setTab] = useState('item');
+  const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
+  const [compareX, setCompareX] = useState(50);
+  const dragging = useRef(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    const onMove = e => {
+      if (!dragging.current || !wrapRef.current) return;
+      const r = wrapRef.current.getBoundingClientRect();
+      const x = ((e.clientX - r.left) / r.width) * 100;
+      setCompareX(Math.max(6, Math.min(94, x)));
+    };
+    const onUp = () => { dragging.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
+
+  return (
+    <div className="col right">
+      <div className="tab-bar">
+        <button className={tab==='item' ? 'on' : ''} onClick={() => setTab('item')}>
+          선택 자료 <span className="badge">{itemPosLabel}</span>
+        </button>
+        <button className={tab==='board' ? 'on' : ''} onClick={() => setTab('board')}>
+          칠판 설정
+        </button>
+      </div>
+
+      {tab === 'item' && (
+        <>
+          <div className="tab-body">
+            {item ? (
+              <>
+                <div className="item-meta">
+                  <div className="nm">
+                    <div className="t">{item.name}</div>
+                    <div className="s">{item.source} · {item.type.toUpperCase()}</div>
+                  </div>
+                  <div className="pos-tag">{itemPosLabel}</div>
+                </div>
+
+                <div className="item-preview" ref={wrapRef}>
+                  <div className="ptab">
+                    <button className={previewMode==='raw' ? 'on' : ''} onClick={() => setPreviewMode('raw')}>원본</button>
+                    <button className={previewMode==='chalk' ? 'on' : ''} onClick={() => setPreviewMode('chalk')}>칠판용</button>
+                    <button className={previewMode==='compare' ? 'on' : ''} onClick={() => setPreviewMode('compare')}>비교</button>
+                  </div>
+
+                  {previewMode === 'compare' ? (
+                    <div className="canvas-mini" style={{ background: 'white' }}>
+                      <div className="inner"><ItemArt kind={item.kind} mode="raw" /></div>
+                      <div style={{
+                        position: 'absolute', inset: 0,
+                        clipPath: `inset(0 0 0 ${compareX}%)`,
+                        background: boardColor,
+                      }}>
+                        <div className="inner"><ItemArt kind={item.kind} mode="chalk" /></div>
+                      </div>
+                      <div className="compare-handle"
+                           style={{ left: `${compareX}%` }}
+                           onMouseDown={() => { dragging.current = true; }}/>
+                    </div>
+                  ) : (
+                    <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
+                         style={previewMode==='chalk' ? { background: boardColor } : null}>
+                      <div className="inner"><ItemArt kind={item.kind} mode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
+                    </div>
+                  )}
+
+                  <div className="ptools">
+                    <button className="icon-btn" title="회전">{Icon.rotate}</button>
+                    <button className="icon-btn" title="자르기">{Icon.crop}</button>
+                    <button className="icon-btn" title="확대">{Icon.zoomIn}</button>
+                    <div className="spacer" />
+                    <span className="scale">100%</span>
+                  </div>
+                </div>
+
+                <div className="panel-section-hd">
+                  처리 방식 선택 <span className="line" />
+                </div>
+
+                <div className="steps">
+                  <button
+                    className={`step-row ${item.step === 's1' ? 'on' : ''}`}
+                    onClick={() => setStep(item.id, 's1')}
+                  >
+                    <span className="radio" />
+                    <div>
+                      <div className="t">1단계 · 그대로 붙이기</div>
+                      <div className="d">스캔한 모양 그대로. 원본 색·여백 유지.</div>
+                    </div>
+                    <div className="meta-r">즉시<strong>~ 0.3s</strong></div>
+                  </button>
+                  <button
+                    className={`step-row ${item.step === 's2' ? 'on' : ''}`}
+                    onClick={() => setStep(item.id, 's2')}
+                  >
+                    <span className="radio" />
+                    <div>
+                      <div className="t">2단계 · AI 칠판 변환 <span className="ai-badge">AI</span></div>
+                      <div className="d">배경 제거 · 분필 색상 자동 배치 · 가독성 최적화.</div>
+                    </div>
+                    <div className="meta-r">자동<strong>~ 4s</strong></div>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{
+                padding: 40, textAlign: 'center',
+                color: 'var(--muted)', fontSize: 13,
+                border: '1px dashed var(--line)',
+                borderRadius: 10,
+              }}>
+                왼쪽 목록 또는 칠판에서<br/>자료를 선택하세요
+              </div>
+            )}
+          </div>
+
+          <div className="tab-foot">
+            <label className="check">
+              <input type="checkbox" checked={bulk} onChange={e => setBulk(e.target.checked)} />
+              전체 {items.length}개 일괄
+            </label>
+            <div className="spacer" />
+            <button className="btn" disabled={!item}>건너뛰기</button>
+            <button
+              className="btn primary"
+              disabled={!item || item.step === 'raw'}
+              onClick={() => {
+                if (!item) return;
+                if (bulk) applyToAll(item.step);
+                onConfirm(item.id);
+              }}
+            >
+              {Icon.check} {bulk ? '일괄 확인' : '확인'}
+            </button>
+          </div>
+        </>
+      )}
+
+      {tab === 'board' && (
+        <>
+          <div className="tab-body">
+            <div className="panel-section-hd">레이아웃 <span className="line" /></div>
+
+            <div className="row-control">
+              <div className="lbl">열 수<small>한 행에 나란히 둘 자료 수</small></div>
+              <div className="seg-mini">
+                {[1,2,3].map(n => (
+                  <button key={n} className={boardColumns===n ? 'on' : ''} onClick={() => setBoardColumns(n)}>{n}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="row-control">
+              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤 (최대 50p)</small></div>
+              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+            </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>칠판 색상 <span className="line" /></div>
+
+            <div className="row-control">
+              <div className="lbl">칠판 배경<small>실제 교실 칠판과 맞추기</small></div>
+              <div className="swatches">
+                {BOARD_COLORS.map(c => (
+                  <div key={c}
+                       className={`sw ${boardColor === c ? 'on' : ''}`}
+                       style={{ background: c }}
+                       onClick={() => setBoardColor(c)}
+                       title={c} />
+                ))}
+              </div>
+            </div>
+
+            <div className="row-control">
+              <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
+              <div className="swatches">
+                {ACCENTS.map(c => (
+                  <div key={c}
+                       className={`sw ${accent === c ? 'on' : ''}`}
+                       style={{ background: c }}
+                       onClick={() => setAccent(c)}
+                       title={c} />
+                ))}
+              </div>
+            </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
+
+            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
+              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 전체를 AI 변환</span>
+              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
+            </button>
+            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
+              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
+              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── APP ──────────────────────────────────────────────────────────────────
+function App(){
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  useEffect(() => {
+    document.body.classList.toggle('dark', !!t.dark);
+    document.documentElement.style.setProperty('--accent', t.accent);
+    document.documentElement.style.setProperty('--board', t.boardColor);
+  }, [t.dark, t.accent, t.boardColor]);
+
+  const [items, setItems] = useState(INITIAL_ITEMS);
+  const [activeId, setActiveId] = useState('i2');
+  const [fileName, setFileName] = useState('6월 모의고사 오답풀이 — 6/12 (수)');
+  const [bulk, setBulk] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [published, setPublished] = useState(false);
+
+  const activeIndex = items.findIndex(i => i.id === activeId);
+  const active = activeIndex >= 0 ? items[activeIndex] : null;
+  const processed = items.filter(i => i.step !== 'raw').length;
+  const progress = items.length ? processed / items.length : 0;
+
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2200);
+  };
+
+  const setStep = (id, step) => {
+    setItems(it => it.map(x => x.id === id ? { ...x, step } : x));
+    setPublished(false);
+  };
+  const applyToAll = (step) => {
+    setItems(it => it.map(x => ({ ...x, step })));
+    showToast(`전체 ${items.length}개 항목에 ${step === 's1' ? '1단계' : '2단계 AI 변환'}을(를) 적용했어요`);
+  };
+  const reorder = (fromId, toId) => {
+    setItems(it => {
+      const a = it.findIndex(x => x.id === fromId);
+      const b = it.findIndex(x => x.id === toId);
+      if (a < 0 || b < 0) return it;
+      const arr = [...it];
+      const [moved] = arr.splice(a, 1);
+      arr.splice(b, 0, moved);
+      return arr;
+    });
+  };
+  const removeItem = (id) => {
+    setItems(it => it.filter(x => x.id !== id));
+    if (activeId === id) {
+      const next = items.find(x => x.id !== id);
+      setActiveId(next ? next.id : null);
+    }
+  };
+  const addSample = () => {
+    const pool = ['geometry-circle','equation','table','graph','geometry-triangles','paragraph'];
+    const kind = pool[Math.floor(Math.random() * pool.length)];
+    const id = 'i' + (Date.now() % 100000);
+    const name = '새 자료 ' + (items.length + 1);
+    setItems(it => [...it, { id, name, source: '방금 업로드', type: 'image', kind, step: 'raw' }]);
+    setActiveId(id);
+    showToast('자료 1개 추가됨');
+  };
+
+  const onConfirm = (id) => {
+    showToast(`"${items.find(i=>i.id===id)?.name}" 처리 완료`);
+  };
+
+  const onPublish = () => {
+    setPublished(true);
+    showToast(`칠판에 ${items.length}개 자료를 올렸어요`);
+  };
+
+  return (
+    <div className="app">
+      <TopBar
+        fileName={fileName}
+        setFileName={setFileName}
+        progress={progress}
+        processed={processed}
+        total={items.length}
+        onPublish={onPublish}
+        published={published}
+      />
+      <div className="main">
+        <ItemsRail
+          items={items}
+          activeId={activeId}
+          setActive={setActiveId}
+          reorder={reorder}
+          removeItem={removeItem}
+          addSample={addSample}
+          bulkApply={applyToAll}
+        />
+        <BoardStage
+          items={items}
+          activeId={activeId}
+          setActive={setActiveId}
+          boardColor={t.boardColor}
+          boardColumns={t.boardColumns}
+          fileName={fileName}
+          addSample={addSample}
+        />
+        <SidePanel
+          item={active}
+          items={items}
+          activeIndex={activeIndex}
+          setStep={setStep}
+          applyToAll={applyToAll}
+          bulk={bulk}
+          setBulk={setBulk}
+          boardColumns={t.boardColumns}
+          setBoardColumns={v => setTweak('boardColumns', v)}
+          boardColor={t.boardColor}
+          setBoardColor={v => setTweak('boardColor', v)}
+          accent={t.accent}
+          setAccent={v => setTweak('accent', v)}
+          onConfirm={onConfirm}
+        />
+      </div>
+
+      {toast && <div className="toast">{Icon.check}<span>{toast}</span></div>}
+
+      <TweaksPanel title="Tweaks">
+        <TweakSection label="테마" />
+        <TweakToggle label="다크 모드" value={t.dark} onChange={v => setTweak('dark', v)} />
+        <TweakColor label="강조색" value={t.accent} options={ACCENTS} onChange={v => setTweak('accent', v)} />
+        <TweakSection label="칠판" />
+        <TweakColor label="칠판 색" value={t.boardColor} options={BOARD_COLORS} onChange={v => setTweak('boardColor', v)} />
+        <TweakRadio label="열 수" value={String(t.boardColumns)} options={['1','2','3']} onChange={v => setTweak('boardColumns', parseInt(v))} />
+      </TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
