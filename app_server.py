@@ -19,6 +19,12 @@ from urllib.request import url2pathname
 
 from build_mvp_export import run_export
 from build_problem_board_edb import run_problem_export
+from user_settings import (
+    apply_to_env as apply_user_settings_to_env,
+    load_user_settings,
+    summarize_for_response as summarize_user_settings,
+    update_gemini_api_key,
+)
 
 
 APP_NAME = "ClassIn EDB MVP Local App"
@@ -48,6 +54,12 @@ GENERATED_SESSION_JS = UI_DIR / "generated_session.js"
 def ensure_runtime_dirs() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def hydrate_user_settings_env() -> None:
+    """Load persisted user settings and promote secrets into ``os.environ``
+    so pipeline modules pick them up via the usual env-var path."""
+    apply_user_settings_to_env(load_user_settings(RUNTIME_DIR))
 
 
 def write_placeholder_generated_session() -> None:
@@ -253,6 +265,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/file":
             self._handle_file(parsed)
             return
+        if parsed.path == "/api/user-settings":
+            self._handle_user_settings_get()
+            return
         if parsed.path in {"", "/"}:
             self.path = "/index.html"
         else:
@@ -264,7 +279,31 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/export":
             self._handle_export()
             return
+        if parsed.path == "/api/user-settings":
+            self._handle_user_settings_post()
+            return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
+
+    def _handle_user_settings_get(self) -> None:
+        self._send_json(
+            {"ok": True, "settings": summarize_user_settings(RUNTIME_DIR)}
+        )
+
+    def _handle_user_settings_post(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        raw_key = payload.get("geminiApiKey")
+        if raw_key is None:
+            raw_key = payload.get("gemini_api_key")
+        try:
+            summary = update_gemini_api_key(RUNTIME_DIR, raw_key if isinstance(raw_key, str) else "")
+        except OSError as exc:
+            self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self._send_json({"ok": True, "settings": summary})
 
     def _read_json_body(self) -> dict[str, Any]:
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -431,6 +470,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
     ensure_runtime_dirs()
+    hydrate_user_settings_env()
     write_placeholder_generated_session()
     handler = partial(AppRequestHandler)
     server = AppHTTPServer((host, port), handler)

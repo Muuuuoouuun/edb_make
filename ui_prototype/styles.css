@@ -316,7 +316,8 @@ h2 {
   gap: 10px;
 }
 
-.ai-fallback-panel {
+.ai-fallback-panel,
+.user-settings-panel {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -326,6 +327,47 @@ h2 {
   background:
     linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.72)),
     rgba(255, 253, 250, 0.92);
+}
+
+.user-settings-panel {
+  border-color: rgba(59, 130, 246, 0.22);
+  background:
+    linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0.72)),
+    rgba(248, 250, 255, 0.92);
+}
+
+.user-settings-panel code {
+  background: rgba(15, 23, 42, 0.06);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+.field-stack.field-stack-wide {
+  grid-column: 1 / -1;
+}
+
+.input-with-action {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.input-with-action input {
+  flex: 1;
+  min-width: 0;
+}
+
+.meta-pill.is-connected {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.32);
+}
+
+.meta-pill.is-offline {
+  background: rgba(248, 113, 113, 0.12);
+  color: #b91c1c;
+  border-color: rgba(248, 113, 113, 0.32);
 }
 
 .ai-fallback-header {

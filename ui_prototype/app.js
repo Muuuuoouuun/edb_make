@@ -4,29 +4,22 @@ const DEFAULT_OUTPUT_DIR = "mvp_export_app";
 const DEFAULT_AI_FALLBACK = Object.freeze({
   enabled: false,
   mode: "off",
-  provider: "openai",
-  model: "gpt-5.4-mini",
+  provider: "gemini",
+  model: "gemini-2.5-pro",
   threshold: 0.72,
-  maxRegions: 18,
-  timeoutMs: 12000,
+  maxRegions: 30,
+  timeoutMs: 18000,
   saveDebug: false,
   failOnError: false,
   provided: false,
 });
 const AI_PROVIDER_PRESETS = Object.freeze({
-  openai: {
-    provider: "openai",
-    model: "gpt-5.4-mini",
-    threshold: 0.72,
-    maxRegions: 18,
-    timeoutMs: 12000,
-  },
   gemini: {
     provider: "gemini",
-    model: "gemini-2.5-flash",
+    model: "gemini-2.5-pro",
     threshold: 0.72,
-    maxRegions: 18,
-    timeoutMs: 15000,
+    maxRegions: 30,
+    timeoutMs: 18000,
   },
 });
 
@@ -126,8 +119,10 @@ function normalizeAiFallbackConfig(rawConfig, rawSummary) {
   const rawMode = String(config.mode ?? summary.mode ?? DEFAULT_AI_FALLBACK.mode).trim().toLowerCase();
   const mode = ["auto", "force", "off"].includes(rawMode) ? rawMode : DEFAULT_AI_FALLBACK.mode;
   const rawProvider = String(config.provider ?? summary.provider ?? DEFAULT_AI_FALLBACK.provider).trim().toLowerCase();
-  const provider = rawProvider === "gemini" ? "gemini" : "openai";
-  const defaultPreset = AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.openai;
+  // All AI traffic flows through Gemini now; legacy values are normalized.
+  const provider = "gemini";
+  void rawProvider;
+  const defaultPreset = AI_PROVIDER_PRESETS.gemini;
   const model = String(config.model ?? summary.model ?? defaultPreset.model).trim() || defaultPreset.model;
   const threshold = Math.min(1, Math.max(0, toNumber(config.threshold ?? config.aiThreshold ?? summary.threshold, defaultPreset.threshold)));
   const maxRegions = Math.max(1, Math.round(toNumber(config.max_regions ?? config.maxRegions ?? summary.max_regions ?? summary.maxRegions, defaultPreset.maxRegions)));
@@ -355,7 +350,9 @@ function exportModeLabel(mode) {
 }
 
 function aiProviderLabel(provider) {
-  return provider === "gemini" ? "Gemini" : "OpenAI";
+  // Legacy provider tags (claude/openai) all resolve to Gemini in the backend.
+  void provider;
+  return "Gemini";
 }
 
 function aiModeLabel(mode) {
@@ -410,8 +407,8 @@ function getAiControlElements() {
 
 function readAiFallbackForm() {
   const controls = getAiControlElements();
-  const provider = controls.provider?.value === "gemini" ? "gemini" : "openai";
-  const preset = AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.openai;
+  const provider = "gemini";
+  const preset = AI_PROVIDER_PRESETS.gemini;
   const requestedMode = String(controls.mode?.value || DEFAULT_AI_FALLBACK.mode).trim().toLowerCase();
   const mode = controls.enabled?.checked ? requestedMode : "off";
 
@@ -517,8 +514,11 @@ function syncAiFallbackControls() {
 }
 
 function applyAiPreset(provider) {
-  const normalizedProvider = provider === "gemini" ? "gemini" : "openai";
-  const preset = AI_PROVIDER_PRESETS[normalizedProvider] || AI_PROVIDER_PRESETS.openai;
+  // Only one provider remains; the legacy argument is preserved for callers
+  // that still pass "openai" or "claude".
+  void provider;
+  const normalizedProvider = "gemini";
+  const preset = AI_PROVIDER_PRESETS.gemini;
   writeAiFallbackForm({
     enabled: true,
     mode: "auto",
@@ -999,6 +999,95 @@ async function probeApi() {
     setRunStatus("정적 미리보기 모드입니다. `app_server.py`를 실행하면 브라우저에서 바로 파싱할 수 있습니다.", "warning");
   }
   updateRuntimeControls();
+}
+
+function renderUserSettings(settings) {
+  const statusBadge = document.getElementById("geminiKeyStatus");
+  const helper = document.getElementById("geminiKeyHelper");
+  const input = document.getElementById("geminiApiKeyInput");
+  const clearButton = document.getElementById("clearGeminiKeyButton");
+  if (!statusBadge || !helper) {
+    return;
+  }
+  const hasKey = Boolean(settings?.hasGeminiApiKey);
+  const preview = settings?.geminiApiKeyPreview || "";
+  const source = settings?.geminiApiKeySource || "none";
+  statusBadge.textContent = hasKey ? `키 설정됨 ${preview}` : "키 미설정";
+  statusBadge.classList.toggle("is-connected", hasKey);
+  statusBadge.classList.toggle("is-offline", !hasKey);
+  if (clearButton) {
+    clearButton.disabled = !hasKey;
+  }
+  if (input) {
+    input.placeholder = hasKey ? `현재 ${preview} (새 키로 덮어쓰기)` : "AIza...";
+  }
+  if (!hasKey) {
+    helper.textContent = "키가 없으면 AI 보정과 Gemini OCR 에스컬레이션이 비활성화됩니다.";
+    helper.classList.remove("is-success", "is-warning");
+    helper.classList.add("is-warning");
+  } else if (source === "env") {
+    helper.textContent = "셸 환경변수의 GEMINI_API_KEY를 사용 중입니다. 저장하면 그 값이 우선합니다.";
+    helper.classList.remove("is-warning", "is-success");
+  } else {
+    helper.textContent = "저장된 키를 GEMINI_API_KEY로 자동 적용 중입니다.";
+    helper.classList.remove("is-warning");
+    helper.classList.add("is-success");
+  }
+}
+
+async function fetchUserSettings() {
+  try {
+    const response = await fetch("/api/user-settings");
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `사용자 설정을 불러오지 못했습니다 (${response.status})`);
+    }
+    renderUserSettings(payload.settings);
+  } catch (error) {
+    const helper = document.getElementById("geminiKeyHelper");
+    if (helper) {
+      helper.textContent = `사용자 설정을 불러오지 못했습니다: ${error.message}`;
+      helper.classList.add("is-warning");
+    }
+  }
+}
+
+async function saveGeminiApiKey(rawValue) {
+  const helper = document.getElementById("geminiKeyHelper");
+  const trimmed = (rawValue || "").trim();
+  try {
+    const response = await fetch("/api/user-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ geminiApiKey: trimmed }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `저장에 실패했습니다 (${response.status})`);
+    }
+    renderUserSettings(payload.settings);
+    if (helper) {
+      helper.textContent = trimmed ? "키를 저장하고 GEMINI_API_KEY로 적용했습니다." : "키를 삭제했습니다.";
+      helper.classList.remove("is-warning");
+      helper.classList.add("is-success");
+    }
+    const input = document.getElementById("geminiApiKeyInput");
+    if (input) {
+      input.value = "";
+      input.type = "password";
+    }
+    const toggle = document.getElementById("toggleGeminiKeyVisibility");
+    if (toggle) {
+      toggle.setAttribute("aria-pressed", "false");
+      toggle.textContent = "보기";
+    }
+  } catch (error) {
+    if (helper) {
+      helper.textContent = `저장 실패: ${error.message}`;
+      helper.classList.remove("is-success");
+      helper.classList.add("is-warning");
+    }
+  }
 }
 
 async function fetchLatestSessionFromApi() {
@@ -1648,8 +1737,35 @@ document.getElementById("runLayoutModeSelect").addEventListener("change", () => 
   document.getElementById(id)?.addEventListener("change", syncAiFallbackControls);
 });
 document.getElementById("runAiModelInput")?.addEventListener("input", syncAiFallbackControls);
-document.getElementById("applyOpenAiPresetButton")?.addEventListener("click", () => applyAiPreset("openai"));
 document.getElementById("applyGeminiPresetButton")?.addEventListener("click", () => applyAiPreset("gemini"));
+
+document.getElementById("saveGeminiKeyButton")?.addEventListener("click", () => {
+  const input = document.getElementById("geminiApiKeyInput");
+  saveGeminiApiKey(input?.value || "");
+});
+document.getElementById("clearGeminiKeyButton")?.addEventListener("click", () => {
+  if (!window.confirm("저장된 Gemini API 키를 삭제할까요?")) {
+    return;
+  }
+  saveGeminiApiKey("");
+});
+document.getElementById("toggleGeminiKeyVisibility")?.addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  const input = document.getElementById("geminiApiKeyInput");
+  if (!input) {
+    return;
+  }
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  button.setAttribute("aria-pressed", showing ? "false" : "true");
+  button.textContent = showing ? "보기" : "숨기기";
+});
+document.getElementById("geminiApiKeyInput")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveGeminiApiKey(event.target.value || "");
+  }
+});
 
 document.getElementById("openComposerButton").addEventListener("click", openComposerModal);
 
@@ -1774,8 +1890,14 @@ async function initializeRuntimeConnection() {
   render();
   await probeApi();
   if (!state.apiAvailable) {
+    const helper = document.getElementById("geminiKeyHelper");
+    if (helper) {
+      helper.textContent = "로컬 앱 서버가 꺼져 있어 사용자 설정을 저장할 수 없습니다.";
+      helper.classList.add("is-warning");
+    }
     return;
   }
+  await fetchUserSettings();
   try {
     const latestSession = await fetchLatestSessionFromApi();
     applySession(latestSession);
