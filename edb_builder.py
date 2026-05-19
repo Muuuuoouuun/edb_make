@@ -16,6 +16,27 @@ CANVAS_WIDTH = 590.0
 CANVAS_HEIGHT = 1280.0
 DEFAULT_PAGE_COUNT_HINT = 50
 
+# Crop format versions seen in real ClassIn EDB exports.
+# v1 = legacy wide layout (header_flag=4, image_secondary is a downsampled preview).
+# v2 = current crop layout (header_flag=0, image_secondary is a whitespace-trimmed tight crop,
+#       displayed image is resized to a fixed pixel width so more problems fit per board page).
+CROP_FORMAT_V1 = "v1"
+CROP_FORMAT_V2 = "v2"
+DEFAULT_CROP_FORMAT = CROP_FORMAT_V2
+
+# Observed in real v2 exports: every problem image is rendered at ~301px wide
+# (width_hint ≈ 0.2352). Keep this aligned with the ClassIn sample EDBs in
+# Downloads/edb.v2.edb so downstream rendering matches.
+V2_TARGET_IMAGE_WIDTH_PX = 301
+V2_HEADER_FLAG_IMAGE_ONLY = 0
+V2_VERSION_STRING = "6.0.5.3913"
+V1_HEADER_FLAG_IMAGE_ONLY = 4
+V1_VERSION_STRING = "6.0.5.3911"
+
+# Whitespace-trim threshold used when producing the tight image_secondary in v2 mode.
+# Pixels with all RGB channels above this value are treated as background.
+V2_TIGHT_CROP_WHITE_THRESHOLD = 244
+
 
 def pack_u16(value: int) -> bytes:
     return struct.pack(">H", value)
@@ -172,6 +193,84 @@ def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (5
     else:
         image.save(output, format="JPEG", quality=quality, optimize=True)
     return output.getvalue()
+
+
+def _content_bbox(image: Image.Image, *, white_threshold: int) -> tuple[int, int, int, int] | None:
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    pixels = rgb.load()
+    left = width
+    right = -1
+    top = height
+    bottom = -1
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            if r < white_threshold or g < white_threshold or b < white_threshold:
+                if x < left:
+                    left = x
+                if x > right:
+                    right = x
+                if y < top:
+                    top = y
+                if y > bottom:
+                    bottom = y
+    if right < left or bottom < top:
+        return None
+    return left, top, right + 1, bottom + 1
+
+
+def build_tight_crop_image_bytes(
+    image_bytes: bytes,
+    *,
+    format_hint: str | None = None,
+    quality: int = 88,
+    white_threshold: int = V2_TIGHT_CROP_WHITE_THRESHOLD,
+    min_trim_ratio: float = 0.02,
+) -> bytes:
+    """Return JPEG/PNG bytes of a whitespace-trimmed copy of the source image.
+
+    Used as the image_secondary in v2 crop format. Matches the behaviour
+    observed in real ClassIn v2 EDBs where img_1 is sometimes smaller than
+    img_0 because trailing whitespace has been removed.
+    """
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    bbox = _content_bbox(image, white_threshold=white_threshold)
+    if bbox is not None:
+        left, top, right, bottom = bbox
+        trimmed_w = right - left
+        trimmed_h = bottom - top
+        orig_w, orig_h = image.size
+        # Only apply the trim if it removes a meaningful amount of margin,
+        # otherwise the secondary image stays the same size as the primary
+        # (which matches v2 records where img_0 and img_1 share dimensions).
+        if (
+            orig_w - trimmed_w > orig_w * min_trim_ratio
+            or orig_h - trimmed_h > orig_h * min_trim_ratio
+        ):
+            image = image.crop(bbox)
+    output = io.BytesIO()
+    ext = (format_hint or "JPEG").upper()
+    if ext == "PNG":
+        image.save(output, format="PNG")
+    else:
+        image.save(output, format="JPEG", quality=quality, optimize=True)
+    return output.getvalue()
+
+
+def header_flag_for_crop_format(crop_format: str, *, mode: str = "image") -> int:
+    """Return the header_flag value to use for the given crop_format and record mode."""
+    if mode == "image":
+        if crop_format == CROP_FORMAT_V2:
+            return V2_HEADER_FLAG_IMAGE_ONLY
+        return V1_HEADER_FLAG_IMAGE_ONLY
+    return 3
+
+
+def version_string_for_crop_format(crop_format: str) -> str:
+    if crop_format == CROP_FORMAT_V2:
+        return V2_VERSION_STRING
+    return V1_VERSION_STRING
 
 
 def normalize_x_px(x_px: float) -> float:

@@ -462,10 +462,10 @@ def _document_band_box(mask: Image.Image, column_box: Box, band: tuple[int, int]
     right = column_box.left + min(column_box.width, float(bbox[2]) + padding)
     top = column_box.top + max(0.0, float(band_top) - padding)
     bottom = column_box.top + min(column_box.height, float(band_bottom) + padding)
-    minimum_width = column_box.width * 0.72
-    if right - left < minimum_width:
-        left = column_box.left
-        right = column_box.right
+    # minimum_width = column_box.width * 0.72
+    # if right - left < minimum_width:
+    #     left = column_box.left
+    #     right = column_box.right
 
     return Box.from_points(left, top, right, bottom).expanded(
         8.0,
@@ -534,10 +534,10 @@ def _fit_document_slice_box(
     right = parent_box.left + min(parent_box.width, float(bbox[2]) + padding)
     bottom = parent_box.top + float(slice_top) + min(float(slice_bottom - slice_top), float(bbox[3]) + padding)
 
-    minimum_width = parent_box.width * 0.7
-    if right - left < minimum_width:
-        left = parent_box.left
-        right = parent_box.right
+    # minimum_width = parent_box.width * 0.7
+    # if right - left < minimum_width:
+    #     left = parent_box.left
+    #     right = parent_box.right
 
     return Box.from_points(left, top, right, bottom).expanded(
         6.0,

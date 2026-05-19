@@ -1360,9 +1360,240 @@
     line-height: 1.5;
   }
   @keyframes spin{ to { transform: rotate(360deg); } }
+  .spin-ic > svg{ animation: spin .9s linear infinite; transform-origin: 50% 50%; }
   @keyframes fadein{
     from { opacity: 0; }
     to { opacity: 1; }
+  }
+
+  /* Review view (detected problem boxes over original page) */
+  .review-wrap{
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px 24px 60px;
+    background: var(--bg);
+  }
+  .review-empty{
+    padding: 60px 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .review-page{
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow-1);
+    margin-bottom: 22px;
+    overflow: hidden;
+    max-width: 1100px;
+  }
+  body.dark .review-page{ background: var(--surface); }
+  .review-page-hd{
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--surface);
+  }
+  .review-page-hd .pg-num{
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700; color: var(--ink);
+    font-size: 11.5px;
+  }
+  .review-page-hd .pg-count{
+    padding: 2px 7px; border-radius: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    font-size: 11px;
+  }
+  .review-page-hd .pg-risk{
+    font-size: 10.5px; font-weight: 600;
+    padding: 2px 7px; border-radius: 4px;
+    background: rgba(213,72,72,.12);
+    color: var(--danger);
+  }
+  .review-page-hd .spacer{ flex: 1; }
+  .review-page-canvas{
+    position: relative;
+    width: 100%;
+    background: #fafbfc;
+  }
+  body.dark .review-page-canvas{ background: #14171d; }
+  .review-page-canvas img{
+    display: block;
+    width: 100%;
+    height: auto;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  .review-bbox{
+    position: absolute;
+    border: 2px solid rgba(47,111,237,.7);
+    background: rgba(47,111,237,.06);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, box-shadow .12s;
+    box-sizing: border-box;
+  }
+  .review-bbox:hover{
+    background: rgba(47,111,237,.16);
+    border-color: var(--accent);
+  }
+  .review-bbox.active{
+    border-color: var(--chalk-warm);
+    background: rgba(246,211,101,.18);
+    box-shadow: 0 0 0 2px var(--chalk-warm);
+  }
+  .review-bbox.risky{
+    border-color: var(--danger);
+    background: rgba(213,72,72,.10);
+  }
+  .review-bbox.risky.active{
+    box-shadow: 0 0 0 2px var(--danger);
+  }
+  .review-bbox-label{
+    position: absolute;
+    top: -1px; left: -1px;
+    background: var(--accent);
+    color: white;
+    padding: 2px 7px;
+    border-radius: 0 0 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    display: flex; align-items: center; gap: 4px;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .review-bbox.risky .review-bbox-label{ background: var(--danger); }
+  .review-bbox.active .review-bbox-label{ background: var(--chalk-warm); color: #2c1d00; }
+  .review-bbox-risk{
+    font-size: 9px;
+    background: rgba(255,255,255,.25);
+    padding: 0 4px;
+    border-radius: 2px;
+  }
+  .risk-pip{
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    vertical-align: -1px;
+    flex: none;
+  }
+  .review-actionbar{
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow-1);
+  }
+  .review-actionbar .count-chip{
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 700;
+    padding: 3px 8px; border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+  }
+  .review-actionbar .hint{
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .review-actionbar .spacer{ flex: 1; }
+  .review-actionbar .btn.danger{
+    background: var(--danger);
+    color: white;
+    border-color: var(--danger);
+  }
+  .review-actionbar .btn.danger:hover{ background: #b03b3b; }
+  .review-actionbar .btn.primary{
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  .review-actionbar .btn.primary:hover{ background: var(--accent-ink); }
+  .review-bbox.selected{
+    border-color: var(--accent);
+    background: rgba(47,111,237,.16);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  .review-bbox.selected.risky{ box-shadow: 0 0 0 2px var(--danger); }
+  .review-bbox.splitting{
+    pointer-events: auto;
+    border-color: var(--chalk-warm);
+    background: rgba(246,211,101,.18);
+    box-shadow: 0 0 0 2px var(--chalk-warm);
+  }
+  .split-guide{
+    position: absolute;
+    left: 0; right: 0;
+    height: 4px;
+    margin-top: -2px;
+    background: var(--accent);
+    cursor: ns-resize;
+    z-index: 6;
+    box-shadow: 0 0 0 1px white, 0 0 8px rgba(47,111,237,.5);
+  }
+  .split-guide::after{
+    content: '↕ 가르기 위치';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--accent);
+    color: white;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,.2);
+  }
+  .split-actions{
+    position: absolute;
+    z-index: 7;
+    display: flex;
+    gap: 6px;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow-2);
+    transform: translateY(8px);
+  }
+  .split-actions .btn{ padding: 5px 10px; font-size: 12px; }
+  .view-toggle{
+    display: inline-flex;
+    padding: 2px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+  }
+  .view-toggle button{
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .view-toggle button.on{
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-1);
   }
 
   /* Toast */

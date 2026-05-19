@@ -277,7 +277,25 @@ class TesseractOCRBackend(OCRBackend):
     def ocr_image(self, image: Image.Image) -> OCRResult:
         started_at = time.perf_counter()
         prepped = _prep_crop_for_ocr(image)
-        data = pytesseract.image_to_data(prepped, lang=self.lang, output_type=pytesseract.Output.DICT)
+        
+        try:
+            data = pytesseract.image_to_data(prepped, lang=self.lang, output_type=pytesseract.Output.DICT)
+        except Exception as exc:
+            return OCRResult(
+                text="",
+                confidence=None,
+                lines=[],
+                backend_name=self.name,
+                metadata=_build_ocr_metadata(
+                    backend=self.name,
+                    started_at=started_at,
+                    text="",
+                    confidence=None,
+                    lines=[],
+                    error=str(exc),
+                ),
+            )
+
         lines: list[OCRLine] = []
         collected: list[str] = []
         confidences: list[float] = []

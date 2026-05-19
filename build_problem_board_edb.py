@@ -23,16 +23,23 @@ from segment import draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
+    CROP_FORMAT_V1,
+    CROP_FORMAT_V2,
+    DEFAULT_CROP_FORMAT,
     ImageRecordSpec,
     TextRecordSpec,
+    V2_TARGET_IMAGE_WIDTH_PX,
     build_edb,
     build_image_record,
     build_preview_image_bytes,
     build_text_record,
+    build_tight_crop_image_bytes,
+    header_flag_for_crop_format,
     normalize_height_px,
     normalize_width_px,
     normalize_x_px,
     normalize_y_px,
+    version_string_for_crop_format,
     write_edb,
 )
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
@@ -490,6 +497,43 @@ def _normalize_problem_title(title: str | None, index: int, source_page_id: str,
     return f"臾명빆 {index + 1:02d} 쨌 {source_page_id}"
 
 
+def recrop_problem(
+    page_image: Image.Image,
+    bbox: Box,
+    crop_path: Path,
+) -> tuple[int, int]:
+    """Re-crop a problem from its source page image for split/merge mutations.
+
+    Writes a rectangular crop to ``crop_path``. Background removal / cutout
+    regeneration is intentionally skipped — that path is reserved for the
+    AI (Step 2) workflow. Callers that need a board_render_path can reuse the
+    crop_path itself; the board renderer will composite onto the dark theme
+    at EDB build time.
+    """
+    left = int(max(0, min(page_image.width, bbox.left)))
+    top = int(max(0, min(page_image.height, bbox.top)))
+    right = int(max(left + 1, min(page_image.width, bbox.right)))
+    bottom = int(max(top + 1, min(page_image.height, bbox.bottom)))
+    crop = page_image.crop((left, top, right, bottom))
+    crop_path.parent.mkdir(parents=True, exist_ok=True)
+    crop.save(crop_path)
+    return crop.size
+
+
+_GLOBAL_RISK_REASONS = {"merged_problem_block", "fallback_grouping", "marker_conflicts"}
+
+
+def _collect_page_risk_flags(page_metadata: dict[str, Any]) -> list[str]:
+    route_decision = page_metadata.get("route_decision")
+    if not isinstance(route_decision, dict):
+        return []
+    profile = route_decision.get("profile") or {}
+    reasons = profile.get("reasons") if isinstance(profile, dict) else None
+    if not isinstance(reasons, list):
+        return []
+    return [str(reason) for reason in reasons if isinstance(reason, str)]
+
+
 def build_ui_session(
     prepared_pages: list[PreparedPage],
     placements: list[dict[str, object]],
@@ -500,23 +544,43 @@ def build_ui_session(
     record_mode: str,
     ai_fallback_config: dict[str, Any] | None = None,
     ai_summary: dict[str, Any] | None = None,
+    pages: list[PageModel] | None = None,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
     warning_messages: list[str] = []
     if placements and len(placements) <= len(prepared_pages):
         warning_messages.append("臾명빆 遺꾨━媛 異⑸텇?섏? ?딆븘 ?섏씠吏 ?⑥쐞??媛源앷쾶 臾띠씤 ??ぉ???덉뒿?덈떎.")
 
+    # Map page_id → PageModel for risk-flag lookup, and page_id → list[problem_id]
+    # so the UI can group detected problems by their source page in the review view.
+    pages_by_id: dict[str, PageModel] = {}
+    if pages:
+        for page in pages:
+            pages_by_id[page.page_id] = page
+    page_risk_flags: dict[str, list[str]] = {
+        page_id: _collect_page_risk_flags(page.metadata)
+        for page_id, page in pages_by_id.items()
+    }
+
     problems: list[dict[str, Any]] = []
+    problems_by_page: dict[str, list[str]] = {}
     for index, placement in enumerate(placements):
         crop_path = Path(str(placement["crop_path"])).resolve()
         source_path = Path(str(placement["source_path"])).resolve()
+        source_page_id = str(placement["source_page_id"])
+        bbox = placement.get("bbox") or {}
+        page_flags = page_risk_flags.get(source_page_id, [])
+        # Only propagate "this specific problem may be merged / auto-grouped"
+        # reasons to per-problem flags; page-wide signals stay on the page.
+        problem_flags = [reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS]
+        problem_id = str(placement["problem_id"])
         problems.append(
             {
-                "id": placement["problem_id"],
+                "id": problem_id,
                 "title": _normalize_problem_title(
                     str(placement.get("title") or ""),
                     index,
-                    str(placement["source_page_id"]),
+                    source_page_id,
                     int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
                 ),
                 "problemNumber": int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
@@ -528,7 +592,7 @@ def build_ui_session(
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
                 "overflowAllowed": bool(placement["overflow_allowed"]),
                 "readingHeavy": bool(placement["overflow_allowed"]),
-                "sourcePageId": str(placement["source_page_id"]),
+                "sourcePageId": source_page_id,
                 "startYPages": float(placement["start_y_pages"]),
                 "snappedNextStartYPages": float(placement["snapped_next_start_y_pages"]),
                 "overflowAmountPages": float(placement["overflow_amount_pages"]),
@@ -537,6 +601,31 @@ def build_ui_session(
                 "recordMode": str(placement.get("record_mode") or record_mode),
                 "textRecordCount": int(placement.get("text_record_count", 0)),
                 "imageRecordCount": int(placement.get("image_record_count", 0)),
+                "bbox": {
+                    "left": float(bbox.get("left", 0.0)),
+                    "top": float(bbox.get("top", 0.0)),
+                    "width": float(bbox.get("width", 0.0)),
+                    "height": float(bbox.get("height", 0.0)),
+                },
+                "riskFlags": problem_flags,
+            }
+        )
+        problems_by_page.setdefault(source_page_id, []).append(problem_id)
+
+    pages_payload: list[dict[str, Any]] = []
+    for prepared_page in prepared_pages:
+        width, height = prepared_page.image.size
+        resolved_path = Path(prepared_page.source_path).resolve()
+        pages_payload.append(
+            {
+                "id": prepared_page.page_id,
+                "pageNumber": prepared_page.page_number,
+                "sourceImageUri": _to_file_uri(resolved_path),
+                "sourceImagePath": str(resolved_path),
+                "width": int(width),
+                "height": int(height),
+                "problemIds": problems_by_page.get(prepared_page.page_id, []),
+                "riskFlags": page_risk_flags.get(prepared_page.page_id, []),
             }
         )
 
@@ -570,6 +659,7 @@ def build_ui_session(
         "ai_summary": ai_summary,
         "warning_messages": warning_messages,
         "problems": problems,
+        "pages": pages_payload,
     }
 
 
@@ -642,15 +732,33 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
     ]
 
 
+def _resize_to_target_width(image: Image.Image, target_width_px: int) -> Image.Image:
+    if target_width_px <= 0 or image.width == target_width_px:
+        return image
+    aspect = image.height / max(image.width, 1)
+    new_height = max(1, int(round(target_width_px * aspect)))
+    return image.resize((target_width_px, new_height), Image.Resampling.LANCZOS)
+
+
 def build_image_only_records(
     problem_entries: list[ProblemEntry],
     template: LayoutTemplate,
     *,
     dark_board: bool = True,
     board_theme: str = DEFAULT_BOARD_THEME,
+    crop_format: str = DEFAULT_CROP_FORMAT,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
-    available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
+    if crop_format == CROP_FORMAT_V2:
+        # v2 displays every problem at a fixed pixel width on the board, so
+        # the image is resized to V2_TARGET_IMAGE_WIDTH_PX before encoding
+        # and the width_hint is computed from that exact value rather than
+        # from the template's fixed_left_zone_ratio.
+        target_image_width_px = float(V2_TARGET_IMAGE_WIDTH_PX)
+        available_width_px = target_image_width_px
+    else:
+        target_image_width_px = 0.0  # 0 means "do not resize"
+        available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
 
     records: list[bytes] = []
     placement_summaries: list[dict[str, object]] = []
@@ -659,20 +767,37 @@ def build_image_only_records(
         board_render_path = Path(str(placement.metadata["board_render_path"]))
         crop_image = Image.open(crop_path).convert("RGB")
         board_image = Image.open(board_render_path) if dark_board else crop_image
+        if target_image_width_px > 0:
+            board_image = _resize_to_target_width(board_image, int(target_image_width_px))
         image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
-        preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
-        height_px = placement.actual_content_height_pages * CANVAS_WIDTH
+        if crop_format == CROP_FORMAT_V2:
+            secondary_bytes = build_tight_crop_image_bytes(
+                image_bytes, format_hint=image_format, quality=88
+            )
+        else:
+            secondary_bytes = build_preview_image_bytes(
+                image_bytes, max_size=(768, 768), format_hint=image_format, quality=88
+            )
+        if crop_format == CROP_FORMAT_V2:
+            width_hint = normalize_width_px(float(board_image.width))
+            height_hint = normalize_height_px(
+                float(board_image.height), page_count_hint=template.board_page_count
+            )
+        else:
+            height_px = placement.actual_content_height_pages * CANVAS_WIDTH
+            width_hint = normalize_width_px(available_width_px)
+            height_hint = normalize_height_px(height_px, page_count_hint=template.board_page_count)
         y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
         records.append(
             build_image_record(
                 ImageRecordSpec(
                     record_id=record_id,
                     image_primary=image_bytes,
-                    image_secondary=preview_bytes,
+                    image_secondary=secondary_bytes,
                     x=normalize_x_px(LEFT_MARGIN_PX),
                     y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
-                    width_hint=normalize_width_px(available_width_px),
-                    height_hint=normalize_height_px(height_px, page_count_hint=template.board_page_count),
+                    width_hint=width_hint,
+                    height_hint=height_hint,
                 )
             )
         )
@@ -699,6 +824,9 @@ def build_image_only_records(
                 "text_record_count": 0,
                 "image_record_count": 1,
                 "board_theme": _resolve_board_theme(board_theme),
+                "crop_format": crop_format,
+                "image_pixel_width": int(board_image.width),
+                "image_pixel_height": int(board_image.height),
             }
         )
 
@@ -870,17 +998,17 @@ def build_records(
     text_confidence_threshold: float,
     dark_board: bool = True,
     board_theme: str = DEFAULT_BOARD_THEME,
+    crop_format: str = DEFAULT_CROP_FORMAT,
 ) -> tuple[list[bytes], list[dict[str, object]], int]:
     if record_mode == "image-only":
-        return (
-            *build_image_only_records(
-                problem_entries,
-                template,
-                dark_board=dark_board,
-                board_theme=board_theme,
-            ),
-            4,
+        records, placement_summaries = build_image_only_records(
+            problem_entries,
+            template,
+            dark_board=dark_board,
+            board_theme=board_theme,
+            crop_format=crop_format,
         )
+        return records, placement_summaries, header_flag_for_crop_format(crop_format, mode="image")
 
     records, placement_summaries = build_mixed_records(
         problem_entries,
@@ -890,7 +1018,11 @@ def build_records(
         dark_board=dark_board,
         board_theme=board_theme,
     )
-    header_flag = 4 if any(item["image_record_count"] for item in placement_summaries) else 3
+    has_images = any(item["image_record_count"] for item in placement_summaries)
+    if has_images:
+        header_flag = header_flag_for_crop_format(crop_format, mode="image")
+    else:
+        header_flag = 3
     return records, placement_summaries, header_flag
 
 
@@ -954,6 +1086,7 @@ def run_problem_export(
     dark_board: bool = True,
     board_theme: str = DEFAULT_BOARD_THEME,
     sync_ui: bool = False,
+    crop_format: str = DEFAULT_CROP_FORMAT,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
     ai_fallback_provider: str = "openai",
@@ -1020,6 +1153,7 @@ def run_problem_export(
         template,
         board_theme=resolved_board_theme,
     )
+    resolved_crop_format = crop_format if crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
     records, placements, header_flag = build_records(
         problem_entries,
         template,
@@ -1028,6 +1162,7 @@ def run_problem_export(
         text_confidence_threshold=text_confidence_threshold,
         dark_board=dark_board,
         board_theme=resolved_board_theme,
+        crop_format=resolved_crop_format,
     )
 
     summary = {
@@ -1041,6 +1176,7 @@ def run_problem_export(
         "record_mode": record_mode,
         "dark_board": dark_board,
         "board_theme": resolved_board_theme,
+        "crop_format": resolved_crop_format,
         "header_flag": header_flag,
         "text_confidence_threshold": text_confidence_threshold,
         "ai_fallback": ai_fallback_config,
@@ -1058,7 +1194,12 @@ def run_problem_export(
         edb_path = out_dir / edb_name
         write_edb(
             edb_path,
-            build_edb(records, header_flag=header_flag, page_count_hint=template.board_page_count),
+            build_edb(
+                records,
+                header_flag=header_flag,
+                version=version_string_for_crop_format(resolved_crop_format),
+                page_count_hint=template.board_page_count,
+            ),
         )
         summary["edb_path"] = str(edb_path.resolve())
         placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1072,6 +1213,7 @@ def run_problem_export(
         record_mode=record_mode,
         ai_fallback_config=ai_fallback_config,
         ai_summary=ai_summary,
+        pages=pages,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -1104,6 +1246,17 @@ def main() -> int:
     parser.add_argument("--board-pages", type=int, default=50, help="Board page count hint")
     parser.add_argument("--slot-height", type=float, default=1.2, help="Base slot height in board pages")
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
+    parser.add_argument(
+        "--crop-format",
+        choices=(CROP_FORMAT_V1, CROP_FORMAT_V2),
+        default=DEFAULT_CROP_FORMAT,
+        help=(
+            "EDB crop layout version. v2 (default) matches the current ClassIn "
+            "crop sample (header_flag=0, ~301px image width, tight-cropped image_secondary, "
+            "version 6.0.5.3913). v1 keeps the legacy wide layout (header_flag=4, "
+            "wider images, downsampled preview, version 6.0.5.3911)."
+        ),
+    )
     parser.add_argument("--text-confidence-threshold", type=float, default=0.78, help="Minimum OCR confidence for text records in mixed mode")
     parser.add_argument(
         "--board-theme",
@@ -1173,6 +1326,7 @@ def main() -> int:
         template,
         board_theme=resolved_board_theme,
     )
+    resolved_crop_format = args.crop_format if args.crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
     records, placements, header_flag = build_records(
         problem_entries,
         template,
@@ -1181,12 +1335,18 @@ def main() -> int:
         text_confidence_threshold=args.text_confidence_threshold,
         dark_board=not args.light_board,
         board_theme=resolved_board_theme,
+        crop_format=resolved_crop_format,
     )
 
     edb_path = output_dir / f"{Path(args.source).stem}.edb"
     write_edb(
         edb_path,
-        build_edb(records, header_flag=header_flag, page_count_hint=template.board_page_count),
+        build_edb(
+            records,
+            header_flag=header_flag,
+            version=version_string_for_crop_format(resolved_crop_format),
+            page_count_hint=template.board_page_count,
+        ),
     )
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
 
@@ -1201,6 +1361,7 @@ def main() -> int:
         "record_mode": args.record_mode,
         "dark_board": not args.light_board,
         "board_theme": resolved_board_theme,
+        "crop_format": resolved_crop_format,
         "header_flag": header_flag,
         "text_confidence_threshold": args.text_confidence_threshold,
         "ai_fallback": ai_fallback_config,

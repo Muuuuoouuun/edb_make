@@ -7,6 +7,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import subprocess
 import sys
 import time
 import webbrowser
@@ -24,6 +25,7 @@ from build_problem_board_edb import (
     ProblemEntry,
     build_records,
     build_ui_session,
+    recrop_problem,
     resolve_subject,
     run_problem_export,
 )
@@ -244,6 +246,10 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         for key in ("imagePath", "sourceImagePath", "boardRenderPath"):
             add_path(problem.get(key))
 
+    for page in session.get("pages", []):
+        for key in ("sourceImageUri", "sourceImagePath"):
+            add_path(page.get(key))
+
     return paths
 
 
@@ -327,7 +333,331 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
         problem["imagePath"] = path_to_api_url(problem.get("imagePath"))
         problem["sourceImagePath"] = path_to_api_url(problem.get("sourceImagePath"))
         problem["boardRenderPath"] = path_to_api_url(problem.get("boardRenderPath"))
+
+    for page in rewritten.get("pages", []):
+        # Front-end loads page images through /api/file; the original
+        # sourceImagePath is kept (server-side absolute path) for mutation
+        # endpoints to re-open with PIL.
+        page["sourceImageUri"] = path_to_api_url(page.get("sourceImagePath") or page.get("sourceImageUri"))
     return rewritten
+
+
+def _find_problem(session: dict[str, Any], problem_id: str) -> tuple[int, dict[str, Any]]:
+    for index, problem in enumerate(session.get("problems", [])):
+        if isinstance(problem, dict) and str(problem.get("id")) == problem_id:
+            return index, problem
+    raise ValueError(f"problem not found: {problem_id}")
+
+
+def _find_page(session: dict[str, Any], page_id: str) -> dict[str, Any]:
+    for page in session.get("pages", []):
+        if isinstance(page, dict) and str(page.get("id")) == page_id:
+            return page
+    raise ValueError(f"page not found: {page_id}")
+
+
+def _resolve_session_path(value: Any) -> Path | None:
+    """Coerce a session-stored value (file URI, /api/file URL, raw path) to a
+    real filesystem path. Returns None if the value cannot be resolved."""
+    if not value:
+        return None
+    text = str(value)
+    if text.startswith("file://"):
+        parsed = urlparse(text)
+        return Path(url2pathname(parsed.path))
+    if text.startswith("/api/file"):
+        parsed = urlparse(text)
+        params = parse_qs(parsed.query)
+        raw = params.get("path", [None])[0]
+        return Path(unquote(raw)) if raw else None
+    return Path(text)
+
+
+def _next_problem_id(session: dict[str, Any], base: str, suffix: str) -> str:
+    """Generate a problem id that does not collide with any existing problem.
+
+    Splits and merges produce children whose ids reflect the parent so the
+    UI can keep stable mappings across mutations; we append an integer if
+    needed to avoid collisions when the same parent is split twice."""
+    candidate = f"{base}-{suffix}"
+    existing = {str(p.get("id")) for p in session.get("problems", []) if isinstance(p, dict) and p.get("id")}
+    if candidate not in existing:
+        return candidate
+    counter = 2
+    while f"{candidate}-{counter}" in existing:
+        counter += 1
+    return f"{candidate}-{counter}"
+
+
+def _crop_dir_for_session(session: dict[str, Any]) -> Path:
+    out = session.get("output_dir")
+    if out:
+        target = Path(str(out)) / "problem_crops"
+    else:
+        target = RUNTIME_DIR / "mutated_crops"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _make_crop_filename(problem_id: str, suffix: str) -> str:
+    digest = hashlib.sha1(f"{problem_id}|{suffix}|{time.time_ns()}".encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return f"mutated_{digest}.png"
+
+
+def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
+    """Carry over the fields that survive a split/merge unchanged — the
+    surgical fields (id, bbox, image paths, title) are filled in by caller."""
+    skeleton = {
+        "title": parent.get("title"),
+        "problemNumber": parent.get("problemNumber"),
+        "subject": parent.get("subject"),
+        "sourceFileName": parent.get("sourceFileName"),
+        "sourceImagePath": parent.get("sourceImagePath"),
+        "actualHeightPages": parent.get("actualHeightPages"),
+        "overflowAllowed": parent.get("overflowAllowed"),
+        "readingHeavy": parent.get("readingHeavy"),
+        "sourcePageId": parent.get("sourcePageId"),
+        "startYPages": parent.get("startYPages"),
+        "snappedNextStartYPages": parent.get("snappedNextStartYPages"),
+        "overflowAmountPages": parent.get("overflowAmountPages"),
+        "overflowViolation": parent.get("overflowViolation"),
+        "slotSpanCount": parent.get("slotSpanCount"),
+        "recordMode": parent.get("recordMode"),
+        "textRecordCount": parent.get("textRecordCount", 0),
+        "imageRecordCount": parent.get("imageRecordCount", 1),
+        "riskFlags": [],  # mutated entries lose the auto-detected risk
+    }
+    return skeleton
+
+
+def _replace_problem(session: dict[str, Any], original_index: int, replacements: list[dict[str, Any]]) -> None:
+    """Replace the problem at original_index with one or more replacements,
+    keeping the rest of the list intact. Also updates the page's problemIds
+    array to match the new ordering."""
+    problems = list(session.get("problems") or [])
+    original = problems[original_index]
+    page_id = str(original.get("sourcePageId") or "")
+    new_ids = [str(r["id"]) for r in replacements]
+
+    problems[original_index : original_index + 1] = replacements
+    session["problems"] = problems
+
+    for page in session.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        if str(page.get("id")) != page_id:
+            continue
+        ids = list(page.get("problemIds") or [])
+        if str(original.get("id")) in ids:
+            pos = ids.index(str(original.get("id")))
+            ids[pos : pos + 1] = new_ids
+        else:
+            ids.extend(new_ids)
+        page["problemIds"] = ids
+        break
+    session["detected_problem_count"] = len(problems)
+
+
+def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dict[str, Any]]:
+    """Drop matching problems from session.problems and from each page's
+    problemIds list. Returns the removed entries (in original order)."""
+    removed: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for problem in session.get("problems") or []:
+        if isinstance(problem, dict) and str(problem.get("id")) in problem_ids:
+            removed.append(problem)
+        else:
+            kept.append(problem)
+    session["problems"] = kept
+    for page in session.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        page["problemIds"] = [pid for pid in (page.get("problemIds") or []) if pid not in problem_ids]
+    session["detected_problem_count"] = len(kept)
+    return removed
+
+
+def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float) -> dict[str, Any]:
+    if not (0.05 < split_y_ratio < 0.95):
+        raise ValueError("splitYRatio must be between 0.05 and 0.95")
+    index, problem = _find_problem(session, problem_id)
+    page_id = str(problem.get("sourcePageId") or "")
+    page = _find_page(session, page_id)
+    page_image_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+    if page_image_path is None or not page_image_path.exists():
+        raise FileNotFoundError(f"page image missing for {page_id}: {page_image_path}")
+
+    bbox = problem.get("bbox") or {}
+    left = float(bbox.get("left", 0.0))
+    top = float(bbox.get("top", 0.0))
+    width = float(bbox.get("width", 0.0))
+    height = float(bbox.get("height", 0.0))
+    if width <= 0 or height <= 0:
+        raise ValueError("problem bbox is empty — cannot split")
+    cut = height * split_y_ratio
+    upper = Box(left=left, top=top, width=width, height=cut)
+    lower = Box(left=left, top=top + cut, width=width, height=height - cut)
+
+    crop_dir = _crop_dir_for_session(session)
+    from PIL import Image  # local import: PIL is already in build_problem_board_edb's deps
+
+    page_image = Image.open(page_image_path).convert("RGB")
+    upper_id = _next_problem_id(session, str(problem.get("id")), "u")
+    upper_crop_path = crop_dir / _make_crop_filename(upper_id, "u")
+    recrop_problem(page_image, upper, upper_crop_path)
+    lower_id = _next_problem_id({**session, "problems": session.get("problems", []) + [{"id": upper_id}]}, str(problem.get("id")), "l")
+    lower_crop_path = crop_dir / _make_crop_filename(lower_id, "l")
+    recrop_problem(page_image, lower, lower_crop_path)
+
+    parent_title = str(problem.get("title") or problem_id)
+
+    def make_entry(new_id: str, new_bbox: Box, crop_path: Path, suffix: str) -> dict[str, Any]:
+        entry = _problem_skeleton_from_parent(problem)
+        entry["id"] = new_id
+        entry["title"] = f"{parent_title} ({suffix})"
+        entry["imagePath"] = crop_path.resolve().as_uri()
+        # cutout regeneration is reserved for the AI workflow — for now the
+        # board render path mirrors the rectangular crop. EDB build composites
+        # onto the dark theme using the same source.
+        entry["boardRenderPath"] = crop_path.resolve().as_uri()
+        entry["bbox"] = {
+            "left": new_bbox.left,
+            "top": new_bbox.top,
+            "width": new_bbox.width,
+            "height": new_bbox.height,
+        }
+        return entry
+
+    upper_entry = make_entry(upper_id, upper, upper_crop_path, "위")
+    lower_entry = make_entry(lower_id, lower, lower_crop_path, "아래")
+    _replace_problem(session, index, [upper_entry, lower_entry])
+    return session
+
+
+def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
+    if len(problem_ids) < 2:
+        raise ValueError("merge requires at least 2 problems")
+    targets: list[tuple[int, dict[str, Any]]] = []
+    for pid in problem_ids:
+        index, problem = _find_problem(session, pid)
+        targets.append((index, problem))
+    page_ids = {str(p.get("sourcePageId")) for _, p in targets}
+    if len(page_ids) != 1:
+        raise ValueError("merge requires all problems on the same source page")
+    page_id = next(iter(page_ids))
+    page = _find_page(session, page_id)
+    page_image_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+    if page_image_path is None or not page_image_path.exists():
+        raise FileNotFoundError(f"page image missing for {page_id}: {page_image_path}")
+
+    lefts, tops, rights, bottoms = [], [], [], []
+    for _, problem in targets:
+        bbox = problem.get("bbox") or {}
+        left = float(bbox.get("left", 0.0))
+        top = float(bbox.get("top", 0.0))
+        width = float(bbox.get("width", 0.0))
+        height = float(bbox.get("height", 0.0))
+        if width <= 0 or height <= 0:
+            raise ValueError(f"problem {problem.get('id')} has an empty bbox — cannot merge")
+        lefts.append(left)
+        tops.append(top)
+        rights.append(left + width)
+        bottoms.append(top + height)
+    merged = Box.from_points(min(lefts), min(tops), max(rights), max(bottoms))
+
+    first_index = min(idx for idx, _ in targets)
+    primary = targets[0][1]  # take the first listed problem as the metadata source
+    crop_dir = _crop_dir_for_session(session)
+    new_id = _next_problem_id(session, str(primary.get("id")), "m")
+    new_crop_path = crop_dir / _make_crop_filename(new_id, "m")
+
+    from PIL import Image
+    page_image = Image.open(page_image_path).convert("RGB")
+    recrop_problem(page_image, merged, new_crop_path)
+
+    merged_entry = _problem_skeleton_from_parent(primary)
+    merged_entry["id"] = new_id
+    parent_title = str(primary.get("title") or new_id)
+    merged_entry["title"] = f"{parent_title} 외 {len(targets) - 1}건"
+    merged_entry["imagePath"] = new_crop_path.resolve().as_uri()
+    merged_entry["boardRenderPath"] = new_crop_path.resolve().as_uri()
+    merged_entry["bbox"] = {
+        "left": merged.left,
+        "top": merged.top,
+        "width": merged.width,
+        "height": merged.height,
+    }
+    # remove all originals; the page's problemIds will be cleaned up too.
+    _remove_problems(session, {str(pid) for pid in problem_ids})
+    # insert the merged entry at the position of the first removed problem
+    # (relative to the post-removal list — adjust because earlier entries
+    # may have been removed too).
+    problems = session.get("problems") or []
+    insert_at = min(first_index, len(problems))
+    problems.insert(insert_at, merged_entry)
+    session["problems"] = problems
+    session["detected_problem_count"] = len(problems)
+    # also slot the new id into the page's problemIds
+    for p in session.get("pages", []):
+        if not isinstance(p, dict):
+            continue
+        if str(p.get("id")) != page_id:
+            continue
+        ids = list(p.get("problemIds") or [])
+        # find a reasonable insertion point — right after the first id that
+        # already appears in the new problems list, or at the end.
+        existing_ids_in_problems = [str(prob.get("id")) for prob in problems if isinstance(prob, dict)]
+        insertion_index = len(ids)
+        for idx, pid_in_page in enumerate(ids):
+            if pid_in_page in existing_ids_in_problems:
+                position_in_problems = existing_ids_in_problems.index(pid_in_page)
+                if position_in_problems >= insert_at:
+                    insertion_index = idx
+                    break
+        ids.insert(insertion_index, new_id)
+        p["problemIds"] = ids
+        break
+    return session
+
+
+def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
+    if not problem_id:
+        raise ValueError("problemId is required")
+    _find_problem(session, problem_id)  # raises if missing
+    _remove_problems(session, {problem_id})
+    return session
+
+
+def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite any /api/file?path=... values in a session snapshot back to
+    file:// URIs so the server's "latest_session" stays canonical regardless
+    of whether the snapshot came from JS (where everything is /api/file URLs)
+    or from a fresh build (where everything is file://)."""
+    cloned = json.loads(json.dumps(snapshot))
+
+    def fix(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if value.startswith("/api/file"):
+            parsed = urlparse(value)
+            params = parse_qs(parsed.query)
+            raw = params.get("path", [None])[0]
+            if raw:
+                return Path(unquote(raw)).resolve().as_uri()
+        return value
+
+    for problem in cloned.get("problems", []) or []:
+        if not isinstance(problem, dict):
+            continue
+        for key in ("imagePath", "sourceImagePath", "boardRenderPath"):
+            problem[key] = fix(problem.get(key))
+    for page in cloned.get("pages", []) or []:
+        if not isinstance(page, dict):
+            continue
+        page["sourceImageUri"] = fix(page.get("sourceImageUri"))
+    cloned["edb_file_uri"] = fix(cloned.get("edb_file_uri"))
+    cloned["rendered_page_file_uris"] = [fix(v) for v in cloned.get("rendered_page_file_uris", [])]
+    return cloned
 
 
 class AppHTTPServer(ThreadingHTTPServer):
@@ -383,6 +713,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/session/publish":
             self._handle_session_publish()
+            return
+        if parsed.path == "/api/system/open-folder":
+            self._handle_open_folder()
+            return
+        if parsed.path == "/api/session/mutate":
+            self._handle_session_mutate()
+            return
+        if parsed.path == "/api/session/restore":
+            self._handle_session_restore()
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
@@ -488,8 +827,106 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # carry over user-facing labels so the rename doesn't get lost
         if session.get("session_name"):
             new_session["session_name"] = session["session_name"]
+        # publish only re-renders records; page-level review metadata
+        # (sourceImageUri, dimensions, riskFlags) is still meaningful for the
+        # caller, so preserve it across the publish hop.
+        if session.get("pages"):
+            preserved_pages: list[dict[str, Any]] = []
+            problem_ids_remaining = {str(problem.get("id")) for problem in new_session.get("problems", []) if problem.get("id")}
+            for page in session["pages"]:
+                page_copy = dict(page)
+                page_copy["problemIds"] = [pid for pid in page.get("problemIds", []) if pid in problem_ids_remaining]
+                preserved_pages.append(page_copy)
+            new_session["pages"] = preserved_pages
+        # propagate per-problem bbox/riskFlags from the prior session — they
+        # are derived from segmentation, which publish does not re-run.
+        prior_problems_by_id = {
+            str(problem.get("id")): problem
+            for problem in session.get("problems", [])
+            if isinstance(problem, dict) and problem.get("id")
+        }
+        for problem in new_session.get("problems", []):
+            prior = prior_problems_by_id.get(str(problem.get("id")))
+            if not prior:
+                continue
+            if "bbox" not in problem or not problem["bbox"]:
+                problem["bbox"] = prior.get("bbox") or {}
+            problem["riskFlags"] = list(prior.get("riskFlags") or [])
         self.app_server.remember_session(new_session)
         self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+
+    # ── /api/session/mutate ──────────────────────────────────────────────
+    # Body: { "action": "split" | "merge" | "exclude", ...args }
+    # Returns the updated session (rewritten for HTTP).
+    def _handle_session_mutate(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        action = str(payload.get("action") or "").strip().lower()
+        try:
+            if action == "split":
+                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                raw_ratio = payload.get("splitYRatio")
+                if raw_ratio is None:
+                    raw_ratio = payload.get("split_y_ratio")
+                if raw_ratio is None:
+                    raw_ratio = 0.5
+                split_ratio = float(raw_ratio)
+                new_session = _mutate_split(session, problem_id, split_ratio)
+            elif action == "merge":
+                ids_raw = payload.get("problemIds") or payload.get("problem_ids") or []
+                problem_ids = [str(pid) for pid in ids_raw if pid]
+                new_session = _mutate_merge(session, problem_ids)
+            elif action == "exclude":
+                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                new_session = _mutate_exclude(session, problem_id)
+            else:
+                self._send_json(
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|exclude)"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
+            return
+
+        self.app_server.remember_session(new_session)
+        self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+
+    # ── /api/session/restore ────────────────────────────────────────────
+    # Body: { "session": { ... full session JSON ... } }
+    # Replaces the server's "latest" session with the provided snapshot. Used
+    # by the front-end Undo stack so a single round-trip is enough to revert.
+    def _handle_session_restore(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        snapshot = payload.get("session")
+        if not isinstance(snapshot, dict) or "problems" not in snapshot:
+            self._send_json(
+                {"ok": False, "error": "session payload must be a dict containing 'problems'"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        # Strip the HTTP-friendly URLs that may already be in the snapshot —
+        # the server stores file-system paths and re-derives /api/file URLs on
+        # the way out. Snapshots that round-trip through rewrite_session_for_http
+        # would otherwise drift over time.
+        restored = _denormalize_session_paths(snapshot)
+        self.app_server.remember_session(restored)
+        self._send_json({"ok": True, "session": rewrite_session_for_http(restored)})
 
     def _handle_session_clear(self) -> None:
         self.app_server.latest_session = None
@@ -506,6 +943,44 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except OSError:
             pass
         self._send_json({"ok": True})
+
+    def _handle_open_folder(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        raw_path = payload.get("path") or payload.get("folder") or ""
+        if not raw_path:
+            self._send_json({"ok": False, "error": "path is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            target = Path(str(raw_path)).resolve()
+        except (OSError, ValueError) as exc:
+            self._send_json({"ok": False, "error": f"invalid path: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        # confine the open to paths under BASE_DIR / RUNTIME_DIR so the API
+        # can't be abused to reveal arbitrary locations on the user's machine.
+        roots = [BASE_DIR.resolve(), RUNTIME_DIR.resolve()]
+        if not any(str(target) == str(root) or str(target).startswith(str(root) + os.sep) for root in roots):
+            self._send_json({"ok": False, "error": "path outside allowed roots"}, status=HTTPStatus.FORBIDDEN)
+            return
+        if target.is_file():
+            target = target.parent
+        if not target.exists() or not target.is_dir():
+            self._send_json({"ok": False, "error": f"folder not found: {target}"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
+        except OSError as exc:
+            self._send_json({"ok": False, "error": f"failed to open: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self._send_json({"ok": True, "path": str(target)})
 
     def _handle_user_settings_get(self) -> None:
         self._send_json(

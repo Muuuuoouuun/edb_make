@@ -113,6 +113,11 @@ def _problem_title_source(block: ContentBlock) -> str | None:
 
 def _problem_display_title(block: ContentBlock) -> str | None:
     title_source = _problem_title_source(block)
+    if not title_source:
+        return None
+    # 필터: 이미지 파일명(record_0001_img_0 등)이 OCR로 빨려 들어온 경우 무시
+    if "record_" in title_source.lower() and ("img_" in title_source.lower() or "page-" in title_source.lower()):
+        return None
     return strip_problem_marker(title_source) or title_source
 
 

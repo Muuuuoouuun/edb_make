@@ -75,6 +75,8 @@ const Icon = {
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
   zoomIn: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>,
   undo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3"/></svg>,
+  refresh:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3.5-7.1M21 4v5h-5"/></svg>,
+  reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
 };
@@ -82,7 +84,7 @@ const Icon = {
 const stepLabel = s => s === 's1' ? '1단계' : s === 's2' ? '2단계 · AI' : '대기';
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, hasSession }){
+function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, hasSession, view, setView, reviewAvailable, onUndo, canUndo }){
   return (
     <div className="topbar">
       <div className="brand">
@@ -94,15 +96,305 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <input value={fileName} onChange={e => setFileName(e.target.value)} />
       </div>
       <div className="spacer" />
+      <div className="view-toggle" title={reviewAvailable ? '' : '먼저 자료를 업로드하세요'}>
+        <button className={view === 'board' ? 'on' : ''} onClick={() => setView && setView('board')}>칠판</button>
+        <button
+          className={view === 'review' ? 'on' : ''}
+          onClick={() => reviewAvailable && setView && setView('review')}
+          disabled={!reviewAvailable}
+          style={!reviewAvailable ? { cursor: 'not-allowed', opacity: .5 } : null}
+        >검수</button>
+      </div>
       <div className="progress" title={`${processed} / ${total} 처리됨`}>
         <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
         <span>{processed}/{total} 처리됨</span>
       </div>
-      <button className="btn ghost" onClick={onReset} disabled={!hasSession} title="현재 세션 비우기">새 세션</button>
-      <button className="btn ghost icon" title="실행 취소">{Icon.undo}</button>
+      <button
+        className="btn ghost"
+        onClick={onRefresh}
+        disabled={refreshing}
+        title="저장된 세션을 다시 불러옵니다"
+      >
+        <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
+        <span style={{marginLeft:4}}>{refreshing ? '불러오는 중…' : '새로고침'}</span>
+      </button>
+      <button className="btn ghost" onClick={onReset} disabled={!hasSession} title="세션과 업로드 자료를 모두 비웁니다">
+        {Icon.reset}<span style={{marginLeft:4}}>초기화</span>
+      </button>
+      <button
+        className="btn ghost icon"
+        title={canUndo ? '검수 변경 되돌리기 (Ctrl/Cmd+Z)' : '되돌릴 변경이 없습니다'}
+        onClick={onUndo}
+        disabled={!canUndo}
+      >{Icon.undo}</button>
       <button className={`btn primary ${published ? 'done' : ''}`} onClick={onPublish}>
         {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
       </button>
+    </div>
+  );
+}
+
+// ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
+function ReviewStage({ session, items, activeId, setActive, mutateSession, mutating }){
+  const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const problemsById = useMemo(() => {
+    const map = new Map();
+    (session?.problems || []).forEach(p => { if (p && p.id) map.set(p.id, p); });
+    return map;
+  }, [session]);
+  // Problem display number reflects the current rail order (user reordering /
+  // excluding is honoured here, so the chip on each bbox matches the rail).
+  const orderMap = useMemo(() => {
+    const map = new Map();
+    items.forEach((it, idx) => map.set(it.id, idx + 1));
+    return map;
+  }, [items]);
+
+  // Multi-select state: ids of bboxes currently selected. Clicking without
+  // shift replaces selection; shift-click toggles.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Split mode: when set to a problem id, that bbox shows a draggable
+  // horizontal guideline. The ratio is in (0, 1).
+  const [splitTarget, setSplitTarget] = useState(null);
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  const splitDraggingRef = useRef(false);
+  const splitBoxRef = useRef(null);
+
+  // Cancel split mode if the session changes underneath (e.g. after a mutation).
+  useEffect(() => {
+    setSplitTarget(null);
+    setSelectedIds(new Set());
+  }, [session]);
+
+  const onBoxClick = (probId, evt) => {
+    if (splitTarget) return;  // ignore clicks while splitting
+    if (evt.shiftKey) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(probId)) next.delete(probId);
+        else next.add(probId);
+        return next;
+      });
+    } else {
+      setSelectedIds(new Set([probId]));
+    }
+    if (setActive) setActive(probId);
+  };
+
+  const selectedList = Array.from(selectedIds);
+  const selectedProblems = selectedList.map(id => problemsById.get(id)).filter(Boolean);
+  const sameSourcePage = selectedProblems.length >= 2
+    && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
+
+  const beginSplit = () => {
+    if (selectedList.length !== 1) return;
+    setSplitTarget(selectedList[0]);
+    setSplitRatio(0.5);
+  };
+  const cancelSplit = () => setSplitTarget(null);
+  const confirmSplit = async () => {
+    if (!splitTarget) return;
+    const ratio = Math.max(0.06, Math.min(0.94, splitRatio));
+    await mutateSession?.('split', { problemId: splitTarget, splitYRatio: ratio });
+  };
+  const doMerge = async () => {
+    if (!sameSourcePage) return;
+    await mutateSession?.('merge', { problemIds: selectedList });
+  };
+  const doExclude = async () => {
+    if (selectedList.length === 0) return;
+    // sequential calls — exclude is a single-id operation
+    for (const id of selectedList) {
+      await mutateSession?.('exclude', { problemId: id });
+    }
+  };
+
+  // Drag handler for the split guideline. Tracks against the splitting bbox
+  // element so the ratio is relative to the box, not the page image.
+  useEffect(() => {
+    if (!splitTarget) return;
+    const onMove = (evt) => {
+      if (!splitDraggingRef.current || !splitBoxRef.current) return;
+      const rect = splitBoxRef.current.getBoundingClientRect();
+      const y = evt.clientY - rect.top;
+      const ratio = Math.max(0.06, Math.min(0.94, y / rect.height));
+      setSplitRatio(ratio);
+    };
+    const onUp = () => { splitDraggingRef.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [splitTarget]);
+
+  if (!pages.length) {
+    return (
+      <div className="col center">
+        <div className="stage">
+          <div className="stage-toolbar">
+            <span className="name">검수 — 검출된 문제 박스</span>
+          </div>
+          <div className="review-empty">
+            먼저 자료를 업로드해 주세요.<br />
+            업로드한 페이지 원본 위에 검출된 박스를 보여드립니다.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const riskyCount = (session?.problems || []).filter(p => (p.riskFlags || []).length > 0).length;
+
+  const actionBar = splitTarget ? (
+    <div className="review-actionbar">
+      <span className="count-chip">가르기 중</span>
+      <span className="hint">박스 안의 파란 선을 드래그해서 위치를 정한 다음 [가르기]를 눌러주세요.</span>
+      <div className="spacer" />
+      <button className="btn" onClick={cancelSplit} disabled={mutating}>취소</button>
+      <button className="btn primary" onClick={confirmSplit} disabled={mutating}>
+        ✂ {(splitRatio * 100).toFixed(0)}% 위치에서 가르기
+      </button>
+    </div>
+  ) : selectedList.length === 0 ? (
+    <div className="review-actionbar">
+      <span className="hint">박스를 클릭해서 선택. Shift+클릭으로 여러 박스 선택.</span>
+      <div className="spacer" />
+      {riskyCount > 0 && (
+        <span className="pg-risk" title="인식이 의심되는 박스 수">
+          ⚠ 위험 의심 {riskyCount}건
+        </span>
+      )}
+    </div>
+  ) : (
+    <div className="review-actionbar">
+      <span className="count-chip">{selectedList.length}개 선택됨</span>
+      <span className="hint">
+        {selectedList.length === 1
+          ? '한 박스를 두 문제로 가르거나, 이 박스를 제외할 수 있어요.'
+          : sameSourcePage
+            ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
+            : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
+      </span>
+      <div className="spacer" />
+      {selectedList.length === 1 && (
+        <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 가르기</button>
+      )}
+      {selectedList.length >= 2 && (
+        <button className="btn primary" onClick={doMerge} disabled={!sameSourcePage || mutating}>
+          ⇲ 합치기
+        </button>
+      )}
+      <button className="btn danger" onClick={doExclude} disabled={mutating}>
+        {Icon.trash} 제외
+      </button>
+      <button className="btn" onClick={() => setSelectedIds(new Set())} disabled={mutating}>선택 해제</button>
+    </div>
+  );
+
+  return (
+    <div className="col center">
+      <div className="stage">
+        <div className="stage-toolbar">
+          <span className="name">검수 — 검출된 문제 박스</span>
+          <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {session?.problems?.length || 0} 문제</span>
+          <div className="spacer" />
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+            빨간 박스는 인식이 의심됩니다. 클릭 후 가르기·합치기·제외하세요.
+          </span>
+        </div>
+        <div className="review-wrap">
+          {actionBar}
+          {pages.map(page => {
+            const pageProblems = (page.problemIds || [])
+              .map(pid => problemsById.get(pid))
+              .filter(Boolean);
+            const pageRiskFlags = page.riskFlags || [];
+            const hasRisk = pageRiskFlags.length > 0;
+            return (
+              <div key={page.id} className="review-page">
+                <div className="review-page-hd">
+                  <span className="pg-num">{page.id}</span>
+                  <span className="pg-count">{pageProblems.length}개 검출</span>
+                  {hasRisk && (
+                    <span className="pg-risk" title={pageRiskFlags.join(', ')}>
+                      ⚠ 위험 · {pageRiskFlags.join(' · ')}
+                    </span>
+                  )}
+                  <div className="spacer" />
+                  <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
+                    {page.width}×{page.height}
+                  </span>
+                </div>
+                <div className="review-page-canvas">
+                  {page.sourceImageUri ? (
+                    <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                  ) : (
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
+                      페이지 이미지를 불러올 수 없어요.
+                    </div>
+                  )}
+                  {pageProblems.map(prob => {
+                    const bbox = prob.bbox || {};
+                    const w = page.width || 1;
+                    const h = page.height || 1;
+                    if (!bbox.width || !bbox.height) return null;
+                    const leftPct = (bbox.left / w) * 100;
+                    const topPct = (bbox.top / h) * 100;
+                    const widthPct = (bbox.width / w) * 100;
+                    const heightPct = (bbox.height / h) * 100;
+                    const isSelected = selectedIds.has(prob.id);
+                    const isActive = prob.id === activeId;
+                    const isRisky = (prob.riskFlags || []).length > 0;
+                    const isSplitting = splitTarget === prob.id;
+                    const order = orderMap.get(prob.id);
+                    const tooltipParts = [prob.title || ''];
+                    if (isRisky) tooltipParts.push(`위험: ${prob.riskFlags.join(', ')}`);
+                    const classes = [
+                      'review-bbox',
+                      isSelected ? 'selected' : '',
+                      isActive ? 'active' : '',
+                      isRisky ? 'risky' : '',
+                      isSplitting ? 'splitting' : '',
+                    ].filter(Boolean).join(' ');
+                    return (
+                      <div
+                        key={prob.id}
+                        ref={isSplitting ? splitBoxRef : null}
+                        className={classes}
+                        style={{
+                          left: `${leftPct}%`,
+                          top: `${topPct}%`,
+                          width: `${widthPct}%`,
+                          height: `${heightPct}%`,
+                        }}
+                        onClick={(evt) => onBoxClick(prob.id, evt)}
+                        title={tooltipParts.filter(Boolean).join(' · ')}
+                      >
+                        <div className="review-bbox-label">
+                          {String(order || '?').padStart(2, '0')}
+                          {isRisky && <span className="review-bbox-risk">⚠</span>}
+                        </div>
+                        {isSplitting && (
+                          <div
+                            className="split-guide"
+                            style={{ top: `${splitRatio * 100}%` }}
+                            onMouseDown={(evt) => {
+                              evt.stopPropagation();
+                              splitDraggingRef.current = true;
+                            }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -197,7 +489,15 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
               <TileImage item={it} forceMode="raw" />
             </div>
             <div className="meta">
-              <div className="name">{it.name}</div>
+              <div className="name">
+                {(it.riskFlags && it.riskFlags.length > 0) && (
+                  <span
+                    className="risk-pip"
+                    title={`인식 의심: ${it.riskFlags.join(', ')}`}
+                  >⚠</span>
+                )}
+                {it.name}
+              </div>
               <div className="sub">
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
                 {it.step === 's2' && <span className="tag s2">AI</span>}
@@ -816,6 +1116,7 @@ function mapProblemToItem(problem, idx){
     imageUrl: problem.imagePath || null,
     chalkUrl: problem.boardRenderPath || null,
     subject: problem.subject || 'unknown',
+    riskFlags: Array.isArray(problem.riskFlags) ? problem.riskFlags : [],
   };
 }
 
@@ -877,6 +1178,45 @@ async function clearSession(){
   if (!resp.ok || !json.ok) throw new Error(json.error || `세션 초기화 실패 (${resp.status})`);
 }
 
+async function postMutate(action, args){
+  const resp = await fetch('/api/session/mutate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...args }),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `검수 수정 실패 (${resp.status})`);
+  return json.session;
+}
+
+async function postRestore(snapshot){
+  const resp = await fetch('/api/session/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: snapshot }),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `이전 상태 복원 실패 (${resp.status})`);
+  return json.session;
+}
+
+async function openOutputFolder(path){
+  if (!path) return;
+  try {
+    const resp = await fetch('/api/system/open-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json.ok) {
+      console.warn('[board] open-folder failed:', json.error || resp.status);
+    }
+  } catch (e) {
+    console.warn('[board] open-folder error:', e.message);
+  }
+}
+
 async function saveUserSettings(geminiApiKey){
   const resp = await fetch('/api/user-settings', {
     method: 'POST',
@@ -908,7 +1248,20 @@ function App(){
   const [usingMock, setUsingMock] = useState(true);
   const [userSettings, setUserSettings] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [view, setView] = useState('board');
+  const [mutating, setMutating] = useState(false);
+  // Undo history: each entry is a prior session snapshot. Pushed before
+  // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
+  const [historyStack, setHistoryStack] = useState([]);
   const fileInputRef = useRef(null);
+
+  const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
+  // auto-revert to board view if the session is cleared or never had pages
+  useEffect(() => {
+    if (view === 'review' && !reviewAvailable) setView('board');
+  }, [view, reviewAvailable]);
+  const canUndo = historyStack.length > 0 && !mutating;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
@@ -933,6 +1286,112 @@ function App(){
     if (rawSession.session_name) setFileName(rawSession.session_name);
     return true;
   }, []);
+
+  // Replace state from a mutation response: similar to applySession but
+  // tries to preserve the user's current item ordering when the mutation
+  // only affects a subset of problem ids (e.g. exclude leaves order intact).
+  const adoptMutatedSession = useCallback((nextSession, prevSession) => {
+    if (!nextSession || !Array.isArray(nextSession.problems)) return;
+    const nextProblemsById = new Map();
+    nextSession.problems.forEach(p => { if (p && p.id) nextProblemsById.set(p.id, p); });
+    // Start from the previous items order, drop missing ids, append any new
+    // ids in their server-side order (this keeps split children adjacent to
+    // where the parent was, and lets reordered exclusion preserve the rest).
+    const prevItemIds = items.map(it => it.id);
+    const seen = new Set();
+    const orderedIds = [];
+    for (const id of prevItemIds) {
+      if (nextProblemsById.has(id) && !seen.has(id)) {
+        orderedIds.push(id);
+        seen.add(id);
+      }
+    }
+    for (const prob of nextSession.problems) {
+      if (prob && prob.id && !seen.has(prob.id)) {
+        orderedIds.push(prob.id);
+        seen.add(prob.id);
+      }
+    }
+    const orderedProblems = orderedIds.map(id => nextProblemsById.get(id)).filter(Boolean);
+    const mapped = orderedProblems.map((p, idx) => mapProblemToItem(p, idx));
+    setItems(mapped);
+    setSession(nextSession);
+    setPublished(false);
+    if (!nextProblemsById.has(activeId)) {
+      setActiveId(mapped[0]?.id || null);
+    }
+  }, [items, activeId]);
+
+  // Run a server-side mutation (split / merge / exclude). Captures the
+  // current session into the undo history *before* the request goes out
+  // so that a failed mutation does not clutter the stack.
+  const mutateSession = useCallback(async (action, args) => {
+    if (!session) {
+      showToast('변경할 세션이 없습니다');
+      return;
+    }
+    setMutating(true);
+    setLoading({
+      label: action === 'split' ? '문제를 가르는 중…'
+        : action === 'merge' ? '문제를 합치는 중…'
+        : action === 'exclude' ? '문제를 제외하는 중…'
+        : '변경 중…',
+      startedAt: Date.now(),
+    });
+    const snapshotBefore = session;
+    try {
+      const next = await postMutate(action, args);
+      setHistoryStack(prev => [...prev, snapshotBefore]);
+      adoptMutatedSession(next, snapshotBefore);
+      showToast(
+        action === 'split' ? '문제를 두 개로 갈랐어요'
+        : action === 'merge' ? '문제를 합쳤어요'
+        : '문제를 제외했어요'
+      );
+    } catch (e) {
+      showToast(`수정 실패: ${e.message}`);
+    } finally {
+      setMutating(false);
+      setLoading(null);
+    }
+  }, [session, adoptMutatedSession]);
+
+  const undoMutation = useCallback(async () => {
+    if (historyStack.length === 0) return;
+    const snapshot = historyStack[historyStack.length - 1];
+    setMutating(true);
+    setLoading({ label: '되돌리는 중…', startedAt: Date.now() });
+    try {
+      const restored = await postRestore(snapshot);
+      setHistoryStack(prev => prev.slice(0, -1));
+      adoptMutatedSession(restored, session);
+      showToast('이전 상태로 되돌렸어요');
+    } catch (e) {
+      showToast(`되돌리기 실패: ${e.message}`);
+    } finally {
+      setMutating(false);
+      setLoading(null);
+    }
+  }, [historyStack, session, adoptMutatedSession]);
+
+  // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
+  // browser's native undo still works for editable fields (file-name crumb).
+  useEffect(() => {
+    const onKey = (evt) => {
+      if (!(evt.key === 'z' || evt.key === 'Z')) return;
+      if (!(evt.ctrlKey || evt.metaKey)) return;
+      if (evt.shiftKey) return;  // reserve Ctrl/Cmd+Shift+Z for future redo
+      const target = evt.target;
+      const tag = (target?.tagName || '').toUpperCase();
+      const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || (target && target.isContentEditable);
+      if (isEditable) return;
+      if (historyStack.length === 0 || mutating) return;
+      evt.preventDefault();
+      undoMutation();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [historyStack.length, mutating, undoMutation]);
 
   // initial session fetch — falls back silently to INITIAL_ITEMS on 404
   useEffect(() => {
@@ -977,7 +1436,7 @@ function App(){
   }, []);
 
   const resetSession = useCallback(async () => {
-    if (!window.confirm('현재 세션을 비우고 새로 시작할까요? 업로드한 자료가 보드에서 사라집니다.')) return;
+    if (!window.confirm('세션을 초기화할까요? 업로드한 자료가 모두 보드에서 사라집니다.')) return;
     try {
       await clearSession();
       setSession(null);
@@ -986,11 +1445,34 @@ function App(){
       setUsingMock(true);
       setPublished(false);
       setFileName('새 세션');
-      showToast('새 세션을 시작했습니다');
+      showToast('초기화 완료');
     } catch (e) {
       showToast('초기화 실패: ' + e.message);
     }
   }, []);
+
+  const refreshSession = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const s = await fetchLatestSession();
+      if (s && Array.isArray(s.problems) && s.problems.length) {
+        applySession(s);
+        showToast(`새로고침 완료 · ${s.problems.length}개 문항`);
+      } else {
+        // backend cleared the session — fall back to mock items
+        setSession(null);
+        setItems(INITIAL_ITEMS);
+        setActiveId(INITIAL_ITEMS[0]?.id || null);
+        setUsingMock(true);
+        setPublished(false);
+        showToast('저장된 세션이 없습니다');
+      }
+    } catch (e) {
+      showToast('새로고침 실패: ' + e.message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [applySession]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -1011,6 +1493,9 @@ function App(){
       const s = await postExport(files, aiFallback);
       applySession(s);
       showToast(`파싱 완료 · ${(s.problems || []).length}개 문항`);
+      // open the output folder in Windows Explorer so the user can grab the .edb
+      const folder = s?.output_dir || s?.outputDir;
+      if (folder) openOutputFolder(folder);
     } catch (e) {
       showToast(`파싱 실패: ${e.message}`);
     } finally {
@@ -1122,7 +1607,14 @@ function App(){
         onPublish={onPublish}
         published={published}
         onReset={resetSession}
+        onRefresh={refreshSession}
+        refreshing={refreshing}
         hasSession={!!session}
+        view={view}
+        setView={setView}
+        reviewAvailable={reviewAvailable}
+        onUndo={undoMutation}
+        canUndo={canUndo}
       />
       <div className="main">
         <ItemsRail
@@ -1135,16 +1627,27 @@ function App(){
           bulkApply={applyToAll}
           handleFiles={handleFiles}
         />
-        <BoardStage
-          items={items}
-          activeId={activeId}
-          setActive={setActiveId}
-          boardColor={t.boardColor}
-          boardColumns={t.boardColumns}
-          fileName={fileName}
-          addSample={addSample}
-          reorder={reorder}
-        />
+        {view === 'review' ? (
+          <ReviewStage
+            session={session}
+            items={items}
+            activeId={activeId}
+            setActive={setActiveId}
+            mutateSession={mutateSession}
+            mutating={mutating}
+          />
+        ) : (
+          <BoardStage
+            items={items}
+            activeId={activeId}
+            setActive={setActiveId}
+            boardColor={t.boardColor}
+            boardColumns={t.boardColumns}
+            fileName={fileName}
+            addSample={addSample}
+            reorder={reorder}
+          />
+        )}
         <SidePanel
           item={active}
           items={items}

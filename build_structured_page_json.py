@@ -16,6 +16,19 @@ from segment import crop_block_image, draw_segment_debug, segment_page
 from structured_schema import BlockType, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
 
 
+def load_env_local() -> None:
+    # edb_make 전용 .env.local 만 읽어옵니다. (Classin_Home 프로젝트와 완전히 분리)
+    env_path = Path(__file__).resolve().parent / ".env.local"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ.setdefault(key.strip(), val.strip())
+
+load_env_local()
+
+
 def _resolve_subject(name: str | None) -> Subject:
     if not name:
         return Subject.UNKNOWN
