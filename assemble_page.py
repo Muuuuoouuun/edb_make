@@ -386,44 +386,87 @@ def group_problem_units(page: PageModel) -> PageModel:
     relabeled.metadata["problem_number_source_counts"] = diagnostics["problem_number_source_counts"]
 
     if fallback_grouping:
+        # Without OCR text markers we cannot tell problem boundaries from text.
+        # The least-bad heuristic is to lean on the segmentation metadata:
+        # blocks that share a (column_index, source_band_index) came from the
+        # same pre-split row band — i.e. one visual problem region that the
+        # band splitter cut into stem / figure / choices. Collapsing them back
+        # into a single ProblemUnit prevents the "stem, figure, and choices
+        # each become their own problem" failure mode that happens when OCR
+        # is unavailable.
         problems: list[ProblemUnit] = []
-        for index, block in enumerate(classified_blocks, start=1):
-            problem_number, number_source = extract_problem_number_from_block(block)
-            block_diag = block_diagnostics[index - 1]
-            current = ProblemUnit(
-                unit_id=f"{page.page_id}-problem-{index}",
-                subject=infer_subject(relabeled),
-                title=_problem_display_title(block),
-            )
-            if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
-                current.figure_block_ids.append(block.block_id)
-            elif block.block_type == BlockType.EXPLANATION:
-                current.explanation_block_ids.append(block.block_id)
-            elif block.block_type == BlockType.CHOICE:
-                current.choice_block_ids.append(block.block_id)
+        groups: dict[tuple[int, object], list[int]] = {}
+        group_order: list[tuple[int, object]] = []
+        for index, block in enumerate(classified_blocks):
+            column_index = int(block.metadata.get("column_index") or 0)
+            source_band = block.metadata.get("source_band_index")
+            # Only merge when we actually have a band index — otherwise keep
+            # the original "one block per problem" behaviour so we don't
+            # accidentally collapse genuinely unrelated blocks.
+            if source_band is None:
+                key: tuple[int, object] = ("__solo__", index)
             else:
-                current.stem_block_ids.append(block.block_id)
+                key = (column_index, int(source_band))
+            if key not in groups:
+                groups[key] = []
+                group_order.append(key)
+            groups[key].append(index)
+
+        for problem_index, key in enumerate(group_order, start=1):
+            block_indices = groups[key]
+            primary_index = block_indices[0]
+            primary_block = classified_blocks[primary_index]
+            primary_diag = block_diagnostics[primary_index]
+            problem_number, number_source = extract_problem_number_from_block(primary_block)
+            # Fall back to scanning other merged blocks for a problem number
+            # in case the leading band was a header/decoration.
+            if problem_number is None:
+                for member_index in block_indices[1:]:
+                    member_number, member_source = extract_problem_number_from_block(
+                        classified_blocks[member_index]
+                    )
+                    if member_number is not None:
+                        problem_number, number_source = member_number, member_source
+                        break
+
+            current = ProblemUnit(
+                unit_id=f"{page.page_id}-problem-{problem_index}",
+                subject=infer_subject(relabeled),
+                title=_problem_display_title(primary_block),
+            )
+            for member_index in block_indices:
+                member_block = classified_blocks[member_index]
+                if member_block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
+                    current.figure_block_ids.append(member_block.block_id)
+                elif member_block.block_type == BlockType.EXPLANATION:
+                    current.explanation_block_ids.append(member_block.block_id)
+                elif member_block.block_type == BlockType.CHOICE:
+                    current.choice_block_ids.append(member_block.block_id)
+                else:
+                    current.stem_block_ids.append(member_block.block_id)
             current.metadata.update(
                 {
                     "fallback_grouping": True,
                     "grouping_mode": diagnostics["grouping_mode"],
                     "grouping_source": diagnostics["grouping_source"],
-                    "grouping_index": index,
-                    "question_band_index": block.metadata.get("question_band_index"),
-                    "column_index": block.metadata.get("column_index"),
-                    "marker_conflict": bool(block_diag.get("marker_conflict")),
-                    "problem_marker": bool(block_diag.get("problem_marker")),
-                    "choice_marker": bool(block_diag.get("choice_marker")),
-                    "problem_number_source": block_diag.get("problem_number_source"),
+                    "grouping_index": problem_index,
+                    "question_band_index": primary_block.metadata.get("question_band_index"),
+                    "column_index": primary_block.metadata.get("column_index"),
+                    "source_band_index": primary_block.metadata.get("source_band_index"),
+                    "merged_block_count": len(block_indices),
+                    "marker_conflict": bool(primary_diag.get("marker_conflict")),
+                    "problem_marker": bool(primary_diag.get("problem_marker")),
+                    "choice_marker": bool(primary_diag.get("choice_marker")),
+                    "problem_number_source": number_source or primary_diag.get("problem_number_source"),
                 }
             )
             if problem_number is not None:
                 current.metadata["problem_number"] = problem_number
                 current.metadata["problem_number_source"] = number_source
             current.metadata["marker_counts"] = {
-                "problem_marker": int(bool(block_diag.get("problem_marker"))),
-                "choice_marker": int(bool(block_diag.get("choice_marker"))),
-                "marker_conflict": int(bool(block_diag.get("marker_conflict"))),
+                "problem_marker": int(bool(primary_diag.get("problem_marker"))),
+                "choice_marker": int(bool(primary_diag.get("choice_marker"))),
+                "marker_conflict": int(bool(primary_diag.get("marker_conflict"))),
             }
             problems.append(current)
         diagnostics["problem_count"] = len(problems)

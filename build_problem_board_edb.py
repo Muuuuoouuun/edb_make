@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-from PIL import Image, ImageOps, ImageStat
+from PIL import Image, ImageFilter, ImageOps, ImageStat
 
 try:
     import numpy as np  # type: ignore
@@ -83,6 +83,40 @@ def _resolve_board_theme(board_theme: str | None) -> str:
     return DEFAULT_BOARD_THEME
 
 
+# Minimum width (px) for a problem crop before chalk rendering. Smaller crops
+# get upscaled with LANCZOS so OCR and the dark-board composite have enough
+# pixel-detail to render legibly. Chosen empirically: 1024 px wide is roughly
+# the width of a printed Korean exam problem at 200 DPI.
+PROBLEM_CROP_TARGET_MIN_WIDTH_PX = 1024
+PROBLEM_CROP_MAX_UPSCALE = 2.6
+
+
+def _enhance_problem_crop(image: Image.Image) -> Image.Image:
+    """Upscale small crops and sharpen ink so the chalk render reads cleanly.
+
+    Run BEFORE alpha-extraction so the upscale uses the original ink edges
+    rather than a binary cutout. Returns a new image; the input is not
+    mutated.
+    """
+    if image.width <= 0 or image.height <= 0:
+        return image
+
+    rgb = image.convert("RGB")
+    if rgb.width < PROBLEM_CROP_TARGET_MIN_WIDTH_PX:
+        scale = min(
+            PROBLEM_CROP_MAX_UPSCALE,
+            PROBLEM_CROP_TARGET_MIN_WIDTH_PX / max(rgb.width, 1),
+        )
+        if scale > 1.05:
+            new_size = (int(round(rgb.width * scale)), int(round(rgb.height * scale)))
+            rgb = rgb.resize(new_size, Image.Resampling.LANCZOS)
+
+    # Unsharp mask brings ink-on-paper transitions back after upscale and also
+    # helps thin-stroke text survive the alpha-mask threshold inside
+    # _extract_problem_cutout.
+    return rgb.filter(ImageFilter.UnsharpMask(radius=1.4, percent=140, threshold=2))
+
+
 def _extract_problem_cutout(image: Image.Image) -> Image.Image:
     """Remove paper-like backgrounds and keep problem ink as an RGBA cutout."""
     rgb = image.convert("RGB")
@@ -128,7 +162,8 @@ def _prepare_image_for_dark_board(image: Image.Image, *, board_theme: str = DEFA
     """Composite a light-background crop onto a dark ClassIn-style board."""
     resolved_theme = _resolve_board_theme(board_theme)
     palette = BOARD_THEME_PALETTES[resolved_theme]
-    cutout = _extract_problem_cutout(image).convert("RGBA")
+    enhanced = _enhance_problem_crop(image)
+    cutout = _extract_problem_cutout(enhanced).convert("RGBA")
     alpha_mask = cutout.getchannel("A")
 
     board = Image.new("RGBA", cutout.size, palette["background"] + (255,))
@@ -266,6 +301,113 @@ def build_pages(
     return prepared_pages, page_models
 
 
+def _iter_problem_block_ids_raw(problem: ProblemUnit) -> list[str]:
+    """Like iter_problem_block_ids but without the page-level fallback —
+    used for purely problem-owned blocks (for top-y bookkeeping)."""
+    ordered: list[str] = []
+    for block_id in (
+        *problem.stem_block_ids,
+        *problem.choice_block_ids,
+        *problem.explanation_block_ids,
+        *problem.figure_block_ids,
+    ):
+        if block_id not in ordered:
+            ordered.append(block_id)
+    return ordered
+
+
+def _problem_top_y(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> float:
+    ids = _iter_problem_block_ids_raw(problem)
+    blocks = [block_by_id[bid] for bid in ids if bid in block_by_id]
+    if not blocks:
+        return 0.0
+    return min(block.bbox.top for block in blocks)
+
+
+def _expand_problem_blocks_by_gap(
+    page: PageModel,
+    problem: ProblemUnit,
+    next_problem: ProblemUnit | None,
+    block_by_id: dict[str, ContentBlock],
+    other_problem_block_ids: set[str],
+) -> list[ContentBlock]:
+    """Include every page block whose vertical centre falls between this
+    problem's start and the next problem's start.
+
+    The grouping pass leaves choice / figure blocks orphaned when segmentation
+    splits them into separate bands or columns. Filling the vertical gap
+    between consecutive problem-starts ensures the crop captures the full
+    question + figure + choices set.
+    """
+    own_ids = set(_iter_problem_block_ids_raw(problem))
+    own_blocks = [block_by_id[bid] for bid in own_ids if bid in block_by_id]
+    if not own_blocks:
+        return []
+
+    start_y = min(block.bbox.top for block in own_blocks)
+    if next_problem is None:
+        end_y = float(page.height_px)
+    else:
+        next_top = _problem_top_y(next_problem, block_by_id)
+        end_y = next_top if next_top > start_y else float(page.height_px)
+
+    included: list[ContentBlock] = []
+    for block in page.blocks:
+        if block.block_id in own_ids:
+            included.append(block)
+            continue
+        if block.block_id in other_problem_block_ids:
+            continue
+        centre = (block.bbox.top + block.bbox.bottom) / 2.0
+        if start_y <= centre < end_y:
+            included.append(block)
+    return included
+
+
+def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
+    """Patch in problem_number for entries whose marker OCR failed.
+
+    Strategy: when leading problems have no number but later ones do,
+    extrapolate backwards from the first known number. Forward-fill
+    sequential gaps from the previous known number + 1.
+    """
+    numbers: list[int | None] = []
+    for problem in problems:
+        raw = problem.metadata.get("problem_number")
+        if isinstance(raw, int):
+            numbers.append(raw)
+        elif isinstance(raw, str) and raw.isdigit():
+            numbers.append(int(raw))
+        else:
+            numbers.append(None)
+
+    if not any(n is not None for n in numbers):
+        return
+
+    first_known_index = next((i for i, n in enumerate(numbers) if n is not None), None)
+    if first_known_index is not None and first_known_index > 0:
+        anchor = numbers[first_known_index]
+        for offset in range(1, first_known_index + 1):
+            candidate = anchor - offset
+            if candidate >= 1:
+                numbers[first_known_index - offset] = candidate
+
+    for index in range(1, len(numbers)):
+        if numbers[index] is None and numbers[index - 1] is not None:
+            numbers[index] = numbers[index - 1] + 1
+
+    for problem, number in zip(problems, numbers):
+        if number is None:
+            continue
+        existing = problem.metadata.get("problem_number")
+        if isinstance(existing, int):
+            continue
+        if isinstance(existing, str) and existing.isdigit():
+            continue
+        problem.metadata["problem_number"] = number
+        problem.metadata.setdefault("problem_number_source", "inferred_sequence")
+
+
 def build_problem_entries(
     prepared_pages: list[PreparedPage],
     pages: list[PageModel],
@@ -287,9 +429,30 @@ def build_problem_entries(
             continue
         block_by_id = {block.block_id: block for block in page.blocks}
 
-        for index, problem in enumerate(page.problems):
+        # Reorder problems by their first block's top y so the "next problem"
+        # boundary used for gap-filling matches reading order even when the
+        # grouping pass produced them out of order.
+        ordered_problems = sorted(
+            page.problems,
+            key=lambda p: (_problem_top_y(p, block_by_id), p.unit_id),
+        )
+
+        _fill_missing_problem_numbers(ordered_problems)
+
+        all_assigned_ids: set[str] = set()
+        for prob in ordered_problems:
+            all_assigned_ids.update(_iter_problem_block_ids_raw(prob))
+
+        for index, problem in enumerate(ordered_problems):
+            next_problem = ordered_problems[index + 1] if index + 1 < len(ordered_problems) else None
+            own_ids = set(_iter_problem_block_ids_raw(problem))
+            other_problem_block_ids = all_assigned_ids - own_ids
             problem_block_ids = iter_problem_block_ids(page, problem)
-            blocks = [block_by_id[block_id] for block_id in problem_block_ids if block_id in block_by_id]
+            own_blocks = [block_by_id[block_id] for block_id in problem_block_ids if block_id in block_by_id]
+            gap_filled = _expand_problem_blocks_by_gap(
+                page, problem, next_problem, block_by_id, other_problem_block_ids
+            )
+            blocks = gap_filled if gap_filled else own_blocks
             raw_problem_number = problem.metadata.get("problem_number")
             if isinstance(raw_problem_number, int):
                 problem_number = raw_problem_number
@@ -317,7 +480,11 @@ def build_problem_entries(
             crop_name = f"problem_{len(entries) + 1:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
             crop_path = crop_dir / crop_name
             crop.save(crop_path)
-            cutout_image = _extract_problem_cutout(crop)
+            # The cutout becomes the chalk render — upscale + sharpen first so
+            # small or low-DPI crops produce a legible alpha mask on the dark
+            # board.
+            enhanced_crop = _enhance_problem_crop(crop)
+            cutout_image = _extract_problem_cutout(enhanced_crop)
             board_render_path = cutout_dir / crop_name
             _write_render_image(cutout_image, board_render_path)
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
@@ -415,6 +582,37 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
     )
+
+
+def _summarize_ocr_usage(pages: list[PageModel]) -> dict[str, Any]:
+    """Report which OCR backend(s) actually ran. Exposes the common 'auto
+    silently resolved to NoOcrBackend' failure so the UI/log can flag it."""
+    backend_counts: dict[str, int] = {}
+    empty_text_count = 0
+    populated_text_count = 0
+    total_blocks = 0
+    for page in pages:
+        for block in page.blocks:
+            total_blocks += 1
+            backend = str(block.metadata.get("ocr_backend") or "unknown")
+            backend_counts[backend] = backend_counts.get(backend, 0) + 1
+            if block.metadata.get("ocr_empty_text"):
+                empty_text_count += 1
+            elif block.text and block.text.strip():
+                populated_text_count += 1
+    primary_backend = (
+        max(backend_counts.items(), key=lambda item: item[1])[0]
+        if backend_counts
+        else "unknown"
+    )
+    return {
+        "resolved_backend": primary_backend,
+        "backend_counts": backend_counts,
+        "block_count": total_blocks,
+        "empty_text_block_count": empty_text_count,
+        "populated_text_block_count": populated_text_count,
+        "no_ocr_fallback_active": primary_backend == "none",
+    }
 
 
 def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1146,6 +1344,15 @@ def run_problem_export(
 
     save_pages_json(pages, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
+    ocr_summary = _summarize_ocr_usage(pages)
+    if ocr_summary["no_ocr_fallback_active"]:
+        print(
+            "[run_problem_export] WARNING: OCR resolved to 'none' for every block — "
+            "problem-number detection will be disabled and each detected band "
+            "will become its own pseudo-problem. Set GEMINI_API_KEY (or pass "
+            "ocr='gemini') to enable Gemini OCR.",
+            flush=True,
+        )
     problem_entries = build_problem_entries(
         prepared_pages,
         pages,
@@ -1184,6 +1391,7 @@ def run_problem_export(
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": ocr,
+        "ocr_summary": ocr_summary,
     }
 
     placements_path = out_dir / "placements.json"
@@ -1219,7 +1427,7 @@ def run_problem_export(
 
     return {
         "output_dir": out_dir.resolve(),
-        "edb_path": edb_path.resolve() if edb_path.exists() else None,
+        "edb_path": edb_path.resolve() if edb_path and edb_path.exists() else None,
         "pages_json_path": (out_dir / "pages.json").resolve(),
         "placements_json_path": placements_path.resolve(),
         "ui_session": ui_session,
@@ -1349,6 +1557,7 @@ def main() -> int:
         ),
     )
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
+    ocr_summary = _summarize_ocr_usage(pages)
 
     summary = {
         "source": str(args.source),
@@ -1369,6 +1578,7 @@ def main() -> int:
         "placement_summary": build_placement_summary(placements),
         "placements": placements,
         "ocr_backend_requested": args.ocr,
+        "ocr_summary": ocr_summary,
     }
     summary_path = output_dir / "board_run_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

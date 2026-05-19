@@ -583,6 +583,21 @@ def _looks_like_question_start(mask: Image.Image, band_box: Box) -> bool:
     if second_width < max(42, int(crop.width * 0.12)):
         return False
 
+    # Reject the classic choice-row pattern. A "① 강자성체 ② 상자성체 ③ … ⑤ …"
+    # row produces several narrow, regularly spaced ink runs that pass the
+    # naïve first-run / second-run check above. Real problem starts ("1.",
+    # "2.") are followed by ONE long stem run, not 4+ short runs. Counting
+    # the short runs in the tail is a cheap, language-agnostic signal that
+    # the band is a choices line and must not become a problem boundary.
+    short_run_width_limit = max(24, int(crop.width * 0.14))
+    short_tail_runs = sum(
+        1
+        for run in active_runs[1:]
+        if (run[1] - run[0] + 1) <= short_run_width_limit
+    )
+    if short_tail_runs >= 4:
+        return False
+
     right_side_density = sum(column_projection[second_run[0] :]) / max(1.0, float((crop.width - second_run[0]) * sample_height))
     return right_side_density >= 0.012
 

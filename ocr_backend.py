@@ -549,6 +549,17 @@ def _gemini_finish_reason(response: dict[str, Any]) -> str:
     return str(candidates[0].get("finishReason") or "unknown")
 
 
+def _tesseract_binary_available() -> bool:
+    """Return True only if the tesseract binary is actually callable."""
+    if pytesseract is None:
+        return False
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
 def build_ocr_backend(name: str = "auto") -> OCRBackend:
     normalized = name.lower()
     if normalized in {"none", "noop"}:
@@ -562,10 +573,34 @@ def build_ocr_backend(name: str = "auto") -> OCRBackend:
         # resolve to the Gemini backend now.
         return GeminiOCRBackend()
 
+    # --- auto selection: Korean exam pages with diagrams and math need a
+    # vision-language model to read reliably, so prefer Gemini when an API
+    # key is configured. Local engines stay as the offline fallback.
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        try:
+            return GeminiOCRBackend()
+        except Exception:
+            pass
     if PaddleOCR is not None:
-        return PaddleOCRBackend()
-    if pytesseract is not None:
-        return TesseractOCRBackend()
+        try:
+            return PaddleOCRBackend()
+        except Exception:
+            pass
+    if _tesseract_binary_available():
+        try:
+            return TesseractOCRBackend()
+        except Exception:
+            pass
+    # Last resort. Surface this loudly: a silent NoOcr fallback is the most
+    # common reason problem numbers, choices, and figures get split into
+    # separate fake "problems" downstream.
+    print(
+        "[ocr_backend] WARNING: 'auto' resolved to NoOcrBackend — no OCR engine "
+        "is available. Set GEMINI_API_KEY (in .env.local or the user settings UI) "
+        "or install paddleocr / tesseract. Problem-number detection will be "
+        "disabled and every detected band will become its own pseudo-problem.",
+        flush=True,
+    )
     return NoOcrBackend()
 
 
