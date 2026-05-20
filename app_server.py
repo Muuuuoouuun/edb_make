@@ -775,6 +775,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         template = _template_from_session(session)
+        # Resize the logical canvas to match the actual problem count after the
+        # user may have excluded items in the review UI. Mirrors the formula in
+        # run_problem_export so mvp_board.edb and the published EDB agree.
+        template.board_page_count = max(50, len(entries) * 2)
         output_dir = Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 

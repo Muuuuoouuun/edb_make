@@ -1439,6 +1439,11 @@ def run_problem_export(
         template,
         board_theme=resolved_board_theme,
     )
+    # Match ClassIn's observed publish behaviour: page_count_hint scales with the
+    # number of problems on the board so the logical canvas always covers the
+    # actual content height. Real published EDBs use ~2x the record count
+    # (e.g. 44 problems -> pages_hint=88); keep 50 as the floor for short boards.
+    template.board_page_count = max(50, len(problem_entries) * 2)
     resolved_crop_format = crop_format if crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
     records, placements, header_flag = build_records(
         problem_entries,
