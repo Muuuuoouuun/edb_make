@@ -50,18 +50,20 @@ Or package directly if PyInstaller is already installed:
 
 Useful options:
 ```powershell
+# Create a single executable file instead of a directory
+.\package_mvp.ps1 -OneFile
+
+# Clean previous builds and zip the output directory
 .\package_mvp.ps1 -OutputDir .\dist_smoke -Clean -Zip
 ```
 
 Expected output:
-```text
-dist\ClassInEDBMVP\
-```
+- **Default (`--onedir`)**: A folder containing the executable and dependencies: `dist\ClassInEDBMVP\`
+- **Single File (`--onefile` with `-OneFile`)**: A single standalone executable: `dist\ClassInEDBMVP.exe`
 
 Typical packaged launch target:
-```text
-dist\ClassInEDBMVP\ClassInEDBMVP.exe
-```
+- Default mode: `dist\ClassInEDBMVP\ClassInEDBMVP.exe`
+- Standalone mode: `dist\ClassInEDBMVP.exe`
 
 If PyInstaller is not installed, the script falls back to a source bundle:
 ```text

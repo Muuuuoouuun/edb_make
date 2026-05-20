@@ -3,6 +3,7 @@ param(
     [string]$OutputDir = "dist",
     [switch]$Clean,
     [switch]$Zip,
+    [switch]$OneFile,
     [switch]$InstallPyInstaller,
     [string]$PythonExe = ""
 )
@@ -41,16 +42,18 @@ if ($LASTEXITCODE -ne 0) {
 
 if ($HasPyInstaller) {
     $AddData = "ui_prototype;ui_prototype"
+    $ModeArg = if ($OneFile) { "--onefile" } else { "--onedir" }
+    
     & $PythonExe -m PyInstaller `
         --noconfirm `
         --clean `
-        --onedir `
+        $ModeArg `
         --distpath $ResolvedOutputDir `
         --name $AppName `
         --add-data $AddData `
         app_server.py
 
-    $PackageRoot = Join-Path $ResolvedOutputDir $AppName
+    $PackageRoot = if ($OneFile) { Join-Path $ResolvedOutputDir "$AppName.exe" } else { Join-Path $ResolvedOutputDir $AppName }
     Write-Host "PyInstaller packaging complete."
 } else {
     $PackageRoot = Join-Path $ResolvedOutputDir "source-package"
