@@ -7,7 +7,8 @@ const DEFAULT_AI_FALLBACK = Object.freeze({
   provider: "gemini",
   model: "gemini-2.5-pro",
   threshold: 0.72,
-  maxRegions: 30,
+  maxRegions: 48,
+  maxTokens: 4096,
   timeoutMs: 18000,
   saveDebug: false,
   failOnError: false,
@@ -18,7 +19,8 @@ const AI_PROVIDER_PRESETS = Object.freeze({
     provider: "gemini",
     model: "gemini-2.5-pro",
     threshold: 0.72,
-    maxRegions: 30,
+    maxRegions: 48,
+    maxTokens: 4096,
     timeoutMs: 18000,
   },
 });
@@ -163,6 +165,7 @@ function normalizeAiFallbackConfig(rawConfig, rawSummary) {
   const model = String(config.model ?? summary.model ?? defaultPreset.model).trim() || defaultPreset.model;
   const threshold = Math.min(1, Math.max(0, toNumber(config.threshold ?? config.aiThreshold ?? summary.threshold, defaultPreset.threshold)));
   const maxRegions = Math.max(1, Math.round(toNumber(config.max_regions ?? config.maxRegions ?? summary.max_regions ?? summary.maxRegions, defaultPreset.maxRegions)));
+  const maxTokens = Math.max(1024, Math.round(toNumber(config.max_tokens ?? config.maxTokens ?? summary.max_tokens ?? summary.maxTokens, defaultPreset.maxTokens)));
   const timeoutMs = Math.max(1000, Math.round(toNumber(config.timeout_ms ?? config.timeoutMs ?? summary.timeout_ms ?? summary.timeoutMs, defaultPreset.timeoutMs)));
   const enabled = Boolean(config.enabled ?? summary.requested ?? (mode !== "off"));
 
@@ -173,6 +176,7 @@ function normalizeAiFallbackConfig(rawConfig, rawSummary) {
     model,
     threshold,
     maxRegions,
+    maxTokens,
     timeoutMs,
     saveDebug: Boolean(config.save_debug ?? config.saveDebug),
     failOnError: Boolean(config.fail_on_error ?? config.failOnError),
@@ -532,6 +536,7 @@ function readAiFallbackForm() {
     model: (controls.model?.value || "").trim() || preset.model,
     threshold: Math.min(1, Math.max(0, toNumber(controls.threshold?.value, preset.threshold))),
     maxRegions: Math.max(1, Math.round(toNumber(controls.maxRegions?.value, preset.maxRegions))),
+    maxTokens: preset.maxTokens,
     timeoutMs: Math.max(1000, Math.round(toNumber(controls.timeoutMs?.value, preset.timeoutMs))),
     saveDebug: Boolean(controls.saveDebug?.checked),
   };
@@ -549,6 +554,7 @@ function aiFallbackForInputIntent(inputIntent, config) {
       model: config.model || preset.model,
       threshold: config.threshold || preset.threshold,
       maxRegions: config.maxRegions || preset.maxRegions,
+      maxTokens: config.maxTokens || preset.maxTokens,
       timeoutMs: config.timeoutMs || preset.timeoutMs,
     };
   }
@@ -661,6 +667,7 @@ function applyAiPreset(provider) {
     model: preset.model,
     threshold: preset.threshold,
     maxRegions: preset.maxRegions,
+    maxTokens: preset.maxTokens,
     timeoutMs: preset.timeoutMs,
     saveDebug: false,
   });
@@ -1382,6 +1389,7 @@ async function runExportFromApi() {
         model: aiFallback.model,
         threshold: aiFallback.threshold,
         maxRegions: aiFallback.maxRegions,
+        maxTokens: aiFallback.maxTokens,
         timeoutMs: aiFallback.timeoutMs,
         saveDebug: aiFallback.saveDebug,
       },

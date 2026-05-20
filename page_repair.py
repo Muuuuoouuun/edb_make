@@ -31,7 +31,8 @@ class AIFallbackConfig:
     provider: str = "gemini"
     model: str = ""
     threshold: float = 0.72
-    max_regions: int = 30
+    max_regions: int = 48
+    max_tokens: int = 4096
     timeout_ms: int = 18000
     save_debug: bool = False
     fail_on_error: bool = False
@@ -66,6 +67,7 @@ class AIFallbackConfig:
             "model": self.resolved_model,
             "threshold": self.threshold,
             "max_regions": self.max_regions,
+            "max_tokens": self.max_tokens,
             "timeout_ms": self.timeout_ms,
             "save_debug": self.save_debug,
             "fail_on_error": self.fail_on_error,
@@ -78,7 +80,8 @@ def build_ai_fallback_config(
     provider: str = "gemini",
     model: str = "",
     threshold: float = 0.72,
-    max_regions: int = 30,
+    max_regions: int = 48,
+    max_tokens: int | None = None,
     timeout_ms: int = 18000,
     save_debug: bool = False,
     fail_on_error: bool = False,
@@ -89,6 +92,7 @@ def build_ai_fallback_config(
         model=model,
         threshold=threshold,
         max_regions=max_regions,
+        max_tokens=max(1024, int(max_tokens or 4096)),
         timeout_ms=timeout_ms,
         save_debug=save_debug,
         fail_on_error=fail_on_error,
@@ -119,6 +123,7 @@ def repair_page_model(
         "mode": resolved_config.normalized_mode,
         "provider": resolved_config.provider,
         "model": resolved_config.resolved_model,
+        "max_tokens": resolved_config.max_tokens,
         "ocr_mode": ocr_mode,
         "attempted": False,
         "applied": False,
@@ -399,7 +404,7 @@ def _request_gemini_repair(
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": _repair_schema(),
-            "maxOutputTokens": 1536,
+            "maxOutputTokens": config.max_tokens,
             "temperature": 0.0,
         },
     }
@@ -565,8 +570,11 @@ def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
             "  - choice_block_ids: standalone ①–⑤ (or A–E) answer-option blocks.",
             "  - figure_block_ids: image, diagram, graph, or table content blocks.",
             "  - If the page contains a single question, return only its first block as a problem start.",
+            "  - If the page contains 5 or more numbered questions, return EVERY visible numbered",
+            "    question start. Do not stop after the first 2 or 3.",
             "  - Prefer minimal reassignment—only reclassify when clearly wrong.",
             "  - Optional problem_units: include only when confident. This is advisory metadata;",
+            "    if there are many questions, omit problem_units before omitting any problem_start_block_ids.",
             "    keep the block-id arrays above authoritative. Each unit must use a problem_start_block_id",
             "    from problem_start_block_ids, bbox_px in page pixels covering that full problem, and",
             "    review_flags such as needs_human_review, uncertain_bbox, split_choice_block, or merged_problem.",

@@ -324,6 +324,7 @@ def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
                 actual_height_pages=float(problem.get("actualHeightPages") or 1.2),
                 overflow_allowed=bool(problem.get("overflowAllowed", True)),
                 reading_heavy=bool(problem.get("readingHeavy", False)),
+                risk_flags=[str(flag) for flag in (problem.get("riskFlags") or []) if flag],
             )
         )
     return entries
@@ -644,6 +645,233 @@ def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
     return session
 
 
+def _problem_review_status(problem: dict[str, Any]) -> str:
+    explicit = str(problem.get("reviewStatus") or problem.get("review_status") or "").strip().lower()
+    if explicit in {"normal", "check_needed", "failed"}:
+        return explicit
+    bbox = problem.get("bbox") or {}
+    try:
+        has_bbox = (
+            isinstance(bbox, dict)
+            and float(bbox.get("width") or 0) > 0
+            and float(bbox.get("height") or 0) > 0
+        )
+    except (TypeError, ValueError):
+        has_bbox = False
+    if not has_bbox or problem.get("parseFailed") or problem.get("parse_failed"):
+        return "failed"
+    if problem.get("riskFlags") or problem.get("risk_flags"):
+        return "check_needed"
+    return "normal"
+
+
+def _page_needs_ai_retry(session: dict[str, Any], page: dict[str, Any]) -> bool:
+    page_flags = page.get("riskFlags") or page.get("risk_flags") or []
+    if isinstance(page_flags, list) and page_flags:
+        return True
+    problem_ids = [str(pid) for pid in (page.get("problemIds") or []) if pid]
+    if not problem_ids:
+        return True
+    by_id = {
+        str(problem.get("id")): problem
+        for problem in session.get("problems", [])
+        if isinstance(problem, dict) and problem.get("id")
+    }
+    return any(_problem_review_status(by_id.get(pid, {})) != "normal" for pid in problem_ids)
+
+
+def _retry_target_page_ids(session: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    raw_page_ids = payload.get("pageIds") or payload.get("page_ids") or []
+    if payload.get("pageId") or payload.get("page_id"):
+        raw_page_ids = [payload.get("pageId") or payload.get("page_id")]
+
+    ids: list[str] = [str(pid) for pid in raw_page_ids if pid]
+    raw_problem_ids = payload.get("problemIds") or payload.get("problem_ids") or []
+    if payload.get("problemId") or payload.get("problem_id"):
+        raw_problem_ids = [payload.get("problemId") or payload.get("problem_id")]
+    for problem_id in raw_problem_ids:
+        _, problem = _find_problem(session, str(problem_id))
+        page_id = str(problem.get("sourcePageId") or "")
+        if page_id:
+            ids.append(page_id)
+
+    if not ids:
+        ids.extend(
+            str(page.get("id"))
+            for page in session.get("pages", [])
+            if isinstance(page, dict) and page.get("id") and _page_needs_ai_retry(session, page)
+        )
+
+    return list(dict.fromkeys(ids))
+
+
+def _replace_page_problems(session: dict[str, Any], page_id: str, replacements: list[dict[str, Any]]) -> None:
+    page = _find_page(session, page_id)
+    old_ids = {str(pid) for pid in (page.get("problemIds") or []) if pid}
+    if not old_ids:
+        old_ids = {
+            str(problem.get("id"))
+            for problem in session.get("problems", [])
+            if isinstance(problem, dict) and str(problem.get("sourcePageId") or "") == page_id
+        }
+
+    inserted = False
+    next_problems: list[dict[str, Any]] = []
+    for problem in session.get("problems", []) or []:
+        if isinstance(problem, dict) and str(problem.get("id")) in old_ids:
+            if not inserted:
+                next_problems.extend(replacements)
+                inserted = True
+            continue
+        next_problems.append(problem)
+
+    if not inserted:
+        next_problems.extend(replacements)
+
+    session["problems"] = next_problems
+    page["problemIds"] = [str(problem.get("id")) for problem in replacements if problem.get("id")]
+    session["detected_problem_count"] = len(next_problems)
+
+
+def _normalized_retry_problem(
+    session: dict[str, Any],
+    source_page: dict[str, Any],
+    retry_problem: dict[str, Any],
+    *,
+    stamp: str,
+    index: int,
+    replacements_so_far: list[dict[str, Any]],
+) -> dict[str, Any]:
+    page_id = str(source_page.get("id") or "")
+    source_path = _resolve_session_path(source_page.get("sourceImagePath") or source_page.get("sourceImageUri"))
+    candidate_session = {**session, "problems": list(session.get("problems") or []) + replacements_so_far}
+    new_id = _next_problem_id(candidate_session, f"{page_id}-ai", f"{stamp}-{index}")
+    problem = dict(retry_problem)
+    problem["id"] = new_id
+    problem["sourcePageId"] = page_id
+    problem["sourceFileName"] = source_path.name if source_path else str(source_page.get("id") or "AI retry")
+    if source_path:
+        problem["sourceImagePath"] = source_path.resolve().as_uri()
+    risk_flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
+    problem["riskFlags"] = list(dict.fromkeys(risk_flags))
+    problem["reviewStatus"] = _problem_review_status(problem)
+    problem["aiRetry"] = {
+        "status": "applied",
+        "sourcePageId": page_id,
+        "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    return problem
+
+
+def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
+        raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
+
+    page_ids = _retry_target_page_ids(session, payload)
+    if not page_ids:
+        raise ValueError("AI 재인식할 페이지가 없습니다")
+
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    output_root = Path(session.get("output_dir") or RUNTIME_DIR / "ai_retries").resolve()
+    ai_config = session.get("ai_fallback") if isinstance(session.get("ai_fallback"), dict) else {}
+    summaries: list[dict[str, Any]] = []
+
+    for page_id in page_ids:
+        page = _find_page(session, page_id)
+        source_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+        if source_path is None or not source_path.exists():
+            raise FileNotFoundError(f"source page image missing for retry: {page_id}")
+
+        retry_dir = output_root / "ai_retries" / sanitize_output_dir_name(f"{page_id}_{stamp}")
+        try:
+            result = run_problem_export(
+                source_path,
+                output_dir=retry_dir,
+                subject_name=str(payload.get("subject") or "unknown"),
+                ocr=str(payload.get("ocr") or "auto"),
+                pdf_dpi=int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
+                detect_perspective=False,
+                skip_deskew=True,
+                skip_crop=True,
+                max_dimension=None,
+                export_edb=False,
+                edb_name="ai_retry.edb",
+                sync_ui=False,
+                record_mode=str(session.get("record_mode") or "image-only"),
+                text_confidence_threshold=float(session.get("text_confidence_threshold") or 0.78),
+                input_intent="multi-problem",
+                ai_fallback_enabled=True,
+                ai_fallback="force",
+                ai_fallback_provider=str(ai_config.get("provider") or "gemini"),
+                ai_fallback_model=str(ai_config.get("model") or ""),
+                ai_fallback_max_tokens=ai_config.get("max_tokens"),
+                ai_fallback_temperature=ai_config.get("temperature"),
+                ai_fallback_threshold=float(ai_config.get("threshold") or 0.72),
+                ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
+                ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 18000),
+                ai_fallback_save_debug=bool(ai_config.get("save_debug")),
+            )
+        except Exception as exc:  # noqa: BLE001 - show the actionable pipeline message to the UI
+            page["reviewStatus"] = "failed"
+            flags = list(page.get("riskFlags") or [])
+            flags.append("ai_retry_failed")
+            page["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+            page["aiRetry"] = {
+                "status": "failed",
+                "error": str(exc),
+                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            summaries.append({"pageId": page_id, "status": "failed", "error": str(exc)})
+            continue
+
+        retry_session = result.get("ui_session") or {}
+        retry_problems = [p for p in retry_session.get("problems", []) if isinstance(p, dict)]
+        retry_pages = [p for p in retry_session.get("pages", []) if isinstance(p, dict)]
+        retry_page = retry_pages[0] if retry_pages else {}
+
+        if not retry_problems:
+            page["reviewStatus"] = "failed"
+            flags = list(page.get("riskFlags") or [])
+            flags.append("ai_retry_empty")
+            page["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+            page["aiRetry"] = {
+                "status": "empty",
+                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            summaries.append({"pageId": page_id, "status": "empty", "replacedProblemCount": 0})
+            continue
+
+        previous_problem_count = len(page.get("problemIds") or [])
+        replacements: list[dict[str, Any]] = []
+        for index, retry_problem in enumerate(retry_problems, start=1):
+            replacements.append(
+                _normalized_retry_problem(
+                    session,
+                    page,
+                    retry_problem,
+                    stamp=stamp,
+                    index=index,
+                    replacements_so_far=replacements,
+                )
+            )
+
+        _replace_page_problems(session, page_id, replacements)
+        page["riskFlags"] = [str(flag) for flag in (retry_page.get("riskFlags") or []) if flag]
+        page["reviewStatus"] = "check_needed" if page["riskFlags"] else "normal"
+        page["aiRetry"] = {
+            "status": "applied",
+            "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "previousProblemCount": previous_problem_count,
+            "replacedProblemCount": len(replacements),
+            "aiSummary": retry_session.get("ai_summary"),
+        }
+        summaries.append({"pageId": page_id, "status": "applied", "replacedProblemCount": len(replacements)})
+
+    session["ai_retry_summary"] = summaries
+    session["detected_problem_count"] = len(session.get("problems") or [])
+    return session
+
+
 def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Rewrite any /api/file?path=... values in a session snapshot back to
     file:// URIs so the server's "latest_session" stays canonical regardless
@@ -735,6 +963,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/session/mutate":
             self._handle_session_mutate()
+            return
+        if parsed.path == "/api/session/retry-ai":
+            self._handle_session_retry_ai()
             return
         if parsed.path == "/api/session/restore":
             self._handle_session_restore()
@@ -908,9 +1139,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             elif action == "exclude":
                 problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                 new_session = _mutate_exclude(session, problem_id)
+            elif action in {"retry-ai", "retry_ai"}:
+                new_session = _mutate_retry_ai(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|exclude)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|exclude|retry-ai)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
@@ -923,6 +1156,31 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
         self.app_server.remember_session(new_session)
         self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+
+    def _handle_session_retry_ai(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+            new_session = _mutate_retry_ai(session, payload)
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
+            return
+
+        self.app_server.remember_session(new_session)
+        self._send_json({
+            "ok": True,
+            "session": rewrite_session_for_http(new_session),
+            "retry": new_session.get("ai_retry_summary") or [],
+        })
 
     # ── /api/session/restore ────────────────────────────────────────────
     # Body: { "session": { ... full session JSON ... } }

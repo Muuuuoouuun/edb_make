@@ -269,6 +269,33 @@
   .stage-content{
     position: relative;
     width: 100%;
+    --left-zone-width: 33.333333%;
+    isolation: isolate;
+  }
+  .stage-content::before,
+  .stage-content::after{
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .stage-content::before{
+    left: 0;
+    width: var(--left-zone-width);
+    background:
+      linear-gradient(90deg, rgba(246,211,101,.07), rgba(246,211,101,.025)),
+      repeating-linear-gradient(180deg, rgba(244,237,224,.08) 0, rgba(244,237,224,.08) 1px, transparent 1px, transparent 54px);
+    border-right: 1.5px dashed rgba(246,211,101,.52);
+    box-shadow: inset -18px 0 28px rgba(0,0,0,.08);
+  }
+  .stage-content::after{
+    left: var(--left-zone-width);
+    right: 0;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,.025), transparent 42%),
+      repeating-linear-gradient(180deg, transparent 0, transparent 35px, rgba(244,237,224,.045) 36px, transparent 37px);
   }
 
   .page-divider{
@@ -277,7 +304,7 @@
     height: 0;
     border-top: 1px dashed rgba(244,237,224,.18);
     pointer-events: none;
-    z-index: 0;
+    z-index: 1;
   }
   .page-divider .label{
     position: absolute;
@@ -307,13 +334,13 @@
   }
   .board-pageind .sep{ opacity: .4; margin: 0 4px; }
   .board-pageind .total{ opacity: .6; }
-
   .stage-tile-end{
     border: 1.5px dashed rgba(244,237,224,.22);
     border-radius: 10px;
     background: rgba(244,237,224,.02);
     position: absolute;
-    left: 0; right: 0;
+    left: 0; right: auto;
+    width: calc(var(--left-zone-width) - 10px);
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 4px;
@@ -321,7 +348,7 @@
     font-size: 12px; font-weight: 500;
     cursor: pointer;
     transition: border-color .12s, color .12s, background .12s;
-    z-index: 1;
+    z-index: 2;
   }
   .stage-tile-end:hover{
     border-color: rgba(244,237,224,.45);
@@ -406,10 +433,11 @@
     cursor: grab;
     transition: transform .12s, box-shadow .12s, border-color .12s;
     position: absolute;
-    left: 0; right: 0;
+    left: 0; right: auto;
+    width: calc(var(--left-zone-width) - 10px);
     overflow: hidden;
     text-align: left;
-    z-index: 1;
+    z-index: 2;
   }
   .stage-tile:hover{
     transform: translateY(-1px);
@@ -915,6 +943,7 @@
     font-size: 13px; font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     color: var(--ink);
+    display: flex; align-items: center; gap: 5px;
   }
   .item .meta .sub{
     font-size: 11px; color: var(--muted);
@@ -932,6 +961,51 @@
   }
   .item .meta .sub .tag.s1{ background: #fff3e0; border-color: #f4d3a3; color: #aa6516; }
   .item .meta .sub .tag.s2{ background: #e7f4ec; border-color: #b5dec5; color: #1f7a4a; }
+  .item .meta .sub .tag.status-tag{
+    text-transform: none;
+    font-family: 'Pretendard Variable', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+  .status-dot{
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--ok);
+  }
+  .status-dot.status-check-needed{ background: #d97757; }
+  .status-dot.status-failed{ background: var(--danger); }
+  .status-badge{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid rgba(31,122,74,.2);
+    background: rgba(31,122,74,.08);
+    color: #1f7a4a;
+    font-size: 10.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .status-badge.status-check-needed,
+  .tag.status-tag.status-check-needed{
+    background: rgba(217,119,87,.13);
+    border-color: rgba(217,119,87,.26);
+    color: #b85737;
+  }
+  .status-badge.status-failed,
+  .tag.status-tag.status-failed{
+    background: rgba(213,72,72,.12);
+    border-color: rgba(213,72,72,.25);
+    color: var(--danger);
+  }
+  .tag.status-tag.status-normal{
+    background: rgba(31,122,74,.08);
+    border-color: rgba(31,122,74,.18);
+    color: #1f7a4a;
+  }
   body.dark .item .meta .sub .tag.s1{ background: #3a2a14; border-color: #5a3f1c; color: #f0b97a; }
   body.dark .item .meta .sub .tag.s2{ background: #163525; border-color: #245a3e; color: #5fc28d; }
   .item .actions{ opacity: 0; display: flex; gap: 2px; padding-right: 2px;}
@@ -1130,6 +1204,42 @@
     cursor: pointer;
   }
   .check input{ accent-color: var(--accent); }
+  .intent-control{
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .intent-choice{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-height: 64px;
+    padding: 10px 11px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--surface);
+    text-align: left;
+    transition: background .12s, border-color .12s, box-shadow .12s;
+  }
+  .intent-choice:hover{
+    background: var(--surface-2);
+  }
+  .intent-choice.on{
+    border-color: rgba(47,111,237,.5);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px rgba(47,111,237,.08);
+  }
+  .intent-choice span{
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .intent-choice small{
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: var(--muted);
+  }
 
   .confirm-area{
     display: flex; align-items: center; gap: 10px;
@@ -1414,6 +1524,25 @@
     background: rgba(213,72,72,.12);
     color: var(--danger);
   }
+  .review-page.status-failed{
+    border-color: rgba(213,72,72,.34);
+  }
+  .review-page.status-check-needed{
+    border-color: rgba(217,119,87,.34);
+  }
+  .mini-action{
+    border: 1px solid rgba(47,111,237,.22);
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    border-radius: 5px;
+    height: 26px;
+    padding: 0 9px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .mini-action:hover{ border-color: var(--accent); }
+  .mini-action:disabled{ opacity: .45; cursor: not-allowed; }
   .review-page-hd .spacer{ flex: 1; }
   .review-page-canvas{
     position: relative;
@@ -1447,10 +1576,17 @@
     box-shadow: 0 0 0 2px var(--chalk-warm);
   }
   .review-bbox.risky{
+    border-color: #d97757;
+    background: rgba(217,119,87,.10);
+  }
+  .review-bbox.status-failed{
     border-color: var(--danger);
-    background: rgba(213,72,72,.10);
+    background: rgba(213,72,72,.12);
   }
   .review-bbox.risky.active{
+    box-shadow: 0 0 0 2px #d97757;
+  }
+  .review-bbox.status-failed.active{
     box-shadow: 0 0 0 2px var(--danger);
   }
   .review-bbox-label{
@@ -1468,7 +1604,8 @@
     z-index: 2;
     pointer-events: none;
   }
-  .review-bbox.risky .review-bbox-label{ background: var(--danger); }
+  .review-bbox.risky .review-bbox-label{ background: #d97757; }
+  .review-bbox.status-failed .review-bbox-label{ background: var(--danger); }
   .review-bbox.active .review-bbox-label{ background: var(--chalk-warm); color: #2c1d00; }
   .review-bbox-risk{
     font-size: 9px;
@@ -1502,6 +1639,36 @@
     margin-bottom: 14px;
     box-shadow: var(--shadow-1);
   }
+  .review-filters{
+    display: inline-flex;
+    gap: 4px;
+    padding: 2px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    border-radius: 7px;
+  }
+  .review-filters button{
+    height: 26px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .review-filters button span{
+    margin-left: 4px;
+    color: var(--muted-2);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .review-filters button.on{
+    background: white;
+    color: var(--ink);
+    box-shadow: var(--shadow-1);
+  }
+  body.dark .review-filters button.on{ background: var(--surface); }
   .review-actionbar .count-chip{
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px; font-weight: 700;
@@ -1624,6 +1791,6 @@
 
 <script type="text/babel" src="art.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel" src="app.jsx?v=parser-review-ai-retry-20260520"></script>
 </body>
 </html>

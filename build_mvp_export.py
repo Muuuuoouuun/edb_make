@@ -64,7 +64,8 @@ def _build_ai_fallback_config(
     fail_on_error: bool,
 ) -> dict[str, Any] | None:
     threshold = 0.72 if threshold is None else float(threshold)
-    max_regions = 18 if max_regions is None else int(max_regions)
+    max_tokens = 4096 if max_tokens is None else int(max_tokens)
+    max_regions = 48 if max_regions is None else int(max_regions)
     timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
     resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
     if resolved_mode not in {"off", "auto", "force"}:
@@ -75,10 +76,10 @@ def _build_ai_fallback_config(
         and provider in {"openai", "gemini"}
         and not model
         and not prompt
-        and max_tokens is None
+        and max_tokens == 4096
         and temperature is None
         and threshold == 0.72
-        and max_regions == 18
+        and max_regions == 48
         and timeout_ms == 12000
         and not save_debug
         and not fail_on_error
@@ -108,7 +109,8 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         provider=str(ai_fallback_config.get("provider") or "gemini"),
         model=str(ai_fallback_config.get("model") or ""),
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
-        max_regions=int(ai_fallback_config.get("max_regions") or 18),
+        max_regions=int(ai_fallback_config.get("max_regions") or 48),
+        max_tokens=int(ai_fallback_config.get("max_tokens") or 4096),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
@@ -447,7 +449,7 @@ def run_export(
     ai_fallback_max_tokens: int | None = None,
     ai_fallback_temperature: float | None = None,
     ai_fallback_threshold: float = 0.72,
-    ai_fallback_max_regions: int = 18,
+    ai_fallback_max_regions: int = 48,
     ai_fallback_timeout_ms: int = 12000,
     ai_fallback_save_debug: bool = False,
     fail_on_ai_error: bool = False,
@@ -576,7 +578,7 @@ def main() -> int:
     parser.add_argument("--ai-fallback-max-tokens", type=int, default=None, help="AI fallback max output tokens")
     parser.add_argument("--ai-fallback-temperature", type=float, default=None, help="AI fallback sampling temperature")
     parser.add_argument("--ai-fallback-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
-    parser.add_argument("--ai-fallback-max-regions", type=int, default=18, help="Maximum number of regions sent to AI fallback")
+    parser.add_argument("--ai-fallback-max-regions", type=int, default=48, help="Maximum number of regions sent to AI fallback")
     parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")

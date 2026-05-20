@@ -278,6 +278,7 @@ class ProblemEntry:
     actual_height_pages: float
     overflow_allowed: bool
     reading_heavy: bool
+    risk_flags: list[str]
 
 
 def resolve_subject(name: str | None) -> Subject:
@@ -542,6 +543,29 @@ def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
         problem.metadata.setdefault("problem_number_source", "inferred_sequence")
 
 
+def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
+    flags: list[str] = []
+    if problem.metadata.get("fallback_grouping"):
+        flags.append("fallback_grouping")
+    if problem.metadata.get("merged_problem_block"):
+        flags.append("merged_problem_block")
+    if problem.metadata.get("marker_conflict"):
+        flags.append("marker_conflicts")
+
+    for key in ("review_flags", "risk_flags"):
+        values = problem.metadata.get(key)
+        if isinstance(values, list):
+            flags.extend(str(value) for value in values if value)
+
+    ai_unit = problem.metadata.get("ai_problem_unit")
+    if isinstance(ai_unit, dict):
+        values = ai_unit.get("review_flags")
+        if isinstance(values, list):
+            flags.extend(str(value) for value in values if value)
+
+    return list(dict.fromkeys(flags))
+
+
 def build_problem_entries(
     prepared_pages: list[PreparedPage],
     pages: list[PageModel],
@@ -652,6 +676,7 @@ def build_problem_entries(
                     actual_height_pages=estimate_height_pages(crop.size, template),
                     overflow_allowed=reading_heavy,
                     reading_heavy=reading_heavy,
+                    risk_flags=_collect_problem_risk_flags(problem),
                 )
             )
 
@@ -680,7 +705,8 @@ def _build_ai_fallback_config(
     fail_on_error: bool,
 ) -> dict[str, Any] | None:
     threshold = 0.72 if threshold is None else float(threshold)
-    max_regions = 18 if max_regions is None else int(max_regions)
+    max_tokens = 4096 if max_tokens is None else int(max_tokens)
+    max_regions = 48 if max_regions is None else int(max_regions)
     timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
     resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
     if resolved_mode not in {"off", "auto", "force"}:
@@ -691,10 +717,10 @@ def _build_ai_fallback_config(
         and provider in {"openai", "gemini"}
         and not model
         and not prompt
-        and max_tokens is None
+        and max_tokens == 4096
         and temperature is None
         and threshold == 0.72
-        and max_regions == 18
+        and max_regions == 48
         and timeout_ms == 12000
         and not save_debug
         and not fail_on_error
@@ -724,7 +750,8 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         provider=str(ai_fallback_config.get("provider") or "gemini"),
         model=str(ai_fallback_config.get("model") or ""),
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
-        max_regions=int(ai_fallback_config.get("max_regions") or 18),
+        max_regions=int(ai_fallback_config.get("max_regions") or 48),
+        max_tokens=int(ai_fallback_config.get("max_tokens") or 4096),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
@@ -885,6 +912,36 @@ def _collect_page_risk_flags(page_metadata: dict[str, Any]) -> list[str]:
     return [str(reason) for reason in reasons if isinstance(reason, str)]
 
 
+def _page_quality_payload(page: PageModel | None) -> dict[str, Any]:
+    metadata = page.metadata if page is not None else {}
+    route_decision = metadata.get("route_decision") if isinstance(metadata, dict) else {}
+    if not isinstance(route_decision, dict):
+        route_decision = {}
+    profile = route_decision.get("profile")
+    if not isinstance(profile, dict):
+        profile = {}
+    ai_fallback = metadata.get("ai_fallback") if isinstance(metadata, dict) else {}
+    if not isinstance(ai_fallback, dict):
+        ai_fallback = {}
+
+    risk_score = float(profile.get("overall_risk") or 0.0)
+    segmentation_risk = float(profile.get("segmentation_risk") or 0.0)
+    ocr_risk = float(profile.get("ocr_risk") or 0.0)
+    grouping_risk = float(profile.get("grouping_risk") or 0.0)
+    return {
+        "riskScore": round(max(0.0, min(1.0, risk_score)), 4),
+        "riskTier": str(profile.get("tier") or "green"),
+        "parseConfidence": round(max(0.0, min(1.0, 1.0 - risk_score)), 4),
+        "confidence": {
+            "overall": round(max(0.0, min(1.0, 1.0 - risk_score)), 4),
+            "segmentation": round(max(0.0, min(1.0, 1.0 - segmentation_risk)), 4),
+            "ocr": round(max(0.0, min(1.0, 1.0 - ocr_risk)), 4),
+            "grouping": round(max(0.0, min(1.0, 1.0 - grouping_risk)), 4),
+        },
+        "aiStatus": str(ai_fallback.get("status") or "unknown"),
+    }
+
+
 def build_ui_session(
     prepared_pages: list[PreparedPage],
     placements: list[dict[str, object]],
@@ -931,10 +988,13 @@ def build_ui_session(
         source_path = Path(str(placement["source_path"])).resolve()
         source_page_id = str(placement["source_page_id"])
         bbox = placement.get("bbox") or {}
+        page_quality = _page_quality_payload(pages_by_id.get(source_page_id))
         page_flags = page_risk_flags.get(source_page_id, [])
         # Only propagate "this specific problem may be merged / auto-grouped"
         # reasons to per-problem flags; page-wide signals stay on the page.
-        problem_flags = [reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS]
+        problem_flags = list(placement.get("risk_flags") or [])
+        problem_flags.extend(reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS)
+        problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
         problem_id = str(placement["problem_id"])
         problems.append(
             {
@@ -970,6 +1030,10 @@ def build_ui_session(
                     "height": float(bbox.get("height", 0.0)),
                 },
                 "riskFlags": problem_flags,
+                "reviewStatus": "check_needed" if problem_flags else "normal",
+                "parseConfidence": page_quality["parseConfidence"],
+                "confidence": page_quality["confidence"],
+                "aiStatus": page_quality["aiStatus"],
             }
         )
         problems_by_page.setdefault(source_page_id, []).append(problem_id)
@@ -978,6 +1042,10 @@ def build_ui_session(
     for prepared_page in prepared_pages:
         width, height = prepared_page.image.size
         resolved_path = Path(prepared_page.source_path).resolve()
+        page_quality = _page_quality_payload(pages_by_id.get(prepared_page.page_id))
+        problem_ids = problems_by_page.get(prepared_page.page_id, [])
+        risk_flags = page_risk_flags.get(prepared_page.page_id, [])
+        review_status = "failed" if not problem_ids else "check_needed" if risk_flags else "normal"
         pages_payload.append(
             {
                 "id": prepared_page.page_id,
@@ -986,8 +1054,10 @@ def build_ui_session(
                 "sourceImagePath": str(resolved_path),
                 "width": int(width),
                 "height": int(height),
-                "problemIds": problems_by_page.get(prepared_page.page_id, []),
-                "riskFlags": page_risk_flags.get(prepared_page.page_id, []),
+                "problemIds": problem_ids,
+                "riskFlags": risk_flags,
+                "reviewStatus": review_status,
+                **page_quality,
             }
         )
 
@@ -1088,6 +1158,7 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
                     "width": entry.bounds.width,
                     "height": entry.bounds.height,
                 },
+                "risk_flags": list(entry.risk_flags),
             },
         )
         for entry in problem_entries
@@ -1124,7 +1195,6 @@ def build_image_only_records(
 
     records: list[bytes] = []
     placement_summaries: list[dict[str, object]] = []
-    entry_map = {entry.problem_id: entry for entry in problem_entries}
     next_record_id = 0
 
     for placement in placements:
@@ -1171,75 +1241,6 @@ def build_image_only_records(
         next_record_id += 1
         image_record_count = 1
 
-        # Multi-Layer Diagram EDB Packing
-        entry = entry_map.get(placement.problem_id)
-        if entry is not None:
-            chalk_color = _resolve_chalk_color(board_theme)
-            diagram_blocks = [
-                block for block in entry.blocks
-                if block.block_type in {BlockType.DIAGRAM, BlockType.TABLE, BlockType.IMAGE}
-            ]
-            scale = float(board_image.width) / max(1.0, entry.bounds.width)
-            for block in diagram_blocks:
-                if (block.bbox.width <= 1.0 or block.bbox.height <= 1.0 or
-                    block.bbox.left < entry.bounds.left or block.bbox.top < entry.bounds.top):
-                    continue
-
-                try:
-                    diag_crop = entry.prepared_page.image.crop((
-                        int(block.bbox.left),
-                        int(block.bbox.top),
-                        int(block.bbox.right),
-                        int(block.bbox.bottom)
-                    ))
-                    diag_name = f"problem_{entry.problem_id}_diag_{block.block_id}.png"
-                    diag_crop_path = crop_path.parent / diag_name
-                    diag_render_path = board_render_path.parent / diag_name
-
-                    diag_crop.save(diag_crop_path)
-                    
-                    enhanced_diag = _enhance_problem_crop(diag_crop)
-                    diag_cutout = _extract_problem_cutout(enhanced_diag, chalk_color=chalk_color)
-                    _write_render_image(diag_cutout, diag_render_path)
-
-                    diag_board_image = diag_cutout if dark_board else diag_crop.convert("RGB")
-                    diag_target_width = max(1, int(round(diag_board_image.width * scale)))
-                    diag_board_image = _resize_to_target_width(diag_board_image, diag_target_width)
-
-                    diag_image_bytes, diag_image_format = _encode_image_bytes(diag_board_image, quality=92)
-                    if crop_format == CROP_FORMAT_V2:
-                        diag_secondary_bytes = build_tight_crop_image_bytes(
-                            diag_image_bytes, format_hint=diag_image_format, quality=88
-                        )
-                    else:
-                        diag_secondary_bytes = build_preview_image_bytes(
-                            diag_image_bytes, max_size=(768, 768), format_hint=diag_image_format, quality=88
-                        )
-
-                    rel_left = block.bbox.left - entry.bounds.left
-                    rel_top = block.bbox.top - entry.bounds.top
-                    diag_x_px = LEFT_MARGIN_PX + rel_left * scale
-                    diag_y_px = y_px + rel_top * scale
-
-                    records.append(
-                        build_image_record(
-                            ImageRecordSpec(
-                                record_id=next_record_id,
-                                image_primary=diag_image_bytes,
-                                image_secondary=diag_secondary_bytes,
-                                x=normalize_x_px(diag_x_px),
-                                y=normalize_y_px(diag_y_px, page_count_hint=template.board_page_count),
-                                width_hint=normalize_width_px(float(diag_board_image.width)),
-                                height_hint=normalize_height_px(float(diag_board_image.height), page_count_hint=template.board_page_count),
-                            )
-                        )
-                    )
-                    next_record_id += 1
-                    image_record_count += 1
-                except Exception as e:
-                    import logging
-                    logging.warning(f"Failed to extract multi-layer diagram: {e}")
-
         placement_summaries.append(
             {
                 "problem_id": placement.problem_id,
@@ -1259,6 +1260,7 @@ def build_image_only_records(
                 "overflow_violation": placement.overflow_violation,
                 "slot_span_count": placement.slot_span_count,
                 "bbox": placement.metadata["bbox"],
+                "risk_flags": list(placement.metadata.get("risk_flags") or []),
                 "record_mode": "image-only",
                 "text_record_count": 0,
                 "image_record_count": image_record_count,
@@ -1418,6 +1420,7 @@ def build_mixed_records(
                     "width": entry.bounds.width,
                     "height": entry.bounds.height,
                 },
+                "risk_flags": list(entry.risk_flags),
                 "record_mode": "mixed",
                 "text_record_count": text_record_count,
                 "image_record_count": image_record_count,
@@ -1537,7 +1540,7 @@ def run_problem_export(
     ai_fallback_max_tokens: int | None = None,
     ai_fallback_temperature: float | None = None,
     ai_fallback_threshold: float = 0.72,
-    ai_fallback_max_regions: int = 18,
+    ai_fallback_max_regions: int = 48,
     ai_fallback_timeout_ms: int = 12000,
     ai_fallback_save_debug: bool = False,
     fail_on_ai_error: bool = False,
@@ -1741,7 +1744,7 @@ def main() -> int:
     parser.add_argument("--ai-fallback-max-tokens", type=int, default=None, help="AI fallback max output tokens")
     parser.add_argument("--ai-fallback-temperature", type=float, default=None, help="AI fallback sampling temperature")
     parser.add_argument("--ai-fallback-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
-    parser.add_argument("--ai-fallback-max-regions", type=int, default=18, help="Maximum number of regions sent to AI fallback")
+    parser.add_argument("--ai-fallback-max-regions", type=int, default=48, help="Maximum number of regions sent to AI fallback")
     parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")

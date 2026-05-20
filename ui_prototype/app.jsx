@@ -32,6 +32,7 @@ const HEIGHT_BY_KIND = {
   'paragraph': 1.85,
 };
 const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
+const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 
 const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
   const kind = SAMPLE_KINDS[i % SAMPLE_KINDS.length];
@@ -135,7 +136,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
-function ReviewStage({ session, items, activeId, setActive, mutateSession, mutating }){
+function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
     const map = new Map();
@@ -157,6 +158,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
   // horizontal guideline. The ratio is in (0, 1).
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitRatio, setSplitRatio] = useState(0.5);
+  const [reviewFilter, setReviewFilter] = useState('all');
   const splitDraggingRef = useRef(false);
   const splitBoxRef = useRef(null);
 
@@ -185,6 +187,33 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
   const selectedProblems = selectedList.map(id => problemsById.get(id)).filter(Boolean);
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
+  const statusCounts = useMemo(() => {
+    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
+    (session?.problems || []).forEach(problem => {
+      const status = deriveProblemStatus(problem);
+      counts.all += 1;
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [session]);
+  const pageRetryIds = useMemo(() => {
+    const ids = [];
+    const byId = problemsById;
+    pages.forEach(page => {
+      const pageFlags = page.riskFlags || page.risk_flags || [];
+      const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
+      const hasProblemRisk = (page.problemIds || [])
+        .map(pid => byId.get(pid))
+        .filter(Boolean)
+        .some(problem => deriveProblemStatus(problem) !== 'normal');
+      if (pageStatus === 'failed' || (Array.isArray(pageFlags) && pageFlags.length) || !(page.problemIds || []).length || hasProblemRisk) {
+        ids.push(page.id);
+      }
+    });
+    return listUnique(ids.filter(Boolean));
+  }, [pages, problemsById]);
+  const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
+  const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
 
   const beginSplit = () => {
     if (selectedList.length !== 1) return;
@@ -207,6 +236,10 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
     for (const id of selectedList) {
       await mutateSession?.('exclude', { problemId: id });
     }
+  };
+  const doRetryAi = async (pageIds) => {
+    if (!pageIds?.length) return;
+    await retryAiSession?.({ pageIds });
   };
 
   // Drag handler for the split guideline. Tracks against the splitting bbox
@@ -245,7 +278,18 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
     );
   }
 
-  const riskyCount = (session?.problems || []).filter(p => (p.riskFlags || []).length > 0).length;
+  const riskyCount = statusCounts.check_needed + statusCounts.failed;
+  const filterOptions = [
+    ['all', '전체', statusCounts.all],
+    ['normal', '정상', statusCounts.normal],
+    ['check_needed', '확인 필요', statusCounts.check_needed],
+    ['failed', '실패', statusCounts.failed],
+  ];
+  const retryDisabledReason = !aiAvailable
+    ? 'Gemini API 키를 먼저 저장해 주세요'
+    : mutating
+      ? '처리 중입니다'
+      : '';
 
   const actionBar = splitTarget ? (
     <div className="review-actionbar">
@@ -259,12 +303,30 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
     </div>
   ) : selectedList.length === 0 ? (
     <div className="review-actionbar">
-      <span className="hint">박스를 클릭해서 선택. Shift+클릭으로 여러 박스 선택.</span>
+      <div className="review-filters" aria-label="검수 상태 필터">
+        {filterOptions.map(([value, label, count]) => (
+          <button
+            key={value}
+            className={reviewFilter === value ? 'on' : ''}
+            type="button"
+            onClick={() => setReviewFilter(value)}
+          >
+            {label} <span>{count}</span>
+          </button>
+        ))}
+      </div>
+      <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
       <div className="spacer" />
       {riskyCount > 0 && (
-        <span className="pg-risk" title="인식이 의심되는 박스 수">
-          ⚠ 위험 의심 {riskyCount}건
-        </span>
+        <button
+          className="btn primary"
+          type="button"
+          title={retryDisabledReason || `${pageRetryIds.length}개 페이지 재인식`}
+          onClick={() => doRetryAi(pageRetryIds)}
+          disabled={!aiAvailable || mutating || !pageRetryIds.length}
+        >
+          AI 재인식 {riskyCount}
+        </button>
       )}
     </div>
   ) : (
@@ -278,6 +340,15 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
             : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
       </span>
       <div className="spacer" />
+      <button
+        className="btn primary"
+        type="button"
+        title={retryDisabledReason || `${selectedRetryPageIds.length}개 페이지 재인식`}
+        onClick={() => doRetryAi(selectedRetryPageIds)}
+        disabled={!aiAvailable || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
+      >
+        AI 재인식
+      </button>
       {selectedList.length === 1 && (
         <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 가르기</button>
       )}
@@ -307,22 +378,45 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
         <div className="review-wrap">
           {actionBar}
           {pages.map(page => {
-            const pageProblems = (page.problemIds || [])
+            const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
               .filter(Boolean);
+            const pageProblems = allPageProblems
+              .filter(problem => reviewFilter === 'all' || deriveProblemStatus(problem) === reviewFilter);
             const pageRiskFlags = page.riskFlags || [];
-            const hasRisk = pageRiskFlags.length > 0;
+            const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status)
+              || (!(page.problemIds || []).length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
+            const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
+            const pageCanRetry = pageRetryIds.includes(page.id);
             return (
-              <div key={page.id} className="review-page">
+              <div key={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
                 <div className="review-page-hd">
                   <span className="pg-num">{page.id}</span>
-                  <span className="pg-count">{pageProblems.length}개 검출</span>
+                  <span className="pg-count">
+                    {reviewFilter === 'all'
+                      ? `${allPageProblems.length}개 검출`
+                      : `${pageProblems.length}/${allPageProblems.length} 표시`}
+                  </span>
+                  <span className={`status-badge ${reviewStatusClass(pageStatus)}`}>
+                    {reviewStatusMeta(pageStatus).label}
+                  </span>
                   {hasRisk && (
                     <span className="pg-risk" title={pageRiskFlags.join(', ')}>
-                      ⚠ 위험 · {pageRiskFlags.join(' · ')}
+                      {pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
                     </span>
                   )}
                   <div className="spacer" />
+                  {pageCanRetry && (
+                    <button
+                      className="mini-action"
+                      type="button"
+                      title={retryDisabledReason || '이 페이지만 AI로 다시 인식'}
+                      onClick={() => doRetryAi([page.id])}
+                      disabled={!aiAvailable || mutating}
+                    >
+                      AI 재인식
+                    </button>
+                  )}
                   <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
                     {page.width}×{page.height}
                   </span>
@@ -346,16 +440,19 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
                     const heightPct = (bbox.height / h) * 100;
                     const isSelected = selectedIds.has(prob.id);
                     const isActive = prob.id === activeId;
-                    const isRisky = (prob.riskFlags || []).length > 0;
+                    const status = deriveProblemStatus(prob);
+                    const statusMeta = reviewStatusMeta(status);
+                    const isRisky = status !== 'normal';
                     const isSplitting = splitTarget === prob.id;
                     const order = orderMap.get(prob.id);
                     const tooltipParts = [prob.title || ''];
-                    if (isRisky) tooltipParts.push(`위험: ${prob.riskFlags.join(', ')}`);
+                    if (isRisky) tooltipParts.push(`${statusMeta.label}: ${(prob.riskFlags || []).join(', ') || '경계 확인 필요'}`);
                     const classes = [
                       'review-bbox',
                       isSelected ? 'selected' : '',
                       isActive ? 'active' : '',
                       isRisky ? 'risky' : '',
+                      reviewStatusClass(status),
                       isSplitting ? 'splitting' : '',
                     ].filter(Boolean).join(' ');
                     return (
@@ -374,7 +471,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, mutat
                       >
                         <div className="review-bbox-label">
                           {String(order || '?').padStart(2, '0')}
-                          {isRisky && <span className="review-bbox-risk">⚠</span>}
+                          {isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
                         {isSplitting && (
                           <div
@@ -490,15 +587,14 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
             </div>
             <div className="meta">
               <div className="name">
-                {(it.riskFlags && it.riskFlags.length > 0) && (
-                  <span
-                    className="risk-pip"
-                    title={`인식 의심: ${it.riskFlags.join(', ')}`}
-                  >⚠</span>
-                )}
+                <span
+                  className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
+                  title={it.statusReason || it.statusLabel}
+                />
                 {it.name}
               </div>
               <div className="sub">
+                <span className={`tag status-tag ${reviewStatusClass(it.reviewStatus)}`}>{it.statusLabel}</span>
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
                 {it.step === 's2' && <span className="tag s2">AI</span>}
                 {it.step === 'raw' && <span className="tag">대기</span>}
@@ -543,18 +639,36 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   const layout = useMemo(() => {
     const EPS = 0.001;
     const positions = [];
+    const usesPlacement = items.some(it => Number.isFinite(it.startYPages));
     let cursor = 0;
+    let maxBottom = 0;
     items.forEach((it, i) => {
-      const top = i === 0 ? 0 : Math.ceil(cursor / pageH - EPS) * pageH;
-      const height = (it.heightFrac || 0.8) * pageH;
-      positions.push({ top, height, page: Math.floor(top / pageH) + 1, spans: Math.ceil(height / pageH) });
+      const heightPages = Math.max(0.12, it.heightFrac || 0.8);
+      const startPages = usesPlacement && Number.isFinite(it.startYPages)
+        ? Math.max(0, it.startYPages)
+        : (i === 0 ? 0 : Math.ceil(cursor / pageH - EPS));
+      const top = startPages * pageH;
+      const height = heightPages * pageH;
+      const snappedNext = Number.isFinite(it.snappedNextStartYPages)
+        ? Math.max(startPages + heightPages, it.snappedNextStartYPages)
+        : startPages + heightPages;
+      positions.push({
+        top,
+        height,
+        page: Math.floor(top / pageH) + 1,
+        spans: Math.max(1, Math.ceil(height / pageH)),
+        startPages,
+        heightPages,
+        snappedNext,
+      });
       cursor = top + height;
+      maxBottom = Math.max(maxBottom, snappedNext * pageH, cursor);
     });
-    const endTop = items.length === 0 ? 0 : Math.ceil(cursor / pageH - EPS) * pageH;
+    const endTop = items.length === 0 ? 0 : Math.ceil(maxBottom / pageH - EPS) * pageH;
     const endH = pageH * 0.42;
     const totalH = endTop + endH;
     const totalPages = Math.max(1, Math.ceil(totalH / pageH));
-    return { positions, endTop, endH, totalH, totalPages };
+    return { positions, endTop, endH, totalH, totalPages, usesPlacement };
   }, [items, pageH]);
 
   const [scrollTop, setScrollTop] = useState(0);
@@ -598,6 +712,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   const aiCount = items.filter(i => i.step === 's2').length;
   const rawCount = items.filter(i => i.step === 'raw').length;
   const s1Count = items.filter(i => i.step === 's1').length;
+  const leftZonePercent = `${FIXED_LEFT_ZONE_RATIO * 100}%`;
 
   // page-boundary divider lines (between page N and N+1)
   const dividers = [];
@@ -622,7 +737,10 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
           <div className="stage-board" style={{ background: boardColor }}>
 
             <div className="stage-scroll" ref={scrollRef} onScroll={onScroll}>
-              <div className="stage-content" style={{ height: layout.totalH }}>
+              <div
+                className="stage-content"
+                style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
+              >
                 {/* page boundary dividers — scroll with content */}
                 {dividers.map((top, i) => (
                   <div key={i} className="page-divider" style={{ top }}>
@@ -711,7 +829,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
         </div>
 
         <div className="stage-status">
-          <span className="chip">1문제 / 1페이지 · 자동 페이지 나눔</span>
+          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1페이지 · 자동 페이지 나눔'}</span>
           <span className="chip">
             <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
             1단계 {s1Count}
@@ -743,6 +861,7 @@ function SidePanel({
   onConfirm,
   userSettings, onSaveGeminiKey,
   aiEnabled, setAiEnabled,
+  inputIntent, setInputIntent,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -789,7 +908,10 @@ function SidePanel({
                 <div className="item-meta">
                   <div className="nm">
                     <div className="t">{item.name}</div>
-                    <div className="s">{item.source} · {item.type.toUpperCase()}</div>
+                    <div className="s">
+                      <span className={`status-badge ${reviewStatusClass(item.reviewStatus)}`}>{item.statusLabel}</span>
+                      {item.source} · {item.type.toUpperCase()}
+                    </div>
                   </div>
                   <div className="pos-tag">{itemPosLabel}</div>
                 </div>
@@ -954,6 +1076,21 @@ function SidePanel({
 
             <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
 
+            <div className="intent-control">
+              {INPUT_INTENT_OPTIONS.map(option => (
+                <button
+                  key={option.value}
+                  className={`intent-choice ${normalizeInputIntent(inputIntent) === option.value ? 'on' : ''}`}
+                  type="button"
+                  onClick={() => setInputIntent?.(option.value)}
+                  title={option.description}
+                >
+                  <span>{option.label}</span>
+                  <small>{option.description}</small>
+                </button>
+              ))}
+            </div>
+
             <div className="row-control">
               <div className="lbl">
                 AI 보정 사용
@@ -1103,6 +1240,9 @@ function mapProblemToItem(problem, idx){
   // strip the noisy "...page-001 problem 1" suffix when present
   const cleanTitle = title.replace(/page-\d+\s+problem\s+\d+\s*$/i, '').trim();
   const name = cleanTitle || `문항 ${idx + 1}`;
+  const riskFlags = Array.isArray(problem.riskFlags) ? problem.riskFlags : [];
+  const reviewStatus = deriveProblemStatus(problem);
+  const statusMeta = reviewStatusMeta(reviewStatus);
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -1116,7 +1256,19 @@ function mapProblemToItem(problem, idx){
     imageUrl: problem.imagePath || null,
     chalkUrl: problem.boardRenderPath || null,
     subject: problem.subject || 'unknown',
-    riskFlags: Array.isArray(problem.riskFlags) ? problem.riskFlags : [],
+    riskFlags,
+    reviewStatus,
+    statusLabel: statusMeta.label,
+    statusReason: riskFlags.length ? riskFlags.join(', ') : '',
+    retryable: reviewStatus !== 'normal',
+    parseConfidence: typeof problem.parseConfidence === 'number' ? problem.parseConfidence : null,
+    confidence: problem.confidence || null,
+    aiStatus: problem.aiStatus || 'unknown',
+    startYPages: typeof problem.startYPages === 'number' ? problem.startYPages : null,
+    snappedNextStartYPages: typeof problem.snappedNextStartYPages === 'number' ? problem.snappedNextStartYPages : null,
+    overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
+    overflowViolation: Boolean(problem.overflowViolation),
+    slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
   };
 }
 
@@ -1135,10 +1287,82 @@ const AI_FALLBACK_ON = {
   provider: 'gemini',
   model: 'gemini-2.5-pro',
   threshold: 0.72,
-  maxRegions: 30,
+  maxRegions: 48,
+  maxTokens: 4096,
   timeoutMs: 18000,
   saveDebug: false,
 };
+const DEFAULT_INPUT_INTENT = 'multi-problem';
+const INPUT_INTENT_OPTIONS = [
+  {
+    value: 'auto',
+    label: '자동 판별',
+    description: '사진 내용에 맞춰 문항 경계를 판단',
+    exportMode: 'question',
+  },
+  {
+    value: 'single-problem',
+    label: '한 문제',
+    description: '한 이미지나 페이지를 한 문항으로 처리',
+    exportMode: 'question',
+  },
+  {
+    value: 'multi-problem',
+    label: '여러 문제',
+    description: '한 페이지 안의 여러 문항을 분리',
+    exportMode: 'question',
+  },
+  {
+    value: 'page-as-is',
+    label: '페이지 그대로',
+    description: '문항 분리 없이 페이지 단위로 변환',
+    exportMode: 'question',
+  },
+];
+const INPUT_INTENT_BY_VALUE = Object.freeze(
+  INPUT_INTENT_OPTIONS.reduce((acc, option) => {
+    acc[option.value] = option;
+    return acc;
+  }, {})
+);
+
+function normalizeInputIntent(value){
+  const normalized = String(value || DEFAULT_INPUT_INTENT).trim().toLowerCase().replace(/_/g, '-');
+  return INPUT_INTENT_BY_VALUE[normalized] ? normalized : DEFAULT_INPUT_INTENT;
+}
+
+const REVIEW_STATUS_META = {
+  normal: { label: '정상', shortLabel: '정상', tone: 'normal' },
+  check_needed: { label: '확인 필요', shortLabel: '확인', tone: 'check' },
+  failed: { label: '인식 실패', shortLabel: '실패', tone: 'failed' },
+};
+
+function normalizeReviewStatus(value){
+  const normalized = String(value || '').trim().toLowerCase().replace(/-/g, '_');
+  return REVIEW_STATUS_META[normalized] ? normalized : null;
+}
+
+function deriveProblemStatus(problem){
+  const explicit = normalizeReviewStatus(problem?.reviewStatus || problem?.review_status);
+  if (explicit) return explicit;
+  const bbox = problem?.bbox || {};
+  const hasBox = Number(bbox.width || 0) > 0 && Number(bbox.height || 0) > 0;
+  if (!hasBox || problem?.parseFailed || problem?.parse_failed) return 'failed';
+  const flags = problem?.riskFlags || problem?.risk_flags || [];
+  return Array.isArray(flags) && flags.length > 0 ? 'check_needed' : 'normal';
+}
+
+function reviewStatusMeta(status){
+  return REVIEW_STATUS_META[status] || REVIEW_STATUS_META.normal;
+}
+
+function reviewStatusClass(status){
+  return `status-${String(status || 'normal').replace(/_/g, '-')}`;
+}
+
+function listUnique(values){
+  return Array.from(new Set(values));
+}
 
 function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
@@ -1172,7 +1396,9 @@ function requestedInitialView(){
   }
 }
 
-async function postExport(files, aiFallback){
+async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT){
+  const resolvedInputIntent = normalizeInputIntent(inputIntent);
+  const inputIntentConfig = INPUT_INTENT_BY_VALUE[resolvedInputIntent] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
   const filesPayload = await Promise.all(files.map(async (f) => ({
     fileName: f.name,
     fileDataBase64: await fileToBase64(f),
@@ -1182,9 +1408,9 @@ async function postExport(files, aiFallback){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       files: filesPayload,
-      exportMode: 'question',
-      inputIntent: 'auto',
-      input_intent: 'auto',
+      exportMode: inputIntentConfig.exportMode,
+      inputIntent: resolvedInputIntent,
+      input_intent: resolvedInputIntent,
       sourceMode: 'auto',
       source_mode: 'auto',
       subject: 'unknown',
@@ -1223,6 +1449,17 @@ async function postMutate(action, args){
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `검수 수정 실패 (${resp.status})`);
   return json.session;
+}
+
+async function postRetryAi(args){
+  const resp = await fetch('/api/session/retry-ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args || {}),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `AI 재인식 실패 (${resp.status})`);
+  return json;
 }
 
 async function postRestore(snapshot){
@@ -1284,6 +1521,7 @@ function App(){
   const [usingMock, setUsingMock] = useState(true);
   const [userSettings, setUserSettings] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
+  const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
@@ -1398,6 +1636,38 @@ function App(){
       setLoading(null);
     }
   }, [session, adoptMutatedSession]);
+
+  const retryAiSession = useCallback(async (args) => {
+    if (!session) {
+      showToast('변경할 세션이 없습니다');
+      return;
+    }
+    if (!userSettings?.hasGeminiApiKey) {
+      showToast('Gemini API 키를 먼저 저장해 주세요');
+      return;
+    }
+    setMutating(true);
+    setLoading({
+      label: '문제 인식이 의심되는 페이지만 AI 재인식 중…',
+      hint: '전체 자료를 다시 올리지 않고 선택한 페이지만 다시 분석합니다.',
+      startedAt: Date.now(),
+    });
+    const snapshotBefore = session;
+    try {
+      const result = await postRetryAi(args);
+      const next = result.session;
+      setHistoryStack(prev => [...prev, snapshotBefore]);
+      adoptMutatedSession(next, snapshotBefore);
+      const applied = (result.retry || []).filter(row => row.status === 'applied').length;
+      showToast(applied ? `AI 재인식 완료 · ${applied}개 페이지 갱신` : 'AI 재인식 결과를 확인해 주세요');
+      if (hasReviewPages(next)) setView('review');
+    } catch (e) {
+      showToast(`AI 재인식 실패: ${e.message}`);
+    } finally {
+      setMutating(false);
+      setLoading(null);
+    }
+  }, [session, userSettings, adoptMutatedSession]);
 
   const undoMutation = useCallback(async () => {
     if (historyStack.length === 0) return;
@@ -1533,9 +1803,11 @@ function App(){
       startedAt: Date.now(),
     });
     try {
-      const s = await postExport(files, aiFallback);
+      const resolvedInputIntent = normalizeInputIntent(inputIntent);
+      const s = await postExport(files, aiFallback, resolvedInputIntent);
       applySession(s);
-      showToast(`파싱 완료 · ${(s.problems || []).length}개 문항`);
+      const intentLabel = INPUT_INTENT_BY_VALUE[resolvedInputIntent]?.label || '자동 판별';
+      showToast(`${intentLabel}로 파싱 완료 · ${(s.problems || []).length}개 문항`);
       // open the output folder in Windows Explorer so the user can grab the .edb
       const folder = s?.output_dir || s?.outputDir;
       if (folder) openOutputFolder(folder);
@@ -1677,7 +1949,9 @@ function App(){
             activeId={activeId}
             setActive={setActiveId}
             mutateSession={mutateSession}
+            retryAiSession={retryAiSession}
             mutating={mutating}
+            aiAvailable={!!userSettings?.hasGeminiApiKey}
           />
         ) : (
           <BoardStage
@@ -1710,6 +1984,8 @@ function App(){
           onSaveGeminiKey={onSaveGeminiKey}
           aiEnabled={aiEnabled}
           setAiEnabled={setAiEnabled}
+          inputIntent={inputIntent}
+          setInputIntent={setInputIntent}
         />
       </div>
 

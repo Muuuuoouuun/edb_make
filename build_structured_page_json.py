@@ -372,7 +372,8 @@ def main() -> int:
     parser.add_argument("--ai-provider", default="gemini", help="AI fallback provider: gemini (GEMINI_API_KEY required)")
     parser.add_argument("--ai-model", default="", help="AI model override (default: gemini-2.5-pro for page repair)")
     parser.add_argument("--ai-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
-    parser.add_argument("--ai-max-regions", type=int, default=30, help="Maximum number of blocks to send to AI fallback")
+    parser.add_argument("--ai-max-tokens", type=int, default=None, help="Maximum output tokens for AI fallback")
+    parser.add_argument("--ai-max-regions", type=int, default=48, help="Maximum number of blocks to send to AI fallback")
     parser.add_argument("--ai-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback requests")
     parser.add_argument("--ai-save-debug", action="store_true", help="Write AI fallback debug artifacts under .pipeline_cache/ai_debug")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error instead of silently skipping on AI fallback failures")
@@ -383,6 +384,7 @@ def main() -> int:
         provider=args.ai_provider,
         model=args.ai_model,
         threshold=args.ai_threshold,
+        max_tokens=args.ai_max_tokens,
         max_regions=args.ai_max_regions,
         timeout_ms=args.ai_timeout_ms,
         save_debug=args.ai_save_debug,
