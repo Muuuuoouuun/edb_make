@@ -1,0 +1,5 @@
+# Development and test-only dependencies.
+# Use Python 3.11+; the app code relies on stdlib enum.StrEnum.
+-r requirements-local.txt
+
+pytest>=8,<10

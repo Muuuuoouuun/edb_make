@@ -15,12 +15,50 @@ The project can be tested fully in local mode with:
 
 ## What You Do Need
 
+### Python version
+
+Use Python 3.11 or newer. The app code uses standard-library features such as
+`enum.StrEnum`, so older virtual environments such as Python 3.9 will fail before
+tests can collect.
+
+If `.venv` already exists, check its version first:
+
+```powershell
+.\.venv\Scripts\python --version
+```
+
+```bash
+.venv/bin/python --version
+```
+
+If it reports a version older than Python 3.11, recreate `.venv` with a newer
+interpreter before installing test dependencies.
+
 ### Core Python packages
 
 Install the local requirements:
 
 ```powershell
 python -m pip install -r requirements-local.txt
+```
+
+### Automated test setup
+
+For repeatable local tests, create the virtual environment with Python 3.11+ and
+install the development requirements:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python -m pytest -q
+```
+
+On macOS or Linux, the same test path is:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
 
 ### Optional OCR

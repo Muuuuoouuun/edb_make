@@ -27,6 +27,19 @@ Default app URL:
 http://127.0.0.1:8765/
 ```
 
+## macOS Double-Click Run
+For day-to-day local use, packaging is not required. Double-click:
+
+```text
+run_local_app.command
+```
+
+The launcher requires Python 3.11 or newer because the current code uses `enum.StrEnum`. It checks the existing `.venv` before use; if `.venv` is missing or was created with Python older than 3.11, it recreates `.venv` with a suitable `python3` interpreter, installs `requirements-local.txt` only when needed, starts `app_server.py`, and opens the browser at `http://127.0.0.1:8765/`.
+
+If Python 3.11+ is not installed, the launcher shows a Korean error message and waits for Enter before closing.
+
+If the local server is already running, it only opens the browser instead of starting a duplicate server.
+
 ## In-App Flow
 1. Start the local app server
 2. Open the browser UI

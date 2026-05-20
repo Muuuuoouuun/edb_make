@@ -14,6 +14,9 @@ pipeline_output_perspective/
 mvp_export*/
 smoke_server_export*/
 tmp_debug_output/
+/smoke_multi_image*/
+/tmp_tune_*/
+/tmp_validation_*/
 ui_prototype/prototype_data.js
 ui_prototype/generated_session.js
 local_test_output/
