@@ -158,11 +158,31 @@ def _extract_problem_cutout(
 
     if np is None:
         mask = gray.point(lambda px: 255 if px < 242 else 0, mode="L")
+        mask_dilated = mask.filter(ImageFilter.MaxFilter(3))
+        mask = Image.blend(mask, mask_dilated, 0.35)
         return _compose_chalk_rgba_pil(mask, image.size, resolved_chalk)
 
     rgb_array = np.asarray(rgb, dtype=np.float32) / 255.0
     gray_array = np.asarray(gray, dtype=np.float32)
     darkness = 255.0 - gray_array
+
+    # Thicken thin math lines/symbols via a fast 4-connectivity morphological dilation in NumPy
+    dilated_darkness = np.copy(darkness)
+    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        shifted = np.roll(np.roll(darkness, dy, axis=0), dx, axis=1)
+        if dy < 0:
+            shifted[-1, :] = 0.0
+        elif dy > 0:
+            shifted[0, :] = 0.0
+        if dx < 0:
+            shifted[:, -1] = 0.0
+        elif dx > 0:
+            shifted[:, 0] = 0.0
+        dilated_darkness = np.maximum(dilated_darkness, shifted)
+
+    # Smooth blend to keep edge anti-aliasing while keeping thin lines bright
+    darkness = 0.65 * darkness + 0.35 * dilated_darkness
+
     noise_floor = max(10.0, float(np.percentile(darkness, 62)) + 4.0)
     alpha_strength = np.clip((darkness - noise_floor) / max(1.0, 255.0 - noise_floor), 0.0, 1.0)
     alpha_strength = np.power(np.clip(alpha_strength * 1.45, 0.0, 1.0), 0.7)
@@ -1038,7 +1058,10 @@ def build_image_only_records(
 
     records: list[bytes] = []
     placement_summaries: list[dict[str, object]] = []
-    for record_id, placement in enumerate(placements):
+    entry_map = {entry.problem_id: entry for entry in problem_entries}
+    next_record_id = 0
+
+    for placement in placements:
         crop_path = Path(str(placement.metadata["crop_path"]))
         board_render_path = Path(str(placement.metadata["board_render_path"]))
         crop_image = Image.open(crop_path).convert("RGB")
@@ -1064,10 +1087,12 @@ def build_image_only_records(
             width_hint = normalize_width_px(available_width_px)
             height_hint = normalize_height_px(height_px, page_count_hint=template.board_page_count)
         y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
+        
+        parent_record_id = next_record_id
         records.append(
             build_image_record(
                 ImageRecordSpec(
-                    record_id=record_id,
+                    record_id=parent_record_id,
                     image_primary=image_bytes,
                     image_secondary=secondary_bytes,
                     x=normalize_x_px(LEFT_MARGIN_PX),
@@ -1077,6 +1102,78 @@ def build_image_only_records(
                 )
             )
         )
+        next_record_id += 1
+        image_record_count = 1
+
+        # Multi-Layer Diagram EDB Packing
+        entry = entry_map.get(placement.problem_id)
+        if entry is not None:
+            chalk_color = _resolve_chalk_color(board_theme)
+            diagram_blocks = [
+                block for block in entry.blocks
+                if block.block_type in {BlockType.DIAGRAM, BlockType.TABLE, BlockType.IMAGE}
+            ]
+            scale = float(board_image.width) / max(1.0, entry.bounds.width)
+            for block in diagram_blocks:
+                if (block.bbox.width <= 1.0 or block.bbox.height <= 1.0 or
+                    block.bbox.left < entry.bounds.left or block.bbox.top < entry.bounds.top):
+                    continue
+
+                try:
+                    diag_crop = entry.prepared_page.image.crop((
+                        int(block.bbox.left),
+                        int(block.bbox.top),
+                        int(block.bbox.right),
+                        int(block.bbox.bottom)
+                    ))
+                    diag_name = f"problem_{entry.problem_id}_diag_{block.block_id}.png"
+                    diag_crop_path = crop_path.parent / diag_name
+                    diag_render_path = board_render_path.parent / diag_name
+
+                    diag_crop.save(diag_crop_path)
+                    
+                    enhanced_diag = _enhance_problem_crop(diag_crop)
+                    diag_cutout = _extract_problem_cutout(enhanced_diag, chalk_color=chalk_color)
+                    _write_render_image(diag_cutout, diag_render_path)
+
+                    diag_board_image = diag_cutout if dark_board else diag_crop.convert("RGB")
+                    diag_target_width = max(1, int(round(diag_board_image.width * scale)))
+                    diag_board_image = _resize_to_target_width(diag_board_image, diag_target_width)
+
+                    diag_image_bytes, diag_image_format = _encode_image_bytes(diag_board_image, quality=92)
+                    if crop_format == CROP_FORMAT_V2:
+                        diag_secondary_bytes = build_tight_crop_image_bytes(
+                            diag_image_bytes, format_hint=diag_image_format, quality=88
+                        )
+                    else:
+                        diag_secondary_bytes = build_preview_image_bytes(
+                            diag_image_bytes, max_size=(768, 768), format_hint=diag_image_format, quality=88
+                        )
+
+                    rel_left = block.bbox.left - entry.bounds.left
+                    rel_top = block.bbox.top - entry.bounds.top
+                    diag_x_px = LEFT_MARGIN_PX + rel_left * scale
+                    diag_y_px = y_px + rel_top * scale
+
+                    records.append(
+                        build_image_record(
+                            ImageRecordSpec(
+                                record_id=next_record_id,
+                                image_primary=diag_image_bytes,
+                                image_secondary=diag_secondary_bytes,
+                                x=normalize_x_px(diag_x_px),
+                                y=normalize_y_px(diag_y_px, page_count_hint=template.board_page_count),
+                                width_hint=normalize_width_px(float(diag_board_image.width)),
+                                height_hint=normalize_height_px(float(diag_board_image.height), page_count_hint=template.board_page_count),
+                            )
+                        )
+                    )
+                    next_record_id += 1
+                    image_record_count += 1
+                except Exception as e:
+                    import logging
+                    logging.warning(f"Failed to extract multi-layer diagram: {e}")
+
         placement_summaries.append(
             {
                 "problem_id": placement.problem_id,
@@ -1098,7 +1195,7 @@ def build_image_only_records(
                 "bbox": placement.metadata["bbox"],
                 "record_mode": "image-only",
                 "text_record_count": 0,
-                "image_record_count": 1,
+                "image_record_count": image_record_count,
                 "board_theme": _resolve_board_theme(board_theme),
                 "crop_format": crop_format,
                 "image_pixel_width": int(board_image.width),

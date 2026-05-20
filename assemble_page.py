@@ -51,6 +51,28 @@ def _matches_choice_marker(text: str | None) -> bool:
     return bool(text and CHOICE_MARKER_RE.match(text))
 
 
+SET_PROBLEM_HEADER_RE = re.compile(
+    r"^\s*"
+    r"[\[［](?P<start>[0-9１-９]+)\s*[~\-~〜]\s*(?P<end>[0-9１-９]+)[\]］]"
+)
+
+
+def extract_set_problem_range(text: str | None) -> tuple[int, int] | None:
+    if not text:
+        return None
+    match = SET_PROBLEM_HEADER_RE.match(text)
+    if not match:
+        return None
+    try:
+        start_val = int(unicodedata.normalize("NFKC", match.group("start")))
+        end_val = int(unicodedata.normalize("NFKC", match.group("end")))
+        if start_val <= end_val:
+            return start_val, end_val
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def extract_problem_number(text: str | None) -> int | None:
     if not text:
         return None
@@ -362,9 +384,100 @@ def _build_grouping_diagnostics(
     }
 
 
+def get_choice_index(text: str | None) -> int | None:
+    if not text:
+        return None
+    text = text.strip()
+    # Check ①-⑨
+    for idx, char in enumerate("①②③④⑤⑥⑦⑧⑨", start=1):
+        if text.startswith(char):
+            return idx
+    # Check (1)-(9)
+    m = re.match(r"^\s*\(([1-9])\)", text)
+    if m:
+        return int(m.group(1))
+    # Check 1) - 9)
+    m = re.match(r"^\s*([1-9])\)", text)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def fill_choice_gaps(classified_blocks: list[ContentBlock]) -> list[ContentBlock]:
+    """Scan through classified blocks and fill gaps in choices.
+    
+    If we have choice blocks 1 and 3, and a single block in between is not a choice,
+    we can confidently classify it as choice 2.
+    """
+    if not classified_blocks:
+        return classified_blocks
+
+    # Group blocks by their corresponding problem starts.
+    # Each subsegment represents the blocks belonging to one problem.
+    problem_boundaries: list[int] = []
+    for index, block in enumerate(classified_blocks):
+        if detect_problem_start(block):
+            problem_boundaries.append(index)
+            
+    # Add page end boundary
+    problem_boundaries.append(len(classified_blocks))
+    
+    # Process each problem block subsegment separately to avoid cross-problem pollution
+    new_blocks = list(classified_blocks)
+    
+    for b_idx in range(len(problem_boundaries) - 1):
+        start = problem_boundaries[b_idx]
+        end = problem_boundaries[b_idx + 1]
+        p_blocks = new_blocks[start:end]
+        
+        # Track choice indices and their block relative indices
+        choices_info: list[tuple[int, int]] = []  # list of (relative_block_index, choice_value)
+        for rel_idx, block in enumerate(p_blocks):
+            # Check if this block is already a CHOICE
+            is_choice = (block.block_type == BlockType.CHOICE or detect_choice_block(block))
+            c_val = get_choice_index(block.text)
+            if is_choice and c_val is not None:
+                choices_info.append((rel_idx, c_val))
+                
+        # Sort by relative index
+        choices_info.sort(key=lambda x: x[0])
+        
+        # Check gaps between consecutive choices in the list
+        for i in range(len(choices_info) - 1):
+            rel_idx1, val1 = choices_info[i]
+            rel_idx2, val2 = choices_info[i + 1]
+            
+            # Gap in choice values (e.g. 1 and 3 -> gap is 2, meaning choice 2 is missing)
+            val_gap = val2 - val1
+            # Gap in block indices (e.g. choice 1 is block 3, choice 3 is block 5 -> gap is 2, 1 block in between)
+            idx_gap = rel_idx2 - rel_idx1
+            
+            if val_gap == 2 and idx_gap == 2:
+                # Exactly one block in between. Let's make it a CHOICE!
+                target_rel_idx = rel_idx1 + 1
+                target_abs_idx = start + target_rel_idx
+                mid_block = new_blocks[target_abs_idx]
+                if mid_block.block_type not in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
+                    new_blocks[target_abs_idx] = replace(mid_block, block_type=BlockType.CHOICE)
+            elif val_gap == 2 and idx_gap > 2:
+                # More than one block in between. Let's see if there is exactly one non-image block in the gap.
+                non_image_rel_indices = []
+                for g_rel_idx in range(rel_idx1 + 1, rel_idx2):
+                    g_block = p_blocks[g_rel_idx]
+                    if g_block.block_type not in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
+                        non_image_rel_indices.append(g_rel_idx)
+                if len(non_image_rel_indices) == 1:
+                    target_rel_idx = non_image_rel_indices[0]
+                    target_abs_idx = start + target_rel_idx
+                    new_blocks[target_abs_idx] = replace(new_blocks[target_abs_idx], block_type=BlockType.CHOICE)
+
+    return new_blocks
+
+
 def group_problem_units(page: PageModel) -> PageModel:
     relabeled = relabel_reading_order(page)
     classified_blocks = [classify_block(block) for block in relabeled.blocks]
+    classified_blocks = fill_choice_gaps(classified_blocks)
     block_diagnostics = [_block_grouping_diagnostics(block) for block in classified_blocks]
     has_text_markers = any(detect_problem_start(block) for block in classified_blocks)
     has_band_metadata = any("question_band_index" in block.metadata for block in classified_blocks)
@@ -474,10 +587,46 @@ def group_problem_units(page: PageModel) -> PageModel:
         relabeled.metadata["fallback_grouping_stats"]["problem_count"] = len(problems)
         return replace(relabeled, subject=infer_subject(relabeled), blocks=classified_blocks, problems=problems)
 
+    # Set-problem range header extraction & shared asset mapping
+    shared_blocks_by_number: dict[int, list[str]] = {}
+    active_range: tuple[int, int] | None = None
+    active_shared_blocks: list[str] = []
+
+    for block in classified_blocks:
+        range_val = extract_set_problem_range(block.text)
+        if range_val is not None:
+            if active_range is not None:
+                for num in range(active_range[0], active_range[1] + 1):
+                    shared_blocks_by_number[num] = list(active_shared_blocks)
+            active_range = range_val
+            active_shared_blocks = [block.block_id]
+            continue
+
+        prob_num, _ = extract_problem_number_from_block(block)
+        if prob_num is not None:
+            if active_range is not None:
+                for num in range(active_range[0], active_range[1] + 1):
+                    shared_blocks_by_number[num] = list(active_shared_blocks)
+                active_range = None
+                active_shared_blocks = []
+            continue
+
+        if active_range is not None:
+            active_shared_blocks.append(block.block_id)
+
+    if active_range is not None:
+        for num in range(active_range[0], active_range[1] + 1):
+            shared_blocks_by_number[num] = list(active_shared_blocks)
+
+    all_shared_ids = {bid for bids in shared_blocks_by_number.values() for bid in bids}
+
     problems: list[ProblemUnit] = []
     current: ProblemUnit | None = None
 
     for index, block in enumerate(classified_blocks, start=1):
+        if block.block_id in all_shared_ids:
+            continue
+
         block_diag = block_diagnostics[index - 1]
         if detect_problem_start(block) or current is None:
             problem_number, number_source = extract_problem_number_from_block(block)
@@ -489,6 +638,17 @@ def group_problem_units(page: PageModel) -> PageModel:
             if problem_number is not None:
                 current.metadata["problem_number"] = problem_number
                 current.metadata["problem_number_source"] = number_source
+                if problem_number in shared_blocks_by_number:
+                    for shared_bid in shared_blocks_by_number[problem_number]:
+                        shared_block = next((b for b in classified_blocks if b.block_id == shared_bid), None)
+                        if shared_block:
+                            if shared_block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
+                                current.figure_block_ids.append(shared_bid)
+                            elif shared_block.block_type == BlockType.EXPLANATION:
+                                current.explanation_block_ids.append(shared_bid)
+                            else:
+                                current.stem_block_ids.append(shared_bid)
+
             current.metadata.update(
                 {
                     "grouping_mode": diagnostics["grouping_mode"],

@@ -647,10 +647,41 @@ def _find_question_anchor_rows(
     return anchors
 
 
+def _find_closed_box_vertical_ranges(crop: Image.Image) -> list[tuple[int, int]]:
+    """Detect vertical coordinate ranges of large rectangular closed contours in the crop.
+    
+    These ranges correspond to <보기> or reading passage boxes and should be protected
+    from being split horizontally.
+    """
+    if cv2 is None or np is None:
+        return []
+    try:
+        arr = np.asarray(crop, dtype=np.uint8)
+        # Find external contours (outermost boxes)
+        contours, _ = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        ranges: list[tuple[int, int]] = []
+        crop_width, crop_height = crop.width, crop.height
+        min_box_width = crop_width * 0.35  # Box spans at least 35% of the column width
+        min_box_height = 42                # Box height is at least 42 pixels
+        max_box_height = crop_height * 0.90 # Avoid page-chrome borders
+        
+        for c in contours:
+            x, y, w, h = cv2.boundingRect(c)
+            if w >= min_box_width and h >= min_box_height and h <= max_box_height:
+                ranges.append((y, y + h))
+        return ranges
+    except Exception:
+        return []
+
+
 def _find_document_split_row(mask: Image.Image, band_box: Box, options: SegmentOptions) -> int | None:
     crop = mask.crop((int(band_box.left), int(band_box.top), int(band_box.right), int(band_box.bottom)))
     if crop.width <= 1 or crop.height < options.document_recursive_split_min_height_px:
         return None
+
+    # Detect vertical coordinate ranges of closed contours (<보기> boxes, reading passages)
+    box_ranges = _find_closed_box_vertical_ranges(crop)
 
     row_projection = _row_dark_projection(crop)
     if not row_projection:
@@ -677,7 +708,14 @@ def _find_document_split_row(mask: Image.Image, band_box: Box, options: SegmentO
             local_offset = min(range(local_end - local_start), key=lambda idx: smoothed[local_start + idx])
             refined_row = local_start + local_offset
             if refined_row >= min_segment_height and crop.height - refined_row >= min_segment_height:
-                return refined_row
+                # Closed-contour check for anchor-refined split row
+                is_inside_box = False
+                for box_top, box_bottom in box_ranges:
+                    if (box_top - 4) < refined_row < (box_bottom + 4):
+                        is_inside_box = True
+                        break
+                if not is_inside_box:
+                    return refined_row
 
     valley_threshold = max(4.0, max_score * options.document_split_valley_ratio)
     search_start = min_segment_height
@@ -705,6 +743,15 @@ def _find_document_split_row(mask: Image.Image, band_box: Box, options: SegmentO
 
         split_row = (run_top + run_bottom) // 2
         if split_row < min_segment_height or crop.height - split_row < min_segment_height:
+            continue
+
+        # Closed-contour check for candidate split row
+        is_inside_box = False
+        for box_top, box_bottom in box_ranges:
+            if (box_top - 4) < split_row < (box_bottom + 4):
+                is_inside_box = True
+                break
+        if is_inside_box:
             continue
 
         top_density = sum(row_projection[:split_row]) / max(1.0, float(split_row * crop.width))
