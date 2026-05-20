@@ -3,7 +3,7 @@
     "name": "mvp-default",
     "board_page_count": 50,
     "base_slot_height_pages": 1.2,
-    "fixed_left_zone_ratio": 0.52
+    "fixed_left_zone_ratio": 0.3333
   },
   "placements": [
     {

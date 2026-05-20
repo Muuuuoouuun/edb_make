@@ -12,7 +12,7 @@ class LayoutTemplate:
     name: str
     board_page_count: int = 50
     base_slot_height_pages: float = 1.2
-    fixed_left_zone_ratio: float = 0.52
+    fixed_left_zone_ratio: float = 1 / 3
     preserve_right_writing_zone: bool = True
     default_overflow_subjects: set[Subject] = field(
         default_factory=lambda: {Subject.KOREAN, Subject.ENGLISH}
