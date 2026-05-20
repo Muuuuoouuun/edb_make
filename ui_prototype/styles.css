@@ -36,13 +36,15 @@ body {
 
 button,
 select,
-input {
+input,
+textarea {
   font: inherit;
 }
 
 button:disabled,
 select:disabled,
-input:disabled {
+input:disabled,
+textarea:disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -220,6 +222,73 @@ h2 {
   align-items: center;
 }
 
+.input-intent-panel,
+.paste-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(216, 207, 192, 0.82);
+  background: rgba(255, 253, 250, 0.78);
+}
+
+.intent-heading,
+.paste-panel-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intent-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.intent-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  min-height: 72px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.intent-option:hover {
+  transform: translateY(-1px);
+}
+
+.intent-option:has(input:checked) {
+  border-color: rgba(15, 118, 110, 0.45);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+}
+
+.intent-option input {
+  grid-row: 1 / span 2;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.intent-option span {
+  min-width: 0;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.intent-option small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .intake-status {
   min-height: 22px;
 }
@@ -269,6 +338,38 @@ h2 {
 
 .source-chip-remove {
   align-self: flex-start;
+}
+
+.paste-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1.4fr);
+  align-items: start;
+}
+
+.paste-text-field {
+  min-width: 0;
+}
+
+.paste-text-field textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  background: #fff;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.paste-text-field textarea:focus {
+  outline: 3px solid rgba(15, 118, 110, 0.16);
+  border-color: rgba(15, 118, 110, 0.45);
+}
+
+.paste-actions {
+  grid-column: 2;
+  align-items: center;
 }
 
 .advanced-panel {
@@ -1215,6 +1316,18 @@ select:hover,
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .intent-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .paste-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .paste-actions {
+    grid-column: auto;
+  }
+
   .composer-field-grid {
     grid-template-columns: 1fr;
   }
@@ -1286,7 +1399,8 @@ select:hover,
   }
 
   .source-queue,
-  .source-queue-list {
+  .source-queue-list,
+  .intent-options {
     grid-template-columns: 1fr;
   }
 

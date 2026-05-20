@@ -72,7 +72,7 @@ def _build_ai_fallback_config(
     effective_enabled = resolved_mode != "off"
     if (
         not effective_enabled
-        and provider == "openai"
+        and provider in {"openai", "gemini"}
         and not model
         and not prompt
         and max_tokens is None
@@ -87,8 +87,8 @@ def _build_ai_fallback_config(
     return {
         "enabled": effective_enabled,
         "mode": resolved_mode,
-        "provider": provider,
-        "model": model or "gpt-5.4-mini",
+        "provider": provider or "gemini",
+        "model": model or "gemini-2.5-pro",
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -105,8 +105,8 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         return build_page_ai_fallback_config()
     return build_page_ai_fallback_config(
         mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
-        provider=str(ai_fallback_config.get("provider") or "openai"),
-        model=str(ai_fallback_config.get("model") or "gpt-5.4-mini"),
+        provider=str(ai_fallback_config.get("provider") or "gemini"),
+        model=str(ai_fallback_config.get("model") or ""),
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 18),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
@@ -441,7 +441,7 @@ def run_export(
     sync_ui: bool = True,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
-    ai_fallback_provider: str = "openai",
+    ai_fallback_provider: str = "gemini",
     ai_fallback_model: str = "",
     ai_fallback_prompt: str = "",
     ai_fallback_max_tokens: int | None = None,
@@ -570,7 +570,7 @@ def main() -> int:
     parser.add_argument("--skip-ui-sync", action="store_true", help="Do not refresh ui_prototype/generated_session.js")
     parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
     parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")
-    parser.add_argument("--ai-fallback-provider", default="openai", help="AI fallback provider name")
+    parser.add_argument("--ai-fallback-provider", default="gemini", help="AI fallback provider name")
     parser.add_argument("--ai-fallback-model", default="", help="AI fallback model name")
     parser.add_argument("--ai-fallback-prompt", default="", help="AI fallback prompt template")
     parser.add_argument("--ai-fallback-max-tokens", type=int, default=None, help="AI fallback max output tokens")

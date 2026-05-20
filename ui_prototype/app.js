@@ -22,6 +22,34 @@ const AI_PROVIDER_PRESETS = Object.freeze({
     timeoutMs: 18000,
   },
 });
+const DEFAULT_INPUT_INTENT = "auto";
+const INPUT_INTENTS = Object.freeze({
+  auto: {
+    label: "자동 판별",
+    exportMode: "question",
+    payload: "auto",
+    payloadSnake: "auto",
+  },
+  "single-problem": {
+    label: "한 문제",
+    exportMode: "question",
+    payload: "single-problem",
+    payloadSnake: "single_problem",
+  },
+  "multi-problem": {
+    label: "여러 문제",
+    exportMode: "question",
+    payload: "multi-problem",
+    payloadSnake: "multi_problem",
+  },
+  "page-as-is": {
+    label: "페이지 그대로",
+    exportMode: "question",
+    payload: "page-as-is",
+    payloadSnake: "page_as_is",
+  },
+});
+const SUPPORTED_SOURCE_EXTENSIONS = /\.(pdf|png|jpe?g|webp|bmp|tiff?|heic|heif)$/i;
 
 const fallbackProblems = [
   {
@@ -99,6 +127,15 @@ function normalizePath(value) {
     return `file:///${value.replace(/\\/g, "/")}`;
   }
   return value.replace(/\\/g, "/");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function normalizeTemplate(template) {
@@ -264,6 +301,9 @@ function normalizeProblem(problem, index) {
     recordMode: problem.recordMode || problem.record_mode || "",
     textRecordCount: toNumber(problem.textRecordCount ?? problem.text_record_count, 0),
     imageRecordCount: toNumber(problem.imageRecordCount ?? problem.image_record_count, 0),
+    riskFlags: Array.isArray(problem.riskFlags || problem.risk_flags)
+      ? (problem.riskFlags || problem.risk_flags)
+      : [],
     excluded: Boolean(problem.excluded ?? problem.isExcluded),
   };
 }
@@ -272,13 +312,17 @@ function normalizeSession(rawSession, fallbackName = "불러온 세션") {
   const rawProblems = Array.isArray(rawSession?.problems) ? rawSession.problems : [];
   const aiSummary = normalizeAiSummary(rawSession?.ai_summary || rawSession?.aiSummary);
   const aiFallback = normalizeAiFallbackConfig(rawSession?.ai_fallback || rawSession?.aiFallback, rawSession?.ai_summary || rawSession?.aiSummary);
+  const exportMode = rawSession?.export_mode || rawSession?.exportMode || "question";
+  const rawInputIntent = rawSession?.input_intent || rawSession?.inputIntent || "";
   return {
     sessionName: rawSession?.session_name || rawSession?.sessionName || fallbackName,
     dataSource: rawSession?.data_source || rawSession?.dataSource || "manual",
     generatedAt: rawSession?.generated_at || rawSession?.generatedAt || "",
     outputDir: rawSession?.output_dir || rawSession?.outputDir || "",
     sourceMode: rawSession?.source_mode || rawSession?.sourceMode || "single",
-    exportMode: rawSession?.export_mode || rawSession?.exportMode || "question",
+    inputIntent: rawInputIntent || (exportMode === "page" ? "page-as-is" : "auto"),
+    inputNotes: rawSession?.input_notes || rawSession?.inputNotes || "",
+    exportMode,
     recordMode: rawSession?.record_mode || rawSession?.recordMode || "mixed",
     inputFileCount: toNumber(rawSession?.input_file_count ?? rawSession?.inputFileCount, 0),
     sourcePageCount: toNumber(rawSession?.source_page_count ?? rawSession?.sourcePageCount, 0),
@@ -290,6 +334,7 @@ function normalizeSession(rawSession, fallbackName = "불러온 세션") {
     placementsJsonPath: rawSession?.placements_json_path || rawSession?.placementsJsonPath || "",
     edbPath: rawSession?.edb_path || rawSession?.edbPath || "",
     edbFileUri: normalizePath(rawSession?.edb_file_uri || rawSession?.edbFileUri || rawSession?.edb_path || ""),
+    pages: Array.isArray(rawSession?.pages) ? rawSession.pages : [],
     renderedPageFileUris: (rawSession?.rendered_page_file_uris || rawSession?.renderedPageFileUris || rawSession?.rendered_page_paths || rawSession?.renderedPagePaths || []).map(normalizePath),
     template: normalizeTemplate(rawSession?.template),
     warningMessages: Array.isArray(rawSession?.warning_messages || rawSession?.warningMessages)
@@ -311,6 +356,43 @@ function fileKey(file) {
 
 function isPdfFile(file) {
   return /\.pdf$/i.test(file.name || "");
+}
+
+function isSupportedSourceFile(file) {
+  if (!file) {
+    return false;
+  }
+  const type = String(file.type || "").toLowerCase();
+  return type.startsWith("image/") || type === "application/pdf" || SUPPORTED_SOURCE_EXTENSIONS.test(file.name || "");
+}
+
+function clipboardFileName(file, index) {
+  if (file.name) {
+    return file.name;
+  }
+  const type = String(file.type || "").toLowerCase();
+  const extension = type === "application/pdf"
+    ? "pdf"
+    : type.includes("jpeg")
+      ? "jpg"
+      : type.includes("webp")
+        ? "webp"
+        : type.includes("bmp")
+          ? "bmp"
+          : type.includes("tiff")
+            ? "tiff"
+            : "png";
+  return `clipboard-${Date.now()}-${index + 1}.${extension}`;
+}
+
+function normalizeClipboardFile(file, index) {
+  if (!file || file.name) {
+    return file;
+  }
+  return new File([file], clipboardFileName(file, index), {
+    type: file.type || "image/png",
+    lastModified: Date.now(),
+  });
 }
 
 function formatFileSize(bytes) {
@@ -347,6 +429,37 @@ function sessionSourceLabel(source) {
 
 function exportModeLabel(mode) {
   return mode === "page" ? "페이지별" : "문항별";
+}
+
+function normalizeInputIntent(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  return Object.prototype.hasOwnProperty.call(INPUT_INTENTS, normalized) ? normalized : DEFAULT_INPUT_INTENT;
+}
+
+function inputIntentLabel(intent) {
+  return INPUT_INTENTS[normalizeInputIntent(intent)].label;
+}
+
+function inputIntentExportMode(intent) {
+  return INPUT_INTENTS[normalizeInputIntent(intent)].exportMode;
+}
+
+function readInputIntent() {
+  const selected = document.querySelector('input[name="inputIntent"]:checked');
+  return normalizeInputIntent(selected?.value || state.inputIntent || DEFAULT_INPUT_INTENT);
+}
+
+function syncInputIntentControls({ syncLayout = true } = {}) {
+  const intent = normalizeInputIntent(state.inputIntent || DEFAULT_INPUT_INTENT);
+  const selected = document.querySelector(`input[name="inputIntent"][value="${intent}"]`);
+  if (selected) {
+    selected.checked = true;
+  }
+
+  const layoutModeSelect = document.getElementById("runLayoutModeSelect");
+  if (syncLayout && layoutModeSelect) {
+    layoutModeSelect.value = inputIntentExportMode(intent);
+  }
 }
 
 function aiProviderLabel(provider) {
@@ -422,6 +535,31 @@ function readAiFallbackForm() {
     timeoutMs: Math.max(1000, Math.round(toNumber(controls.timeoutMs?.value, preset.timeoutMs))),
     saveDebug: Boolean(controls.saveDebug?.checked),
   };
+}
+
+function aiFallbackForInputIntent(inputIntent, config) {
+  const normalizedIntent = normalizeInputIntent(inputIntent);
+  const preset = AI_PROVIDER_PRESETS.gemini;
+  if (normalizedIntent === "multi-problem" && (!config.enabled || config.mode === "off")) {
+    return {
+      ...config,
+      enabled: true,
+      mode: "auto",
+      provider: "gemini",
+      model: config.model || preset.model,
+      threshold: config.threshold || preset.threshold,
+      maxRegions: config.maxRegions || preset.maxRegions,
+      timeoutMs: config.timeoutMs || preset.timeoutMs,
+    };
+  }
+  if (normalizedIntent === "single-problem" || normalizedIntent === "page-as-is") {
+    return {
+      ...config,
+      enabled: false,
+      mode: "off",
+    };
+  }
+  return config;
 }
 
 function writeAiFallbackForm(config) {
@@ -500,17 +638,14 @@ function syncAiFallbackControls() {
   }
 
   if (config.provider === "gemini") {
-    helper.textContent = "Gemini는 자리만 준비됐습니다. 현재 실행에서는 provider_pending으로 안전하게 건너뜁니다.";
-    helper.classList.add("is-warning");
+    if (config.mode === "force") {
+      helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 모든 후보 페이지를 보정 시도합니다.`;
+    } else {
+      helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 애매한 페이지만 선택 보정합니다.`;
+    }
+    helper.classList.add("is-success");
     return;
   }
-
-  if (config.mode === "force") {
-    helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 모든 후보 페이지를 보정 시도합니다.`;
-  } else {
-    helper.textContent = `${aiProviderLabel(config.provider)} ${config.model}로 애매한 페이지만 선택 보정합니다.`;
-  }
-  helper.classList.add("is-success");
 }
 
 function applyAiPreset(provider) {
@@ -574,10 +709,11 @@ function renderSourceQueue() {
   state.runSourceFiles.forEach((file, index) => {
     const card = document.createElement("article");
     card.className = "source-chip";
+    const fileName = escapeHtml(file.name);
     card.innerHTML = `
       <div class="source-chip-head">
         <div>
-          <div class="source-chip-name">${file.name}</div>
+          <div class="source-chip-name">${fileName}</div>
           <div class="source-chip-meta">
             <span>${index + 1}번째</span>
             <span>${isPdfFile(file) ? "PDF" : "이미지"}</span>
@@ -586,15 +722,15 @@ function renderSourceQueue() {
         </div>
         <span class="meta-pill">${isPdfFile(file) ? "PDF" : "사진"}</span>
       </div>
-      <button class="small-button source-chip-remove" type="button" data-remove-file="${fileKey(file)}">제거</button>
+      <button class="small-button source-chip-remove" type="button" data-remove-index="${index}">제거</button>
     `;
     root.appendChild(card);
   });
 
-  root.querySelectorAll("[data-remove-file]").forEach((button) => {
+  root.querySelectorAll("[data-remove-index]").forEach((button) => {
     button.addEventListener("click", () => {
-      const nextKey = button.dataset.removeFile;
-      state.runSourceFiles = state.runSourceFiles.filter((file) => fileKey(file) !== nextKey);
+      const removeIndex = Number(button.dataset.removeIndex);
+      state.runSourceFiles = state.runSourceFiles.filter((_, index) => index !== removeIndex);
       updateRuntimeControls();
       renderSourceQueue();
     });
@@ -602,25 +738,51 @@ function renderSourceQueue() {
 }
 
 function updateQueuedFiles(fileList, { replace = false } = {}) {
-  const incomingFiles = Array.from(fileList || []).filter(Boolean);
+  const rawFiles = Array.from(fileList || []).filter(Boolean);
+  const incomingFiles = rawFiles.filter(isSupportedSourceFile);
   if (!incomingFiles.length) {
-    return;
+    if (rawFiles.length) {
+      setRunStatus("지원하는 이미지/PDF 파일만 업로드 큐에 넣을 수 있습니다.", "warning");
+    }
+    return 0;
   }
 
   const incomingMap = new Map(incomingFiles.map((file) => [fileKey(file), file]));
+  const incomingUniqueFiles = Array.from(incomingMap.values());
   const nextFiles = replace
-    ? Array.from(incomingMap.values())
-    : [...state.runSourceFiles.filter((file) => !incomingMap.has(fileKey(file))), ...incomingFiles];
+    ? incomingUniqueFiles
+    : [...state.runSourceFiles.filter((file) => !incomingMap.has(fileKey(file))), ...incomingUniqueFiles];
 
   state.runSourceFiles = nextFiles;
   updateRuntimeControls();
   renderSourceQueue();
+  return incomingUniqueFiles.length;
 }
 
 function clearQueuedFiles() {
   state.runSourceFiles = [];
   updateRuntimeControls();
   renderSourceQueue();
+}
+
+function readPastedText() {
+  const input = document.getElementById("pastedTextInput");
+  return (input?.value || "").trim();
+}
+
+function writePastedText(value) {
+  const input = document.getElementById("pastedTextInput");
+  const text = String(value || "");
+  state.pastedText = text;
+  if (input && input.value !== text) {
+    input.value = text;
+  }
+  updateRuntimeControls();
+}
+
+function clearPastedText() {
+  writePastedText("");
+  setRunStatus("붙여넣은 텍스트를 지웠습니다.", "neutral");
 }
 
 function clearAllState() {
@@ -644,6 +806,7 @@ function clearAllState() {
   document.getElementById("sourceFileInput").value = "";
   document.getElementById("cameraFileInput").value = "";
   document.getElementById("sessionFileInput").value = "";
+  writePastedText("");
 
   applySession(createEmptySession());
   setRunStatus("업로드 큐와 현재 파싱 결과를 모두 초기화했습니다.", "neutral");
@@ -697,7 +860,9 @@ const state = {
   composerOpen: false,
   apiAvailable: false,
   runBusy: false,
-  autoParse: true,
+  autoParse: false,
+  inputIntent: DEFAULT_INPUT_INTENT,
+  pastedText: "",
   runSourceFiles: [],
 };
 
@@ -742,6 +907,8 @@ function applySession(session) {
   if (layoutModeSelect) {
     layoutModeSelect.value = session.exportMode || "question";
   }
+  state.inputIntent = normalizeInputIntent(session.inputIntent || (session.exportMode === "page" ? "page-as-is" : DEFAULT_INPUT_INTENT));
+  syncInputIntentControls({ syncLayout: false });
   writeAiFallbackForm(session.aiFallback);
   syncAiFallbackControls();
   syncTemplateSelect();
@@ -772,9 +939,12 @@ function resetRunOptions() {
     runExportEdb.checked = true;
   }
 
-  state.autoParse = true;
+  state.inputIntent = DEFAULT_INPUT_INTENT;
+  syncInputIntentControls();
+  writePastedText("");
+  state.autoParse = false;
   if (autoParseToggle) {
-    autoParseToggle.checked = true;
+    autoParseToggle.checked = false;
   }
   writeAiFallbackForm(DEFAULT_AI_FALLBACK);
   syncAiFallbackControls();
@@ -968,6 +1138,12 @@ function updateRuntimeControls() {
   const clearAllButton = document.getElementById("clearAllButton");
   const autoParseToggle = document.getElementById("autoParseToggle");
   const runLayoutModeSelect = document.getElementById("runLayoutModeSelect");
+  const pasteHelper = document.getElementById("pasteHelper");
+  const clearPastedTextButton = document.getElementById("clearPastedTextButton");
+  const pastedTextInput = document.getElementById("pastedTextInput");
+  const focusPasteTextButton = document.getElementById("focusPasteTextButton");
+  const inputIntent = normalizeInputIntent(state.inputIntent);
+  const textLength = readPastedText().length;
 
   apiStatus.textContent = state.apiAvailable ? "로컬 앱 연결됨" : "오프라인 미리보기";
   apiStatus.classList.toggle("is-connected", state.apiAvailable);
@@ -981,8 +1157,29 @@ function updateRuntimeControls() {
   if (clearAllButton) {
     clearAllButton.disabled = state.runBusy;
   }
-  runExportButton.textContent = `${exportModeLabel(runLayoutModeSelect?.value)} 변환`;
+  const exportMode = inputIntentExportMode(inputIntent) || runLayoutModeSelect?.value || "question";
+  runExportButton.textContent = inputIntent === "auto"
+    ? `${exportModeLabel(exportMode)} 자동 판별`
+    : `${inputIntentLabel(inputIntent)} 변환`;
   autoParseToggle.checked = state.autoParse;
+  if (pasteHelper) {
+    pasteHelper.textContent = textLength
+      ? `붙여넣은 텍스트 ${textLength.toLocaleString()}자 포함`
+      : "이미지 복사 후 이 화면에서 Ctrl/Cmd+V";
+    pasteHelper.classList.toggle("is-success", textLength > 0);
+  }
+  if (clearPastedTextButton) {
+    clearPastedTextButton.disabled = state.runBusy || textLength === 0;
+  }
+  if (pastedTextInput) {
+    pastedTextInput.disabled = state.runBusy;
+  }
+  if (focusPasteTextButton) {
+    focusPasteTextButton.disabled = state.runBusy;
+  }
+  document.querySelectorAll('input[name="inputIntent"]').forEach((input) => {
+    input.disabled = state.runBusy;
+  });
   syncAiFallbackControls();
 }
 
@@ -1099,6 +1296,35 @@ async function fetchLatestSessionFromApi() {
   return normalizeSession(payload.session, "최근 세션");
 }
 
+function sessionHasReviewPages(session) {
+  return Array.isArray(session?.pages) && session.pages.length > 0;
+}
+
+function sessionRiskCount(session) {
+  const problemRiskCount = (session?.problems || []).filter((problem) => (
+    Array.isArray(problem.riskFlags) && problem.riskFlags.length > 0
+  )).length;
+  const pageRiskCount = (session?.pages || []).filter((page) => {
+    const flags = page?.riskFlags || page?.risk_flags || [];
+    return Array.isArray(flags) && flags.length > 0;
+  }).length;
+  const warningCount = Array.isArray(session?.warningMessages) ? session.warningMessages.length : 0;
+  return problemRiskCount + pageRiskCount + warningCount;
+}
+
+function shouldRouteToReview(session, inputIntent) {
+  if (!sessionHasReviewPages(session)) {
+    return false;
+  }
+  const detectedCount = session.detectedProblemCount || session.problems?.length || 0;
+  const isMulti = inputIntent === "multi-problem" || detectedCount > 1 || session.inputFileCount > 1;
+  return isMulti || sessionRiskCount(session) > 0;
+}
+
+function postParseRoute(session, inputIntent) {
+  return shouldRouteToReview(session, inputIntent) ? "/board.html?view=review" : "/board.html";
+}
+
 async function runExportFromApi() {
   if (!state.apiAvailable) {
     window.alert("로컬 파싱 API가 연결되지 않았습니다. 먼저 `app_server.py`를 실행해주세요.");
@@ -1113,11 +1339,18 @@ async function runExportFromApi() {
   try {
     state.runBusy = true;
     runExportButton.disabled = true;
-    setRunStatus(`소스 ${state.runSourceFiles.length}개를 업로드하고 자동 파싱하는 중입니다...`, "loading");
+    const inputIntent = readInputIntent();
+    const inputIntentConfig = INPUT_INTENTS[inputIntent];
+    const exportMode = inputIntentExportMode(inputIntent);
+    const pastedText = readPastedText();
+    state.inputIntent = inputIntent;
+    state.pastedText = pastedText;
+    syncInputIntentControls();
+    setRunStatus(`소스 ${state.runSourceFiles.length}개를 ${inputIntentLabel(inputIntent)} 모드로 파싱하는 중입니다...`, "loading");
 
     const queue = [...state.runSourceFiles];
     const containsPhoto = queue.some((file) => !isPdfFile(file));
-    const aiFallback = readAiFallbackForm();
+    const aiFallback = aiFallbackForInputIntent(inputIntent, readAiFallbackForm());
     const filesPayload = await Promise.all(
       queue.map(async (file) => ({
         fileName: file.name,
@@ -1128,12 +1361,20 @@ async function runExportFromApi() {
     const payload = {
       files: filesPayload,
       outputDir: document.getElementById("outputDirInput").value.trim(),
-      exportMode: document.getElementById("runLayoutModeSelect").value,
+      exportMode,
+      inputIntent: inputIntentConfig.payload,
+      input_intent: inputIntentConfig.payloadSnake,
+      sourceMode: inputIntentConfig.payload,
+      source_mode: inputIntentConfig.payloadSnake,
       subject: document.getElementById("runSubjectSelect").value,
       ocr: document.getElementById("runOcrSelect").value,
       exportEdb: document.getElementById("runExportEdb").checked,
       detectPerspective: containsPhoto,
       maxDimension: containsPhoto ? 2400 : null,
+      inputNotes: pastedText,
+      input_notes: pastedText,
+      pastedText,
+      pasted_text: pastedText,
       aiFallback: {
         enabled: aiFallback.enabled,
         mode: aiFallback.mode,
@@ -1160,13 +1401,16 @@ async function runExportFromApi() {
 
     state.previewMode = "problem";
     const normalizedSession = normalizeSession(result.session, "파싱 세션");
+    const route = postParseRoute(normalizedSession, inputIntent);
+    const nextScreenLabel = route.includes("view=review") ? "검수 화면" : "칠판 편집기";
     applySession(normalizedSession);
     clearQueuedFiles();
+    writePastedText("");
     setRunStatus(
-      `파싱 완료: ${exportModeLabel(normalizedSession.exportMode)} · ${normalizedSession.sourcePageCount || 0}페이지 · ${normalizedSession.detectedProblemCount || normalizedSession.problems.length}문항 · 칠판 편집기로 이동합니다...`,
+      `파싱 완료: ${exportModeLabel(normalizedSession.exportMode)} · ${normalizedSession.sourcePageCount || 0}페이지 · ${normalizedSession.detectedProblemCount || normalizedSession.problems.length}문항 · ${nextScreenLabel}로 이동합니다...`,
       "success",
     );
-    setTimeout(() => { window.location.href = "/board.html"; }, 900);
+    setTimeout(() => { window.location.href = route; }, 900);
   } catch (error) {
     setRunStatus(`파싱 실패: ${error.message}`, "error");
     window.alert(`파싱 실패: ${error.message}`);
@@ -1461,7 +1705,7 @@ function renderInspector(selected) {
         <span>${formatAiStatusCounts(aiSummary.statusCounts) || "기록 없음"}</span>
       </div>
       ${aiFallback.provider === "gemini" ? `
-      <p class="helper-text">Gemini는 UI와 설정만 준비된 상태입니다. 현재 서버에서는 실제 호출 없이 안전하게 건너뜁니다.</p>
+      <p class="helper-text">Gemini API 키가 설정되어 있으면 애매한 문항 경계를 선택적으로 보정합니다.</p>
       ` : ""}
     </div>
     ` : ""}
@@ -1722,7 +1966,27 @@ document.getElementById("templateSelect").addEventListener("change", (event) => 
 });
 
 document.getElementById("runLayoutModeSelect").addEventListener("change", () => {
+  const layoutModeSelect = document.getElementById("runLayoutModeSelect");
+  if (layoutModeSelect?.value === "page") {
+    state.inputIntent = "page-as-is";
+  } else if (state.inputIntent === "page-as-is") {
+    state.inputIntent = DEFAULT_INPUT_INTENT;
+  }
+  syncInputIntentControls();
   updateRuntimeControls();
+});
+
+document.querySelectorAll('input[name="inputIntent"]').forEach((input) => {
+  input.addEventListener("change", (event) => {
+    state.inputIntent = normalizeInputIntent(event.target.value);
+    syncInputIntentControls();
+    if (state.inputIntent === "multi-problem") {
+      writeAiFallbackForm(aiFallbackForInputIntent(state.inputIntent, readAiFallbackForm()));
+      syncAiFallbackControls();
+    }
+    updateRuntimeControls();
+    setRunStatus(`${inputIntentLabel(state.inputIntent)} 입력 형태로 설정했습니다.`, "neutral");
+  });
 });
 
 [
@@ -1821,6 +2085,49 @@ const sourceFileInput = document.getElementById("sourceFileInput");
 const cameraFileInput = document.getElementById("cameraFileInput");
 const sourceDropzone = document.getElementById("sourceDropzone");
 
+function isEditablePasteTarget(target) {
+  const tagName = String(target?.tagName || "").toUpperCase();
+  return tagName === "INPUT" || tagName === "TEXTAREA" || Boolean(target?.isContentEditable);
+}
+
+function collectClipboardSourceFiles(clipboardData) {
+  if (!clipboardData) {
+    return [];
+  }
+
+  const itemFiles = Array.from(clipboardData.items || [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  const rawFiles = itemFiles.length ? itemFiles : Array.from(clipboardData.files || []);
+  return rawFiles
+    .map((file, index) => normalizeClipboardFile(file, index))
+    .filter(isSupportedSourceFile);
+}
+
+async function handleDocumentPaste(event) {
+  const clipboardData = event.clipboardData;
+  const files = collectClipboardSourceFiles(clipboardData);
+  if (files.length) {
+    event.preventDefault();
+    const addedCount = updateQueuedFiles(files, { replace: false });
+    if (addedCount) {
+      setRunStatus(`${addedCount}개 클립보드 파일을 업로드 큐에 추가했습니다.`, "neutral");
+      await maybeAutoRun();
+    }
+    return;
+  }
+
+  const text = clipboardData?.getData("text/plain") || "";
+  if (!text.trim() || isEditablePasteTarget(event.target)) {
+    return;
+  }
+
+  event.preventDefault();
+  writePastedText(text.trim());
+  setRunStatus("클립보드 텍스트를 붙여넣었습니다. 사진/PDF와 함께 참고 메모로 전송됩니다.", "neutral");
+}
+
 document.getElementById("openCameraButton").addEventListener("click", () => {
   cameraFileInput.click();
 });
@@ -1843,15 +2150,37 @@ document.getElementById("autoParseToggle").addEventListener("change", (event) =>
   updateRuntimeControls();
 });
 
+document.getElementById("pastedTextInput")?.addEventListener("input", (event) => {
+  state.pastedText = event.target.value.trim();
+  updateRuntimeControls();
+});
+
+document.getElementById("focusPasteTextButton")?.addEventListener("click", () => {
+  const input = document.getElementById("pastedTextInput");
+  input?.focus();
+  input?.select();
+});
+
+document.getElementById("clearPastedTextButton")?.addEventListener("click", clearPastedText);
+document.addEventListener("paste", (event) => {
+  handleDocumentPaste(event);
+});
+
 sourceFileInput.addEventListener("change", async (event) => {
-  updateQueuedFiles(event.target.files, { replace: false });
+  const addedCount = updateQueuedFiles(event.target.files, { replace: false });
   event.target.value = "";
+  if (addedCount) {
+    setRunStatus(`${addedCount}개 파일을 업로드 큐에 추가했습니다.`, "neutral");
+  }
   await maybeAutoRun();
 });
 
 cameraFileInput.addEventListener("change", async (event) => {
-  updateQueuedFiles(event.target.files, { replace: false });
+  const addedCount = updateQueuedFiles(event.target.files, { replace: false });
   event.target.value = "";
+  if (addedCount) {
+    setRunStatus(`${addedCount}개 카메라 파일을 업로드 큐에 추가했습니다.`, "neutral");
+  }
   await maybeAutoRun();
 });
 
@@ -1872,7 +2201,10 @@ sourceDropzone.addEventListener("dragleave", () => {
 sourceDropzone.addEventListener("drop", async (event) => {
   event.preventDefault();
   sourceDropzone.classList.remove("is-drag-over");
-  updateQueuedFiles(event.dataTransfer?.files, { replace: false });
+  const addedCount = updateQueuedFiles(event.dataTransfer?.files, { replace: false });
+  if (addedCount) {
+    setRunStatus(`${addedCount}개 파일을 업로드 큐에 추가했습니다.`, "neutral");
+  }
   await maybeAutoRun();
 });
 
@@ -1887,6 +2219,8 @@ document.addEventListener("keydown", (event) => {
 async function initializeRuntimeConnection() {
   writeAiFallbackForm(state.session.aiFallback);
   syncAiFallbackControls();
+  syncInputIntentControls();
+  writePastedText(state.pastedText);
   syncTemplateSelect();
   render();
   await probeApi();

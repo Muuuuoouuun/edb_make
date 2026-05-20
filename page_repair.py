@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, replace
@@ -16,7 +17,7 @@ from assemble_page import detect_choice_block, detect_problem_start, group_probl
 from pipeline_cache import PipelineCache
 from pipeline_router import decide_page_route
 from preprocess import PreparedPage
-from structured_schema import BlockType, ContentBlock, PageModel
+from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit
 
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -171,6 +172,10 @@ def repair_page_model(
         repair_payload, response_id = cached_repair
         validation_error = _validate_repair_payload(repair_payload, baseline.blocks)
         if validation_error is None:
+            problem_unit_metadata, problem_unit_warnings = _extract_problem_unit_metadata(
+                repair_payload,
+                baseline.blocks,
+            )
             repaired = _apply_repair_payload(
                 baseline,
                 repair_payload,
@@ -185,12 +190,15 @@ def repair_page_model(
                     "response_id": response_id,
                     "repaired_problem_count": len(repaired.problems),
                     "ai_notes": list(repair_payload.get("notes") or []),
+                    "problem_units_accepted": len(problem_unit_metadata),
                 }
             )
+            if problem_unit_warnings:
+                summary["problem_units_warnings"] = problem_unit_warnings
             repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
             repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
             repaired.metadata["ai_fallback"] = summary
-            _annotate_problem_metadata(repaired, trigger_reasons)
+            _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
             return repaired
 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -226,6 +234,10 @@ def repair_page_model(
         baseline.metadata["ai_fallback"] = summary
         return baseline
 
+    problem_unit_metadata, problem_unit_warnings = _extract_problem_unit_metadata(
+        repair_payload,
+        baseline.blocks,
+    )
     repaired = _apply_repair_payload(
         baseline,
         repair_payload,
@@ -249,12 +261,15 @@ def repair_page_model(
             "response_id": response_id,
             "repaired_problem_count": len(repaired.problems),
             "ai_notes": list(repair_payload.get("notes") or []),
+            "problem_units_accepted": len(problem_unit_metadata),
         }
     )
+    if problem_unit_warnings:
+        summary["problem_units_warnings"] = problem_unit_warnings
     repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
     repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
     repaired.metadata["ai_fallback"] = summary
-    _annotate_problem_metadata(repaired, trigger_reasons)
+    _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
     _maybe_write_debug_artifacts(
         prepared_page=prepared_page,
         page=repaired,
@@ -443,6 +458,48 @@ def _repair_schema() -> dict[str, Any]:
                     "required": ["block_id", "title"],
                 },
             },
+            "problem_units": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "unit_id": {"type": "string"},
+                        "problem_start_block_id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "stem_block_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "choice_block_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "explanation_block_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "figure_block_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "bbox_px": {
+                            "type": "object",
+                            "properties": {
+                                "left": {"type": "number"},
+                                "top": {"type": "number"},
+                                "width": {"type": "number"},
+                                "height": {"type": "number"},
+                            },
+                            "required": ["left", "top", "width", "height"],
+                        },
+                        "review_flags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["problem_start_block_id", "bbox_px", "review_flags"],
+                },
+            },
             "notes": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -509,6 +566,10 @@ def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
             "  - figure_block_ids: image, diagram, graph, or table content blocks.",
             "  - If the page contains a single question, return only its first block as a problem start.",
             "  - Prefer minimal reassignment—only reclassify when clearly wrong.",
+            "  - Optional problem_units: include only when confident. This is advisory metadata;",
+            "    keep the block-id arrays above authoritative. Each unit must use a problem_start_block_id",
+            "    from problem_start_block_ids, bbox_px in page pixels covering that full problem, and",
+            "    review_flags such as needs_human_review, uncertain_bbox, split_choice_block, or merged_problem.",
             f"  - Trigger reasons: {', '.join(trigger_reasons)}",
             "",
             "Blocks (JSON, reading order top→bottom):",
@@ -577,6 +638,146 @@ def _validate_repair_payload(payload: dict[str, Any], blocks: list[ContentBlock]
     return None
 
 
+def _extract_problem_unit_metadata(
+    payload: dict[str, Any],
+    blocks: list[ContentBlock],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    raw_units = payload.get("problem_units")
+    if raw_units is None:
+        return [], []
+    if not isinstance(raw_units, list):
+        return [], ["problem_units ignored: expected array"]
+
+    known_ids = {block.block_id for block in blocks}
+    problem_start_ids = set(payload.get("problem_start_block_ids") or [])
+    units: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for index, raw_unit in enumerate(raw_units, start=1):
+        if not isinstance(raw_unit, dict):
+            warnings.append(f"problem_units[{index}] ignored: expected object")
+            continue
+
+        unit: dict[str, Any] = {"source_index": index}
+        start_id = _clean_optional_string(raw_unit.get("problem_start_block_id"))
+        if start_id:
+            if start_id not in known_ids:
+                warnings.append(f"problem_units[{index}] ignored unknown problem_start_block_id")
+                continue
+            if problem_start_ids and start_id not in problem_start_ids:
+                warnings.append(f"problem_units[{index}] problem_start_block_id not in start ids")
+            unit["problem_start_block_id"] = start_id
+
+        unit_id = _clean_optional_string(raw_unit.get("unit_id"))
+        if unit_id:
+            unit["unit_id"] = unit_id
+
+        title = _clean_optional_string(raw_unit.get("title"))
+        if title:
+            unit["title"] = title
+
+        referenced_block_ids: list[str] = []
+        for key in (
+            "stem_block_ids",
+            "choice_block_ids",
+            "explanation_block_ids",
+            "figure_block_ids",
+        ):
+            block_ids, block_warnings = _clean_problem_unit_block_ids(raw_unit.get(key), known_ids)
+            if block_warnings:
+                warnings.extend(f"problem_units[{index}] {warning}" for warning in block_warnings)
+            if block_ids:
+                unit[key] = block_ids
+                referenced_block_ids.extend(block_ids)
+
+        bbox_px = _clean_bbox_px(raw_unit.get("bbox_px"))
+        if bbox_px is not None:
+            unit["bbox_px"] = bbox_px
+        elif "bbox_px" in raw_unit:
+            warnings.append(f"problem_units[{index}] bbox_px ignored: expected finite positive pixel box")
+
+        review_flags, flag_warnings = _clean_review_flags(raw_unit.get("review_flags"))
+        if flag_warnings:
+            warnings.extend(f"problem_units[{index}] {warning}" for warning in flag_warnings)
+        if "review_flags" in raw_unit or review_flags:
+            unit["review_flags"] = review_flags
+
+        unit["referenced_block_ids"] = list(dict.fromkeys(referenced_block_ids))
+        if any(key in unit for key in ("bbox_px", "review_flags", "unit_id", "title")):
+            units.append(unit)
+
+    return units, warnings[:10]
+
+
+def _clean_optional_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _clean_problem_unit_block_ids(value: Any, known_ids: set[str]) -> tuple[list[str], list[str]]:
+    if value is None:
+        return [], []
+    if not isinstance(value, list):
+        return [], ["block ids ignored: expected array"]
+
+    block_ids: list[str] = []
+    warnings: list[str] = []
+    for raw_id in value:
+        if not isinstance(raw_id, str):
+            warnings.append("non-string block id ignored")
+            continue
+        block_id = raw_id.strip()
+        if block_id not in known_ids:
+            warnings.append(f"unknown block id ignored: {block_id}")
+            continue
+        block_ids.append(block_id)
+    return list(dict.fromkeys(block_ids)), warnings
+
+
+def _clean_bbox_px(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+
+    cleaned: dict[str, float] = {}
+    for key in ("left", "top", "width", "height"):
+        raw_value = value.get(key)
+        if isinstance(raw_value, bool):
+            return None
+        try:
+            number = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        if key in {"width", "height"}:
+            if number <= 0:
+                return None
+        elif number < 0:
+            return None
+        cleaned[key] = round(number, 2)
+    return cleaned
+
+
+def _clean_review_flags(value: Any) -> tuple[list[str], list[str]]:
+    if value is None:
+        return [], []
+    if not isinstance(value, list):
+        return [], ["review_flags ignored: expected array"]
+
+    flags: list[str] = []
+    warnings: list[str] = []
+    for raw_flag in value:
+        if not isinstance(raw_flag, str):
+            warnings.append("non-string review flag ignored")
+            continue
+        flag = raw_flag.strip()
+        if flag:
+            flags.append(flag[:80])
+    return list(dict.fromkeys(flags)), warnings
+
+
 def _apply_repair_payload(
     page: PageModel,
     payload: dict[str, Any],
@@ -625,10 +826,67 @@ def _apply_repair_payload(
     return page
 
 
-def _annotate_problem_metadata(page: PageModel, trigger_reasons: list[str]) -> None:
-    for problem in page.problems:
+def _annotate_problem_metadata(
+    page: PageModel,
+    trigger_reasons: list[str],
+    problem_unit_metadata: list[dict[str, Any]] | None = None,
+) -> None:
+    used_problem_units: set[int] = set()
+    ai_units = problem_unit_metadata or []
+    for index, problem in enumerate(page.problems):
         problem.metadata["grouping_source"] = "ai_fallback"
         problem.metadata["grouping_reason"] = list(trigger_reasons)
+        unit_metadata = _match_problem_unit_metadata(problem, ai_units, used_problem_units, index)
+        if unit_metadata is None:
+            continue
+
+        public_metadata = {
+            key: value
+            for key, value in unit_metadata.items()
+            if key not in {"source_index", "referenced_block_ids"}
+        }
+        problem.metadata["ai_problem_unit"] = public_metadata
+        if "bbox_px" in public_metadata:
+            problem.metadata["bbox_px"] = public_metadata["bbox_px"]
+        if "review_flags" in public_metadata:
+            problem.metadata["review_flags"] = public_metadata["review_flags"]
+
+
+def _match_problem_unit_metadata(
+    problem: ProblemUnit,
+    units: list[dict[str, Any]],
+    used_units: set[int],
+    problem_index: int,
+) -> dict[str, Any] | None:
+    problem_block_ids = set(
+        [
+            *problem.stem_block_ids,
+            *problem.choice_block_ids,
+            *problem.explanation_block_ids,
+            *problem.figure_block_ids,
+        ]
+    )
+
+    for index, unit in enumerate(units):
+        if index in used_units:
+            continue
+        start_id = unit.get("problem_start_block_id")
+        if start_id and start_id in problem_block_ids:
+            used_units.add(index)
+            return unit
+
+    for index, unit in enumerate(units):
+        if index in used_units:
+            continue
+        referenced_ids = set(unit.get("referenced_block_ids") or [])
+        if referenced_ids and referenced_ids & problem_block_ids:
+            used_units.add(index)
+            return unit
+
+    if problem_index < len(units) and problem_index not in used_units:
+        used_units.add(problem_index)
+        return units[problem_index]
+    return None
 
 
 def _maybe_write_debug_artifacts(

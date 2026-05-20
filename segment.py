@@ -1206,6 +1206,14 @@ def segment_page(
 
     board_region = _detect_board_region(image, resolved_options)
     candidates = _find_candidate_boxes(image, board_region, resolved_options)
+    candidate_fallback_full_region = (
+        len(candidates) == 1
+        and abs(candidates[0][0].left - board_region.left) < 1.0
+        and abs(candidates[0][0].top - board_region.top) < 1.0
+        and abs(candidates[0][0].width - board_region.width) < 1.0
+        and abs(candidates[0][0].height - board_region.height) < 1.0
+        and float(candidates[0][1]) >= 0.999
+    )
     candidate_count = len(candidates)
     expanded_candidates: list[tuple[Box, float]] = []
     split_applied = False
@@ -1233,11 +1241,14 @@ def segment_page(
             0.25,
         )
         block_type, metadata = _classify_geometry(image, box, board_region, fill_ratio)
+        block_metadata = {
+            **metadata,
+            "segmenter": "rule-based",
+        }
+        if candidate_fallback_full_region:
+            block_metadata["fallback_reason"] = "candidate_detection_failed"
         metadata = _enrich_block_segmentation_metadata(
-            {
-                **metadata,
-                "segmenter": "rule-based",
-            },
+            block_metadata,
             segmentation_mode=SEGMENTATION_MODE_BOARD,
             block_area=box.area,
             page_area=page_area,
@@ -1301,6 +1312,11 @@ def segment_page(
             "expanded_candidate_count": expanded_candidate_count,
             "merged_candidate_count": merged_candidate_count,
             "split_applied": split_applied,
+            **(
+                {"fallback_reason": "candidate_detection_failed"}
+                if candidate_fallback_full_region
+                else {}
+            ),
         },
     )
 

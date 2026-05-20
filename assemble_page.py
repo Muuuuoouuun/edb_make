@@ -479,6 +479,14 @@ def group_problem_units(page: PageModel) -> PageModel:
     classified_blocks = [classify_block(block) for block in relabeled.blocks]
     classified_blocks = fill_choice_gaps(classified_blocks)
     block_diagnostics = [_block_grouping_diagnostics(block) for block in classified_blocks]
+    for block, diagnostic in zip(classified_blocks, block_diagnostics):
+        block.metadata["problem_marker"] = bool(diagnostic.get("problem_marker"))
+        block.metadata["choice_marker"] = bool(diagnostic.get("choice_marker"))
+        block.metadata["marker_conflict"] = bool(diagnostic.get("marker_conflict"))
+        if diagnostic.get("problem_number") is not None:
+            block.metadata["problem_number"] = diagnostic["problem_number"]
+        if diagnostic.get("problem_number_source"):
+            block.metadata["problem_number_source"] = diagnostic["problem_number_source"]
     has_text_markers = any(detect_problem_start(block) for block in classified_blocks)
     has_band_metadata = any("question_band_index" in block.metadata for block in classified_blocks)
     fallback_grouping = not has_text_markers and (has_band_metadata or len(classified_blocks) > 1)

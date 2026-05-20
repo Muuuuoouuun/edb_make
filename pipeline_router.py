@@ -129,7 +129,10 @@ def decide_page_route(
 
 
 def _collect_segmentation_diagnostics(page: PageModel) -> dict[str, Any]:
-    metadata = dict(page.metadata.get("segmentation_diagnostics") or {})
+    # Older segmenters write diagnostics directly into page.metadata, while
+    # newer callers may nest them under "segmentation_diagnostics". Read both
+    # shapes so routing does not silently under-score bad segmentation.
+    metadata = dict(page.metadata.get("segmentation_diagnostics") or page.metadata or {})
     fallback_reasons = []
     if metadata.get("fallback_reason"):
         fallback_reasons.append(str(metadata["fallback_reason"]))
@@ -197,6 +200,12 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
 
 def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
     metadata = dict(page.metadata.get("grouping_diagnostics") or {})
+    marker_counts = metadata.get("marker_counts")
+    if not isinstance(marker_counts, dict):
+        marker_counts = {}
+    fallback_stats = metadata.get("fallback_grouping_stats")
+    if not isinstance(fallback_stats, dict):
+        fallback_stats = {}
     problem_marker_count = sum(1 for block in page.blocks if block.metadata.get("problem_marker"))
     choice_marker_count = sum(1 for block in page.blocks if block.metadata.get("choice_marker"))
     marker_conflict_count = sum(1 for block in page.blocks if block.metadata.get("marker_conflict"))
@@ -216,10 +225,29 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
         "grouping_mode": metadata.get("grouping_mode") or "default",
         "problem_count": len(page.problems),
         "block_count": len(page.blocks),
-        "problem_marker_count": int(metadata.get("problem_marker_count") or problem_marker_count),
-        "choice_marker_count": int(metadata.get("choice_marker_count") or choice_marker_count),
-        "marker_conflict_count": int(metadata.get("marker_conflict_count") or marker_conflict_count),
-        "fallback_grouping_problem_count": int(metadata.get("fallback_grouping_problem_count") or fallback_grouping_problem_count),
+        "problem_marker_count": int(
+            metadata.get("problem_marker_count")
+            or marker_counts.get("problem_marker_block_count")
+            or marker_counts.get("problem_marker")
+            or problem_marker_count
+        ),
+        "choice_marker_count": int(
+            metadata.get("choice_marker_count")
+            or marker_counts.get("choice_marker_block_count")
+            or marker_counts.get("choice_marker")
+            or choice_marker_count
+        ),
+        "marker_conflict_count": int(
+            metadata.get("marker_conflict_count")
+            or marker_counts.get("marker_conflict_block_count")
+            or marker_counts.get("marker_conflict")
+            or marker_conflict_count
+        ),
+        "fallback_grouping_problem_count": int(
+            metadata.get("fallback_grouping_problem_count")
+            or fallback_stats.get("problem_count")
+            or fallback_grouping_problem_count
+        ),
         "problem_number_source_counts": metadata.get("problem_number_source_counts") or problem_number_source_counts,
         "excess_problem_marker_block_count": int(
             metadata.get("excess_problem_marker_block_count") or excess_marker_block_count_blocks

@@ -58,6 +58,7 @@ def load_env_local() -> None:
 load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
+INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 
 
 def app_root() -> Path:
@@ -147,7 +148,7 @@ def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "ai_fallback_enabled": _coerce_bool(_field("aiFallbackEnabled", "ai_fallback_enabled", "enabled"), default=False),
         "ai_fallback": _field("aiFallbackMode", "ai_fallback_mode", "mode"),
-        "ai_fallback_provider": str(_field("aiFallbackProvider", "ai_fallback_provider", "provider", default="openai")),
+        "ai_fallback_provider": str(_field("aiFallbackProvider", "ai_fallback_provider", "provider", default="gemini")),
         "ai_fallback_model": str(_field("aiFallbackModel", "ai_fallback_model", "model", default="")),
         "ai_fallback_prompt": str(_field("aiFallbackPrompt", "ai_fallback_prompt", "prompt", default="")),
         "ai_fallback_max_tokens": _coerce_optional_int(_field("aiFallbackMaxTokens", "ai_fallback_max_tokens", "maxTokens", "max_tokens")),
@@ -158,6 +159,21 @@ def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
         "ai_fallback_save_debug": _coerce_bool(_field("aiFallbackSaveDebug", "ai_fallback_save_debug", "saveDebug", "save_debug"), default=False),
         "fail_on_ai_error": _coerce_bool(_field("failOnAiError", "fail_on_ai_error"), default=False),
     }
+
+
+def _extract_input_intent(payload: dict[str, Any]) -> str:
+    raw = payload.get("inputIntent") or payload.get("input_intent") or "auto"
+    normalized = str(raw).strip().lower().replace("_", "-")
+    return normalized if normalized in INPUT_INTENTS else "auto"
+
+
+def _extract_input_notes(payload: dict[str, Any]) -> str:
+    raw = payload.get("inputNotes")
+    if raw is None:
+        raw = payload.get("input_notes")
+    if raw is None:
+        raw = payload.get("pastedText")
+    return str(raw or "").strip()
 
 
 def sanitize_output_dir_name(value: str | None) -> str:
@@ -827,6 +843,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             record_mode="image-only",
             ai_fallback_config=session.get("ai_fallback"),
             ai_summary=session.get("ai_summary"),
+            template=template,
         )
         # carry over user-facing labels so the rename doesn't get lost
         if session.get("session_name"):
@@ -1122,6 +1139,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             source_paths = self._resolve_source_paths(payload)
             output_dir = self._resolve_output_dir(payload, source_paths)
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
+            input_intent = _extract_input_intent(payload)
+            input_notes = _extract_input_notes(payload)
             common_kwargs = {
                 "output_dir": output_dir,
                 "subject_name": str(payload.get("subject") or "unknown"),
@@ -1146,6 +1165,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     source_paths[0] if len(source_paths) == 1 else source_paths,
                     record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "image-only"),
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
+                    input_intent=input_intent,
+                    input_notes=input_notes,
                     **common_kwargs,
                 )
         except Exception as exc:
@@ -1153,6 +1174,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         session = result["ui_session"]
+        session.setdefault("input_intent", input_intent)
+        if input_notes:
+            session["input_notes"] = input_notes
         self.app_server.remember_session(session)
         self._send_json(
             {

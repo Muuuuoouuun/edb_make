@@ -357,6 +357,51 @@ def build_pages(
     return prepared_pages, page_models
 
 
+def _force_single_problem_per_page(pages: list[PageModel], *, input_intent: str) -> list[PageModel]:
+    forced_pages: list[PageModel] = []
+    title_prefix = "페이지" if input_intent == "page-as-is" else "문항"
+
+    for index, page in enumerate(pages, start=1):
+        ordered_blocks = page.sorted_blocks()
+        block_ids = [block.block_id for block in ordered_blocks]
+        unit_metadata: dict[str, Any] = {
+            "grouping_source": "user_intent",
+            "grouping_reason": [input_intent],
+            "force_full_page_bounds": True,
+            "input_intent": input_intent,
+        }
+        if input_intent == "single-problem":
+            unit_metadata["problem_number"] = index
+            unit_metadata["problem_number_source"] = "user_intent"
+
+        forced_problem = ProblemUnit(
+            unit_id=f"{page.page_id}-problem-1",
+            subject=page.subject,
+            title=f"{title_prefix} {index}",
+            stem_block_ids=block_ids,
+            metadata=unit_metadata,
+        )
+        page_metadata = dict(page.metadata)
+        page_metadata.pop("route_decision", None)
+        page_metadata["input_intent"] = input_intent
+        page_metadata["grouping_source"] = "user_intent"
+        page_metadata["grouping_mode"] = "single_page"
+        page_metadata["forced_single_problem"] = True
+        forced_pages.append(
+            PageModel(
+                page_id=page.page_id,
+                width_px=page.width_px,
+                height_px=page.height_px,
+                subject=page.subject,
+                source_path=page.source_path,
+                blocks=list(page.blocks),
+                problems=[forced_problem],
+                metadata=page_metadata,
+            )
+        )
+    return forced_pages
+
+
 def _iter_problem_block_ids_raw(problem: ProblemUnit) -> list[str]:
     """Like iter_problem_block_ids but without the page-level fallback —
     used for purely problem-owned blocks (for top-y bookkeeping)."""
@@ -558,14 +603,18 @@ def build_problem_entries(
                 problem_number = int(raw_problem_number)
             else:
                 problem_number = None
-            boxes = [block.bbox for block in blocks]
-            if not boxes:
-                boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
-            merged_box = merge_boxes(boxes, page_width=page.width_px, page_height=page.height_px)
-            has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
-            if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
-                merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
+            if problem.metadata.get("force_full_page_bounds"):
                 blocks = list(page.sorted_blocks())
+                merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
+            else:
+                boxes = [block.bbox for block in blocks]
+                if not boxes:
+                    boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
+                merged_box = merge_boxes(boxes, page_width=page.width_px, page_height=page.height_px)
+                has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
+                if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
+                    merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
+                    blocks = list(page.sorted_blocks())
 
             crop = prepared_page.image.crop(
                 (
@@ -639,7 +688,7 @@ def _build_ai_fallback_config(
     effective_enabled = resolved_mode != "off"
     if (
         not effective_enabled
-        and provider == "openai"
+        and provider in {"openai", "gemini"}
         and not model
         and not prompt
         and max_tokens is None
@@ -654,8 +703,8 @@ def _build_ai_fallback_config(
     return {
         "enabled": effective_enabled,
         "mode": resolved_mode,
-        "provider": provider,
-        "model": model or "gpt-5.4-mini",
+        "provider": provider or "gemini",
+        "model": model or "gemini-2.5-pro",
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -672,8 +721,8 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         return build_page_ai_fallback_config()
     return build_page_ai_fallback_config(
         mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
-        provider=str(ai_fallback_config.get("provider") or "openai"),
-        model=str(ai_fallback_config.get("model") or "gpt-5.4-mini"),
+        provider=str(ai_fallback_config.get("provider") or "gemini"),
+        model=str(ai_fallback_config.get("model") or ""),
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 18),
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
@@ -781,7 +830,13 @@ def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
     }
 
 
-GENERIC_PROBLEM_TITLE_RE = re.compile(r"^\s*臾명빆\s*\d+(?:\s*[쨌:\-].*)?$")
+GENERIC_PROBLEM_TITLE_RE = re.compile(r"^\s*(?:문항|문제|臾명빆)\s*\d+(?:\s*[·쨌:\-].*)?$")
+INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
+
+
+def _normalize_input_intent(value: str | None) -> str:
+    normalized = (value or "auto").strip().lower().replace("_", "-")
+    return normalized if normalized in INPUT_INTENTS else "auto"
 
 
 def _normalize_problem_title(title: str | None, index: int, source_page_id: str, problem_number: int | None = None) -> str:
@@ -789,8 +844,8 @@ def _normalize_problem_title(title: str | None, index: int, source_page_id: str,
     if raw and "problem" not in raw.lower() and not GENERIC_PROBLEM_TITLE_RE.match(raw):
         return raw
     if isinstance(problem_number, int) and problem_number > 0:
-        return f"臾명빆 {problem_number}"
-    return f"臾명빆 {index + 1:02d} 쨌 {source_page_id}"
+        return f"문항 {problem_number}"
+    return f"문항 {index + 1:02d} · {source_page_id}"
 
 
 def recrop_problem(
@@ -841,11 +896,22 @@ def build_ui_session(
     ai_fallback_config: dict[str, Any] | None = None,
     ai_summary: dict[str, Any] | None = None,
     pages: list[PageModel] | None = None,
+    template: LayoutTemplate | None = None,
+    input_intent: str = "auto",
+    input_notes: str | None = None,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
+    resolved_input_intent = _normalize_input_intent(input_intent)
     warning_messages: list[str] = []
-    if placements and len(placements) <= len(prepared_pages):
-        warning_messages.append("臾명빆 遺꾨━媛 異⑸텇?섏? ?딆븘 ?섏씠吏 ?⑥쐞??媛源앷쾶 臾띠씤 ??ぉ???덉뒿?덈떎.")
+    if placements and len(placements) <= len(prepared_pages) and resolved_input_intent not in {"single-problem", "page-as-is"}:
+        warning_messages.append(
+            "감지된 문항 수가 원본 페이지 수와 비슷합니다. 여러 문제가 있는 페이지라면 검수 화면에서 분리 상태를 확인해 주세요."
+        )
+    resolved_template = template or LayoutTemplate(
+        name="academy-default",
+        board_page_count=max(50, len(placements) * 2 or 50),
+        base_slot_height_pages=1.2,
+    )
 
     # Map page_id → PageModel for risk-flag lookup, and page_id → list[problem_id]
     # so the UI can group detected problems by their source page in the review view.
@@ -931,6 +997,8 @@ def build_ui_session(
         "data_source": "question_export",
         "output_dir": str(output_dir.resolve()),
         "source_mode": "batch" if len(source_paths) > 1 else "single",
+        "input_intent": resolved_input_intent,
+        "input_notes": (input_notes or "").strip(),
         "input_file_count": len(source_paths),
         "input_files": [str(Path(path).resolve()) for path in source_paths],
         "source_page_count": len(prepared_pages),
@@ -939,18 +1007,16 @@ def build_ui_session(
         "record_mode": record_mode,
         "pages_json_path": str((output_dir / "pages.json").resolve()),
         "placements_json_path": str((output_dir / "placements.json").resolve()),
-        "board_render_dir": str((output_dir / "board_renders").resolve()),
+        "board_render_dir": str(
+            Path(str(placements[0]["board_render_path"])).resolve().parent
+            if placements and placements[0].get("board_render_path")
+            else (output_dir / "problem_cutouts").resolve()
+        ),
         "edb_path": str(edb_path.resolve()) if edb_path else None,
         "edb_file_uri": _to_file_uri(edb_path),
         "rendered_page_paths": [str(path) for path in rendered_page_paths],
         "rendered_page_file_uris": [_to_file_uri(path) for path in rendered_page_paths],
-        "template": _template_to_dict(
-            LayoutTemplate(
-                name="academy-default",
-                board_page_count=max(50, len(placements) * 2 or 50),
-                base_slot_height_pages=1.2,
-            )
-        ),
+        "template": _template_to_dict(resolved_template),
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
         "warning_messages": warning_messages,
@@ -1461,9 +1527,11 @@ def run_problem_export(
     board_theme: str = DEFAULT_BOARD_THEME,
     sync_ui: bool = False,
     crop_format: str = DEFAULT_CROP_FORMAT,
+    input_intent: str = "auto",
+    input_notes: str | None = None,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
-    ai_fallback_provider: str = "openai",
+    ai_fallback_provider: str = "gemini",
     ai_fallback_model: str = "",
     ai_fallback_prompt: str = "",
     ai_fallback_max_tokens: int | None = None,
@@ -1484,6 +1552,7 @@ def run_problem_export(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(subject_name)
+    resolved_input_intent = _normalize_input_intent(input_intent)
     resolved_board_theme = _resolve_board_theme(board_theme)
     template = LayoutTemplate(name="academy-default")
     ai_fallback_config = _build_ai_fallback_config(
@@ -1517,6 +1586,9 @@ def run_problem_export(
         )
         prepared_pages.extend(prepared)
         pages.extend(page_models)
+
+    if resolved_input_intent in {"single-problem", "page-as-is"}:
+        pages = _force_single_problem_per_page(pages, input_intent=resolved_input_intent)
 
     save_pages_json(pages, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
@@ -1573,6 +1645,7 @@ def run_problem_export(
         "placements": placements,
         "ocr_backend_requested": ocr,
         "ocr_summary": ocr_summary,
+        "input_intent": resolved_input_intent,
     }
 
     placements_path = out_dir / "placements.json"
@@ -1603,6 +1676,9 @@ def run_problem_export(
         ai_fallback_config=ai_fallback_config,
         ai_summary=ai_summary,
         pages=pages,
+        template=template,
+        input_intent=resolved_input_intent,
+        input_notes=input_notes,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -1617,6 +1693,7 @@ def run_problem_export(
         "summary": summary,
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        "input_intent": resolved_input_intent,
     }
 
 
@@ -1635,6 +1712,7 @@ def main() -> int:
     parser.add_argument("--board-pages", type=int, default=50, help="Board page count hint")
     parser.add_argument("--slot-height", type=float, default=1.2, help="Base slot height in board pages")
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
+    parser.add_argument("--input-intent", choices=tuple(sorted(INPUT_INTENTS)), default="auto", help="How to treat uploaded source pages")
     parser.add_argument(
         "--crop-format",
         choices=(CROP_FORMAT_V1, CROP_FORMAT_V2),
@@ -1657,7 +1735,7 @@ def main() -> int:
     parser.add_argument("--debug-segments", action="store_true", help="Save block overlay images to <output-dir>/debug_segments/ for segmentation inspection")
     parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
     parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")
-    parser.add_argument("--ai-fallback-provider", default="openai", help="AI fallback provider name")
+    parser.add_argument("--ai-fallback-provider", default="gemini", help="AI fallback provider name")
     parser.add_argument("--ai-fallback-model", default="", help="AI fallback model name")
     parser.add_argument("--ai-fallback-prompt", default="", help="AI fallback prompt template")
     parser.add_argument("--ai-fallback-max-tokens", type=int, default=None, help="AI fallback max output tokens")
@@ -1667,7 +1745,11 @@ def main() -> int:
     parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
-    parser.add_argument("--prototype-data-out", default="ui_prototype\\prototype_data.js", help="Path to write UI prototype data JS")
+    parser.add_argument(
+        "--prototype-data-out",
+        default=str(Path("ui_prototype") / "prototype_data.js"),
+        help="Path to write UI prototype data JS",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1701,6 +1783,9 @@ def main() -> int:
         max_dimension=args.max_dimension,
         debug_segments_dir=debug_segments_dir,
     )
+    resolved_input_intent = _normalize_input_intent(args.input_intent)
+    if resolved_input_intent in {"single-problem", "page-as-is"}:
+        pages = _force_single_problem_per_page(pages, input_intent=resolved_input_intent)
     save_pages_json(pages, output_dir / "pages.json")
 
     template = LayoutTemplate(
@@ -1760,6 +1845,7 @@ def main() -> int:
         "placements": placements,
         "ocr_backend_requested": args.ocr,
         "ocr_summary": ocr_summary,
+        "input_intent": resolved_input_intent,
     }
     summary_path = output_dir / "board_run_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

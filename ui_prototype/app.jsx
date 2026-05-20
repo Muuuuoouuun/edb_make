@@ -1140,6 +1140,38 @@ const AI_FALLBACK_ON = {
   saveDebug: false,
 };
 
+function hasReviewPages(session){
+  return Array.isArray(session?.pages) && session.pages.length > 0;
+}
+
+function sessionRiskCount(session){
+  const problemRiskCount = (session?.problems || []).filter(p => Array.isArray(p?.riskFlags) && p.riskFlags.length > 0).length;
+  const pageRiskCount = (session?.pages || []).filter(page => {
+    const flags = page?.riskFlags || page?.risk_flags || [];
+    return Array.isArray(flags) && flags.length > 0;
+  }).length;
+  const warningCount = Array.isArray(session?.warning_messages)
+    ? session.warning_messages.length
+    : Array.isArray(session?.warningMessages)
+      ? session.warningMessages.length
+      : 0;
+  return problemRiskCount + pageRiskCount + warningCount;
+}
+
+function shouldOpenReview(session){
+  if (!hasReviewPages(session)) return false;
+  const problemCount = Array.isArray(session?.problems) ? session.problems.length : 0;
+  return problemCount > 1 || sessionRiskCount(session) > 0;
+}
+
+function requestedInitialView(){
+  try {
+    return new URLSearchParams(window.location.search).get('view') === 'review' ? 'review' : 'board';
+  } catch (_err) {
+    return 'board';
+  }
+}
+
 async function postExport(files, aiFallback){
   const filesPayload = await Promise.all(files.map(async (f) => ({
     fileName: f.name,
@@ -1151,6 +1183,10 @@ async function postExport(files, aiFallback){
     body: JSON.stringify({
       files: filesPayload,
       exportMode: 'question',
+      inputIntent: 'auto',
+      input_intent: 'auto',
+      sourceMode: 'auto',
+      source_mode: 'auto',
       subject: 'unknown',
       ocr: 'auto',
       exportEdb: true,
@@ -1249,7 +1285,9 @@ function App(){
   const [userSettings, setUserSettings] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [view, setView] = useState('board');
+  const initialViewRef = useRef(requestedInitialView());
+  const initialViewConsumedRef = useRef(false);
+  const [view, setView] = useState(initialViewRef.current);
   const [mutating, setMutating] = useState(false);
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
@@ -1284,6 +1322,11 @@ function App(){
     setUsingMock(false);
     setPublished(false);
     if (rawSession.session_name) setFileName(rawSession.session_name);
+    const wantsReview = (!initialViewConsumedRef.current && initialViewRef.current === 'review') || shouldOpenReview(rawSession);
+    if (hasReviewPages(rawSession) && wantsReview) {
+      setView('review');
+      initialViewConsumedRef.current = true;
+    }
     return true;
   }, []);
 
