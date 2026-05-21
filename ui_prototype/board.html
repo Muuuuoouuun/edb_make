@@ -438,6 +438,9 @@
     overflow: hidden;
     text-align: left;
     z-index: 2;
+    user-select: none;
+    touch-action: none;
+    will-change: left, transform;
   }
   .stage-tile:hover{
     transform: translateY(-1px);
@@ -452,6 +455,13 @@
   .stage-tile.dragging{
     opacity: .35;
     cursor: grabbing;
+  }
+  .stage-tile.positioning{
+    cursor: grabbing;
+    border-color: rgba(246,211,101,.55);
+    box-shadow:
+      0 0 0 1px rgba(246,211,101,.45),
+      0 0 24px rgba(246,211,101,.18);
   }
   .stage-tile.drop-target{
     border-color: var(--chalk-blue);

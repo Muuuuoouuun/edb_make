@@ -33,6 +33,12 @@ const HEIGHT_BY_KIND = {
 };
 const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
+const DEFAULT_PLACEMENT_X_RATIO = 0;
+
+function normalizePlacementXRatio(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_X_RATIO;
+}
 
 const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
   const kind = SAMPLE_KINDS[i % SAMPLE_KINDS.length];
@@ -44,8 +50,11 @@ const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
     kind,
     step: SAMPLE_STEPS[i % SAMPLE_STEPS.length],
     heightFrac: heightForKind(kind),
+    placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
   };
 });
+
+const freshInitialItems = () => INITIAL_ITEMS.map(item => ({ ...item }));
 
 // ─── icons ────────────────────────────────────────────────────────────────
 // smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
@@ -72,6 +81,7 @@ const Icon = {
   crop:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 2v15h15M2 7h15v15"/></svg>,
   rotate: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0114.5-7.2M21 4v5h-5"/></svg>,
   wand:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4l1.5 3L20 8.5 16.5 10 15 13l-1.5-3L10 8.5 13.5 7 15 4zM5 19l8-8M5 19l1.5-1.5"/></svg>,
+  aiBatch:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="4" width="7" height="5.5" rx="1.2"/><rect x="3.5" y="14.5" width="7" height="5.5" rx="1.2"/><path d="M13 12h5.7M16.4 8.8L19.6 12l-3.2 3.2"/><path d="M15.2 4.2l.7 1.5 1.6.7-1.6.7-.7 1.5-.7-1.5-1.6-.7 1.6-.7.7-1.5z" fill="currentColor" stroke="none"/><text x="14.2" y="20.3" fill="currentColor" stroke="none" fontSize="5.2" fontWeight="800" fontFamily="JetBrains Mono, monospace">AI</text></svg>,
   check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
   zoomIn: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>,
@@ -85,7 +95,7 @@ const Icon = {
 const stepLabel = s => s === 's1' ? '1단계' : s === 's2' ? '2단계 · AI' : '대기';
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, hasSession, view, setView, reviewAvailable, onUndo, canUndo }){
+function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo }){
   return (
     <div className="topbar">
       <div className="brand">
@@ -119,7 +129,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
         <span style={{marginLeft:4}}>{refreshing ? '불러오는 중…' : '새로고침'}</span>
       </button>
-      <button className="btn ghost" onClick={onReset} disabled={!hasSession} title="세션과 업로드 자료를 모두 비웁니다">
+      <button className="btn ghost" onClick={onReset} disabled={!canReset} title="세션 또는 예시 자료를 비웁니다">
         {Icon.reset}<span style={{marginLeft:4}}>초기화</span>
       </button>
       <button
@@ -526,7 +536,7 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
         <h2>자료</h2>
         <span className="count">{items.length}</span>
         <div className="spacer" />
-        <button className="icon-btn" title="모두 2단계로 변환" onClick={() => bulkApply('s2')}>{Icon.wand}</button>
+        <button className="icon-btn" title="전체를 2단계 AI 변환" onClick={() => bulkApply('s2')}>{Icon.aiBatch}</button>
         <button className="icon-btn" title="추가" onClick={addSample}>{Icon.upload}</button>
       </div>
 
@@ -614,20 +624,32 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
 }
 
 // ─── CENTER: big scrollable board stage (page-flow: 1 problem per page) ──
-function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, reorder }){
+function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, setPlacementX }){
   const scrollRef = useRef(null);
+  const contentRef = useRef(null);
   const tileRefs = useRef({});
   const syncLock = useRef(0);
-  const dragId = useRef(null);
-  const [overId, setOverId] = useState(null);
-  const [draggingId, setDraggingId] = useState(null);
+  const positionDragRef = useRef(null);
+  const suppressClickRef = useRef(null);
+  const [positioningId, setPositioningId] = useState(null);
   const [pageH, setPageH] = useState(400);
+  const [contentW, setContentW] = useState(0);
 
   // measure page (viewport) height
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const measure = () => setPageH(el.clientHeight || 400);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const measure = () => setContentW(el.clientWidth || 0);
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -704,8 +726,56 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   };
 
   const onTileClick = (id) => {
+    if (suppressClickRef.current === id) return;
     syncLock.current = Date.now();
     setActive(id);
+  };
+
+  const beginPositionDrag = (evt, item) => {
+    if (evt.button !== 0 || !contentRef.current) return;
+    const contentRect = contentRef.current.getBoundingClientRect();
+    const tileRect = evt.currentTarget.getBoundingClientRect();
+    const maxLeft = Math.max(1, contentRect.width - tileRect.width);
+    const startRatio = normalizePlacementXRatio(item.placementXRatio);
+    positionDragRef.current = {
+      id: item.id,
+      pointerId: evt.pointerId,
+      startX: evt.clientX,
+      startY: evt.clientY,
+      startLeft: startRatio * maxLeft,
+      maxLeft,
+      moved: false,
+    };
+    setPositioningId(item.id);
+    syncLock.current = Date.now();
+    setActive(item.id);
+    evt.currentTarget.setPointerCapture?.(evt.pointerId);
+  };
+
+  const movePositionDrag = (evt) => {
+    const drag = positionDragRef.current;
+    if (!drag || drag.pointerId !== evt.pointerId) return;
+    const dx = evt.clientX - drag.startX;
+    const dy = evt.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    evt.preventDefault();
+    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
+    setPlacementX?.(drag.id, nextLeft / drag.maxLeft);
+  };
+
+  const endPositionDrag = (evt) => {
+    const drag = positionDragRef.current;
+    if (!drag || drag.pointerId !== evt.pointerId) return;
+    if (drag.moved) {
+      suppressClickRef.current = drag.id;
+      window.setTimeout(() => {
+        if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
+      }, 0);
+    }
+    evt.currentTarget.releasePointerCapture?.(evt.pointerId);
+    positionDragRef.current = null;
+    setPositioningId(null);
   };
 
   const processedCount = items.filter(i => i.step !== 'raw').length;
@@ -739,6 +809,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
             <div className="stage-scroll" ref={scrollRef} onScroll={onScroll}>
               <div
                 className="stage-content"
+                ref={contentRef}
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
                 {/* page boundary dividers — scroll with content */}
@@ -751,41 +822,28 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                 {items.map((it, i) => {
                   const p = layout.positions[i];
                   if (!p) return null;
+                  const tileWidth = contentW > 0
+                    ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
+                    : null;
+                  const maxLeft = tileWidth ? Math.max(0, contentW - tileWidth) : 0;
+                  const xRatio = normalizePlacementXRatio(it.placementXRatio);
+                  const tileStyle = {
+                    top: p.top,
+                    height: p.height,
+                    ...(tileWidth ? { left: xRatio * maxLeft, width: tileWidth } : null),
+                  };
                   return (
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${draggingId === it.id ? 'dragging' : ''} ${overId === it.id ? 'drop-target' : ''}`}
+                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''}`}
                       onClick={() => onTileClick(it.id)}
                       title={it.name}
-                      style={{ top: p.top, height: p.height }}
-                      draggable
-                      onDragStart={e => {
-                        dragId.current = it.id;
-                        setDraggingId(it.id);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragOver={e => {
-                        e.preventDefault();
-                        if (dragId.current && dragId.current !== it.id) {
-                          setOverId(it.id);
-                        }
-                      }}
-                      onDragLeave={() => setOverId(prev => prev === it.id ? null : prev)}
-                      onDrop={e => {
-                        e.preventDefault();
-                        if (dragId.current && dragId.current !== it.id && reorder) {
-                          reorder(dragId.current, it.id);
-                        }
-                        dragId.current = null;
-                        setOverId(null);
-                        setDraggingId(null);
-                      }}
-                      onDragEnd={() => {
-                        dragId.current = null;
-                        setOverId(null);
-                        setDraggingId(null);
-                      }}
+                      style={tileStyle}
+                      onPointerDown={e => beginPositionDrag(e, it)}
+                      onPointerMove={movePositionDrag}
+                      onPointerUp={endPositionDrag}
+                      onPointerCancel={endPositionDrag}
                     >
                       <div className="tile-hd">
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
@@ -1066,7 +1124,7 @@ function SidePanel({
             <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
 
             <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 전체를 AI 변환</span>
+              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 AI 변환</span>
               <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
             </button>
             <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
@@ -1269,6 +1327,7 @@ function mapProblemToItem(problem, idx){
     overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
     overflowViolation: Boolean(problem.overflowViolation),
     slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
+    placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
   };
 }
 
@@ -1510,7 +1569,7 @@ function App(){
     document.documentElement.style.setProperty('--board', t.boardColor);
   }, [t.dark, t.accent, t.boardColor]);
 
-  const [items, setItems] = useState(INITIAL_ITEMS);
+  const [items, setItems] = useState(() => freshInitialItems());
   const [activeId, setActiveId] = useState('i2');
   const [fileName, setFileName] = useState('6월 모의고사 오답풀이 — 6/12 (수)');
   const [bulk, setBulk] = useState(false);
@@ -1547,6 +1606,31 @@ function App(){
   const showToast = msg => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
+  };
+
+  const showMockItems = (message = '예시 문제를 표시했어요') => {
+    const mockItems = freshInitialItems();
+    setSession(null);
+    setItems(mockItems);
+    setActiveId(mockItems[0]?.id || null);
+    setUsingMock(true);
+    setPublished(false);
+    setFileName('새 세션');
+    setHistoryStack([]);
+    setView('board');
+    showToast(message);
+  };
+
+  const hideMockItems = (message = '예시 문제를 숨겼어요') => {
+    setSession(null);
+    setItems([]);
+    setActiveId(null);
+    setUsingMock(true);
+    setPublished(false);
+    setFileName('새 세션');
+    setHistoryStack([]);
+    setView('board');
+    showToast(message);
   };
 
   const applySession = useCallback((rawSession) => {
@@ -1749,20 +1833,18 @@ function App(){
   }, []);
 
   const resetSession = useCallback(async () => {
+    if (!session && usingMock && items.length > 0) {
+      hideMockItems();
+      return;
+    }
     if (!window.confirm('세션을 초기화할까요? 업로드한 자료가 모두 보드에서 사라집니다.')) return;
     try {
       await clearSession();
-      setSession(null);
-      setItems(INITIAL_ITEMS);
-      setActiveId(INITIAL_ITEMS[0]?.id || null);
-      setUsingMock(true);
-      setPublished(false);
-      setFileName('새 세션');
-      showToast('초기화 완료');
+      showMockItems('초기화 완료 · 예시 문제 표시');
     } catch (e) {
       showToast('초기화 실패: ' + e.message);
     }
-  }, []);
+  }, [session, usingMock, items.length]);
 
   const refreshSession = useCallback(async () => {
     setRefreshing(true);
@@ -1772,20 +1854,19 @@ function App(){
         applySession(s);
         showToast(`새로고침 완료 · ${s.problems.length}개 문항`);
       } else {
-        // backend cleared the session — fall back to mock items
-        setSession(null);
-        setItems(INITIAL_ITEMS);
-        setActiveId(INITIAL_ITEMS[0]?.id || null);
-        setUsingMock(true);
-        setPublished(false);
-        showToast('저장된 세션이 없습니다');
+        // No backend session: refresh toggles the example set on/off.
+        if (usingMock && items.length > 0) {
+          hideMockItems('저장된 세션 없음 · 예시 문제 숨김');
+        } else {
+          showMockItems('저장된 세션 없음 · 예시 문제 표시');
+        }
       }
     } catch (e) {
       showToast('새로고침 실패: ' + e.message);
     } finally {
       setRefreshing(false);
     }
-  }, [applySession]);
+  }, [applySession, usingMock, items.length]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -1827,6 +1908,11 @@ function App(){
     setItems(it => it.map(x => ({ ...x, step })));
     showToast(`전체 ${items.length}개 항목에 ${step === 's1' ? '1단계' : '2단계 AI 변환'}을(를) 적용했어요`);
   };
+  const setPlacementX = (id, ratio) => {
+    const nextRatio = normalizePlacementXRatio(ratio);
+    setItems(it => it.map(x => x.id === id ? { ...x, placementXRatio: nextRatio } : x));
+    setPublished(false);
+  };
   const reorder = (fromId, toId) => {
     setItems(it => {
       const a = it.findIndex(x => x.id === fromId);
@@ -1851,7 +1937,7 @@ function App(){
     const kind = pool[Math.floor(Math.random() * pool.length)];
     const id = 'i' + (Date.now() % 100000);
     const name = '새 자료 ' + (items.length + 1);
-    setItems(it => [...it, { id, name, source: '방금 업로드', type: 'image', kind, step: 'raw', heightFrac: heightForKind(kind) }]);
+    setItems(it => [...it, { id, name, source: '방금 업로드', type: 'image', kind, step: 'raw', heightFrac: heightForKind(kind), placementXRatio: DEFAULT_PLACEMENT_X_RATIO }]);
     setActiveId(id);
     showToast('자료 1개 추가됨 (mock)');
   };
@@ -1877,6 +1963,11 @@ function App(){
     const currentIds = items.map(i => i.id);
     const order = currentIds.filter(id => sessionIds.has(id));
     const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
+    const placements = Object.fromEntries(
+      items
+        .filter(item => sessionIds.has(item.id))
+        .map(item => [item.id, { xRatio: normalizePlacementXRatio(item.placementXRatio) }])
+    );
     setLoading({
       label: '편집된 .edb 파일 생성 중...',
       hint: order.length === sessionIds.size
@@ -1888,7 +1979,7 @@ function App(){
       const resp = await fetch('/api/session/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order, excluded }),
+        body: JSON.stringify({ order, excluded, placements }),
       });
       const json = await resp.json();
       if (!resp.ok || !json.ok) throw new Error(json.error || `publish 실패 (${resp.status})`);
@@ -1924,7 +2015,7 @@ function App(){
         onReset={resetSession}
         onRefresh={refreshSession}
         refreshing={refreshing}
-        hasSession={!!session}
+        canReset={!!session || (usingMock && items.length > 0)}
         view={view}
         setView={setView}
         reviewAvailable={reviewAvailable}
@@ -1962,7 +2053,7 @@ function App(){
             boardColumns={t.boardColumns}
             fileName={fileName}
             addSample={addSample}
-            reorder={reorder}
+            setPlacementX={setPlacementX}
           />
         )}
         <SidePanel

@@ -129,6 +129,23 @@ def _coerce_optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _coerce_placement_x_ratio(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("xRatio", "placementXRatio", "placement_x_ratio"):
+            if value.get(key) is not None:
+                value = value.get(key)
+                break
+        else:
+            return None
+    try:
+        ratio = _coerce_optional_float(value)
+    except (TypeError, ValueError):
+        return None
+    if ratio is None:
+        return None
+    return max(0.0, min(1.0, ratio))
+
+
 def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
     nested = payload.get("aiFallback")
     if not isinstance(nested, dict):
@@ -325,6 +342,7 @@ def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
                 overflow_allowed=bool(problem.get("overflowAllowed", True)),
                 reading_heavy=bool(problem.get("readingHeavy", False)),
                 risk_flags=[str(flag) for flag in (problem.get("riskFlags") or []) if flag],
+                placement_x_ratio=_coerce_placement_x_ratio(problem),
             )
         )
     return entries
@@ -442,6 +460,7 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "recordMode": parent.get("recordMode"),
         "textRecordCount": parent.get("textRecordCount", 0),
         "imageRecordCount": parent.get("imageRecordCount", 1),
+        "placementXRatio": _coerce_placement_x_ratio(parent),
         "riskFlags": [],  # mutated entries lose the auto-detected risk
     }
     return skeleton
@@ -992,6 +1011,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
         order = list(payload.get("order") or [])
         excluded = set(payload.get("excluded") or [])
+        placement_payload = payload.get("placements")
+        if not isinstance(placement_payload, dict):
+            placement_payload = {}
 
         by_id = {p["id"]: p for p in session.get("problems", []) if isinstance(p, dict) and p.get("id")}
         sequence: list[dict[str, Any]] = []
@@ -1010,6 +1032,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "after exclusion nothing remains to publish"},
                             status=HTTPStatus.BAD_REQUEST)
             return
+
+        sequence_with_placements: list[dict[str, Any]] = []
+        for problem in sequence:
+            problem_copy = dict(problem)
+            problem_id = str(problem_copy.get("id") or "")
+            x_ratio = _coerce_placement_x_ratio(placement_payload.get(problem_id))
+            if x_ratio is None:
+                x_ratio = _coerce_placement_x_ratio(problem_copy)
+            if x_ratio is not None:
+                problem_copy["placementXRatio"] = x_ratio
+            sequence_with_placements.append(problem_copy)
+        sequence = sequence_with_placements
 
         try:
             entries = _problems_to_entries(sequence)
@@ -1104,6 +1138,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if "bbox" not in problem or not problem["bbox"]:
                 problem["bbox"] = prior.get("bbox") or {}
             problem["riskFlags"] = list(prior.get("riskFlags") or [])
+            if "placementXRatio" not in problem:
+                x_ratio = _coerce_placement_x_ratio(prior)
+                if x_ratio is not None:
+                    problem["placementXRatio"] = x_ratio
         self.app_server.remember_session(new_session)
         self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
 

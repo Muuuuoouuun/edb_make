@@ -76,6 +76,20 @@ BOARD_THEME_PALETTES: dict[str, dict[str, tuple[int, int, int]]] = {
 }
 
 
+def _clamp_placement_x_ratio(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return max(0.0, min(1.0, float(value)))
+
+
+def _problem_origin_x_px(entry: "ProblemEntry", rendered_width_px: float) -> float:
+    ratio = _clamp_placement_x_ratio(entry.placement_x_ratio)
+    if ratio is None:
+        return LEFT_MARGIN_PX
+    max_x_px = max(LEFT_MARGIN_PX, CANVAS_HEIGHT - RIGHT_PADDING_PX - rendered_width_px)
+    return LEFT_MARGIN_PX + ratio * (max_x_px - LEFT_MARGIN_PX)
+
+
 def _resolve_board_theme(board_theme: str | None) -> str:
     normalized = (board_theme or "").strip().lower()
     if normalized in BOARD_THEME_PALETTES:
@@ -279,6 +293,7 @@ class ProblemEntry:
     overflow_allowed: bool
     reading_heavy: bool
     risk_flags: list[str]
+    placement_x_ratio: float | None = None
 
 
 def resolve_subject(name: str | None) -> Subject:
@@ -1020,6 +1035,7 @@ def build_ui_session(
                 "overflowAmountPages": float(placement["overflow_amount_pages"]),
                 "overflowViolation": bool(placement["overflow_violation"]),
                 "slotSpanCount": int(placement["slot_span_count"]),
+                "placementXRatio": float(placement.get("placement_x_ratio") or 0.0),
                 "recordMode": str(placement.get("record_mode") or record_mode),
                 "textRecordCount": int(placement.get("text_record_count", 0)),
                 "imageRecordCount": int(placement.get("image_record_count", 0)),
@@ -1182,6 +1198,7 @@ def build_image_only_records(
     crop_format: str = DEFAULT_CROP_FORMAT,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
+    entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
     if crop_format == CROP_FORMAT_V2:
         # v2 displays every problem at a fixed pixel width on the board, so
         # the image is resized to V2_TARGET_IMAGE_WIDTH_PX before encoding
@@ -1198,6 +1215,7 @@ def build_image_only_records(
     next_record_id = 0
 
     for placement in placements:
+        entry = entries_by_problem_id[placement.problem_id]
         crop_path = Path(str(placement.metadata["crop_path"]))
         board_render_path = Path(str(placement.metadata["board_render_path"]))
         crop_image = Image.open(crop_path).convert("RGB")
@@ -1222,6 +1240,8 @@ def build_image_only_records(
             height_px = placement.actual_content_height_pages * CANVAS_WIDTH
             width_hint = normalize_width_px(available_width_px)
             height_hint = normalize_height_px(height_px, page_count_hint=template.board_page_count)
+        rendered_width_px = float(board_image.width) if crop_format == CROP_FORMAT_V2 else available_width_px
+        x_px = _problem_origin_x_px(entry, rendered_width_px)
         y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
         
         parent_record_id = next_record_id
@@ -1231,7 +1251,7 @@ def build_image_only_records(
                     record_id=parent_record_id,
                     image_primary=image_bytes,
                     image_secondary=secondary_bytes,
-                    x=normalize_x_px(LEFT_MARGIN_PX),
+                    x=normalize_x_px(x_px),
                     y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
                     width_hint=width_hint,
                     height_hint=height_hint,
@@ -1268,6 +1288,7 @@ def build_image_only_records(
                 "crop_format": crop_format,
                 "image_pixel_width": int(board_image.width),
                 "image_pixel_height": int(board_image.height),
+                "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
             }
         )
 
@@ -1297,7 +1318,7 @@ def build_mixed_records(
     for placement in placements:
         entry = entries_by_problem_id[placement.problem_id]
         scale = available_width_px / max(entry.bounds.width, 1.0)
-        problem_origin_x_px = LEFT_MARGIN_PX
+        problem_origin_x_px = _problem_origin_x_px(entry, available_width_px)
         problem_origin_y_px = placement.start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
         block_summaries: list[dict[str, object]] = []
         text_record_count = 0
@@ -1383,7 +1404,7 @@ def build_mixed_records(
                         record_id=next_record_id,
                         image_primary=image_bytes,
                         image_secondary=preview_bytes,
-                        x=normalize_x_px(LEFT_MARGIN_PX),
+                        x=normalize_x_px(problem_origin_x_px),
                         y=normalize_y_px(problem_origin_y_px, page_count_hint=template.board_page_count),
                         width_hint=normalize_width_px(available_width_px),
                         height_hint=normalize_height_px(
@@ -1425,6 +1446,7 @@ def build_mixed_records(
                 "text_record_count": text_record_count,
                 "image_record_count": image_record_count,
                 "board_theme": _resolve_board_theme(board_theme),
+                "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "blocks": block_summaries,
             }
         )
