@@ -33,11 +33,34 @@ const HEIGHT_BY_KIND = {
 };
 const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
+const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
 const DEFAULT_PLACEMENT_X_RATIO = 0;
+const DEFAULT_PLACEMENT_Y_RATIO = 0;
+const PLACEMENT_NUDGE_STEP = 0.04;
 
 function normalizePlacementXRatio(value){
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_X_RATIO;
+}
+
+function normalizePlacementYRatio(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_Y_RATIO;
+}
+
+function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.ceil((value - 0.001) / slotHeight) * slotHeight;
+}
+
+function verticalPlacementRoomPages(item){
+  if (!item) return 0;
+  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
+  const snappedNext = Number.isFinite(item.snappedNextStartYPages)
+    ? Math.max(startPages + heightPages, item.snappedNextStartYPages)
+    : snapUpPages(startPages + heightPages);
+  return Math.max(0, snappedNext - startPages - heightPages);
 }
 
 const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
@@ -51,6 +74,7 @@ const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
     step: SAMPLE_STEPS[i % SAMPLE_STEPS.length],
     heightFrac: heightForKind(kind),
     placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
+    placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
   };
 });
 
@@ -90,6 +114,10 @@ const Icon = {
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
+  arrowUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>,
+  arrowDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>,
+  arrowLeft:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>,
+  arrowRight:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>,
 };
 
 const stepLabel = s => s === 's1' ? '1단계' : s === 's2' ? '2단계 · AI' : '대기';
@@ -624,7 +652,7 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
 }
 
 // ─── CENTER: big scrollable board stage (page-flow: 1 problem per page) ──
-function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, setPlacementX }){
+function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, setPlacement }){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -662,18 +690,18 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     const EPS = 0.001;
     const positions = [];
     const usesPlacement = items.some(it => Number.isFinite(it.startYPages));
-    let cursor = 0;
+    let cursorPages = 0;
     let maxBottom = 0;
-    items.forEach((it, i) => {
+    items.forEach((it) => {
       const heightPages = Math.max(0.12, it.heightFrac || 0.8);
       const startPages = usesPlacement && Number.isFinite(it.startYPages)
         ? Math.max(0, it.startYPages)
-        : (i === 0 ? 0 : Math.ceil(cursor / pageH - EPS));
+        : cursorPages;
       const top = startPages * pageH;
       const height = heightPages * pageH;
       const snappedNext = Number.isFinite(it.snappedNextStartYPages)
         ? Math.max(startPages + heightPages, it.snappedNextStartYPages)
-        : startPages + heightPages;
+        : snapUpPages(startPages + heightPages);
       positions.push({
         top,
         height,
@@ -683,8 +711,8 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
         heightPages,
         snappedNext,
       });
-      cursor = top + height;
-      maxBottom = Math.max(maxBottom, snappedNext * pageH, cursor);
+      cursorPages = snappedNext;
+      maxBottom = Math.max(maxBottom, snappedNext * pageH, top + height);
     });
     const endTop = items.length === 0 ? 0 : Math.ceil(maxBottom / pageH - EPS) * pageH;
     const endH = pageH * 0.42;
@@ -731,19 +759,25 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     setActive(id);
   };
 
-  const beginPositionDrag = (evt, item) => {
+  const beginPositionDrag = (evt, item, placement) => {
     if (evt.button !== 0 || !contentRef.current) return;
     const contentRect = contentRef.current.getBoundingClientRect();
     const tileRect = evt.currentTarget.getBoundingClientRect();
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
-    const startRatio = normalizePlacementXRatio(item.placementXRatio);
+    const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - placement.height);
+    const startXRatio = normalizePlacementXRatio(item.placementXRatio);
+    const startYRatio = normalizePlacementYRatio(item.placementYRatio);
     positionDragRef.current = {
       id: item.id,
       pointerId: evt.pointerId,
       startX: evt.clientX,
       startY: evt.clientY,
-      startLeft: startRatio * maxLeft,
+      startLeft: startXRatio * maxLeft,
+      startTopOffset: startYRatio * maxTopOffset,
       maxLeft,
+      maxTopOffset,
+      lastXRatio: startXRatio,
+      lastYRatio: startYRatio,
       moved: false,
     };
     setPositioningId(item.id);
@@ -761,7 +795,21 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     drag.moved = true;
     evt.preventDefault();
     const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
-    setPlacementX?.(drag.id, nextLeft / drag.maxLeft);
+    const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
+    const nextXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
+    const nextYRatio = drag.maxTopOffset > 0 ? nextTopOffset / drag.maxTopOffset : DEFAULT_PLACEMENT_Y_RATIO;
+    if (
+      Math.abs(nextXRatio - drag.lastXRatio) < 0.002 &&
+      Math.abs(nextYRatio - drag.lastYRatio) < 0.002
+    ) {
+      return;
+    }
+    drag.lastXRatio = nextXRatio;
+    drag.lastYRatio = nextYRatio;
+    setPlacement?.(drag.id, {
+      xRatio: nextXRatio,
+      yRatio: nextYRatio,
+    });
   };
 
   const endPositionDrag = (evt) => {
@@ -826,9 +874,11 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                     ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
                     : null;
                   const maxLeft = tileWidth ? Math.max(0, contentW - tileWidth) : 0;
+                  const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - p.height);
                   const xRatio = normalizePlacementXRatio(it.placementXRatio);
+                  const yRatio = normalizePlacementYRatio(it.placementYRatio);
                   const tileStyle = {
-                    top: p.top,
+                    top: p.top + (yRatio * maxTopOffset),
                     height: p.height,
                     ...(tileWidth ? { left: xRatio * maxLeft, width: tileWidth } : null),
                   };
@@ -840,7 +890,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                       onClick={() => onTileClick(it.id)}
                       title={it.name}
                       style={tileStyle}
-                      onPointerDown={e => beginPositionDrag(e, it)}
+                      onPointerDown={e => beginPositionDrag(e, it, p)}
                       onPointerMove={movePositionDrag}
                       onPointerUp={endPositionDrag}
                       onPointerCancel={endPositionDrag}
@@ -913,6 +963,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
 function SidePanel({
   item, items, activeIndex,
   setStep, applyToAll, bulk, setBulk,
+  setPlacement,
   boardColumns, setBoardColumns,
   boardColor, setBoardColor,
   accent, setAccent,
@@ -946,6 +997,26 @@ function SidePanel({
   }, []);
 
   const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
+  const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
+  const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
+  const hasVerticalRoom = verticalPlacementRoomPages(item) > 0.001;
+  const updatePlacement = (patch) => {
+    if (!item) return;
+    setPlacement?.(item.id, patch);
+  };
+  const nudgePlacement = (dx, dy) => {
+    if (!item) return;
+    updatePlacement({
+      xRatio: placementX + dx,
+      yRatio: placementY + dy,
+    });
+  };
+  const resetPlacement = () => {
+    updatePlacement({
+      xRatio: DEFAULT_PLACEMENT_X_RATIO,
+      yRatio: DEFAULT_PLACEMENT_Y_RATIO,
+    });
+  };
 
   return (
     <div className="col right">
@@ -1008,6 +1079,72 @@ function SidePanel({
                     <button className="icon-btn" title="확대">{Icon.zoomIn}</button>
                     <div className="spacer" />
                     <span className="scale">100%</span>
+                  </div>
+                </div>
+
+                <div className="panel-section-hd">
+                  위치 미세 조절 <span className="line" />
+                </div>
+
+                <div className="position-control">
+                  <div className="position-pad" aria-label="선택 자료 위치 미세 조절">
+                    <button
+                      className="pos-btn up"
+                      type="button"
+                      title="위로"
+                      disabled={!hasVerticalRoom}
+                      onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}
+                    >{Icon.arrowUp}</button>
+                    <button
+                      className="pos-btn left"
+                      type="button"
+                      title="왼쪽으로"
+                      onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}
+                    >{Icon.arrowLeft}</button>
+                    <button
+                      className="pos-btn reset"
+                      type="button"
+                      title="위치 초기화"
+                      onClick={resetPlacement}
+                    >{Icon.reset}</button>
+                    <button
+                      className="pos-btn right"
+                      type="button"
+                      title="오른쪽으로"
+                      onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}
+                    >{Icon.arrowRight}</button>
+                    <button
+                      className="pos-btn down"
+                      type="button"
+                      title="아래로"
+                      disabled={!hasVerticalRoom}
+                      onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}
+                    >{Icon.arrowDown}</button>
+                  </div>
+                  <div className="position-sliders">
+                    <label>
+                      <span>좌우</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={Math.round(placementX * 100)}
+                        onChange={e => updatePlacement({ xRatio: Number(e.target.value) / 100 })}
+                      />
+                      <strong>{Math.round(placementX * 100)}%</strong>
+                    </label>
+                    <label>
+                      <span>상하</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={Math.round((hasVerticalRoom ? placementY : 0) * 100)}
+                        disabled={!hasVerticalRoom}
+                        onChange={e => updatePlacement({ yRatio: Number(e.target.value) / 100 })}
+                      />
+                      <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
+                    </label>
                   </div>
                 </div>
 
@@ -1328,6 +1465,7 @@ function mapProblemToItem(problem, idx){
     overflowViolation: Boolean(problem.overflowViolation),
     slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
+    placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
   };
 }
 
@@ -1908,9 +2046,19 @@ function App(){
     setItems(it => it.map(x => ({ ...x, step })));
     showToast(`전체 ${items.length}개 항목에 ${step === 's1' ? '1단계' : '2단계 AI 변환'}을(를) 적용했어요`);
   };
-  const setPlacementX = (id, ratio) => {
-    const nextRatio = normalizePlacementXRatio(ratio);
-    setItems(it => it.map(x => x.id === id ? { ...x, placementXRatio: nextRatio } : x));
+  const setPlacement = (id, patch) => {
+    setItems(it => it.map(x => {
+      if (x.id !== id) return x;
+      return {
+        ...x,
+        ...(Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')
+          ? { placementXRatio: normalizePlacementXRatio(patch.xRatio) }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')
+          ? { placementYRatio: verticalPlacementRoomPages(x) > 0.001 ? normalizePlacementYRatio(patch.yRatio) : DEFAULT_PLACEMENT_Y_RATIO }
+          : {}),
+      };
+    }));
     setPublished(false);
   };
   const reorder = (fromId, toId) => {
@@ -1937,7 +2085,17 @@ function App(){
     const kind = pool[Math.floor(Math.random() * pool.length)];
     const id = 'i' + (Date.now() % 100000);
     const name = '새 자료 ' + (items.length + 1);
-    setItems(it => [...it, { id, name, source: '방금 업로드', type: 'image', kind, step: 'raw', heightFrac: heightForKind(kind), placementXRatio: DEFAULT_PLACEMENT_X_RATIO }]);
+    setItems(it => [...it, {
+      id,
+      name,
+      source: '방금 업로드',
+      type: 'image',
+      kind,
+      step: 'raw',
+      heightFrac: heightForKind(kind),
+      placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
+      placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
+    }]);
     setActiveId(id);
     showToast('자료 1개 추가됨 (mock)');
   };
@@ -1966,7 +2124,12 @@ function App(){
     const placements = Object.fromEntries(
       items
         .filter(item => sessionIds.has(item.id))
-        .map(item => [item.id, { xRatio: normalizePlacementXRatio(item.placementXRatio) }])
+        .map(item => [item.id, {
+          xRatio: normalizePlacementXRatio(item.placementXRatio),
+          yRatio: verticalPlacementRoomPages(item) > 0.001
+            ? normalizePlacementYRatio(item.placementYRatio)
+            : DEFAULT_PLACEMENT_Y_RATIO,
+        }])
     );
     setLoading({
       label: '편집된 .edb 파일 생성 중...',
@@ -2053,7 +2216,7 @@ function App(){
             boardColumns={t.boardColumns}
             fileName={fileName}
             addSample={addSample}
-            setPlacementX={setPlacementX}
+            setPlacement={setPlacement}
           />
         )}
         <SidePanel
@@ -2064,6 +2227,7 @@ function App(){
           applyToAll={applyToAll}
           bulk={bulk}
           setBulk={setBulk}
+          setPlacement={setPlacement}
           boardColumns={t.boardColumns}
           setBoardColumns={v => setTweak('boardColumns', v)}
           boardColor={t.boardColor}

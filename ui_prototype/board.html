@@ -440,7 +440,7 @@
     z-index: 2;
     user-select: none;
     touch-action: none;
-    will-change: left, transform;
+    will-change: left, top, transform;
   }
   .stage-tile:hover{
     transform: translateY(-1px);
@@ -681,6 +681,82 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px; color: var(--muted);
     padding: 3px 8px;
+  }
+
+  .position-control{
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-2);
+  }
+  .position-pad{
+    width: 84px;
+    display: grid;
+    grid-template-columns: repeat(3, 26px);
+    grid-template-rows: repeat(3, 26px);
+    gap: 3px;
+  }
+  .position-pad .pos-btn{
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .position-pad .pos-btn:hover{
+    color: var(--ink);
+    border-color: var(--line-strong);
+    background: var(--accent-soft);
+  }
+  .position-pad .pos-btn:disabled{
+    opacity: .38;
+    cursor: not-allowed;
+    background: var(--surface-2);
+  }
+  .position-pad .pos-btn:disabled:hover{
+    color: var(--muted);
+    border-color: var(--line);
+    background: var(--surface-2);
+  }
+  .position-pad .pos-btn.up{ grid-column: 2; grid-row: 1; }
+  .position-pad .pos-btn.left{ grid-column: 1; grid-row: 2; }
+  .position-pad .pos-btn.reset{ grid-column: 2; grid-row: 2; }
+  .position-pad .pos-btn.right{ grid-column: 3; grid-row: 2; }
+  .position-pad .pos-btn.down{ grid-column: 2; grid-row: 3; }
+  .position-sliders{
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+  .position-sliders label{
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) 36px;
+    gap: 8px;
+    align-items: center;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .position-sliders input[type="range"]{
+    width: 100%;
+    min-width: 0;
+    accent-color: var(--accent);
+  }
+  .position-sliders input[type="range"]:disabled{
+    opacity: .45;
+    cursor: not-allowed;
+  }
+  .position-sliders strong{
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-2);
+    text-align: right;
   }
 
   .item-meta{
@@ -1801,6 +1877,6 @@
 
 <script type="text/babel" src="art.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="app.jsx?v=parser-review-ai-retry-20260520"></script>
+<script type="text/babel" src="app.jsx?v=position-nudge-20260602b"></script>
 </body>
 </html>
