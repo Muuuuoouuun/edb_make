@@ -758,6 +758,31 @@
     color: var(--ink-2);
     text-align: right;
   }
+  .scale-actions{
+    display: grid;
+    grid-template-columns: 26px minmax(48px, 1fr) 26px;
+    gap: 6px;
+    align-items: center;
+  }
+  .scale-actions .scale-reset{
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink-2);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+  .scale-actions .scale-reset:hover:not(:disabled){
+    border-color: var(--line-strong);
+    background: var(--accent-soft);
+    color: var(--ink);
+  }
+  .scale-actions .scale-reset:disabled{
+    opacity: .45;
+    cursor: not-allowed;
+  }
 
   .item-meta{
     display: flex; align-items: flex-start; gap: 10px;
@@ -955,6 +980,14 @@
     color: var(--muted);
   }
   .icon-btn:hover{ background: var(--surface-2); color: var(--ink); }
+  .icon-btn:disabled{
+    opacity: .38;
+    cursor: not-allowed;
+  }
+  .icon-btn:disabled:hover{
+    background: transparent;
+    color: var(--muted);
+  }
 
   /* Item list */
   .items{
@@ -1877,6 +1910,6 @@
 
 <script type="text/babel" src="art.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="app.jsx?v=position-nudge-20260602b"></script>
+<script type="text/babel" src="app.jsx?v=position-scale-20260602"></script>
 </body>
 </html>

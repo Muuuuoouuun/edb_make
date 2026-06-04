@@ -36,7 +36,11 @@ const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
 const DEFAULT_PLACEMENT_X_RATIO = 0;
 const DEFAULT_PLACEMENT_Y_RATIO = 0;
+const DEFAULT_PLACEMENT_SCALE_RATIO = 1;
+const PLACEMENT_SCALE_MIN = 0.6;
+const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_NUDGE_STEP = 0.04;
+const PLACEMENT_SCALE_STEP = 0.05;
 
 function normalizePlacementXRatio(value){
   const n = Number(value);
@@ -48,19 +52,43 @@ function normalizePlacementYRatio(value){
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_Y_RATIO;
 }
 
+function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
+  const n = Number(value);
+  const resolvedMax = Number.isFinite(Number(maxRatio))
+    ? Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, Number(maxRatio)))
+    : PLACEMENT_SCALE_MAX;
+  return Number.isFinite(n)
+    ? Math.max(PLACEMENT_SCALE_MIN, Math.min(resolvedMax, n))
+    : Math.min(DEFAULT_PLACEMENT_SCALE_RATIO, resolvedMax);
+}
+
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.ceil((value - 0.001) / slotHeight) * slotHeight;
 }
 
-function verticalPlacementRoomPages(item){
+function placementSlotHeightPages(item){
   if (!item) return 0;
   const heightPages = Math.max(0.12, item.heightFrac || 0.8);
   const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
   const snappedNext = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startPages + heightPages, item.snappedNextStartYPages)
     : snapUpPages(startPages + heightPages);
-  return Math.max(0, snappedNext - startPages - heightPages);
+  return Math.max(heightPages, snappedNext - startPages);
+}
+
+function maxPlacementScaleRatio(item){
+  if (!item) return PLACEMENT_SCALE_MAX;
+  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const slotHeightPages = placementSlotHeightPages(item);
+  return Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, slotHeightPages / heightPages));
+}
+
+function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio){
+  if (!item) return 0;
+  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const scale = normalizePlacementScaleRatio(scaleRatio, maxPlacementScaleRatio(item));
+  return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
 }
 
 const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
@@ -75,6 +103,7 @@ const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
     heightFrac: heightForKind(kind),
     placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
     placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
+    placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
   };
 });
 
@@ -109,6 +138,7 @@ const Icon = {
   check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
   zoomIn: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>,
+  zoomOut:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/></svg>,
   undo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3"/></svg>,
   refresh:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3.5-7.1M21 4v5h-5"/></svg>,
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
@@ -764,7 +794,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     const contentRect = contentRef.current.getBoundingClientRect();
     const tileRect = evt.currentTarget.getBoundingClientRect();
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
-    const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - placement.height);
+    const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
     const startXRatio = normalizePlacementXRatio(item.placementXRatio);
     const startYRatio = normalizePlacementYRatio(item.placementYRatio);
     positionDragRef.current = {
@@ -873,14 +903,27 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                   const tileWidth = contentW > 0
                     ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
                     : null;
-                  const maxLeft = tileWidth ? Math.max(0, contentW - tileWidth) : 0;
-                  const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - p.height);
+                  const maxScale = tileWidth
+                    ? Math.max(
+                        PLACEMENT_SCALE_MIN,
+                        Math.min(
+                          PLACEMENT_SCALE_MAX,
+                          contentW / Math.max(tileWidth, 1),
+                          ((p.snappedNext * pageH) - p.top) / Math.max(p.height, 1)
+                        )
+                      )
+                    : PLACEMENT_SCALE_MAX;
+                  const scaleRatio = normalizePlacementScaleRatio(it.placementScaleRatio, maxScale);
+                  const scaledWidth = tileWidth ? tileWidth * scaleRatio : null;
+                  const scaledHeight = p.height * scaleRatio;
+                  const maxLeft = scaledWidth ? Math.max(0, contentW - scaledWidth) : 0;
+                  const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - scaledHeight);
                   const xRatio = normalizePlacementXRatio(it.placementXRatio);
                   const yRatio = normalizePlacementYRatio(it.placementYRatio);
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
-                    height: p.height,
-                    ...(tileWidth ? { left: xRatio * maxLeft, width: tileWidth } : null),
+                    height: scaledHeight,
+                    ...(scaledWidth ? { left: xRatio * maxLeft, width: scaledWidth } : null),
                   };
                   return (
                     <button
@@ -997,9 +1040,13 @@ function SidePanel({
   }, []);
 
   const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
+  const maxScale = maxPlacementScaleRatio(item);
+  const placementScale = item ? normalizePlacementScaleRatio(item.placementScaleRatio, maxScale) : DEFAULT_PLACEMENT_SCALE_RATIO;
   const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
   const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
-  const hasVerticalRoom = verticalPlacementRoomPages(item) > 0.001;
+  const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
+  const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
+  const canZoomIn = item && placementScale < maxScale - 0.001;
   const updatePlacement = (patch) => {
     if (!item) return;
     setPlacement?.(item.id, patch);
@@ -1011,11 +1058,18 @@ function SidePanel({
       yRatio: placementY + dy,
     });
   };
+  const nudgeScale = (delta) => {
+    if (!item) return;
+    updatePlacement({ scaleRatio: placementScale + delta });
+  };
   const resetPlacement = () => {
     updatePlacement({
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
     });
+  };
+  const resetScale = () => {
+    updatePlacement({ scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO });
   };
 
   return (
@@ -1076,14 +1130,25 @@ function SidePanel({
                   <div className="ptools">
                     <button className="icon-btn" title="회전">{Icon.rotate}</button>
                     <button className="icon-btn" title="자르기">{Icon.crop}</button>
-                    <button className="icon-btn" title="확대">{Icon.zoomIn}</button>
+                    <button
+                      className="icon-btn"
+                      title="축소"
+                      disabled={!canZoomOut}
+                      onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}
+                    >{Icon.zoomOut}</button>
+                    <button
+                      className="icon-btn"
+                      title="확대"
+                      disabled={!canZoomIn}
+                      onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}
+                    >{Icon.zoomIn}</button>
                     <div className="spacer" />
-                    <span className="scale">100%</span>
+                    <span className="scale">{Math.round(placementScale * 100)}%</span>
                   </div>
                 </div>
 
                 <div className="panel-section-hd">
-                  위치 미세 조절 <span className="line" />
+                  위치·크기 미세 조절 <span className="line" />
                 </div>
 
                 <div className="position-control">
@@ -1145,6 +1210,39 @@ function SidePanel({
                       />
                       <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
                     </label>
+                    <label>
+                      <span>크기</span>
+                      <input
+                        type="range"
+                        min={Math.round(PLACEMENT_SCALE_MIN * 100)}
+                        max={Math.round(maxScale * 100)}
+                        value={Math.round(placementScale * 100)}
+                        onChange={e => updatePlacement({ scaleRatio: Number(e.target.value) / 100 })}
+                      />
+                      <strong>{Math.round(placementScale * 100)}%</strong>
+                    </label>
+                    <div className="scale-actions">
+                      <button
+                        className="icon-btn"
+                        type="button"
+                        title="축소"
+                        disabled={!canZoomOut}
+                        onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}
+                      >{Icon.zoomOut}</button>
+                      <button
+                        className="scale-reset"
+                        type="button"
+                        onClick={resetScale}
+                        disabled={!item || Math.abs(placementScale - DEFAULT_PLACEMENT_SCALE_RATIO) < 0.001}
+                      >100%</button>
+                      <button
+                        className="icon-btn"
+                        type="button"
+                        title="확대"
+                        disabled={!canZoomIn}
+                        onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}
+                      >{Icon.zoomIn}</button>
+                    </div>
                   </div>
                 </div>
 
@@ -1466,6 +1564,7 @@ function mapProblemToItem(problem, idx){
     slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
+    placementScaleRatio: normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio),
   };
 }
 
@@ -2049,15 +2148,21 @@ function App(){
   const setPlacement = (id, patch) => {
     setItems(it => it.map(x => {
       if (x.id !== id) return x;
-      return {
-        ...x,
-        ...(Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')
-          ? { placementXRatio: normalizePlacementXRatio(patch.xRatio) }
-          : {}),
-        ...(Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')
-          ? { placementYRatio: verticalPlacementRoomPages(x) > 0.001 ? normalizePlacementYRatio(patch.yRatio) : DEFAULT_PLACEMENT_Y_RATIO }
-          : {}),
-      };
+      const next = { ...x };
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
+        next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
+        next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
+      }
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
+        next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
+          ? normalizePlacementYRatio(patch.yRatio)
+          : DEFAULT_PLACEMENT_Y_RATIO;
+      } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
+        next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
+      }
+      return next;
     }));
     setPublished(false);
   };
@@ -2095,6 +2200,7 @@ function App(){
       heightFrac: heightForKind(kind),
       placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
       placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
+      placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
     }]);
     setActiveId(id);
     showToast('자료 1개 추가됨 (mock)');
@@ -2129,6 +2235,7 @@ function App(){
           yRatio: verticalPlacementRoomPages(item) > 0.001
             ? normalizePlacementYRatio(item.placementYRatio)
             : DEFAULT_PLACEMENT_Y_RATIO,
+          scaleRatio: normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item)),
         }])
     );
     setLoading({

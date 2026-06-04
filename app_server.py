@@ -163,6 +163,23 @@ def _coerce_placement_y_ratio(value: Any) -> float | None:
     return max(0.0, min(1.0, ratio))
 
 
+def _coerce_placement_scale_ratio(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("scaleRatio", "placementScaleRatio", "placement_scale_ratio"):
+            if value.get(key) is not None:
+                value = value.get(key)
+                break
+        else:
+            return None
+    try:
+        ratio = _coerce_optional_float(value)
+    except (TypeError, ValueError):
+        return None
+    if ratio is None:
+        return None
+    return max(0.6, min(1.6, ratio))
+
+
 def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
     nested = payload.get("aiFallback")
     if not isinstance(nested, dict):
@@ -361,6 +378,7 @@ def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
                 risk_flags=[str(flag) for flag in (problem.get("riskFlags") or []) if flag],
                 placement_x_ratio=_coerce_placement_x_ratio(problem),
                 placement_y_ratio=_coerce_placement_y_ratio(problem),
+                placement_scale_ratio=_coerce_placement_scale_ratio(problem),
             )
         )
     return entries
@@ -480,6 +498,7 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "imageRecordCount": parent.get("imageRecordCount", 1),
         "placementXRatio": _coerce_placement_x_ratio(parent),
         "placementYRatio": _coerce_placement_y_ratio(parent),
+        "placementScaleRatio": _coerce_placement_scale_ratio(parent),
         "riskFlags": [],  # mutated entries lose the auto-detected risk
     }
     return skeleton
@@ -1066,6 +1085,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 y_ratio = _coerce_placement_y_ratio(problem_copy)
             if y_ratio is not None:
                 problem_copy["placementYRatio"] = y_ratio
+            scale_ratio = _coerce_placement_scale_ratio(placement_payload.get(problem_id))
+            if scale_ratio is None:
+                scale_ratio = _coerce_placement_scale_ratio(problem_copy)
+            if scale_ratio is not None:
+                problem_copy["placementScaleRatio"] = scale_ratio
             sequence_with_placements.append(problem_copy)
         sequence = sequence_with_placements
 
@@ -1170,6 +1194,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 y_ratio = _coerce_placement_y_ratio(prior)
                 if y_ratio is not None:
                     problem["placementYRatio"] = y_ratio
+            if "placementScaleRatio" not in problem:
+                scale_ratio = _coerce_placement_scale_ratio(prior)
+                if scale_ratio is not None:
+                    problem["placementScaleRatio"] = scale_ratio
         self.app_server.remember_session(new_session)
         self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
 

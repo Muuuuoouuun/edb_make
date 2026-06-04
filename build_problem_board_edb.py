@@ -55,6 +55,8 @@ RIGHT_PADDING_PX = 54.0
 PROBLEM_PADDING_PX = 18.0
 MIN_HEIGHT_PAGES = 0.72
 MAX_HEIGHT_PAGES = 4.8
+PLACEMENT_SCALE_MIN = 0.6
+PLACEMENT_SCALE_MAX = 1.6
 MIN_PROBLEM_AREA_RATIO = 0.12
 # Brightness above this value (0-255) is treated as a light background that
 # should be removed from the exported problem image.
@@ -88,6 +90,12 @@ def _clamp_placement_y_ratio(value: float | None) -> float | None:
     return max(0.0, min(1.0, float(value)))
 
 
+def _clamp_placement_scale_ratio(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return max(PLACEMENT_SCALE_MIN, min(PLACEMENT_SCALE_MAX, float(value)))
+
+
 def _problem_origin_x_px(entry: "ProblemEntry", rendered_width_px: float) -> float:
     ratio = _clamp_placement_x_ratio(entry.placement_x_ratio)
     if ratio is None:
@@ -104,6 +112,28 @@ def _problem_origin_y_px(entry: "ProblemEntry", placement: "ProblemPlacement", r
     slot_bottom_y_px = placement.snapped_next_start_y_pages * CANVAS_WIDTH
     max_y_px = max(base_y_px, slot_bottom_y_px - rendered_height_px)
     return base_y_px + ratio * (max_y_px - base_y_px)
+
+
+def _problem_scale_ratio(
+    entry: "ProblemEntry",
+    placement: "ProblemPlacement",
+    rendered_width_px: float,
+    rendered_height_px: float,
+) -> float:
+    requested = _clamp_placement_scale_ratio(entry.placement_scale_ratio)
+    if requested is None:
+        return 1.0
+    max_width_scale = (CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX) / max(rendered_width_px, 1.0)
+    slot_height_px = max(
+        rendered_height_px,
+        (placement.snapped_next_start_y_pages - placement.start_y_pages) * CANVAS_WIDTH,
+    )
+    max_height_scale = slot_height_px / max(rendered_height_px, 1.0)
+    max_scale = max(
+        PLACEMENT_SCALE_MIN,
+        min(PLACEMENT_SCALE_MAX, max_width_scale, max_height_scale),
+    )
+    return max(PLACEMENT_SCALE_MIN, min(max_scale, requested))
 
 
 def _resolve_board_theme(board_theme: str | None) -> str:
@@ -311,6 +341,7 @@ class ProblemEntry:
     risk_flags: list[str]
     placement_x_ratio: float | None = None
     placement_y_ratio: float | None = None
+    placement_scale_ratio: float | None = None
 
 
 def resolve_subject(name: str | None) -> Subject:
@@ -1054,6 +1085,7 @@ def build_ui_session(
                 "slotSpanCount": int(placement["slot_span_count"]),
                 "placementXRatio": float(placement.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(placement.get("placement_y_ratio") or 0.0),
+                "placementScaleRatio": float(placement.get("placement_scale_ratio") or 1.0),
                 "recordMode": str(placement.get("record_mode") or record_mode),
                 "textRecordCount": int(placement.get("text_record_count", 0)),
                 "imageRecordCount": int(placement.get("image_record_count", 0)),
@@ -1240,6 +1272,22 @@ def build_image_only_records(
         board_image = Image.open(board_render_path) if dark_board else crop_image
         if target_image_width_px > 0:
             board_image = _resize_to_target_width(board_image, int(target_image_width_px))
+        base_rendered_width_px = float(board_image.width) if crop_format == CROP_FORMAT_V2 else available_width_px
+        base_rendered_height_px = (
+            float(board_image.height)
+            if crop_format == CROP_FORMAT_V2
+            else placement.actual_content_height_pages * CANVAS_WIDTH
+        )
+        scale_ratio = _problem_scale_ratio(
+            entry,
+            placement,
+            base_rendered_width_px,
+            base_rendered_height_px,
+        )
+        if crop_format == CROP_FORMAT_V2 and abs(scale_ratio - 1.0) > 0.001:
+            scaled_width = max(1, int(round(board_image.width * scale_ratio)))
+            scaled_height = max(1, int(round(board_image.height * scale_ratio)))
+            board_image = board_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
         image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
         if crop_format == CROP_FORMAT_V2:
             secondary_bytes = build_tight_crop_image_bytes(
@@ -1255,11 +1303,11 @@ def build_image_only_records(
                 float(board_image.height), page_count_hint=template.board_page_count
             )
         else:
-            height_px = placement.actual_content_height_pages * CANVAS_WIDTH
-            width_hint = normalize_width_px(available_width_px)
+            height_px = placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio
+            width_hint = normalize_width_px(available_width_px * scale_ratio)
             height_hint = normalize_height_px(height_px, page_count_hint=template.board_page_count)
-        rendered_width_px = float(board_image.width) if crop_format == CROP_FORMAT_V2 else available_width_px
-        rendered_height_px = float(board_image.height) if crop_format == CROP_FORMAT_V2 else placement.actual_content_height_pages * CANVAS_WIDTH
+        rendered_width_px = float(board_image.width) if crop_format == CROP_FORMAT_V2 else available_width_px * scale_ratio
+        rendered_height_px = float(board_image.height) if crop_format == CROP_FORMAT_V2 else placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio
         x_px = _problem_origin_x_px(entry, rendered_width_px)
         y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
 
@@ -1309,6 +1357,7 @@ def build_image_only_records(
                 "image_pixel_height": int(board_image.height),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
+                "placement_scale_ratio": float(scale_ratio),
             }
         )
 
@@ -1337,12 +1386,19 @@ def build_mixed_records(
 
     for placement in placements:
         entry = entries_by_problem_id[placement.problem_id]
-        scale = available_width_px / max(entry.bounds.width, 1.0)
-        problem_origin_x_px = _problem_origin_x_px(entry, available_width_px)
+        scale_ratio = _problem_scale_ratio(
+            entry,
+            placement,
+            available_width_px,
+            placement.actual_content_height_pages * CANVAS_WIDTH,
+        )
+        scaled_available_width_px = available_width_px * scale_ratio
+        scale = scaled_available_width_px / max(entry.bounds.width, 1.0)
+        problem_origin_x_px = _problem_origin_x_px(entry, scaled_available_width_px)
         problem_origin_y_px = _problem_origin_y_px(
             entry,
             placement,
-            placement.actual_content_height_pages * CANVAS_WIDTH,
+            placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio,
         )
         block_summaries: list[dict[str, object]] = []
         text_record_count = 0
@@ -1351,7 +1407,7 @@ def build_mixed_records(
         for block in entry.blocks:
             x_px = problem_origin_x_px + max(0.0, block.bbox.left - entry.bounds.left) * scale
             y_px = problem_origin_y_px + max(0.0, block.bbox.top - entry.bounds.top) * scale
-            width_px = max(40.0, min(available_width_px, block.bbox.width * scale))
+            width_px = max(40.0, min(scaled_available_width_px, block.bbox.width * scale))
             height_px = max(22.0, block.bbox.height * scale)
             record_mode = choose_block_record_mode(block, text_confidence_threshold=text_confidence_threshold)
 
@@ -1430,9 +1486,9 @@ def build_mixed_records(
                         image_secondary=preview_bytes,
                         x=normalize_x_px(problem_origin_x_px),
                         y=normalize_y_px(problem_origin_y_px, page_count_hint=template.board_page_count),
-                        width_hint=normalize_width_px(available_width_px),
+                        width_hint=normalize_width_px(scaled_available_width_px),
                         height_hint=normalize_height_px(
-                            placement.actual_content_height_pages * CANVAS_WIDTH,
+                            placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio,
                             page_count_hint=template.board_page_count,
                         ),
                     )
@@ -1472,6 +1528,7 @@ def build_mixed_records(
                 "board_theme": _resolve_board_theme(board_theme),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
+                "placement_scale_ratio": float(scale_ratio),
                 "blocks": block_summaries,
             }
         )
@@ -1530,6 +1587,7 @@ def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object
                 "readingHeavy": item["overflow_allowed"],
                 "placementXRatio": float(item.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(item.get("placement_y_ratio") or 0.0),
+                "placementScaleRatio": float(item.get("placement_scale_ratio") or 1.0),
             }
             for item in placements
         ]
