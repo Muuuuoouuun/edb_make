@@ -187,7 +187,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
         <span style={{marginLeft:4}}>{refreshing ? '불러오는 중…' : '새로고침'}</span>
       </button>
-      <button className="btn ghost" onClick={onReset} disabled={!canReset} title="세션 또는 예시 자료를 비웁니다">
+      <button className="btn ghost" onClick={onReset} disabled={!canReset} title="세션, 더미, 업로드 대기열을 비웁니다">
         {Icon.reset}<span style={{marginLeft:4}}>초기화</span>
       </button>
       <button
@@ -204,7 +204,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
-function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable }){
+function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable, aiBusy }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
     const map = new Map();
@@ -355,8 +355,10 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   ];
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
-    : mutating
-      ? '처리 중입니다'
+    : aiBusy
+      ? 'AI 인식 중입니다'
+      : mutating
+        ? '처리 중입니다'
       : '';
 
   const actionBar = splitTarget ? (
@@ -391,7 +393,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           type="button"
           title={retryDisabledReason || `${pageRetryIds.length}개 페이지 재인식`}
           onClick={() => doRetryAi(pageRetryIds)}
-          disabled={!aiAvailable || mutating || !pageRetryIds.length}
+          disabled={!aiAvailable || aiBusy || mutating || !pageRetryIds.length}
         >
           AI 재인식 {riskyCount}
         </button>
@@ -413,7 +415,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
         type="button"
         title={retryDisabledReason || `${selectedRetryPageIds.length}개 페이지 재인식`}
         onClick={() => doRetryAi(selectedRetryPageIds)}
-        disabled={!aiAvailable || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
+        disabled={!aiAvailable || aiBusy || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
       >
         AI 재인식
       </button>
@@ -480,7 +482,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                       type="button"
                       title={retryDisabledReason || '이 페이지만 AI로 다시 인식'}
                       onClick={() => doRetryAi([page.id])}
-                      disabled={!aiAvailable || mutating}
+                      disabled={!aiAvailable || aiBusy || mutating}
                     >
                       AI 재인식
                     </button>
@@ -568,6 +570,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
 function ItemsRail({
   items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
+  addMockSample, canAddDummy,
 }){
   const dragId = useRef(null);
   const [overId, setOverId] = useState(null);
@@ -597,8 +600,14 @@ function ItemsRail({
         <h2>자료</h2>
         <span className="count">{items.length}</span>
         <div className="spacer" />
-        <button className="icon-btn" title="전체를 2단계 AI 변환" onClick={() => bulkApply('s2')}>{Icon.aiBatch}</button>
-        <button className="icon-btn" title="추가" onClick={addSample}>{Icon.upload}</button>
+        <button className="icon-btn" title="전체를 2단계 AI 변환" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
+        <button
+          className="icon-btn"
+          title={canAddDummy ? '더미 추가' : '실제 세션 또는 대기열이 있을 때는 더미를 추가하지 않습니다'}
+          onClick={addMockSample}
+          disabled={!canAddDummy}
+        >{Icon.wand}</button>
+        <button className="icon-btn" title="파일 추가" onClick={addSample}>{Icon.upload}</button>
       </div>
 
       <div className="items" ref={railRef}>
@@ -1543,6 +1552,158 @@ function LoadingOverlay({ label, hint, startedAt }){
   );
 }
 
+function BackgroundJobsPanel({ jobs, onCancel, onDismiss }){
+  const visibleJobs = (jobs || []).filter(job => job.status !== 'dismissed');
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!visibleJobs.some(job => job.status === 'running')) return;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [visibleJobs]);
+  if (!visibleJobs.length) return null;
+
+  const elapsedLabel = (startedAt) => {
+    const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+    return seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
+  };
+  const statusLabel = (status) => {
+    if (status === 'running') return '진행 중';
+    if (status === 'failed') return '실패';
+    if (status === 'canceled') return '취소됨';
+    return '완료';
+  };
+
+  return (
+    <div className="bg-jobs" aria-live="polite">
+      {visibleJobs.map(job => (
+        <div key={job.id} className={`bg-job ${job.status}`}>
+          <div className="bg-job-mark">
+            {job.status === 'running' ? <span className="mini-spinner" /> : <span>{job.status === 'failed' ? '!' : Icon.check}</span>}
+          </div>
+          <div className="bg-job-main">
+            <div className="bg-job-title">
+              <strong>{job.label}</strong>
+              <span>{statusLabel(job.status)}</span>
+            </div>
+            {job.hint && <div className="bg-job-hint">{job.hint}</div>}
+            {job.status === 'running' && <div className="bg-job-time">{elapsedLabel(job.startedAt)} 경과</div>}
+          </div>
+          {job.status === 'running' ? (
+            <button className="bg-job-action" type="button" onClick={() => onCancel?.(job.id)}>취소</button>
+          ) : (
+            <button className="bg-job-action" type="button" onClick={() => onDismiss?.(job.id)}>닫기</button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
+  const previewSession = review?.session;
+  const targetPageIds = review?.pageIds || null;
+  const pages = useMemo(() => {
+    const allPages = Array.isArray(previewSession?.pages) ? previewSession.pages : [];
+    if (!targetPageIds?.length) return allPages;
+    const allowed = new Set(targetPageIds);
+    return allPages.filter(page => allowed.has(page.id));
+  }, [previewSession, targetPageIds]);
+  const problemsById = useMemo(() => {
+    const map = new Map();
+    (previewSession?.problems || []).forEach(problem => {
+      if (problem?.id) map.set(problem.id, problem);
+    });
+    return map;
+  }, [previewSession]);
+  const summary = useMemo(
+    () => summarizeRecognitionSession(previewSession, targetPageIds),
+    [previewSession, targetPageIds]
+  );
+
+  if (!review) return null;
+  const title = review.title || 'AI 인식 결과 확인';
+  const subtitle = review.subtitle || `${summary.problems}개 문제로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`;
+
+  return (
+    <div className="recognition-modal-shell" role="dialog" aria-modal="true" aria-labelledby="recognition-review-title">
+      <div className="recognition-modal-backdrop" onClick={confirming ? undefined : onCancel} />
+      <div className="recognition-modal">
+        <div className="recognition-modal-hd">
+          <div>
+            <span className="recognition-eyebrow">AI 인식 결과</span>
+            <h2 id="recognition-review-title">{title}</h2>
+            <p>{subtitle}</p>
+          </div>
+          <button className="modal-x" type="button" onClick={onCancel} disabled={confirming} title="닫기">×</button>
+        </div>
+
+        <div className="recognition-summary">
+          <span>{summary.pages} 페이지</span>
+          <span>{summary.problems} 문제</span>
+          <span className={summary.riskCount ? 'warn' : ''}>
+            {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
+          </span>
+        </div>
+
+        <div className="recognition-preview">
+          {pages.length ? pages.map(page => {
+            const pageProblems = (page.problemIds || page.problem_ids || [])
+              .map(id => problemsById.get(id))
+              .filter(Boolean);
+            return (
+              <div key={page.id} className="recognition-page">
+                <div className="recognition-page-hd">
+                  <strong>{page.id}</strong>
+                  <span>{pageProblems.length}개 문제</span>
+                  <span>{page.width}×{page.height}</span>
+                </div>
+                <div className="recognition-page-canvas">
+                  {page.sourceImageUri ? (
+                    <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                  ) : (
+                    <div className="recognition-page-empty">페이지 이미지를 불러올 수 없어요.</div>
+                  )}
+                  {pageProblems.map((problem, index) => {
+                    const bbox = problem.bbox || {};
+                    const w = page.width || 1;
+                    const h = page.height || 1;
+                    if (!bbox.width || !bbox.height) return null;
+                    const status = deriveProblemStatus(problem);
+                    return (
+                      <div
+                        key={problem.id}
+                        className={`recognition-box ${reviewStatusClass(status)}`}
+                        style={{
+                          left: `${(bbox.left / w) * 100}%`,
+                          top: `${(bbox.top / h) * 100}%`,
+                          width: `${(bbox.width / w) * 100}%`,
+                          height: `${(bbox.height / h) * 100}%`,
+                        }}
+                        title={problem.title || problem.id}
+                      >
+                        <span>{String(index + 1).padStart(2, '0')}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="recognition-empty">확인할 페이지가 없습니다.</div>
+          )}
+        </div>
+
+        <div className="recognition-modal-foot">
+          <button className="btn" type="button" onClick={onCancel} disabled={confirming}>취소</button>
+          <button className="btn primary" type="button" onClick={onConfirm} disabled={confirming || !summary.problems}>
+            {confirming ? '붙이는 중...' : '맞아요, 칠판에 붙이기'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // renders a real image when the item came from the backend; falls back to
 // the SVG ItemArt for mock data. forceMode overrides the step→variant mapping
 // (useful for side-panel preview tabs).
@@ -1868,6 +2029,99 @@ function shouldOpenReview(session){
   return problemCount > 1 || sessionRiskCount(session) > 0;
 }
 
+function summarizeRecognitionSession(session, pageIds){
+  const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const targetIds = Array.isArray(pageIds) && pageIds.length ? new Set(pageIds) : null;
+  const visiblePages = targetIds
+    ? pages.filter(page => targetIds.has(page.id))
+    : pages;
+  const visiblePageIds = new Set(visiblePages.map(page => page.id));
+  const problems = (session?.problems || []).filter(problem => {
+    if (!targetIds) return true;
+    return visiblePageIds.has(problem?.sourcePageId);
+  });
+  const riskCount = problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length;
+  return {
+    pages: visiblePages.length,
+    problems: problems.length,
+    riskCount,
+  };
+}
+
+function mergeRetryCandidateIntoCurrent(currentSession, candidateSession, pageIds){
+  const base = cloneSession(currentSession);
+  const candidate = cloneSession(candidateSession);
+  if (!base || !candidate || !Array.isArray(candidate.problems)) return candidate;
+
+  const targetPageIds = new Set(
+    (Array.isArray(pageIds) && pageIds.length
+      ? pageIds
+      : (candidate.pages || []).map(page => page.id)
+    ).filter(Boolean)
+  );
+  if (!targetPageIds.size) return candidate;
+
+  const candidatePagesById = new Map();
+  (candidate.pages || []).forEach(page => {
+    if (page?.id && targetPageIds.has(page.id)) candidatePagesById.set(page.id, page);
+  });
+
+  const candidateProblemsById = new Map();
+  candidate.problems.forEach(problem => {
+    if (problem?.id) candidateProblemsById.set(problem.id, problem);
+  });
+
+  const replacementsByPageId = new Map();
+  candidatePagesById.forEach((page, pageId) => {
+    const ids = page.problemIds || page.problem_ids || [];
+    const replacements = ids
+      .map(id => candidateProblemsById.get(id))
+      .filter(Boolean);
+    replacementsByPageId.set(pageId, replacements);
+  });
+
+  const insertedPages = new Set();
+  const nextProblems = [];
+  (base.problems || []).forEach(problem => {
+    const pageId = problem?.sourcePageId;
+    if (targetPageIds.has(pageId)) {
+      if (!insertedPages.has(pageId)) {
+        nextProblems.push(...(replacementsByPageId.get(pageId) || []));
+        insertedPages.add(pageId);
+      }
+      return;
+    }
+    nextProblems.push(problem);
+  });
+  targetPageIds.forEach(pageId => {
+    if (!insertedPages.has(pageId)) {
+      nextProblems.push(...(replacementsByPageId.get(pageId) || []));
+    }
+  });
+
+  base.problems = nextProblems;
+  base.pages = (base.pages || []).map(page => {
+    const candidatePage = candidatePagesById.get(page.id);
+    if (!candidatePage) return page;
+    return {
+      ...page,
+      ...candidatePage,
+      id: page.id,
+      sourceImagePath: page.sourceImagePath || candidatePage.sourceImagePath,
+      sourceImageUri: page.sourceImageUri || candidatePage.sourceImageUri,
+      problemIds: (candidatePage.problemIds || candidatePage.problem_ids || []).filter(Boolean),
+    };
+  });
+  base.detected_problem_count = nextProblems.length;
+  base.detectedProblemCount = nextProblems.length;
+  base.ai_retry_summary = candidate.ai_retry_summary || candidate.aiRetrySummary || [];
+  base.edb_path = null;
+  base.edb_file_uri = null;
+  base.edbPath = null;
+  base.edbFileUri = null;
+  return base;
+}
+
 function requestedInitialView(){
   try {
     return new URLSearchParams(window.location.search).get('view') === 'review' ? 'review' : 'board';
@@ -1876,7 +2130,7 @@ function requestedInitialView(){
   }
 }
 
-async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT){
+async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT, options = {}){
   const resolvedInputIntent = normalizeInputIntent(inputIntent);
   const inputIntentConfig = INPUT_INTENT_BY_VALUE[resolvedInputIntent] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
   const filesPayload = await Promise.all(files.map(async (f) => ({
@@ -1885,9 +2139,11 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT)
   })));
   const resp = await fetch('/api/export', {
     method: 'POST',
+    signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       files: filesPayload,
+      preview: !!options.preview,
       exportMode: inputIntentConfig.exportMode,
       inputIntent: resolvedInputIntent,
       input_intent: resolvedInputIntent,
@@ -1895,7 +2151,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT)
       source_mode: 'auto',
       subject: 'unknown',
       ocr: 'auto',
-      exportEdb: true,
+      exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
       detectPerspective: files.some(f => !/\.pdf$/i.test(f.name)),
       maxDimension: 2400,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
@@ -1931,11 +2187,12 @@ async function postMutate(action, args){
   return json.session;
 }
 
-async function postRetryAi(args){
+async function postRetryAi(args, options = {}){
   const resp = await fetch('/api/session/retry-ai', {
     method: 'POST',
+    signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args || {}),
+    body: JSON.stringify({ ...(args || {}), preview: !!options.preview }),
   });
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `AI 재인식 실패 (${resp.status})`);
@@ -1990,15 +2247,18 @@ function App(){
     document.documentElement.style.setProperty('--board', t.boardColor);
   }, [t.dark, t.accent, t.boardColor]);
 
-  const [items, setItems] = useState(() => freshInitialItems());
-  const [activeId, setActiveId] = useState('i2');
-  const [fileName, setFileName] = useState('6월 모의고사 오답풀이 — 6/12 (수)');
+  const [items, setItems] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [fileName, setFileName] = useState('새 세션');
   const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(null); // {label, hint, startedAt} when busy
-  const [usingMock, setUsingMock] = useState(true);
+  const [backgroundJobs, setBackgroundJobs] = useState([]);
+  const [recognitionReview, setRecognitionReview] = useState(null);
+  const [confirmingRecognition, setConfirmingRecognition] = useState(false);
+  const [usingMock, setUsingMock] = useState(false);
   const [userSettings, setUserSettings] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
@@ -2012,6 +2272,7 @@ function App(){
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
   const [historyStack, setHistoryStack] = useState([]);
   const fileInputRef = useRef(null);
+  const jobControllersRef = useRef(new Map());
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
   // auto-revert to board view if the session is cleared or never had pages
@@ -2024,30 +2285,84 @@ function App(){
   const active = activeIndex >= 0 ? items[activeIndex] : null;
   const processed = items.filter(i => i.step !== 'raw').length;
   const progress = items.length ? processed / items.length : 0;
+  const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
+  const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
 
   const showToast = msg => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
 
-  const showMockItems = (message = '예시 문제를 표시했어요') => {
+  const dismissBackgroundJob = useCallback((id) => {
+    setBackgroundJobs(prev => prev.filter(job => job.id !== id));
+    jobControllersRef.current.delete(id);
+  }, []);
+
+  const settleBackgroundJob = useCallback((id, patch, autoDismissMs = 1800) => {
+    jobControllersRef.current.delete(id);
+    setBackgroundJobs(prev => prev.map(job => job.id === id ? { ...job, ...patch } : job));
+    if (autoDismissMs) {
+      window.setTimeout(() => {
+        setBackgroundJobs(prev => prev.filter(job => job.id !== id));
+      }, autoDismissMs);
+    }
+  }, []);
+
+  const startBackgroundJob = useCallback((job) => {
+    const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const controller = new AbortController();
+    jobControllersRef.current.set(id, controller);
+    setBackgroundJobs(prev => [
+      {
+        id,
+        status: 'running',
+        startedAt: Date.now(),
+        label: job.label || '백그라운드 작업',
+        hint: job.hint || '',
+        scope: job.scope || 'general',
+      },
+      ...prev.filter(item => item.status === 'running').slice(0, 2),
+      ...prev.filter(item => item.status !== 'running').slice(0, 1),
+    ]);
+    return { id, controller };
+  }, []);
+
+  const cancelBackgroundJob = useCallback((id) => {
+    const controller = jobControllersRef.current.get(id);
+    if (controller) controller.abort();
+    settleBackgroundJob(id, {
+      status: 'canceled',
+      label: 'AI 인식 취소됨',
+      hint: '결과를 적용하지 않았습니다.',
+    }, 2200);
+    showToast('AI 인식을 취소했어요');
+  }, [settleBackgroundJob]);
+
+  useEffect(() => {
+    return () => {
+      jobControllersRef.current.forEach(controller => controller.abort());
+      jobControllersRef.current.clear();
+    };
+  }, []);
+
+  const showMockItems = (message = '더미 자료를 표시했어요') => {
     const mockItems = freshInitialItems();
     setSession(null);
     setItems(mockItems);
     setActiveId(mockItems[0]?.id || null);
     setUsingMock(true);
     setPublished(false);
-    setFileName('새 세션');
+    setFileName('더미 세션');
     setHistoryStack([]);
     setView('board');
     showToast(message);
   };
 
-  const hideMockItems = (message = '예시 문제를 숨겼어요') => {
+  const hideMockItems = (message = '빈 세션으로 전환했어요') => {
     setSession(null);
     setItems([]);
     setActiveId(null);
-    setUsingMock(true);
+    setUsingMock(false);
     setPublished(false);
     setFileName('새 세션');
     setHistoryStack([]);
@@ -2152,28 +2467,50 @@ function App(){
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
     }
-    setMutating(true);
-    setLoading({
-      label: '문제 인식이 의심되는 페이지만 AI 재인식 중…',
-      hint: '전체 자료를 다시 올리지 않고 선택한 페이지만 다시 분석합니다.',
-      startedAt: Date.now(),
+    const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
+    const snapshotBefore = materializeSessionForItems(session, items, fileName) || cloneSession(session);
+    const job = startBackgroundJob({
+      scope: 'session-recognition',
+      label: pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`,
+      hint: '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
     });
-    const snapshotBefore = session;
     try {
-      const result = await postRetryAi(args);
+      const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
+      if (job.controller.signal.aborted) return;
       const next = result.session;
-      setHistoryStack(prev => [...prev, snapshotBefore]);
-      adoptMutatedSession(next, snapshotBefore);
       const applied = (result.retry || []).filter(row => row.status === 'applied').length;
-      showToast(applied ? `AI 재인식 완료 · ${applied}개 페이지 갱신` : 'AI 재인식 결과를 확인해 주세요');
-      if (hasReviewPages(next)) setView('review');
+      settleBackgroundJob(job.id, {
+        status: 'done',
+        label: 'AI 인식 완료',
+        hint: '결과 확인 팝업에서 문제 경계를 확인하세요.',
+      });
+      setRecognitionReview({
+        id: `review-${job.id}`,
+        kind: 'retry-ai',
+        title: applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요',
+        subtitle: '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
+        session: next,
+        pageIds,
+        snapshotBefore,
+        retrySummary: result.retry || [],
+      });
     } catch (e) {
+      if (e?.name === 'AbortError') {
+        settleBackgroundJob(job.id, {
+          status: 'canceled',
+          label: 'AI 인식 취소됨',
+          hint: '결과를 적용하지 않았습니다.',
+        });
+        return;
+      }
+      settleBackgroundJob(job.id, {
+        status: 'failed',
+        label: 'AI 인식 실패',
+        hint: e.message,
+      }, 5000);
       showToast(`AI 재인식 실패: ${e.message}`);
-    } finally {
-      setMutating(false);
-      setLoading(null);
     }
-  }, [session, userSettings, adoptMutatedSession]);
+  }, [session, userSettings, items, fileName, startBackgroundJob, settleBackgroundJob]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
@@ -2225,7 +2562,7 @@ function App(){
     return () => window.removeEventListener('keydown', onKey);
   }, [historyStack.length, mutating, undoMutation]);
 
-  // initial session fetch — falls back silently to INITIAL_ITEMS on 404
+  // initial session fetch — empty editor on 404, no automatic dummy data.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -2268,18 +2605,25 @@ function App(){
   }, []);
 
   const resetSession = useCallback(async () => {
-    if (!session && usingMock && items.length > 0) {
-      hideMockItems();
+    if (loading) {
+      showToast('작업 중에는 초기화할 수 없습니다');
       return;
     }
-    if (!window.confirm('세션을 초기화할까요? 업로드한 자료가 모두 보드에서 사라집니다.')) return;
+    if (!session && items.length === 0 && pendingFiles.length === 0) {
+      showToast('이미 빈 세션입니다');
+      return;
+    }
+    if (!window.confirm('세션을 초기화할까요? 업로드 대기열과 보드 자료가 모두 사라집니다.')) return;
     try {
-      await clearSession();
-      showMockItems('초기화 완료 · 예시 문제 표시');
+      if (session) {
+        await clearSession();
+      }
+      setPendingFiles([]);
+      hideMockItems('초기화 완료 · 빈 세션');
     } catch (e) {
       showToast('초기화 실패: ' + e.message);
     }
-  }, [session, usingMock, items.length]);
+  }, [loading, session, items.length, pendingFiles.length]);
 
   const refreshSession = useCallback(async () => {
     setRefreshing(true);
@@ -2289,19 +2633,21 @@ function App(){
         applySession(s);
         showToast(`새로고침 완료 · ${s.problems.length}개 문항`);
       } else {
-        // No backend session: refresh toggles the example set on/off.
-        if (usingMock && items.length > 0) {
-          hideMockItems('저장된 세션 없음 · 예시 문제 숨김');
-        } else {
-          showMockItems('저장된 세션 없음 · 예시 문제 표시');
+        if (!usingMock) {
+          setSession(null);
+          setItems([]);
+          setActiveId(null);
+          setPublished(false);
+          setView('board');
         }
+        showToast(usingMock ? '저장된 세션 없음 · 더미 유지' : '저장된 세션 없음 · 빈 세션');
       }
     } catch (e) {
       showToast('새로고침 실패: ' + e.message);
     } finally {
       setRefreshing(false);
     }
-  }, [applySession, usingMock, items.length]);
+  }, [applySession, usingMock]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -2344,6 +2690,58 @@ function App(){
     const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
+    if (isRecognition) {
+      const fileKeys = files.map(fileQueueKey);
+      const job = startBackgroundJob({
+        scope: 'queue-recognition',
+        label: `${files.length}개 파일 문제 인식 중`,
+        hint: aiFallback.enabled
+          ? 'Gemini AI 보정으로 문항 경계를 확인합니다.'
+          : '기본 문항 인식으로 실행 중입니다.',
+      });
+      try {
+        const incomingSession = await postExport(files, aiFallback, resolvedInputIntent, {
+          signal: job.controller.signal,
+          preview: true,
+        });
+        if (job.controller.signal.aborted) return;
+        const summary = summarizeRecognitionSession(incomingSession);
+        settleBackgroundJob(job.id, {
+          status: 'done',
+          label: '문제 인식 완료',
+          hint: `${summary.problems}개 문제를 찾았습니다.`,
+        });
+        setRecognitionReview({
+          id: `review-${job.id}`,
+          kind: 'queue-recognition',
+          title: `${summary.problems}개 문제로 인식했어요`,
+          subtitle: '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
+          session: incomingSession,
+          incomingSession,
+          fileKeys,
+          fileCount: files.length,
+          outputFolder: incomingSession?.output_dir || incomingSession?.outputDir,
+        });
+      } catch (e) {
+        if (e?.name === 'AbortError') {
+          settleBackgroundJob(job.id, {
+            status: 'canceled',
+            label: '문제 인식 취소됨',
+            hint: '대기열은 그대로 유지했습니다.',
+          });
+          return;
+        }
+        settleBackgroundJob(job.id, {
+          status: 'failed',
+          label: '문제 인식 실패',
+          hint: e.message,
+        }, 5000);
+        showToast(`문제 인식 실패: ${e.message}`);
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+      return;
+    }
     setLoading({
       label: isRecognition
         ? `${files.length}개 파일에서 문제 인식 중...`
@@ -2375,13 +2773,77 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession]);
+  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession, startBackgroundJob, settleBackgroundJob]);
+
+  const cancelRecognitionReview = useCallback(() => {
+    if (confirmingRecognition) return;
+    setRecognitionReview(null);
+    showToast('인식 결과를 적용하지 않았어요');
+  }, [confirmingRecognition]);
+
+  const confirmRecognitionReview = useCallback(async () => {
+    const review = recognitionReview;
+    if (!review) return;
+    setConfirmingRecognition(true);
+    try {
+      if (review.kind === 'queue-recognition') {
+        const incomingSession = review.incomingSession || review.session;
+        const currentSnapshot = session && !usingMock
+          ? materializeSessionForItems(session, items, fileName)
+          : null;
+        const candidate = currentSnapshot
+          ? mergeSessions(currentSnapshot, incomingSession, fileName)
+          : cloneSession(incomingSession);
+        const restored = await postRestore(candidate);
+        applySession(restored);
+        setView('board');
+        const appliedKeys = new Set(review.fileKeys || []);
+        setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
+        const summary = summarizeRecognitionSession(incomingSession);
+        showToast(`칠판에 ${summary.problems}개 문제를 붙였어요`);
+        if (review.outputFolder) openOutputFolder(review.outputFolder);
+      } else if (review.kind === 'retry-ai') {
+        const currentSnapshot = session
+          ? (materializeSessionForItems(session, items, fileName) || cloneSession(session))
+          : cloneSession(review.snapshotBefore);
+        const candidate = mergeRetryCandidateIntoCurrent(currentSnapshot, review.session, review.pageIds);
+        const restored = await postRestore(candidate);
+        setHistoryStack(prev => [...prev, review.snapshotBefore || currentSnapshot].filter(Boolean));
+        if (session) {
+          adoptMutatedSession(restored, session);
+        } else {
+          applySession(restored);
+        }
+        setView('board');
+        const summary = summarizeRecognitionSession(restored, review.pageIds);
+        showToast(`AI 인식 적용 · ${summary.problems}개 문제`);
+      }
+      setRecognitionReview(null);
+    } catch (e) {
+      showToast(`적용 실패: ${e.message}`);
+    } finally {
+      setConfirmingRecognition(false);
+    }
+  }, [
+    recognitionReview,
+    confirmingRecognition,
+    session,
+    usingMock,
+    items,
+    fileName,
+    applySession,
+    adoptMutatedSession,
+  ]);
 
   const setStep = (id, step) => {
     setItems(it => it.map(x => x.id === id ? { ...x, step } : x));
     setPublished(false);
   };
   const applyToAll = (step) => {
+    if (!items.length) {
+      showToast('적용할 자료가 없습니다');
+      return;
+    }
     setItems(it => it.map(x => ({ ...x, step })));
     showToast(`전체 ${items.length}개 항목에 ${step === 's1' ? '1단계' : '2단계 AI 변환'}을(를) 적용했어요`);
   };
@@ -2416,16 +2878,29 @@ function App(){
       arr.splice(b, 0, moved);
       return arr;
     });
+    setPublished(false);
   };
   const removeItem = (id) => {
-    setItems(it => it.filter(x => x.id !== id));
+    const nextItems = items.filter(x => x.id !== id);
+    setItems(nextItems);
     if (activeId === id) {
-      const next = items.find(x => x.id !== id);
-      setActiveId(next ? next.id : null);
+      setActiveId(nextItems[0]?.id || null);
     }
+    if (!session && usingMock && nextItems.length === 0) {
+      setUsingMock(false);
+      setFileName('새 세션');
+    }
+    setPublished(false);
   };
-  // mock-only fallback: when no backend session, addSample stays as a visual mock
   const addMockSample = () => {
+    if (session) {
+      showToast('실제 세션에는 더미를 추가하지 않습니다');
+      return;
+    }
+    if (loading || pendingFiles.length > 0) {
+      showToast('대기열 처리 전에는 더미를 추가하지 않습니다');
+      return;
+    }
     const pool = ['geometry-circle','equation','table','graph','geometry-triangles','paragraph'];
     const kind = pool[Math.floor(Math.random() * pool.length)];
     const id = 'i' + (Date.now() % 100000);
@@ -2442,15 +2917,17 @@ function App(){
       placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
       placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
     }]);
+    setUsingMock(true);
     setActiveId(id);
-    showToast('자료 1개 추가됨 (mock)');
+    setPublished(false);
+    if (!items.length) {
+      setFileName('더미 세션');
+    }
+    showToast('더미 자료 1개 추가됨');
   };
 
   // when backend is reachable, addSample opens the real file picker → /api/export
   const addSample = () => {
-    if (usingMock && !session) {
-      // still try real upload — picker will be a no-op if user cancels
-    }
     triggerUpload();
   };
 
@@ -2525,7 +3002,7 @@ function App(){
         onReset={resetSession}
         onRefresh={refreshSession}
         refreshing={refreshing}
-        canReset={!!session || (usingMock && items.length > 0)}
+        canReset={(!!session || items.length > 0 || pendingFiles.length > 0) && !loading}
         view={view}
         setView={setView}
         reviewAvailable={reviewAvailable}
@@ -2546,8 +3023,10 @@ function App(){
           removePendingFile={removePendingFile}
           clearPendingFiles={clearPendingFiles}
           processQueuedFiles={processQueuedFiles}
-          queueBusy={!!loading}
+          queueBusy={!!loading || hasRunningQueueRecognition}
           aiAvailable={!!userSettings?.hasGeminiApiKey}
+          addMockSample={addMockSample}
+          canAddDummy={!session && !loading && pendingFiles.length === 0}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -2559,6 +3038,7 @@ function App(){
             retryAiSession={retryAiSession}
             mutating={mutating}
             aiAvailable={!!userSettings?.hasGeminiApiKey}
+            aiBusy={hasRunningSessionRecognition}
           />
         ) : (
           <BoardStage
@@ -2595,9 +3075,22 @@ function App(){
           inputIntent={inputIntent}
           setInputIntent={setInputIntent}
           onRecognizeSession={recognizeCurrentSession}
-          canRecognizeSession={!!session && !!userSettings?.hasGeminiApiKey && !mutating}
+          canRecognizeSession={!!session && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
         />
       </div>
+
+      <BackgroundJobsPanel
+        jobs={backgroundJobs}
+        onCancel={cancelBackgroundJob}
+        onDismiss={dismissBackgroundJob}
+      />
+
+      <RecognitionReviewModal
+        review={recognitionReview}
+        confirming={confirmingRecognition}
+        onConfirm={confirmRecognitionReview}
+        onCancel={cancelRecognitionReview}
+      />
 
       {toast && <div className="toast">{Icon.check}<span>{toast}</span></div>}
 

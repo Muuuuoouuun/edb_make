@@ -927,7 +927,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
                 ai_fallback_temperature=ai_config.get("temperature"),
                 ai_fallback_threshold=float(ai_config.get("threshold") or 0.72),
                 ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
-                ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 18000),
+                ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 30000),
                 ai_fallback_save_debug=bool(ai_config.get("save_debug")),
             )
         except Exception as exc:  # noqa: BLE001 - show the actionable pipeline message to the UI
@@ -1326,7 +1326,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         try:
             payload = self._read_json_body()
-            new_session = _mutate_retry_ai(session, payload)
+            preview_only = _coerce_bool(
+                payload.get("preview")
+                if "preview" in payload
+                else payload.get("previewOnly")
+                if "previewOnly" in payload
+                else payload.get("dryRun"),
+                default=False,
+            )
+            working_session = json.loads(json.dumps(session)) if preview_only else session
+            new_session = _mutate_retry_ai(working_session, payload)
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -1337,11 +1346,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
-        self.app_server.remember_session(new_session)
+        if preview_only:
+            self.app_server.allowed_files |= collect_session_file_paths(new_session)
+        else:
+            self.app_server.remember_session(new_session)
         self._send_json({
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "retry": new_session.get("ai_retry_summary") or [],
+            "preview": preview_only,
         })
 
     # ── /api/session/restore ────────────────────────────────────────────
@@ -1558,6 +1571,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             payload = self._read_json_body()
             source_paths = self._resolve_source_paths(payload)
             output_dir = self._resolve_output_dir(payload, source_paths)
+            preview_only = _coerce_bool(
+                payload.get("preview")
+                if "preview" in payload
+                else payload.get("previewOnly")
+                if "previewOnly" in payload
+                else payload.get("dryRun"),
+                default=False,
+            )
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
             input_intent = _extract_input_intent(payload)
             input_notes = _extract_input_notes(payload)
@@ -1606,11 +1627,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
-        self.app_server.remember_session(session)
+        if preview_only:
+            self.app_server.allowed_files |= collect_session_file_paths(session)
+        else:
+            self.app_server.remember_session(session)
         self._send_json(
             {
                 "ok": True,
                 "session": rewrite_session_for_http(session),
+                "preview": preview_only,
                 "output_dir": str(result["output_dir"]),
                 "outputDir": str(result["output_dir"]),
                 "ui_session_path": str(result["ui_session_path"]),

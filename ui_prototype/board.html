@@ -1958,6 +1958,290 @@
     box-shadow: var(--shadow-1);
   }
 
+  /* Background AI jobs */
+  .bg-jobs{
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    width: min(380px, calc(100vw - 36px));
+    z-index: 997;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+  }
+  .bg-job{
+    pointer-events: auto;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: var(--shadow-2);
+  }
+  .bg-job.failed{ border-color: rgba(213,72,72,.3); }
+  .bg-job.canceled{ opacity: .86; }
+  .bg-job-mark{
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .bg-job.failed .bg-job-mark{
+    background: rgba(213,72,72,.12);
+    color: var(--danger);
+    font-weight: 800;
+  }
+  .bg-job.canceled .bg-job-mark{
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .mini-spinner{
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(47,111,237,.18);
+    border-top-color: var(--accent);
+    animation: spin .85s linear infinite;
+  }
+  .bg-job-main{ min-width: 0; }
+  .bg-job-title{
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+  .bg-job-title strong{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
+  }
+  .bg-job-title span{
+    flex: none;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .bg-job-hint{
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+  .bg-job-time{
+    margin-top: 4px;
+    color: var(--muted-2);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+  }
+  .bg-job-action{
+    height: 28px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .bg-job-action:hover{
+    border-color: var(--line-strong);
+    background: var(--surface);
+  }
+
+  /* AI recognition review modal */
+  .recognition-modal-shell{
+    position: fixed;
+    inset: 0;
+    z-index: 998;
+    display: grid;
+    place-items: center;
+    padding: 22px;
+  }
+  .recognition-modal-backdrop{
+    position: absolute;
+    inset: 0;
+    background: rgba(15,20,30,.46);
+    backdrop-filter: blur(5px);
+  }
+  .recognition-modal{
+    position: relative;
+    width: min(1080px, calc(100vw - 44px));
+    max-height: calc(100vh - 44px);
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 28px 70px rgba(15,20,30,.28);
+  }
+  .recognition-modal-hd{
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .recognition-modal-hd > div{ min-width: 0; flex: 1; }
+  .recognition-eyebrow{
+    display: inline-flex;
+    margin-bottom: 5px;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .04em;
+  }
+  .recognition-modal h2{
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: 0;
+  }
+  .recognition-modal p{
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .modal-x{
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 20px;
+    line-height: 1;
+  }
+  .modal-x:hover{
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .modal-x:disabled{ opacity: .45; cursor: not-allowed; }
+  .recognition-summary{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .recognition-summary span{
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .recognition-summary span.warn{
+    color: #aa6516;
+    border-color: rgba(217,119,87,.35);
+    background: rgba(217,119,87,.12);
+  }
+  .recognition-preview{
+    overflow: auto;
+    padding: 18px 20px 22px;
+    background: var(--bg);
+  }
+  .recognition-page{
+    overflow: hidden;
+    max-width: 980px;
+    margin: 0 auto 16px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: var(--shadow-1);
+  }
+  .recognition-page-hd{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .recognition-page-hd strong{
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .recognition-page-canvas{
+    position: relative;
+    background: #fafbfc;
+  }
+  body.dark .recognition-page-canvas{ background: #14171d; }
+  .recognition-page-canvas img{
+    display: block;
+    width: 100%;
+    height: auto;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  .recognition-page-empty,
+  .recognition-empty{
+    padding: 44px 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .recognition-box{
+    position: absolute;
+    border: 2px solid rgba(47,111,237,.78);
+    border-radius: 3px;
+    background: rgba(47,111,237,.08);
+    box-shadow: 0 0 0 1px rgba(255,255,255,.5);
+  }
+  .recognition-box.status-check-needed{
+    border-color: #d97757;
+    background: rgba(217,119,87,.12);
+  }
+  .recognition-box.status-failed{
+    border-color: var(--danger);
+    background: rgba(213,72,72,.14);
+  }
+  .recognition-box span{
+    position: absolute;
+    top: -1px;
+    left: -1px;
+    padding: 2px 7px;
+    border-radius: 0 0 4px 0;
+    background: var(--accent);
+    color: white;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 800;
+  }
+  .recognition-box.status-check-needed span{ background: #d97757; }
+  .recognition-box.status-failed span{ background: var(--danger); }
+  .recognition-modal-foot{
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .recognition-modal-foot .btn.primary{
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+
   /* Toast */
   .toast{
     position: fixed;
