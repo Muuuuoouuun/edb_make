@@ -565,7 +565,10 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
 }
 
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
-function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles }){
+function ItemsRail({
+  items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
+  pendingFiles, removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
+}){
   const dragId = useRef(null);
   const [overId, setOverId] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
@@ -626,9 +629,54 @@ function ItemsRail({ items, activeId, setActive, reorder, removeItem, addSample,
           }}
         >
           {Icon.upload}
-          <strong style={{marginTop:6}}>이미지·PDF 끌어다 놓기</strong>
-          <small>JPG · PNG · HEIC · PDF · 최대 50MB</small>
+          <strong style={{marginTop:6}}>이미지·PDF 대기열에 추가</strong>
+          <small>추가한 순서대로 등록됩니다</small>
         </div>
+
+        {!!pendingFiles?.length && (
+          <div className="source-queue-card">
+            <div className="source-queue-head">
+              <strong>업로드 대기열</strong>
+              <span>{pendingFiles.length}개</span>
+              <div className="spacer" />
+              <button className="icon-btn" title="대기열 비우기" onClick={clearPendingFiles} disabled={queueBusy}>
+                {Icon.trash}
+              </button>
+            </div>
+            <div className="source-queue-list">
+              {pendingFiles.map((file, index) => (
+                <div className="source-queue-row" key={fileQueueKey(file)}>
+                  <span className="idx">{String(index + 1).padStart(2, '0')}</span>
+                  <div className="file">
+                    <div className="name">{file.name || '이름 없는 파일'}</div>
+                    <div className="meta">{/\.pdf$/i.test(file.name || '') ? 'PDF' : 'IMG'} · {formatBytes(file.size)}</div>
+                  </div>
+                  <button
+                    className="icon-btn"
+                    title="대기열에서 제거"
+                    onClick={() => removePendingFile(fileQueueKey(file))}
+                    disabled={queueBusy}
+                  >
+                    {Icon.trash}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="source-queue-actions">
+              <button className="btn" type="button" onClick={() => processQueuedFiles('register')} disabled={queueBusy}>
+                {Icon.check} 그대로 등록
+              </button>
+              <button className="btn primary" type="button" onClick={() => processQueuedFiles('recognize')} disabled={queueBusy}>
+                {Icon.aiBatch} 문제 인식
+              </button>
+              {!aiAvailable && (
+                <div className="btn full" style={{cursor:'default', justifyContent:'center', color:'var(--muted)'}}>
+                  Gemini 키 없음 · 기본 인식으로 실행
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {items.map((it, i) => (
           <div
@@ -1014,6 +1062,7 @@ function SidePanel({
   userSettings, onSaveGeminiKey,
   aiEnabled, setAiEnabled,
   inputIntent, setInputIntent,
+  onRecognizeSession, canRecognizeSession,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -1362,6 +1411,16 @@ function SidePanel({
               <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 AI 변환</span>
               <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
             </button>
+            <button
+              className="btn primary"
+              style={{justifyContent:'space-between'}}
+              onClick={onRecognizeSession}
+              disabled={!canRecognizeSession}
+              title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
+            >
+              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
+              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
+            </button>
             <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
               <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
               <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
@@ -1517,6 +1576,131 @@ function fileToBase64(file){
     reader.onerror = () => reject(reader.error || new Error('file read failed'));
     reader.readAsDataURL(file);
   });
+}
+
+function fileQueueKey(file){
+  return [file?.name || 'file', file?.size || 0, file?.lastModified || 0].join('::');
+}
+
+function formatBytes(bytes){
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return '0KB';
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}MB`;
+  return `${Math.max(1, Math.round(size / 1024))}KB`;
+}
+
+function cloneSession(session){
+  return session ? JSON.parse(JSON.stringify(session)) : null;
+}
+
+function makeUniqueId(baseId, existingIds){
+  const raw = String(baseId || 'item').trim() || 'item';
+  if (!existingIds.has(raw)) {
+    existingIds.add(raw);
+    return raw;
+  }
+  let counter = 2;
+  while (existingIds.has(`${raw}-add-${counter}`)) counter += 1;
+  const next = `${raw}-add-${counter}`;
+  existingIds.add(next);
+  return next;
+}
+
+function applyItemStateToProblem(problem, item){
+  const next = { ...problem };
+  next.title = item.name || next.title || '';
+  next.placementXRatio = normalizePlacementXRatio(item.placementXRatio);
+  next.placementYRatio = verticalPlacementRoomPages(item) > 0.001
+    ? normalizePlacementYRatio(item.placementYRatio)
+    : DEFAULT_PLACEMENT_Y_RATIO;
+  next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
+  return next;
+}
+
+function materializeSessionForItems(rawSession, items, fileName){
+  const snapshot = cloneSession(rawSession);
+  if (!snapshot || !Array.isArray(snapshot.problems)) return null;
+  const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
+  const orderedProblems = items
+    .filter(item => byId.has(item.id))
+    .map(item => applyItemStateToProblem(byId.get(item.id), item));
+  const activeIds = new Set(orderedProblems.map(problem => problem.id));
+  snapshot.problems = orderedProblems;
+  snapshot.detected_problem_count = orderedProblems.length;
+  snapshot.detectedProblemCount = orderedProblems.length;
+  snapshot.session_name = fileName || snapshot.session_name || '새 세션';
+  snapshot.edb_path = null;
+  snapshot.edb_file_uri = null;
+  snapshot.edbPath = null;
+  snapshot.edbFileUri = null;
+  if (Array.isArray(snapshot.pages)) {
+    snapshot.pages = snapshot.pages.map(page => ({
+      ...page,
+      problemIds: (page.problemIds || page.problem_ids || []).filter(id => activeIds.has(id)),
+    }));
+  }
+  return snapshot;
+}
+
+function mergeSessions(baseSession, incomingSession, fileName){
+  const base = cloneSession(baseSession);
+  const incoming = cloneSession(incomingSession);
+  if (!base) return incoming;
+  if (!incoming) return base;
+
+  const existingProblemIds = new Set((base.problems || []).map(problem => problem.id).filter(Boolean));
+  const existingPageIds = new Set((base.pages || []).map(page => page.id).filter(Boolean));
+  const pageIdMap = new Map();
+
+  const incomingPages = (incoming.pages || []).map(page => {
+    const oldId = page.id;
+    const nextId = makeUniqueId(oldId, existingPageIds);
+    pageIdMap.set(oldId, nextId);
+    return {
+      ...page,
+      id: nextId,
+      problemIds: [...(page.problemIds || page.problem_ids || [])],
+    };
+  });
+
+  const problemIdMap = new Map();
+  const incomingProblems = (incoming.problems || []).map(problem => {
+    const oldId = problem.id;
+    const nextId = makeUniqueId(oldId, existingProblemIds);
+    problemIdMap.set(oldId, nextId);
+    return {
+      ...problem,
+      id: nextId,
+      sourcePageId: pageIdMap.get(problem.sourcePageId) || problem.sourcePageId,
+    };
+  });
+
+  incomingPages.forEach(page => {
+    page.problemIds = page.problemIds.map(id => problemIdMap.get(id) || id);
+  });
+
+  const mergedProblems = [...(base.problems || []), ...incomingProblems];
+  const mergedPages = [...(base.pages || []), ...incomingPages];
+  const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
+  return {
+    ...base,
+    session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    data_source: 'question_export',
+    source_mode: 'batch',
+    input_file_count: concatUnique(base.input_files || base.inputFiles || [], incoming.input_files || incoming.inputFiles || []).length,
+    input_files: concatUnique(base.input_files || base.inputFiles || [], incoming.input_files || incoming.inputFiles || []),
+    source_page_count: mergedPages.length,
+    detected_problem_count: mergedProblems.length,
+    rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
+    rendered_page_file_uris: concatUnique(base.rendered_page_file_uris || [], incoming.rendered_page_file_uris || []),
+    warning_messages: [...(base.warning_messages || base.warningMessages || []), ...(incoming.warning_messages || incoming.warningMessages || [])],
+    problems: mergedProblems,
+    pages: mergedPages,
+    edb_path: null,
+    edb_file_uri: null,
+    edbPath: null,
+    edbFileUri: null,
+  };
 }
 
 const KIND_BY_SUBJECT = {
@@ -1819,6 +2003,7 @@ function App(){
   const [aiEnabled, setAiEnabled] = useState(true);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
   const [view, setView] = useState(initialViewRef.current);
@@ -1990,6 +2175,19 @@ function App(){
     }
   }, [session, userSettings, adoptMutatedSession]);
 
+  const recognizeCurrentSession = useCallback(async () => {
+    if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
+      showToast('문제 인식할 원본 페이지가 없습니다');
+      return;
+    }
+    if (!userSettings?.hasGeminiApiKey) {
+      showToast('Gemini API 키를 먼저 저장해 주세요');
+      return;
+    }
+    const pageIds = listUnique(session.pages.map(page => page.id).filter(Boolean));
+    await retryAiSession({ pageIds });
+  }, [session, userSettings, retryAiSession]);
+
   const undoMutation = useCallback(async () => {
     if (historyStack.length === 0) return;
     const snapshot = historyStack[historyStack.length - 1];
@@ -2107,35 +2305,77 @@ function App(){
 
   const triggerUpload = () => fileInputRef.current?.click();
 
-  const handleFiles = async (fileList) => {
+  const handleFiles = (fileList) => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    const aiFallback = aiEnabled && userSettings?.hasGeminiApiKey
+    setPendingFiles(prev => {
+      const seen = new Set(prev.map(fileQueueKey));
+      const next = [...prev];
+      files.forEach(file => {
+        const key = fileQueueKey(file);
+        if (!seen.has(key)) {
+          seen.add(key);
+          next.push(file);
+        }
+      });
+      return next;
+    });
+    showToast(`${files.length}개 파일을 대기열에 추가했어요`);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removePendingFile = useCallback((key) => {
+    setPendingFiles(prev => prev.filter(file => fileQueueKey(file) !== key));
+  }, []);
+
+  const clearPendingFiles = useCallback(() => {
+    setPendingFiles([]);
+    showToast('업로드 대기열을 비웠어요');
+  }, []);
+
+  const processQueuedFiles = useCallback(async (mode) => {
+    const files = [...pendingFiles];
+    if (!files.length) {
+      showToast('대기열에 파일이 없습니다');
+      return;
+    }
+    const isRecognition = mode === 'recognize';
+    const resolvedInputIntent = isRecognition ? 'multi-problem' : 'single-problem';
+    const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
     setLoading({
-      label: `${files.length}개 파일 파싱 중...`,
-      hint: aiFallback.enabled
-        ? 'AI 보정 사용. 사진 한 장당 15~40초.'
-        : 'AI 없이 빠른 파싱. 사진 한 장당 5~15초.',
+      label: isRecognition
+        ? `${files.length}개 파일에서 문제 인식 중...`
+        : `${files.length}개 파일을 순서대로 등록 중...`,
+      hint: isRecognition
+        ? (aiFallback.enabled
+            ? 'Gemini AI 보정으로 문항 경계를 다시 확인합니다.'
+            : 'Gemini 키가 없어 기본 문항 인식만 실행합니다.')
+        : '각 이미지와 PDF 페이지를 하나의 자료로 등록합니다.',
       startedAt: Date.now(),
     });
     try {
-      const resolvedInputIntent = normalizeInputIntent(inputIntent);
       const s = await postExport(files, aiFallback, resolvedInputIntent);
-      applySession(s);
-      const intentLabel = INPUT_INTENT_BY_VALUE[resolvedInputIntent]?.label || '자동 판별';
-      showToast(`${intentLabel}로 파싱 완료 · ${(s.problems || []).length}개 문항`);
-      // open the output folder in Windows Explorer so the user can grab the .edb
-      const folder = s?.output_dir || s?.outputDir;
+      let sessionToApply = s;
+      if (session && !usingMock) {
+        const currentSnapshot = materializeSessionForItems(session, items, fileName);
+        const merged = mergeSessions(currentSnapshot, s, fileName);
+        sessionToApply = await postRestore(merged);
+      }
+      applySession(sessionToApply);
+      setPendingFiles([]);
+      const intentLabel = isRecognition ? '문제 인식' : '순서 등록';
+      showToast(`${intentLabel} 완료 · ${(sessionToApply.problems || []).length}개 문항`);
+      const folder = sessionToApply?.output_dir || sessionToApply?.outputDir || s?.output_dir || s?.outputDir;
       if (folder) openOutputFolder(folder);
     } catch (e) {
-      showToast(`파싱 실패: ${e.message}`);
+      showToast(`${isRecognition ? '문제 인식' : '등록'} 실패: ${e.message}`);
     } finally {
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  };
+  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession]);
 
   const setStep = (id, step) => {
     setItems(it => it.map(x => x.id === id ? { ...x, step } : x));
@@ -2302,6 +2542,12 @@ function App(){
           addSample={addSample}
           bulkApply={applyToAll}
           handleFiles={handleFiles}
+          pendingFiles={pendingFiles}
+          removePendingFile={removePendingFile}
+          clearPendingFiles={clearPendingFiles}
+          processQueuedFiles={processQueuedFiles}
+          queueBusy={!!loading}
+          aiAvailable={!!userSettings?.hasGeminiApiKey}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -2348,6 +2594,8 @@ function App(){
           setAiEnabled={setAiEnabled}
           inputIntent={inputIntent}
           setInputIntent={setInputIntent}
+          onRecognizeSession={recognizeCurrentSession}
+          canRecognizeSession={!!session && !!userSettings?.hasGeminiApiKey && !mutating}
         />
       </div>
 

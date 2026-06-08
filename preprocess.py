@@ -365,11 +365,15 @@ def prepare_source_pages(
         prepared.append(
             PreparedPage(
                 page_id=page.page_id,
-                source_path=page.source_path,
+                source_path=str(Path(page.normalized_path).resolve()),
                 page_number=page.page_index + 1,
                 image=image,
                 original_size=(page.width_px, page.height_px),
-                metadata=dict(page.metadata),
+                metadata={
+                    **dict(page.metadata),
+                    "original_source_path": str(Path(page.source_path).resolve()),
+                    "normalized_path": str(Path(page.normalized_path).resolve()),
+                },
             )
     )
     return prepared
@@ -423,12 +427,14 @@ def prepare_source_pages_batch(
             prepared_pages.append(
                 PreparedPage(
                     page_id=f"{source_path.stem}-{source_index:02d}-page-{local_page_index:03d}",
-                    source_path=str(source_path.resolve()),
+                    source_path=str(Path(page.normalized_path).resolve()),
                     page_number=page_counter,
                     image=image,
                     original_size=(page.width_px, page.height_px),
                     metadata={
                         **dict(page.metadata),
+                        "original_source_path": str(source_path.resolve()),
+                        "normalized_path": str(Path(page.normalized_path).resolve()),
                         "batch_source_index": source_index,
                         "batch_total_sources": len(source_paths),
                         "original_page_index": page.page_index + 1,

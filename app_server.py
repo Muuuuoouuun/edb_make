@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import json
 import mimetypes
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -59,6 +61,7 @@ load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
+OUTER_EDB_PREFIX_LEN = 11
 
 
 def app_root() -> Path:
@@ -248,6 +251,65 @@ def sanitize_upload_file_name(value: str | None) -> str:
     digest = hashlib.sha1(safe.encode("utf-8", errors="ignore")).hexdigest()[:10]
     trimmed_stem = stem[:48].rstrip(" ._") or "upload"
     return f"{trimmed_stem}_{digest}{extension}"
+
+
+def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dict[str, Any]:
+    """Fast structural check for the EDB envelope we write.
+
+    This does not attempt to fully emulate ClassIn, but it catches the common
+    failure modes that make a file unreadable: missing outer marker, corrupt
+    gzip payload, truncated inner header, or a record hint that is impossible
+    for the requested publish.
+    """
+    edb_path = Path(path)
+    data = edb_path.read_bytes()
+    if len(data) <= OUTER_EDB_PREFIX_LEN:
+        raise ValueError("EDB is too small")
+    if data[4:7] != b"edb":
+        raise ValueError("EDB outer marker is missing")
+
+    inner = gzip.decompress(data[OUTER_EDB_PREFIX_LEN:])
+    if len(inner) < 30:
+        raise ValueError("EDB inner payload is truncated")
+    version_len = inner[16]
+    version_end = 17 + version_len
+    if version_end + 17 > len(inner):
+        raise ValueError("EDB header is truncated")
+
+    page_count_hint = struct.unpack_from(">H", inner, 0)[0]
+    record_count_hint = struct.unpack_from(">H", inner, 2)[0]
+    if record_count_hint < expected_min_records:
+        raise ValueError(
+            f"EDB record hint {record_count_hint} is below expected {expected_min_records}"
+        )
+    if page_count_hint < 1:
+        raise ValueError("EDB page hint must be positive")
+
+    record_offset = version_end + 17
+    current = record_offset
+    actual_records = 0
+    while current + 4 <= len(inner):
+        size = struct.unpack_from(">I", inner, current)[0]
+        if size < 5:
+            break
+        max_end = current + size
+        if max_end > len(inner) + 1:
+            raise ValueError("EDB record extends past payload")
+        actual_records += 1
+        current = max_end
+        if current >= len(inner):
+            break
+    if actual_records < expected_min_records:
+        raise ValueError(
+            f"EDB contains {actual_records} records, expected at least {expected_min_records}"
+        )
+    return {
+        "outerSize": len(data),
+        "innerSize": len(inner),
+        "pageCountHint": page_count_hint,
+        "recordCountHint": record_count_hint,
+        "recordCountActual": actual_records,
+    }
 
 
 def decode_file_reference(value: str | None) -> Path | None:
@@ -1142,6 +1204,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     page_count_hint=template.board_page_count,
                 ),
             )
+            edb_validation = validate_edb_file(edb_path, expected_min_records=len(records))
         except Exception as exc:  # noqa: BLE001
             self._send_json({"ok": False, "error": f"failed to write edb: {exc}"},
                             status=HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -1199,7 +1262,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if scale_ratio is not None:
                     problem["placementScaleRatio"] = scale_ratio
         self.app_server.remember_session(new_session)
-        self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+        self._send_json({
+            "ok": True,
+            "session": rewrite_session_for_http(new_session),
+            "edbValidation": edb_validation,
+            "edb_validation": edb_validation,
+        })
 
     # ── /api/session/mutate ──────────────────────────────────────────────
     # Body: { "action": "split" | "merge" | "exclude", ...args }
@@ -1529,6 +1597,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         session.setdefault("input_intent", input_intent)
         if input_notes:
             session["input_notes"] = input_notes
+        edb_validation = None
+        edb_path = result.get("edb_path")
+        if edb_path:
+            try:
+                expected_records = len((result.get("summary") or {}).get("placements") or [])
+                edb_validation = validate_edb_file(edb_path, expected_min_records=max(1, expected_records))
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
         self.app_server.remember_session(session)
         self._send_json(
             {
@@ -1540,6 +1617,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "uiSessionPath": str(result["ui_session_path"]),
                 "edb_path": str(result["edb_path"]) if result["edb_path"] else None,
                 "edbPath": str(result["edb_path"]) if result["edb_path"] else None,
+                "edb_validation": edb_validation,
+                "edbValidation": edb_validation,
                 "export_mode": session.get("export_mode"),
                 "exportMode": session.get("export_mode"),
             }
