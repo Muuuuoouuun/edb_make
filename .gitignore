@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.env.local
 
 samples/
 out_image1/

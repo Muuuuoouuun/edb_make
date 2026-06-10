@@ -1945,8 +1945,13 @@ const AI_FALLBACK_ON = {
   threshold: 0.72,
   maxRegions: 48,
   maxTokens: 4096,
-  timeoutMs: 18000,
+  timeoutMs: 30000,
   saveDebug: false,
+};
+const AI_MODEL_LABELS = {
+  'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
+  'gemini-3-pro-preview': 'Gemini 3 Pro',
+  'gemini-2.5-pro': 'Gemini 2.5 Pro',
 };
 const DEFAULT_INPUT_INTENT = 'multi-problem';
 const INPUT_INTENT_OPTIONS = [
@@ -2061,6 +2066,18 @@ function summarizeRecognitionSession(session, pageIds){
     problems: problems.length,
     riskCount,
   };
+}
+
+function aiModelFallbackToast(session){
+  const summary = session?.ai_summary || session?.aiSummary || {};
+  const fallbacks = Array.isArray(summary.model_fallbacks || summary.modelFallbacks)
+    ? (summary.model_fallbacks || summary.modelFallbacks)
+    : [];
+  const first = fallbacks.find(item => item && item.from && item.to);
+  if (!first) return '';
+  const from = AI_MODEL_LABELS[first.from] || first.from;
+  const to = AI_MODEL_LABELS[first.to] || first.to;
+  return `${from} 호출 오류 · ${to}로 재시도했어요`;
 }
 
 function mergeRetryCandidateIntoCurrent(currentSession, candidateSession, pageIds){
@@ -2493,6 +2510,8 @@ function App(){
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
       if (job.controller.signal.aborted) return;
       const next = result.session;
+      const fallbackMessage = aiModelFallbackToast(next);
+      if (fallbackMessage) showToast(fallbackMessage);
       const applied = (result.retry || []).filter(row => row.status === 'applied').length;
       settleBackgroundJob(job.id, {
         status: 'done',
@@ -2722,6 +2741,8 @@ function App(){
           preview: true,
         });
         if (job.controller.signal.aborted) return;
+        const fallbackMessage = aiModelFallbackToast(incomingSession);
+        if (fallbackMessage) showToast(fallbackMessage);
         const summary = summarizeRecognitionSession(incomingSession);
         settleBackgroundJob(job.id, {
           status: 'done',

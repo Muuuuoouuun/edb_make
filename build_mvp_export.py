@@ -128,6 +128,7 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
     status_counts: dict[str, int] = {}
     route_counts: dict[str, int] = {}
     route_tier_counts: dict[str, int] = {}
+    model_fallbacks: list[dict[str, Any]] = []
 
     for page_model in page_models:
         ai_summary = page_model.metadata.get("ai_fallback")
@@ -141,6 +142,9 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
             ai_cache_hit_count += 1
         status = str(ai_summary.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
+        model_fallback = ai_summary.get("model_fallback")
+        if isinstance(model_fallback, dict):
+            model_fallbacks.append(dict(model_fallback))
 
         route_decision = page_model.metadata.get("route_decision")
         if isinstance(route_decision, dict):
@@ -170,6 +174,7 @@ def _summarize_ai_fallback_usage(page_models: list[PageModel], ai_fallback_confi
         "status_counts": status_counts,
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
+        "model_fallbacks": model_fallbacks,
     }
 
 

@@ -22,6 +22,8 @@ from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_REPAIR_MODEL = "gemini-3.1-pro-preview"
+FALLBACK_GEMINI_REPAIR_MODEL = "gemini-2.5-pro"
+DEPRECATED_GEMINI_REPAIR_MODELS = {"gemini-3-pro-preview"}
 
 _SUPPORTED_PROVIDER_ALIASES = {"gemini", "google", "claude", "anthropic", "openai"}
 
@@ -217,7 +219,7 @@ def repair_page_model(
     summary["attempted"] = True
     start_time = time.perf_counter()
     try:
-        repair_payload, response_id = _request_ai_repair_with_retry(
+        repair_payload, response_id, used_model, model_attempts = _request_ai_repair_with_model_fallback(
             prepared_page=prepared_page,
             page=baseline,
             config=resolved_config,
@@ -253,7 +255,7 @@ def repair_page_model(
     pipeline_cache.save_ai_repair(
         page=baseline,
         provider=provider_key,
-        model=resolved_config.resolved_model,
+        model=used_model,
         trigger_reasons=trigger_reasons,
         repair_payload=repair_payload,
         response_id=response_id,
@@ -265,11 +267,27 @@ def repair_page_model(
             "status": "applied",
             "latency_ms": latency_ms,
             "response_id": response_id,
+            "model_used": used_model,
+            "model_attempts": model_attempts,
             "repaired_problem_count": len(repaired.problems),
             "ai_notes": list(repair_payload.get("notes") or []),
             "problem_units_accepted": len(problem_unit_metadata),
         }
     )
+    if used_model != resolved_config.resolved_model:
+        first_error = next(
+            (
+                attempt.get("error")
+                for attempt in model_attempts
+                if attempt.get("model") == resolved_config.resolved_model
+            ),
+            "",
+        )
+        summary["model_fallback"] = {
+            "from": resolved_config.resolved_model,
+            "to": used_model,
+            "reason": str(first_error or "primary_model_error"),
+        }
     if problem_unit_warnings:
         summary["problem_units_warnings"] = problem_unit_warnings
     repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
@@ -281,7 +299,7 @@ def repair_page_model(
         page=repaired,
         repair_payload=repair_payload,
         summary=summary,
-        config=resolved_config,
+        config=replace(resolved_config, model=used_model),
     )
     return repaired
 
@@ -350,6 +368,43 @@ def _looks_like_full_page_image(page: PageModel) -> bool:
     if block.block_type not in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
         return False
     return block.bbox.area >= float(page.width_px * page.height_px) * 0.75
+
+
+def _repair_model_candidates(config: AIFallbackConfig) -> list[str]:
+    primary = config.resolved_model
+    candidates = [primary]
+    if primary == DEFAULT_GEMINI_REPAIR_MODEL or primary in DEPRECATED_GEMINI_REPAIR_MODELS:
+        candidates.append(FALLBACK_GEMINI_REPAIR_MODEL)
+    return list(dict.fromkeys(model for model in candidates if model))
+
+
+def _request_ai_repair_with_model_fallback(
+    *,
+    prepared_page: PreparedPage,
+    page: PageModel,
+    config: AIFallbackConfig,
+    trigger_reasons: list[str],
+    api_key: str,
+) -> tuple[dict[str, Any], str | None, str, list[dict[str, str]]]:
+    """Call Gemini, falling back from 3.1 Pro Preview to stable Pro if needed."""
+    attempts: list[dict[str, str]] = []
+    last_exc: Exception | None = None
+    for model in _repair_model_candidates(config):
+        model_config = replace(config, model=model)
+        try:
+            repair_payload, response_id = _request_ai_repair_with_retry(
+                prepared_page=prepared_page,
+                page=page,
+                config=model_config,
+                trigger_reasons=trigger_reasons,
+                api_key=api_key,
+            )
+            attempts.append({"model": model, "status": "ok"})
+            return repair_payload, response_id, model, attempts
+        except Exception as exc:
+            last_exc = exc
+            attempts.append({"model": model, "status": "error", "error": str(exc)})
+    raise RuntimeError(f"AI repair failed after model fallback: {last_exc}") from last_exc
 
 
 def _request_ai_repair_with_retry(
