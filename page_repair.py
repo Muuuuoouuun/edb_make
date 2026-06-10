@@ -373,7 +373,12 @@ def _looks_like_full_page_image(page: PageModel) -> bool:
 def _repair_model_candidates(config: AIFallbackConfig) -> list[str]:
     primary = config.resolved_model
     candidates = [primary]
-    if primary == DEFAULT_GEMINI_REPAIR_MODEL or primary in DEPRECATED_GEMINI_REPAIR_MODELS:
+    if (
+        primary == DEFAULT_GEMINI_REPAIR_MODEL
+        or primary in DEPRECATED_GEMINI_REPAIR_MODELS
+        or primary.startswith("gemini-3")
+        or "preview" in primary
+    ):
         candidates.append(FALLBACK_GEMINI_REPAIR_MODEL)
     return list(dict.fromkeys(model for model in candidates if model))
 
@@ -386,7 +391,7 @@ def _request_ai_repair_with_model_fallback(
     trigger_reasons: list[str],
     api_key: str,
 ) -> tuple[dict[str, Any], str | None, str, list[dict[str, str]]]:
-    """Call Gemini, falling back from 3.1 Pro Preview to stable Pro if needed."""
+    """Call Gemini, falling back from preview/3.x models to stable Pro if needed."""
     attempts: list[dict[str, str]] = []
     last_exc: Exception | None = None
     for model in _repair_model_candidates(config):
@@ -619,6 +624,8 @@ def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
             "  - Answer choices MUST BE final options like ① ② ③ ④ ⑤  or  (1) (2) …",
             "  - Figures / diagrams / physics–chemistry drawings appear below the stem.",
             "  - Never mix the choices of Problem 1 with Problem 2.",
+            "  - On two-column pages, group blocks by their visual column first.",
+            "    Do not attach a block from the left column to a right-column problem, or vice versa.",
             "",
             "Output rules (STRICT):",
             "  - Use ONLY the block_ids listed below. Do NOT invent IDs.",
@@ -634,6 +641,9 @@ def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
             "    keep the block-id arrays above authoritative. Each unit must use a problem_start_block_id",
             "    from problem_start_block_ids, bbox_px in page pixels covering that full problem, and",
             "    review_flags such as needs_human_review, uncertain_bbox, split_choice_block, or merged_problem.",
+            "    bbox_px must include the problem number/title, stem, figures, and all answer choices.",
+            "    bbox_px must stop before the next numbered problem in the same column.",
+            "    If the next title is visible at the bottom edge, exclude it from the previous problem.",
             f"  - Trigger reasons: {', '.join(trigger_reasons)}",
             "",
             "Blocks (JSON, reading order top→bottom):",

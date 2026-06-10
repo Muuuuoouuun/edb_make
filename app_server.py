@@ -24,6 +24,7 @@ from urllib.request import url2pathname
 from build_mvp_export import run_export
 from build_problem_board_edb import (
     DEFAULT_BOARD_THEME,
+    ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     ProblemEntry,
     build_records,
     build_ui_session,
@@ -32,7 +33,8 @@ from build_problem_board_edb import (
     run_problem_export,
 )
 from edb_builder import (
-    DEFAULT_CROP_FORMAT,
+    CROP_FORMAT_V1,
+    CROP_FORMAT_V2,
     build_edb,
     version_string_for_crop_format,
     write_edb,
@@ -181,6 +183,20 @@ def _coerce_placement_scale_ratio(value: Any) -> float | None:
     if ratio is None:
         return None
     return max(0.6, min(1.6, ratio))
+
+
+APP_DEFAULT_CROP_FORMAT = CROP_FORMAT_V1
+
+
+def _normalize_crop_format(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {CROP_FORMAT_V1, CROP_FORMAT_V2}:
+        return normalized
+    return APP_DEFAULT_CROP_FORMAT
+
+
+def _extract_crop_format(payload: dict[str, Any]) -> str:
+    return _normalize_crop_format(payload.get("cropFormat") or payload.get("crop_format"))
 
 
 def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
@@ -334,6 +350,17 @@ def path_to_api_url(path: str | Path | None) -> str | None:
     return f"/api/file?path={quote(str(resolved))}"
 
 
+def content_disposition_attachment(filename: str) -> str:
+    fallback = "".join(
+        ch if 32 <= ord(ch) < 127 and ch not in {'"', "\\", ";"} else "_"
+        for ch in filename
+    ).strip()
+    if not fallback or fallback in {".", ".."}:
+        fallback = "download.edb"
+    encoded = quote(filename, safe="")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+
+
 def load_generated_session() -> dict[str, Any] | None:
     if not GENERATED_SESSION_JS.exists():
         return None
@@ -454,7 +481,10 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
             kwargs[key] = template_data[key]
     if "preserve_right_writing_zone" in template_data:
         kwargs["preserve_right_writing_zone"] = bool(template_data["preserve_right_writing_zone"])
-    return LayoutTemplate(**kwargs)
+    template = LayoutTemplate(**kwargs)
+    template.base_slot_height_pages = ONE_PROBLEM_SLOT_HEIGHT_PAGES
+    template.metadata["placement_mode"] = "one-problem-per-page"
+    return template
 
 
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
@@ -891,7 +921,11 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
         raise ValueError("AI 재인식할 페이지가 없습니다")
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    output_root = Path(session.get("output_dir") or RUNTIME_DIR / "ai_retries").resolve()
+    session_output_dir = session.get("output_dir")
+    if session_output_dir:
+        output_root = Path(session_output_dir).resolve() / "ai_retries"
+    else:
+        output_root = (RUNTIME_DIR / "ai_retries").resolve()
     ai_config = session.get("ai_fallback") if isinstance(session.get("ai_fallback"), dict) else {}
     summaries: list[dict[str, Any]] = []
 
@@ -899,9 +933,26 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
         page = _find_page(session, page_id)
         source_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
         if source_path is None or not source_path.exists():
-            raise FileNotFoundError(f"source page image missing for retry: {page_id}")
+            # Mark this page failed and continue; aborting the whole batch
+            # mid-loop would leak partial mutations into latest_session because
+            # ``session`` is the same object the HTTP handler resolved.
+            page["reviewStatus"] = "failed"
+            flags = list(page.get("riskFlags") or [])
+            flags.append("ai_retry_missing_source")
+            page["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+            page["aiRetry"] = {
+                "status": "missing_source",
+                "error": f"source page image missing for retry: {page_id}",
+                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            summaries.append({
+                "pageId": page_id,
+                "status": "missing_source",
+                "error": f"source page image missing for retry: {page_id}",
+            })
+            continue
 
-        retry_dir = output_root / "ai_retries" / sanitize_output_dir_name(f"{page_id}_{stamp}")
+        retry_dir = output_root / sanitize_output_dir_name(f"{page_id}_{stamp}")
         try:
             result = run_problem_export(
                 source_path,
@@ -1109,6 +1160,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
 
+        payload_session = payload.get("session")
+        if isinstance(payload_session, dict) and isinstance(payload_session.get("problems"), list):
+            session = _denormalize_session_paths(payload_session)
+
         order = list(payload.get("order") or [])
         excluded = set(payload.get("excluded") or [])
         placement_payload = payload.get("placements")
@@ -1151,7 +1206,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if scale_ratio is None:
                 scale_ratio = _coerce_placement_scale_ratio(problem_copy)
             if scale_ratio is not None:
-                problem_copy["placementScaleRatio"] = scale_ratio
+                problem_copy["placementScaleRatio"] = max(1.0, scale_ratio)
             sequence_with_placements.append(problem_copy)
         sequence = sequence_with_placements
 
@@ -1173,6 +1228,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         output_dir = Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        crop_format = _normalize_crop_format(session.get("crop_format"))
+
         try:
             records, placements, header_flag = build_records(
                 entries,
@@ -1182,7 +1239,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 text_confidence_threshold=0.78,
                 dark_board=True,
                 board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
-                crop_format=session.get("crop_format") or DEFAULT_CROP_FORMAT,
+                crop_format=crop_format,
             )
         except Exception as exc:  # noqa: BLE001 — bubble up pipeline errors verbatim
             self._send_json({"ok": False, "error": f"publish build failed: {exc}"},
@@ -1198,9 +1255,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 build_edb(
                     records,
                     header_flag=header_flag,
-                    version=version_string_for_crop_format(
-                        session.get("crop_format") or DEFAULT_CROP_FORMAT
-                    ),
+                    version=version_string_for_crop_format(crop_format),
                     page_count_hint=template.board_page_count,
                 ),
             )
@@ -1220,10 +1275,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             ai_fallback_config=session.get("ai_fallback"),
             ai_summary=session.get("ai_summary"),
             template=template,
+            board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
+            crop_format=crop_format,
         )
         # carry over user-facing labels so the rename doesn't get lost
         if session.get("session_name"):
             new_session["session_name"] = session["session_name"]
+        new_session["crop_format"] = crop_format
         # publish only re-renders records; page-level review metadata
         # (sourceImageUri, dimensions, riskFlags) is still meaningful for the
         # caller, so preserve it across the publish hop.
@@ -1248,7 +1306,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 continue
             if "bbox" not in problem or not problem["bbox"]:
                 problem["bbox"] = prior.get("bbox") or {}
-            problem["riskFlags"] = list(prior.get("riskFlags") or [])
+            problem["riskFlags"] = [
+                str(flag)
+                for flag in (prior.get("riskFlags") or [])
+                if str(flag) != "fallback_grouping"
+            ]
+            problem["reviewStatus"] = "check_needed" if problem["riskFlags"] else "normal"
             if "placementXRatio" not in problem:
                 x_ratio = _coerce_placement_x_ratio(prior)
                 if x_ratio is not None:
@@ -1510,7 +1573,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
         if path.suffix.lower() == ".edb":
-            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            self.send_header("Content-Disposition", content_disposition_attachment(path.name))
         self.end_headers()
         self.wfile.write(data)
 
@@ -1582,6 +1645,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
             input_intent = _extract_input_intent(payload)
             input_notes = _extract_input_notes(payload)
+            crop_format = _extract_crop_format(payload)
             common_kwargs = {
                 "output_dir": output_dir,
                 "subject_name": str(payload.get("subject") or "unknown"),
@@ -1606,6 +1670,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     source_paths[0] if len(source_paths) == 1 else source_paths,
                     record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "image-only"),
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
+                    crop_format=crop_format,
                     input_intent=input_intent,
                     input_notes=input_notes,
                     **common_kwargs,

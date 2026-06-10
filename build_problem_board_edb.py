@@ -59,6 +59,14 @@ MAX_HEIGHT_PAGES = 4.8
 PLACEMENT_SCALE_MIN = 0.6
 PLACEMENT_SCALE_MAX = 1.6
 MIN_PROBLEM_AREA_RATIO = 0.12
+DOCUMENT_BAND_TOP_PADDING_PX = 14.0
+DOCUMENT_BAND_BOTTOM_PADDING_PX = 8.0
+DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX = 6.0
+V1_LAYOUT_MARGIN_X_PX = 24.0
+V1_LAYOUT_MARGIN_Y_PX = 24.0
+V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
+ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
+PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 18
 # Brightness above this value (0-255) is treated as a light background that
 # should be removed from the exported problem image.
 DARK_BOARD_BRIGHTNESS_THRESHOLD = 160
@@ -157,6 +165,68 @@ def _resolve_chalk_color(board_theme: str | None) -> tuple[int, int, int]:
 # the width of a printed Korean exam problem at 200 DPI.
 PROBLEM_CROP_TARGET_MIN_WIDTH_PX = 1024
 PROBLEM_CROP_MAX_UPSCALE = 2.6
+EDGE_GUIDE_SCAN_RATIO = 0.12
+EDGE_GUIDE_SCAN_MAX_PX = 52
+EDGE_GUIDE_DARK_THRESHOLD = 200
+EDGE_GUIDE_MIN_COLUMN_RATIO = 0.55
+EDGE_GUIDE_TRIM_PADDING_PX = 4
+
+
+def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
+    """Remove page/column guide lines that hug the left or right crop edge.
+
+    We only trim nearly full-height dark vertical strokes inside the outer
+    edge band so internal diagram axes and graph lines stay intact.
+    """
+    width, height = image.size
+    if width <= 12 or height <= 12:
+        return image
+
+    gray = image.convert("L")
+    pixels = gray.load()
+    scan_width = min(int(round(width * EDGE_GUIDE_SCAN_RATIO)), EDGE_GUIDE_SCAN_MAX_PX)
+    if scan_width <= 0:
+        return image
+
+    min_dark_pixels = int(round(height * EDGE_GUIDE_MIN_COLUMN_RATIO))
+
+    def is_guide_column(x: int) -> bool:
+        dark_count = 0
+        for y in range(height):
+            if pixels[x, y] <= EDGE_GUIDE_DARK_THRESHOLD:
+                dark_count += 1
+        return dark_count >= min_dark_pixels
+
+    left_trim = 0
+    for x in range(scan_width):
+        if is_guide_column(x):
+            left_trim = max(left_trim, x + EDGE_GUIDE_TRIM_PADDING_PX + 1)
+
+    right_trim = width
+    for x in range(width - scan_width, width):
+        if is_guide_column(x):
+            right_trim = min(right_trim, x - EDGE_GUIDE_TRIM_PADDING_PX)
+
+    if left_trim <= 0 and right_trim >= width:
+        return image
+    if right_trim - left_trim < width * 0.75:
+        return image
+    return image.crop((max(0, left_trim), 0, min(width, right_trim), height))
+
+
+def _pad_problem_crop_bottom(image: Image.Image, padding_px: int = PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX) -> Image.Image:
+    if padding_px <= 0 or image.width <= 0 or image.height <= 0:
+        return image
+    if "A" in image.getbands():
+        fill = (255, 255, 255, 0)
+        mode = "RGBA"
+    else:
+        fill = (255, 255, 255)
+        mode = "RGB"
+    converted = image.convert(mode)
+    padded = Image.new(mode, (converted.width, converted.height + padding_px), fill)
+    padded.paste(converted, (0, 0))
+    return padded
 
 
 def _enhance_problem_crop(image: Image.Image) -> Image.Image:
@@ -295,6 +365,48 @@ def _write_render_image(image: Image.Image, path: Path) -> Path:
     return path
 
 
+def _composite_on_board_background(image: Image.Image, *, board_theme: str = DEFAULT_BOARD_THEME) -> Image.Image:
+    rgba = image.convert("RGBA")
+    background = Image.new(
+        "RGBA",
+        rgba.size,
+        BOARD_THEME_PALETTES[_resolve_board_theme(board_theme)]["background"] + (255,),
+    )
+    background.alpha_composite(rgba)
+    return background.convert("RGB")
+
+
+def _load_board_export_image(
+    board_render_path: Path,
+    crop_image: Image.Image,
+    *,
+    board_theme: str = DEFAULT_BOARD_THEME,
+    target_size: tuple[int, int] | None = None,
+) -> Image.Image:
+    try:
+        rendered = Image.open(board_render_path)
+    except OSError:
+        rendered = None
+
+    if rendered is not None:
+        if target_size is not None and rendered.size != target_size:
+            rendered = rendered.resize(target_size, Image.Resampling.LANCZOS)
+        if "A" in rendered.getbands():
+            return _composite_on_board_background(rendered, board_theme=board_theme)
+        rendered_rgb = rendered.convert("RGB")
+        mean_brightness = ImageStat.Stat(rendered_rgb.convert("L")).mean[0]
+        if mean_brightness <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
+            return rendered_rgb
+
+    cutout = _extract_problem_cutout(
+        _enhance_problem_crop(crop_image),
+        chalk_color=_resolve_chalk_color(board_theme),
+    )
+    if target_size is not None and cutout.size != target_size:
+        cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
+    return _composite_on_board_background(cutout, board_theme=board_theme)
+
+
 def _encode_image_bytes(image: Image.Image, quality: int = 92) -> tuple[bytes, str]:
     """Encode a PIL image for use in an EDB image record."""
     buf = io.BytesIO()
@@ -376,17 +488,19 @@ def merge_boxes(
     page_height: int,
     padding_px: int = PROBLEM_PADDING_PX,
     top_padding_px: int | None = None,
+    bottom_padding_px: int | float | None = None,
 ) -> Box:
     left = min(box.left for box in boxes)
     top = min(box.top for box in boxes)
     right = max(box.right for box in boxes)
     bottom = max(box.bottom for box in boxes)
     resolved_top_padding = padding_px if top_padding_px is None else top_padding_px
+    resolved_bottom_padding = padding_px if bottom_padding_px is None else bottom_padding_px
     return Box.from_points(
         max(0.0, left - float(padding_px)),
         max(0.0, top - float(resolved_top_padding)),
         min(float(page_width), right + float(padding_px)),
-        min(float(page_height), bottom + float(padding_px)),
+        min(float(page_height), bottom + float(resolved_bottom_padding)),
     )
 
 
@@ -499,6 +613,50 @@ def _problem_top_y(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -
     return min(block.bbox.top for block in blocks)
 
 
+def _coerce_int(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _problem_first_block(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> ContentBlock | None:
+    ids = _iter_problem_block_ids_raw(problem)
+    blocks = [block_by_id[bid] for bid in ids if bid in block_by_id]
+    if not blocks:
+        return None
+    return min(blocks, key=lambda block: (block.bbox.top, block.bbox.left, block.reading_order))
+
+
+def _problem_column_value(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> int | None:
+    value = _coerce_int(problem.metadata.get("column_index"))
+    if value is not None:
+        return value
+    first_block = _problem_first_block(problem, block_by_id)
+    if first_block is None:
+        return None
+    return _coerce_int(first_block.metadata.get("column_index"))
+
+
+def _block_column_value(block: ContentBlock) -> int | None:
+    return _coerce_int(block.metadata.get("column_index"))
+
+
+def _problem_band_value(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> int:
+    value = _coerce_int(problem.metadata.get("question_band_index"))
+    if value is not None:
+        return value
+    first_block = _problem_first_block(problem, block_by_id)
+    if first_block is None:
+        return 0
+    return _coerce_int(first_block.metadata.get("question_band_index")) or 0
+
+
+def _problem_left_x(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> float:
+    first_block = _problem_first_block(problem, block_by_id)
+    return first_block.bbox.left if first_block is not None else 0.0
+
+
 def _problem_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> tuple[object, ...]:
     raw_number = problem.metadata.get("problem_number")
     if isinstance(raw_number, int):
@@ -506,27 +664,39 @@ def _problem_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock
     if isinstance(raw_number, str) and raw_number.isdigit():
         return (0, int(raw_number), problem.unit_id)
 
-    ids = _iter_problem_block_ids_raw(problem)
-    blocks = [block_by_id[bid] for bid in ids if bid in block_by_id]
-    first_block = min(blocks, key=lambda block: (block.bbox.top, block.bbox.left)) if blocks else None
-
-    column_index = problem.metadata.get("column_index")
-    if column_index is None and first_block is not None:
-        column_index = first_block.metadata.get("column_index")
-    question_band_index = problem.metadata.get("question_band_index")
-    if question_band_index is None and first_block is not None:
-        question_band_index = first_block.metadata.get("question_band_index")
-
-    try:
-        column_value = int(column_index)
-    except (TypeError, ValueError):
-        column_value = 0
-    try:
-        band_value = int(question_band_index)
-    except (TypeError, ValueError):
-        band_value = 0
-
+    column_value = _problem_column_value(problem, block_by_id) or 0
+    band_value = _problem_band_value(problem, block_by_id)
     return (1, column_value, band_value, _problem_top_y(problem, block_by_id), problem.unit_id)
+
+
+def _build_crop_next_problem_map(
+    problems: list[ProblemUnit],
+    block_by_id: dict[str, ContentBlock],
+) -> dict[str, ProblemUnit]:
+    """Map each problem to the next problem in the same detected column.
+
+    Final output remains number-ordered, but crop boundaries are spatial: in a
+    two-column worksheet, problem 9 should not use problem 10's top as its
+    lower boundary just because 10 is the next number.
+    """
+    grouped: dict[int | None, list[ProblemUnit]] = {}
+    for problem in problems:
+        grouped.setdefault(_problem_column_value(problem, block_by_id), []).append(problem)
+
+    next_by_id: dict[str, ProblemUnit] = {}
+    for group in grouped.values():
+        spatial_order = sorted(
+            group,
+            key=lambda problem: (
+                _problem_top_y(problem, block_by_id),
+                _problem_band_value(problem, block_by_id),
+                _problem_left_x(problem, block_by_id),
+                problem.unit_id,
+            ),
+        )
+        for current, next_problem in zip(spatial_order, spatial_order[1:]):
+            next_by_id[current.unit_id] = next_problem
+    return next_by_id
 
 
 def _expand_problem_blocks_by_gap(
@@ -556,6 +726,7 @@ def _expand_problem_blocks_by_gap(
         next_top = _problem_top_y(next_problem, block_by_id)
         end_y = next_top if next_top > start_y else float(page.height_px)
 
+    problem_column = _problem_column_value(problem, block_by_id)
     included: list[ContentBlock] = []
     for block in page.blocks:
         if block.block_id in own_ids:
@@ -563,10 +734,70 @@ def _expand_problem_blocks_by_gap(
             continue
         if block.block_id in other_problem_block_ids:
             continue
+        block_column = _block_column_value(block)
+        if problem_column is not None and block_column is not None and block_column != problem_column:
+            continue
         centre = (block.bbox.top + block.bbox.bottom) / 2.0
         if start_y <= centre < end_y:
             included.append(block)
     return included
+
+
+def _clamp_box_to_next_problem(
+    box: Box,
+    next_problem: ProblemUnit | None,
+    block_by_id: dict[str, ContentBlock],
+) -> Box:
+    if next_problem is None:
+        return box
+    next_top = _problem_top_y(next_problem, block_by_id)
+    if next_top <= box.top + 1.0:
+        return box
+    limit = max(box.top + 1.0, next_top - DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX)
+    if box.bottom <= limit:
+        return box
+    return Box.from_points(box.left, box.top, box.right, limit)
+
+
+def _problem_metadata_bbox(problem: ProblemUnit, page: PageModel) -> Box | None:
+    raw = problem.metadata.get("bbox_px")
+    if not isinstance(raw, dict):
+        ai_unit = problem.metadata.get("ai_problem_unit")
+        if isinstance(ai_unit, dict):
+            raw = ai_unit.get("bbox_px")
+    if not isinstance(raw, dict):
+        return None
+
+    try:
+        left = float(raw.get("left", 0.0))
+        top = float(raw.get("top", 0.0))
+        width = float(raw.get("width", 0.0))
+        height = float(raw.get("height", 0.0))
+    except (TypeError, ValueError):
+        return None
+    if width <= 1.0 or height <= 1.0:
+        return None
+
+    right = min(float(page.width_px), max(0.0, left + width))
+    bottom = min(float(page.height_px), max(0.0, top + height))
+    left = max(0.0, min(float(page.width_px), left))
+    top = max(0.0, min(float(page.height_px), top))
+    if right <= left + 1.0 or bottom <= top + 1.0:
+        return None
+    return Box.from_points(left, top, right, bottom)
+
+
+def _should_prefer_problem_metadata_bbox(problem: ProblemUnit) -> bool:
+    if problem.metadata.get("grouping_source") != "ai_fallback":
+        return False
+    flags: list[str] = []
+    raw_flags = problem.metadata.get("review_flags")
+    if isinstance(raw_flags, list):
+        flags.extend(str(flag) for flag in raw_flags)
+    ai_unit = problem.metadata.get("ai_problem_unit")
+    if isinstance(ai_unit, dict) and isinstance(ai_unit.get("review_flags"), list):
+        flags.extend(str(flag) for flag in ai_unit["review_flags"])
+    return "uncertain_bbox" not in {flag.strip() for flag in flags}
 
 
 def _drop_pre_first_problem_headers(
@@ -708,13 +939,14 @@ def build_problem_entries(
         ordered_problems = _drop_pre_first_problem_headers(ordered_problems, block_by_id)
 
         _fill_missing_problem_numbers(ordered_problems)
+        next_problem_for_crop = _build_crop_next_problem_map(ordered_problems, block_by_id)
 
         all_assigned_ids: set[str] = set()
         for prob in ordered_problems:
             all_assigned_ids.update(_iter_problem_block_ids_raw(prob))
 
-        for index, problem in enumerate(ordered_problems):
-            next_problem = ordered_problems[index + 1] if index + 1 < len(ordered_problems) else None
+        for problem in ordered_problems:
+            next_problem = next_problem_for_crop.get(problem.unit_id)
             own_ids = set(_iter_problem_block_ids_raw(problem))
             other_problem_block_ids = all_assigned_ids - own_ids
             problem_block_ids = iter_problem_block_ids(page, problem)
@@ -735,6 +967,12 @@ def build_problem_entries(
                 merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
             else:
                 boxes = [block.bbox for block in blocks]
+                metadata_box = _problem_metadata_bbox(problem, page)
+                if metadata_box is not None:
+                    if _should_prefer_problem_metadata_bbox(problem):
+                        boxes = [metadata_box]
+                    else:
+                        boxes.append(metadata_box)
                 if not boxes:
                     boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
                 has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
@@ -742,8 +980,11 @@ def build_problem_entries(
                     boxes,
                     page_width=page.width_px,
                     page_height=page.height_px,
-                    top_padding_px=4 if has_document_band_metadata else PROBLEM_PADDING_PX,
+                    top_padding_px=int(DOCUMENT_BAND_TOP_PADDING_PX) if has_document_band_metadata else PROBLEM_PADDING_PX,
+                    bottom_padding_px=DOCUMENT_BAND_BOTTOM_PADDING_PX if has_document_band_metadata else PROBLEM_PADDING_PX,
                 )
+                if has_document_band_metadata:
+                    merged_box = _clamp_box_to_next_problem(merged_box, next_problem, block_by_id)
                 if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())
@@ -756,6 +997,8 @@ def build_problem_entries(
                     int(merged_box.bottom),
                 )
             )
+            crop = _trim_edge_vertical_guides(crop)
+            crop = _pad_problem_crop_bottom(crop)
             crop_name = f"problem_{len(entries) + 1:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
             crop_path = crop_dir / crop_name
             crop.save(crop_path)
@@ -1006,12 +1249,14 @@ def recrop_problem(
     right = int(max(left + 1, min(page_image.width, bbox.right)))
     bottom = int(max(top + 1, min(page_image.height, bbox.bottom)))
     crop = page_image.crop((left, top, right, bottom))
+    crop = _trim_edge_vertical_guides(crop)
+    crop = _pad_problem_crop_bottom(crop)
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)
     return crop.size
 
 
-_GLOBAL_RISK_REASONS = {"merged_problem_block", "fallback_grouping", "marker_conflicts"}
+_GLOBAL_RISK_REASONS = {"merged_problem_block", "marker_conflicts"}
 
 
 def _collect_page_risk_flags(page_metadata: dict[str, Any]) -> list[str]:
@@ -1069,6 +1314,8 @@ def build_ui_session(
     template: LayoutTemplate | None = None,
     input_intent: str = "auto",
     input_notes: str | None = None,
+    board_theme: str = DEFAULT_BOARD_THEME,
+    crop_format: str = DEFAULT_CROP_FORMAT,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
     resolved_input_intent = _normalize_input_intent(input_intent)
@@ -1080,7 +1327,8 @@ def build_ui_session(
     resolved_template = template or LayoutTemplate(
         name="academy-default",
         board_page_count=max(50, len(placements) * 2 or 50),
-        base_slot_height_pages=1.2,
+        base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+        metadata={"placement_mode": "one-problem-per-page"},
     )
 
     # Map page_id → PageModel for risk-flag lookup, and page_id → list[problem_id]
@@ -1191,6 +1439,8 @@ def build_ui_session(
         "detected_problem_count": len(placements),
         "export_mode": "question",
         "record_mode": record_mode,
+        "board_theme": _resolve_board_theme(board_theme),
+        "crop_format": crop_format,
         "pages_json_path": str((output_dir / "pages.json").resolve()),
         "placements_json_path": str((output_dir / "placements.json").resolve()),
         "board_render_dir": str(
@@ -1291,6 +1541,29 @@ def _resize_to_target_width(image: Image.Image, target_width_px: int) -> Image.I
     return image.resize((target_width_px, new_height), Image.Resampling.LANCZOS)
 
 
+def _v1_source_layout_transform(problem_entries: list[ProblemEntry]) -> tuple[float, float, float] | None:
+    if len(problem_entries) <= 1:
+        return None
+    bounds = [entry.bounds for entry in problem_entries if entry.bounds.width > 0 and entry.bounds.height > 0]
+    if len(bounds) != len(problem_entries):
+        return None
+
+    left = min(bound.left for bound in bounds)
+    top = min(bound.top for bound in bounds)
+    right = max(bound.left + bound.width for bound in bounds)
+    bottom = max(bound.top + bound.height for bound in bounds)
+    layout_width = right - left
+    layout_height = bottom - top
+    if layout_width <= 0 or layout_height <= 0:
+        return None
+
+    max_width = CANVAS_HEIGHT - V1_LAYOUT_MARGIN_X_PX * 2
+    max_height = CANVAS_WIDTH * V1_LAYOUT_MAX_HEIGHT_PAGES - V1_LAYOUT_MARGIN_Y_PX * 2
+    scale = min(max_width / layout_width, max_height / layout_height)
+    scale = max(0.2, min(1.0, scale))
+    return left, top, scale
+
+
 def build_image_only_records(
     problem_entries: list[ProblemEntry],
     template: LayoutTemplate,
@@ -1315,31 +1588,30 @@ def build_image_only_records(
     records: list[bytes] = []
     placement_summaries: list[dict[str, object]] = []
     next_record_id = 0
+    preserve_source_layout = bool(template.metadata.get("preserve_source_layout"))
+    source_layout = (
+        _v1_source_layout_transform(problem_entries)
+        if crop_format == CROP_FORMAT_V1 and preserve_source_layout
+        else None
+    )
 
     for placement in placements:
         entry = entries_by_problem_id[placement.problem_id]
         crop_path = Path(str(placement.metadata["crop_path"]))
         board_render_path = Path(str(placement.metadata["board_render_path"]))
         crop_image = Image.open(crop_path).convert("RGB")
-        board_image = Image.open(board_render_path) if dark_board else crop_image
+        board_image = (
+            _load_board_export_image(
+                board_render_path,
+                crop_image,
+                board_theme=board_theme,
+                target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
+            )
+            if dark_board
+            else crop_image
+        )
         if target_image_width_px > 0:
             board_image = _resize_to_target_width(board_image, int(target_image_width_px))
-        base_rendered_width_px = float(board_image.width) if crop_format == CROP_FORMAT_V2 else available_width_px
-        base_rendered_height_px = (
-            float(board_image.height)
-            if crop_format == CROP_FORMAT_V2
-            else placement.actual_content_height_pages * CANVAS_WIDTH
-        )
-        scale_ratio = _problem_scale_ratio(
-            entry,
-            placement,
-            base_rendered_width_px,
-            base_rendered_height_px,
-        )
-        if crop_format == CROP_FORMAT_V2 and abs(scale_ratio - 1.0) > 0.001:
-            scaled_width = max(1, int(round(board_image.width * scale_ratio)))
-            scaled_height = max(1, int(round(board_image.height * scale_ratio)))
-            board_image = board_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
         image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
         if crop_format == CROP_FORMAT_V2:
             secondary_bytes = build_tight_crop_image_bytes(
@@ -1349,19 +1621,59 @@ def build_image_only_records(
             secondary_bytes = build_preview_image_bytes(
                 image_bytes, max_size=(768, 768), format_hint=image_format, quality=88
             )
-        if crop_format == CROP_FORMAT_V2:
+
+        if source_layout is not None:
+            layout_left, layout_top, layout_scale = source_layout
+            scale_ratio = layout_scale
+            rendered_width_px = entry.bounds.width * layout_scale
+            rendered_height_px = entry.bounds.height * layout_scale
+            x_px = V1_LAYOUT_MARGIN_X_PX + (entry.bounds.left - layout_left) * layout_scale
+            y_px = V1_LAYOUT_MARGIN_Y_PX + (entry.bounds.top - layout_top) * layout_scale
+            width_hint = normalize_width_px(rendered_width_px)
+            height_hint = normalize_height_px(rendered_height_px, page_count_hint=template.board_page_count)
+        elif crop_format == CROP_FORMAT_V2:
+            base_rendered_width_px = float(board_image.width)
+            base_rendered_height_px = float(board_image.height)
+            scale_ratio = _problem_scale_ratio(
+                entry,
+                placement,
+                base_rendered_width_px,
+                base_rendered_height_px,
+            )
+            if abs(scale_ratio - 1.0) > 0.001:
+                scaled_width = max(1, int(round(board_image.width * scale_ratio)))
+                scaled_height = max(1, int(round(board_image.height * scale_ratio)))
+                board_image = board_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+                image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
+                secondary_bytes = build_tight_crop_image_bytes(
+                    image_bytes, format_hint=image_format, quality=88
+                )
             width_hint = normalize_width_px(float(board_image.width))
             height_hint = normalize_height_px(
                 float(board_image.height), page_count_hint=template.board_page_count
             )
+            rendered_width_px = float(board_image.width)
+            rendered_height_px = float(board_image.height)
+            x_px = _problem_origin_x_px(entry, rendered_width_px)
+            y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
         else:
-            height_px = placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio
+            base_rendered_width_px = available_width_px
+            base_rendered_height_px = available_width_px * (
+                float(board_image.height) / max(float(board_image.width), 1.0)
+            )
+            scale_ratio = _problem_scale_ratio(
+                entry,
+                placement,
+                base_rendered_width_px,
+                base_rendered_height_px,
+            )
+            height_px = base_rendered_height_px * scale_ratio
             width_hint = normalize_width_px(available_width_px * scale_ratio)
             height_hint = normalize_height_px(height_px, page_count_hint=template.board_page_count)
-        rendered_width_px = float(board_image.width) if crop_format == CROP_FORMAT_V2 else available_width_px * scale_ratio
-        rendered_height_px = float(board_image.height) if crop_format == CROP_FORMAT_V2 else placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio
-        x_px = _problem_origin_x_px(entry, rendered_width_px)
-        y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
+            rendered_width_px = available_width_px * scale_ratio
+            rendered_height_px = height_px
+            x_px = _problem_origin_x_px(entry, rendered_width_px)
+            y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
 
         parent_record_id = next_record_id
         records.append(
@@ -1716,7 +2028,11 @@ def run_problem_export(
     subject = resolve_subject(subject_name)
     resolved_input_intent = _normalize_input_intent(input_intent)
     resolved_board_theme = _resolve_board_theme(board_theme)
-    template = LayoutTemplate(name="academy-default")
+    template = LayoutTemplate(
+        name="academy-default",
+        base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+        metadata={"placement_mode": "one-problem-per-page"},
+    )
     ai_fallback_config = _build_ai_fallback_config(
         enabled=ai_fallback_enabled,
         mode=ai_fallback,
@@ -1841,6 +2157,8 @@ def run_problem_export(
         template=template,
         input_intent=resolved_input_intent,
         input_notes=input_notes,
+        board_theme=resolved_board_theme,
+        crop_format=resolved_crop_format,
     )
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
@@ -1872,7 +2190,7 @@ def main() -> int:
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     parser.add_argument("--template-name", default="academy-default", help="Layout template name")
     parser.add_argument("--board-pages", type=int, default=50, help="Board page count hint")
-    parser.add_argument("--slot-height", type=float, default=1.2, help="Base slot height in board pages")
+    parser.add_argument("--slot-height", type=float, default=ONE_PROBLEM_SLOT_HEIGHT_PAGES, help="Base slot height in board pages")
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
     parser.add_argument("--input-intent", choices=tuple(sorted(INPUT_INTENTS)), default="auto", help="How to treat uploaded source pages")
     parser.add_argument(

@@ -31,7 +31,7 @@ V2_TARGET_IMAGE_WIDTH_PX = 301
 V2_HEADER_FLAG_IMAGE_ONLY = 0
 V2_VERSION_STRING = "6.0.5.3913"
 V1_HEADER_FLAG_IMAGE_ONLY = 4
-V1_VERSION_STRING = "6.0.5.3911"
+V1_VERSION_STRING = "6.0.7.3141"
 
 # Whitespace-trim threshold used when producing the tight image_secondary in v2 mode.
 # Pixels with all RGB channels above this value are treated as background.
@@ -159,6 +159,11 @@ def _bump_record_size_by_one(record: bytes) -> bytes:
     return size + record[4:]
 
 
+def _append_record_separator(record: bytes, separator: bytes = b"\x04") -> bytes:
+    size = pack_u32(struct.unpack(">I", record[:4])[0] + len(separator))
+    return size + record[4:] + separator
+
+
 def build_edb(
     records: list[bytes],
     header_flag: int,
@@ -167,6 +172,8 @@ def build_edb(
     page_count_hint: int = DEFAULT_PAGE_COUNT_HINT,
 ) -> bytes:
     final_records = list(records)
+    if len(final_records) > 1:
+        final_records[:-1] = [_append_record_separator(record) for record in final_records[:-1]]
     if terminal_eof_plus_one and final_records:
         final_records[-1] = _bump_record_size_by_one(final_records[-1])
 

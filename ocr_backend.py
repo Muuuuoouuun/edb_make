@@ -15,6 +15,9 @@ from PIL import Image
 from structured_schema import Box
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+DEFAULT_GEMINI_OCR_MODEL = "gemini-3.1-pro-preview"
+FALLBACK_GEMINI_OCR_MODEL = "gemini-2.5-pro"
+DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview"}
 
 # Gemini's responseSchema follows an OpenAPI 3.0 subset: no `additionalProperties`,
 # no `$ref`, no `oneOf`. Keep the shape simple and rely on `required` instead.
@@ -66,6 +69,18 @@ except ImportError:  # pragma: no cover - optional dependency
 _OCR_MIN_HEIGHT_PX = 64
 _OCR_UPSCALE_CAP = 3.0
 _OCR_CROP_PADDING_PX = 6
+
+
+def _gemini_model_candidates(primary: str) -> list[str]:
+    candidates = [primary]
+    if (
+        primary == DEFAULT_GEMINI_OCR_MODEL
+        or primary in DEPRECATED_GEMINI_OCR_MODELS
+        or primary.startswith("gemini-3")
+        or "preview" in primary
+    ):
+        candidates.append(FALLBACK_GEMINI_OCR_MODEL)
+    return list(dict.fromkeys(model for model in candidates if model))
 
 
 def _prep_crop_for_ocr(image: Image.Image) -> Image.Image:
@@ -344,7 +359,7 @@ class GeminiOCRBackend(OCRBackend):
     def __init__(
         self,
         *,
-        model: str = "gemini-3.1-pro-preview",
+        model: str = DEFAULT_GEMINI_OCR_MODEL,
         api_key: str | None = None,
         timeout_ms: int = 15000,
         max_tokens: int = 1024,
@@ -412,7 +427,9 @@ class GeminiOCRBackend(OCRBackend):
                 "temperature": 0.0,
             },
         }
-        url = f"{GEMINI_API_BASE}/{self.model}:generateContent?key={self.api_key}"
+        model_candidates = _gemini_model_candidates(self.model)
+        used_model = model_candidates[0]
+        url = f"{GEMINI_API_BASE}/{used_model}:generateContent?key={self.api_key}"
 
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -430,6 +447,42 @@ class GeminiOCRBackend(OCRBackend):
             except Exception as exc:  # network / API errors → retry
                 last_exc = exc
 
+        model_attempts: list[dict[str, str]] = []
+        if response_data is None:
+            model_attempts.append(
+                {
+                    "model": used_model,
+                    "status": "error",
+                    "error": str(last_exc) if last_exc else "no response",
+                }
+            )
+            for fallback_model in model_candidates[1:]:
+                used_model = fallback_model
+                url = f"{GEMINI_API_BASE}/{used_model}:generateContent?key={self.api_key}"
+                last_exc = None
+                for attempt in range(self.max_retries + 1):
+                    if attempt > 0:
+                        time.sleep(min(1.5 * attempt, 4.0))
+                    try:
+                        req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+                        with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                            response_data = json.loads(resp.read().decode("utf-8"))
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                if response_data is not None:
+                    model_attempts.append({"model": used_model, "status": "ok"})
+                    break
+                model_attempts.append(
+                    {
+                        "model": used_model,
+                        "status": "error",
+                        "error": str(last_exc) if last_exc else "no response",
+                    }
+                )
+        else:
+            model_attempts.append({"model": used_model, "status": "ok"})
+
         if response_data is None:
             return OCRResult(
                 text="",
@@ -443,7 +496,7 @@ class GeminiOCRBackend(OCRBackend):
                     confidence=None,
                     lines=[],
                     error=str(last_exc) if last_exc else "no response",
-                    extra={"retry_count": self.max_retries},
+                    extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
                 ),
             )
 
@@ -464,6 +517,7 @@ class GeminiOCRBackend(OCRBackend):
                     confidence=None,
                     lines=[],
                     error=f"no text in response (finish={finish_reason})",
+                    extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
                 ),
             )
 
@@ -482,6 +536,7 @@ class GeminiOCRBackend(OCRBackend):
                     confidence=None,
                     lines=[],
                     error=f"json decode failed: {exc}",
+                    extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
                 ),
             )
 
@@ -520,7 +575,7 @@ class GeminiOCRBackend(OCRBackend):
                 text=raw_text,
                 confidence=confidence,
                 lines=lines,
-                extra={"block_type_hint": block_type_hint, "model": self.model},
+                extra={"block_type_hint": block_type_hint, "model": used_model, "model_attempts": model_attempts},
             ),
         )
 

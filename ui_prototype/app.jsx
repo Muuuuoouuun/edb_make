@@ -734,7 +734,13 @@ function ItemsRail({
                 {it.name}
               </div>
               <div className="sub">
-                <span className={`tag status-tag ${reviewStatusClass(it.reviewStatus)}`}>{it.statusLabel}</span>
+                <span
+                  className={`tag status-tag ${reviewStatusClass(it.reviewStatus)}`}
+                  title={it.statusLabel}
+                  aria-label={it.statusLabel}
+                >
+                  {it.statusShortLabel || it.statusLabel}
+                </span>
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
                 {it.step === 's2' && <span className="tag s2">AI</span>}
                 {it.step === 'raw' && <span className="tag">대기</span>}
@@ -1052,7 +1058,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
         </div>
 
         <div className="stage-status">
-          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1페이지 · 자동 페이지 나눔'}</span>
+          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
           <span className="chip">
             <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
             1단계 {s1Count}
@@ -1372,8 +1378,8 @@ function SidePanel({
               disabled={!item || item.step === 'raw'}
               onClick={() => {
                 if (!item) return;
-                if (bulk) applyToAll(item.step);
-                onConfirm(item.id);
+                if (bulk) applyToAll(item.step, { silent: true });
+                onConfirm(item.id, { bulk });
               }}
             >
               {Icon.check} {bulk ? '일괄 확인' : '확인'}
@@ -1785,12 +1791,69 @@ function makeUniqueId(baseId, existingIds){
 function applyItemStateToProblem(problem, item){
   const next = { ...problem };
   next.title = item.name || next.title || '';
+  next.riskFlags = Array.isArray(item.riskFlags) ? [...item.riskFlags] : [];
+  next.risk_flags = next.riskFlags;
+  next.reviewStatus = normalizeReviewStatus(item.reviewStatus) || deriveProblemStatus(next);
+  next.review_status = next.reviewStatus;
   next.placementXRatio = normalizePlacementXRatio(item.placementXRatio);
   next.placementYRatio = verticalPlacementRoomPages(item) > 0.001
     ? normalizePlacementYRatio(item.placementYRatio)
     : DEFAULT_PLACEMENT_Y_RATIO;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
   return next;
+}
+
+function confirmedItemState(item){
+  const statusMeta = reviewStatusMeta('normal');
+  return {
+    ...item,
+    riskFlags: [],
+    reviewStatus: 'normal',
+    statusLabel: statusMeta.label,
+    statusShortLabel: statusMeta.shortLabel || statusMeta.label,
+    statusReason: '',
+    retryable: false,
+  };
+}
+
+function confirmedProblemState(problem){
+  return {
+    ...problem,
+    riskFlags: [],
+    risk_flags: [],
+    reviewStatus: 'normal',
+    review_status: 'normal',
+    parseFailed: false,
+    parse_failed: false,
+  };
+}
+
+function markSessionProblemsConfirmed(rawSession, targetIds){
+  const snapshot = cloneSession(rawSession);
+  if (!snapshot || !Array.isArray(snapshot.problems)) return snapshot;
+  const confirmedIds = new Set([...targetIds].filter(Boolean));
+  snapshot.problems = snapshot.problems.map(problem => (
+    confirmedIds.has(problem?.id) ? confirmedProblemState(problem) : problem
+  ));
+
+  if (Array.isArray(snapshot.pages)) {
+    const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
+    snapshot.pages = snapshot.pages.map(page => {
+      const problemIds = page.problemIds || page.problem_ids || [];
+      const pageProblems = problemIds.map(id => byId.get(id)).filter(Boolean);
+      const pageIsConfirmed = pageProblems.length > 0
+        && pageProblems.every(problem => deriveProblemStatus(problem) === 'normal');
+      if (!pageIsConfirmed) return page;
+      return {
+        ...page,
+        riskFlags: [],
+        risk_flags: [],
+        reviewStatus: 'normal',
+        review_status: 'normal',
+      };
+    });
+  }
+  return snapshot;
 }
 
 function materializeSessionForItems(rawSession, items, fileName){
@@ -1896,6 +1959,7 @@ function mapProblemToItem(problem, idx){
   const riskFlags = Array.isArray(problem.riskFlags) ? problem.riskFlags : [];
   const reviewStatus = deriveProblemStatus(problem);
   const statusMeta = reviewStatusMeta(reviewStatus);
+  const initialScale = normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio);
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -1912,6 +1976,7 @@ function mapProblemToItem(problem, idx){
     riskFlags,
     reviewStatus,
     statusLabel: statusMeta.label,
+    statusShortLabel: statusMeta.shortLabel || statusMeta.label,
     statusReason: riskFlags.length ? riskFlags.join(', ') : '',
     retryable: reviewStatus !== 'normal',
     parseConfidence: typeof problem.parseConfidence === 'number' ? problem.parseConfidence : null,
@@ -1924,7 +1989,7 @@ function mapProblemToItem(problem, idx){
     slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
-    placementScaleRatio: normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio),
+    placementScaleRatio: initialScale < 0.95 ? DEFAULT_PLACEMENT_SCALE_RATIO : initialScale,
   };
 }
 
@@ -2880,12 +2945,13 @@ function App(){
     setItems(it => it.map(x => x.id === id ? { ...x, step } : x));
     setPublished(false);
   };
-  const applyToAll = (step) => {
+  const applyToAll = (step, options = {}) => {
     if (!items.length) {
       showToast('적용할 자료가 없습니다');
       return;
     }
     setItems(it => it.map(x => ({ ...x, step })));
+    if (options.silent) return;
     showToast(`전체 ${items.length}개 항목에 ${step === 's1' ? '1단계' : '2단계 AI 변환'}을(를) 적용했어요`);
   };
   const setPlacement = (id, patch) => {
@@ -2972,8 +3038,30 @@ function App(){
     triggerUpload();
   };
 
-  const onConfirm = (id) => {
-    showToast(`"${items.find(i=>i.id===id)?.name}" 처리 완료`);
+  const onConfirm = (id, options = {}) => {
+    const targetIds = options.bulk ? items.map(item => item.id) : [id];
+    const confirmedIds = new Set(targetIds.filter(Boolean));
+    if (!confirmedIds.size) return;
+    const nextItemsForSnapshot = items.map(item => (
+      confirmedIds.has(item.id) ? confirmedItemState(item) : item
+    ));
+    const confirmedSession = markSessionProblemsConfirmed(session, confirmedIds);
+    const nextSession = confirmedSession
+      ? (materializeSessionForItems(confirmedSession, nextItemsForSnapshot, fileName) || confirmedSession)
+      : null;
+    setItems(prev => prev.map(item => (
+      confirmedIds.has(item.id) ? confirmedItemState(item) : item
+    )));
+    setSession(prev => nextSession || markSessionProblemsConfirmed(prev, confirmedIds));
+    if (nextSession) {
+      postRestore(nextSession).catch(e => console.warn('[board] confirm persist failed:', e.message));
+    }
+    setPublished(false);
+    if (options.bulk) {
+      showToast(`전체 ${confirmedIds.size}개 확인 완료`);
+      return;
+    }
+    showToast(`"${items.find(i=>i.id===id)?.name}" 확인 완료`);
   };
 
   const onPublish = async () => {
@@ -3007,7 +3095,12 @@ function App(){
       const resp = await fetch('/api/session/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order, excluded, placements }),
+        body: JSON.stringify({
+          order,
+          excluded,
+          placements,
+          session: materializeSessionForItems(session, items, fileName) || session,
+        }),
       });
       const json = await resp.json();
       if (!resp.ok || !json.ok) throw new Error(json.error || `publish 실패 (${resp.status})`);
