@@ -26,6 +26,7 @@ from build_problem_board_edb import (
     DEFAULT_BOARD_THEME,
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     ProblemEntry,
+    _normalize_processing_step,
     build_records,
     build_ui_session,
     recrop_problem,
@@ -468,6 +469,11 @@ def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
                 placement_x_ratio=_coerce_placement_x_ratio(problem),
                 placement_y_ratio=_coerce_placement_y_ratio(problem),
                 placement_scale_ratio=_coerce_placement_scale_ratio(problem),
+                processing_step=_normalize_processing_step(
+                    problem.get("processingStep")
+                    or problem.get("processing_step")
+                    or problem.get("step")
+                ),
             )
         )
     return entries
@@ -586,6 +592,16 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "overflowViolation": parent.get("overflowViolation"),
         "slotSpanCount": parent.get("slotSpanCount"),
         "recordMode": parent.get("recordMode"),
+        "step": _normalize_processing_step(
+            parent.get("processingStep")
+            or parent.get("processing_step")
+            or parent.get("step")
+        ),
+        "processingStep": _normalize_processing_step(
+            parent.get("processingStep")
+            or parent.get("processing_step")
+            or parent.get("step")
+        ),
         "textRecordCount": parent.get("textRecordCount", 0),
         "imageRecordCount": parent.get("imageRecordCount", 1),
         "placementXRatio": _coerce_placement_x_ratio(parent),

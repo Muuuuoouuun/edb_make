@@ -9,7 +9,9 @@ from PIL import Image, ImageDraw
 from app_server import content_disposition_attachment, validate_edb_file
 from build_problem_board_edb import (
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+    PROCESSING_STEP_RECONSTRUCT,
     ProblemEntry,
+    V1_DEFAULT_DISPLAY_WIDTH_PX,
     build_problem_entries,
     build_image_only_records,
     run_problem_export,
@@ -115,6 +117,41 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([0.0, 1.2], [item["start_y_pages"] for item in placements])
             self.assertEqual([1.2, 2.4], [item["snapped_next_start_y_pages"] for item in placements])
             self.assertEqual([1.0, 1.0], [item["placement_scale_ratio"] for item in placements])
+            self.assertEqual(
+                [V1_DEFAULT_DISPLAY_WIDTH_PX, V1_DEFAULT_DISPLAY_WIDTH_PX],
+                [item["rendered_width_px"] for item in placements],
+            )
+            self.assertAlmostEqual(
+                placements[0]["rendered_height_px"],
+                V1_DEFAULT_DISPLAY_WIDTH_PX * (300 / 380),
+                places=6,
+            )
+
+    def test_v1_reconstruct_step_exports_transparent_high_res_png(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "problem-1", Box(0, 40, 380, 300))
+            entry.processing_step = PROCESSING_STEP_RECONSTRUCT
+            image = Image.open(entry.crop_path).convert("RGB")
+            draw = ImageDraw.Draw(image)
+            draw.text((24, 40), "1. Transparent export", fill="black")
+            image.save(entry.crop_path)
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+
+            records, placements = build_image_only_records(
+                [entry],
+                template,
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            self.assertIn(b"\x89PNG\r\n\x1a\n", records[0])
+            self.assertEqual(placements[0]["processing_step"], PROCESSING_STEP_RECONSTRUCT)
+            self.assertEqual(placements[0]["image_pixel_width"], 1330)
+            self.assertGreater(placements[0]["image_pixel_width"], int(entry.bounds.width))
+            self.assertEqual(placements[0]["rendered_width_px"], V1_DEFAULT_DISPLAY_WIDTH_PX)
 
     def test_problem_crops_use_same_column_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:

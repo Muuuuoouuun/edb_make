@@ -191,10 +191,11 @@ def write_edb(path: str | Path, payload: bytes) -> None:
 
 
 def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (512, 512), format_hint: str | None = None, quality: int = 88) -> bytes:
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    source = Image.open(io.BytesIO(image_bytes))
+    ext = (format_hint or source.format or "JPEG").upper()
+    image = source.convert("RGBA" if ext == "PNG" and "A" in source.getbands() else "RGB")
     image.thumbnail(max_size, Image.Resampling.LANCZOS)
     output = io.BytesIO()
-    ext = (format_hint or image.format or "JPEG").upper()
     if ext == "PNG":
         image.save(output, format="PNG")
     else:
@@ -203,6 +204,11 @@ def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (5
 
 
 def _content_bbox(image: Image.Image, *, white_threshold: int) -> tuple[int, int, int, int] | None:
+    if "A" in image.getbands():
+        alpha = image.getchannel("A")
+        bbox = alpha.point(lambda px: 255 if px > 2 else 0, mode="L").getbbox()
+        return bbox
+
     rgb = image.convert("RGB")
     width, height = rgb.size
     pixels = rgb.load()
@@ -241,7 +247,9 @@ def build_tight_crop_image_bytes(
     observed in real ClassIn v2 EDBs where img_1 is sometimes smaller than
     img_0 because trailing whitespace has been removed.
     """
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    source = Image.open(io.BytesIO(image_bytes))
+    ext = (format_hint or source.format or "JPEG").upper()
+    image = source.convert("RGBA" if ext == "PNG" and "A" in source.getbands() else "RGB")
     bbox = _content_bbox(image, white_threshold=white_threshold)
     if bbox is not None:
         left, top, right, bottom = bbox
@@ -257,7 +265,6 @@ def build_tight_crop_image_bytes(
         ):
             image = image.crop(bbox)
     output = io.BytesIO()
-    ext = (format_hint or "JPEG").upper()
     if ext == "PNG":
         image.save(output, format="PNG")
     else:

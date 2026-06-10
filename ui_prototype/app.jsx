@@ -150,7 +150,18 @@ const Icon = {
   arrowRight:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>,
 };
 
-const stepLabel = s => s === 's1' ? '1단계' : s === 's2' ? '2단계 · AI' : '대기';
+const PROCESSING_STEPS = new Set(['raw', 's1', 's2', 's3']);
+function normalizeProcessingStep(step){
+  const normalized = String(step || 'raw').trim().toLowerCase();
+  return PROCESSING_STEPS.has(normalized) ? normalized : 'raw';
+}
+const stepLabel = s => {
+  const step = normalizeProcessingStep(s);
+  if (step === 's1') return '1단계';
+  if (step === 's2') return '2단계 · AI';
+  if (step === 's3') return '3단계 · 재구성';
+  return '대기';
+};
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────
 function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo }){
@@ -743,6 +754,7 @@ function ItemsRail({
                 </span>
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
                 {it.step === 's2' && <span className="tag s2">AI</span>}
+                {it.step === 's3' && <span className="tag s3">재구성</span>}
                 {it.step === 'raw' && <span className="tag">대기</span>}
                 <span style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{it.source}</span>
               </div>
@@ -936,6 +948,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
 
   const processedCount = items.filter(i => i.step !== 'raw').length;
   const aiCount = items.filter(i => i.step === 's2').length;
+  const reconstructCount = items.filter(i => i.step === 's3').length;
   const rawCount = items.filter(i => i.step === 'raw').length;
   const s1Count = items.filter(i => i.step === 's1').length;
   const leftZonePercent = `${FIXED_LEFT_ZONE_RATIO * 100}%`;
@@ -1023,7 +1036,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                           <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
                         )}
                         <span className={`step-mark ${it.step}`}>
-                          {it.step === 's1' ? '1' : it.step === 's2' ? 'AI' : '··'}
+                          {it.step === 's1' ? '1' : it.step === 's2' ? 'AI' : it.step === 's3' ? 'HQ' : '··'}
                         </span>
                       </div>
                       <div className="tile-art">
@@ -1066,6 +1079,10 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
           <span className="chip">
             <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
             AI {aiCount}
+          </span>
+          <span className="chip">
+            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
+            재구성 {reconstructCount}
           </span>
           {rawCount > 0 && (
             <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
@@ -1351,6 +1368,17 @@ function SidePanel({
                       <div className="d">배경 제거 · 분필 색상 자동 배치 · 가독성 최적화.</div>
                     </div>
                     <div className="meta-r">자동<strong>~ 4s</strong></div>
+                  </button>
+                  <button
+                    className={`step-row ${item.step === 's3' ? 'on' : ''}`}
+                    onClick={() => setStep(item.id, 's3')}
+                  >
+                    <span className="radio" />
+                    <div>
+                      <div className="t">3단계 · 고화질 재구성 <span className="ai-badge">HQ</span></div>
+                      <div className="d">선택한 문제만 업스케일링 · 배경제거 · 완전 투명 PNG로 제작.</div>
+                    </div>
+                    <div className="meta-r">제작시<strong>~ 8s</strong></div>
                   </button>
                 </div>
               </>
@@ -1795,6 +1823,9 @@ function applyItemStateToProblem(problem, item){
   next.risk_flags = next.riskFlags;
   next.reviewStatus = normalizeReviewStatus(item.reviewStatus) || deriveProblemStatus(next);
   next.review_status = next.reviewStatus;
+  next.step = normalizeProcessingStep(item.step);
+  next.processingStep = next.step;
+  next.processing_step = next.step;
   next.placementXRatio = normalizePlacementXRatio(item.placementXRatio);
   next.placementYRatio = verticalPlacementRoomPages(item) > 0.001
     ? normalizePlacementYRatio(item.placementYRatio)
@@ -1960,13 +1991,14 @@ function mapProblemToItem(problem, idx){
   const reviewStatus = deriveProblemStatus(problem);
   const statusMeta = reviewStatusMeta(reviewStatus);
   const initialScale = normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio);
+  const step = normalizeProcessingStep(problem.step || problem.processingStep || problem.processing_step);
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
     source: problem.sourcePageId || problem.subject || '업로드',
     type: 'image',
     kind: KIND_BY_SUBJECT[problem.subject] || 'paragraph',
-    step: 'raw',
+    step,
     heightFrac: typeof problem.actualHeightPages === 'number' && problem.actualHeightPages > 0
       ? problem.actualHeightPages
       : 0.8,
@@ -2942,7 +2974,8 @@ function App(){
   ]);
 
   const setStep = (id, step) => {
-    setItems(it => it.map(x => x.id === id ? { ...x, step } : x));
+    const nextStep = normalizeProcessingStep(step);
+    setItems(it => it.map(x => x.id === id ? { ...x, step: nextStep } : x));
     setPublished(false);
   };
   const applyToAll = (step, options = {}) => {
@@ -2950,9 +2983,10 @@ function App(){
       showToast('적용할 자료가 없습니다');
       return;
     }
-    setItems(it => it.map(x => ({ ...x, step })));
+    const nextStep = normalizeProcessingStep(step);
+    setItems(it => it.map(x => ({ ...x, step: nextStep })));
     if (options.silent) return;
-    showToast(`전체 ${items.length}개 항목에 ${step === 's1' ? '1단계' : '2단계 AI 변환'}을(를) 적용했어요`);
+    showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요`);
   };
   const setPlacement = (id, patch) => {
     setItems(it => it.map(x => {

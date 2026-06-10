@@ -65,8 +65,21 @@ DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX = 6.0
 V1_LAYOUT_MARGIN_X_PX = 24.0
 V1_LAYOUT_MARGIN_Y_PX = 24.0
 V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
+V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 18
+PROCESSING_STEP_RAW = "raw"
+PROCESSING_STEP_ORIGINAL = "s1"
+PROCESSING_STEP_CHALK = "s2"
+PROCESSING_STEP_RECONSTRUCT = "s3"
+PROCESSING_STEPS = {
+    PROCESSING_STEP_RAW,
+    PROCESSING_STEP_ORIGINAL,
+    PROCESSING_STEP_CHALK,
+    PROCESSING_STEP_RECONSTRUCT,
+}
+RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
+RECONSTRUCT_MAX_UPSCALE = 3.5
 # Brightness above this value (0-255) is treated as a light background that
 # should be removed from the exported problem image.
 DARK_BOARD_BRIGHTNESS_THRESHOLD = 160
@@ -159,6 +172,11 @@ def _resolve_chalk_color(board_theme: str | None) -> tuple[int, int, int]:
     return BOARD_THEME_PALETTES[_resolve_board_theme(board_theme)]["chalk"]
 
 
+def _normalize_processing_step(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in PROCESSING_STEPS else PROCESSING_STEP_RAW
+
+
 # Minimum width (px) for a problem crop before chalk rendering. Smaller crops
 # get upscaled with LANCZOS so OCR and the dark-board composite have enough
 # pixel-detail to render legibly. Chosen empirically: 1024 px wide is roughly
@@ -229,7 +247,12 @@ def _pad_problem_crop_bottom(image: Image.Image, padding_px: int = PROBLEM_CROP_
     return padded
 
 
-def _enhance_problem_crop(image: Image.Image) -> Image.Image:
+def _enhance_problem_crop(
+    image: Image.Image,
+    *,
+    target_min_width_px: int = PROBLEM_CROP_TARGET_MIN_WIDTH_PX,
+    max_upscale: float = PROBLEM_CROP_MAX_UPSCALE,
+) -> Image.Image:
     """Upscale small crops and sharpen ink so the chalk render reads cleanly.
 
     Run BEFORE alpha-extraction so the upscale uses the original ink edges
@@ -240,10 +263,10 @@ def _enhance_problem_crop(image: Image.Image) -> Image.Image:
         return image
 
     rgb = image.convert("RGB")
-    if rgb.width < PROBLEM_CROP_TARGET_MIN_WIDTH_PX:
+    if rgb.width < target_min_width_px:
         scale = min(
-            PROBLEM_CROP_MAX_UPSCALE,
-            PROBLEM_CROP_TARGET_MIN_WIDTH_PX / max(rgb.width, 1),
+            max_upscale,
+            target_min_width_px / max(rgb.width, 1),
         )
         if scale > 1.05:
             new_size = (int(round(rgb.width * scale)), int(round(rgb.height * scale)))
@@ -407,6 +430,19 @@ def _load_board_export_image(
     return _composite_on_board_background(cutout, board_theme=board_theme)
 
 
+def _build_transparent_reconstruction_image(
+    crop_image: Image.Image,
+    *,
+    board_theme: str = DEFAULT_BOARD_THEME,
+) -> Image.Image:
+    enhanced_crop = _enhance_problem_crop(
+        crop_image,
+        target_min_width_px=RECONSTRUCT_TARGET_MIN_WIDTH_PX,
+        max_upscale=RECONSTRUCT_MAX_UPSCALE,
+    )
+    return _extract_problem_cutout(enhanced_crop, chalk_color=_resolve_chalk_color(board_theme))
+
+
 def _encode_image_bytes(image: Image.Image, quality: int = 92) -> tuple[bytes, str]:
     """Encode a PIL image for use in an EDB image record."""
     buf = io.BytesIO()
@@ -455,6 +491,7 @@ class ProblemEntry:
     placement_x_ratio: float | None = None
     placement_y_ratio: float | None = None
     placement_scale_ratio: float | None = None
+    processing_step: str = PROCESSING_STEP_RAW
 
 
 def resolve_subject(name: str | None) -> Subject:
@@ -1357,6 +1394,9 @@ def build_ui_session(
         problem_flags.extend(reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS)
         problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
         problem_id = str(placement["problem_id"])
+        processing_step = _normalize_processing_step(
+            placement.get("processing_step") or placement.get("step")
+        )
         problems.append(
             {
                 "id": problem_id,
@@ -1384,6 +1424,8 @@ def build_ui_session(
                 "placementXRatio": float(placement.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(placement.get("placement_y_ratio") or 0.0),
                 "placementScaleRatio": float(placement.get("placement_scale_ratio") or 1.0),
+                "step": processing_step,
+                "processingStep": processing_step,
                 "recordMode": str(placement.get("record_mode") or record_mode),
                 "textRecordCount": int(placement.get("text_record_count", 0)),
                 "imageRecordCount": int(placement.get("image_record_count", 0)),
@@ -1527,6 +1569,7 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
                     "height": entry.bounds.height,
                 },
                 "risk_flags": list(entry.risk_flags),
+                "processing_step": _normalize_processing_step(entry.processing_step),
             },
         )
         for entry in problem_entries
@@ -1564,6 +1607,12 @@ def _v1_source_layout_transform(problem_entries: list[ProblemEntry]) -> tuple[fl
     return left, top, scale
 
 
+def _v1_default_display_width_px(template: LayoutTemplate) -> float:
+    legacy_width = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
+    max_width = CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX
+    return max(legacy_width, min(V1_DEFAULT_DISPLAY_WIDTH_PX, max_width))
+
+
 def build_image_only_records(
     problem_entries: list[ProblemEntry],
     template: LayoutTemplate,
@@ -1583,7 +1632,7 @@ def build_image_only_records(
         available_width_px = target_image_width_px
     else:
         target_image_width_px = 0.0  # 0 means "do not resize"
-        available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
+        available_width_px = _v1_default_display_width_px(template)
 
     records: list[bytes] = []
     placement_summaries: list[dict[str, object]] = []
@@ -1597,19 +1646,26 @@ def build_image_only_records(
 
     for placement in placements:
         entry = entries_by_problem_id[placement.problem_id]
+        processing_step = _normalize_processing_step(
+            entry.processing_step or placement.metadata.get("processing_step")
+        )
         crop_path = Path(str(placement.metadata["crop_path"]))
         board_render_path = Path(str(placement.metadata["board_render_path"]))
         crop_image = Image.open(crop_path).convert("RGB")
-        board_image = (
-            _load_board_export_image(
+        if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
+            board_image = _build_transparent_reconstruction_image(
+                crop_image,
+                board_theme=board_theme,
+            )
+        elif dark_board:
+            board_image = _load_board_export_image(
                 board_render_path,
                 crop_image,
                 board_theme=board_theme,
                 target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
             )
-            if dark_board
-            else crop_image
-        )
+        else:
+            board_image = crop_image
         if target_image_width_px > 0:
             board_image = _resize_to_target_width(board_image, int(target_image_width_px))
         image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
@@ -1713,12 +1769,16 @@ def build_image_only_records(
                 "bbox": placement.metadata["bbox"],
                 "risk_flags": list(placement.metadata.get("risk_flags") or []),
                 "record_mode": "image-only",
+                "step": processing_step,
+                "processing_step": processing_step,
                 "text_record_count": 0,
                 "image_record_count": image_record_count,
                 "board_theme": _resolve_board_theme(board_theme),
                 "crop_format": crop_format,
                 "image_pixel_width": int(board_image.width),
                 "image_pixel_height": int(board_image.height),
+                "rendered_width_px": float(rendered_width_px),
+                "rendered_height_px": float(rendered_height_px),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
                 "placement_scale_ratio": float(scale_ratio),
