@@ -5,11 +5,11 @@ const DEFAULT_AI_FALLBACK = Object.freeze({
   enabled: false,
   mode: "off",
   provider: "gemini",
-  model: "gemini-2.5-pro",
+  model: "gemini-3.1-pro-preview",
   threshold: 0.72,
   maxRegions: 48,
   maxTokens: 4096,
-  timeoutMs: 18000,
+  timeoutMs: 30000,
   saveDebug: false,
   failOnError: false,
   provided: false,
@@ -17,11 +17,11 @@ const DEFAULT_AI_FALLBACK = Object.freeze({
 const AI_PROVIDER_PRESETS = Object.freeze({
   gemini: {
     provider: "gemini",
-    model: "gemini-2.5-pro",
+    model: "gemini-3.1-pro-preview",
     threshold: 0.72,
     maxRegions: 48,
     maxTokens: 4096,
-    timeoutMs: 18000,
+    timeoutMs: 30000,
   },
 });
 const DEFAULT_INPUT_INTENT = "auto";

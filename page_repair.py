@@ -21,6 +21,7 @@ from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit
 
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+DEFAULT_GEMINI_REPAIR_MODEL = "gemini-3.1-pro-preview"
 
 _SUPPORTED_PROVIDER_ALIASES = {"gemini", "google", "claude", "anthropic", "openai"}
 
@@ -33,7 +34,7 @@ class AIFallbackConfig:
     threshold: float = 0.72
     max_regions: int = 48
     max_tokens: int = 4096
-    timeout_ms: int = 18000
+    timeout_ms: int = 30000
     save_debug: bool = False
     fail_on_error: bool = False
 
@@ -41,7 +42,7 @@ class AIFallbackConfig:
     def resolved_model(self) -> str:
         if self.model.strip():
             return self.model.strip()
-        return "gemini-2.5-pro"
+        return DEFAULT_GEMINI_REPAIR_MODEL
 
     @property
     def normalized_provider(self) -> str:
@@ -82,7 +83,7 @@ def build_ai_fallback_config(
     threshold: float = 0.72,
     max_regions: int = 48,
     max_tokens: int | None = None,
-    timeout_ms: int = 18000,
+    timeout_ms: int = 30000,
     save_debug: bool = False,
     fail_on_error: bool = False,
 ) -> AIFallbackConfig:

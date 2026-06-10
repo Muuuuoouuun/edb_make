@@ -44,6 +44,7 @@ from edb_builder import (
 )
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
+from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from placement_engine import place_problems
 from preprocess import PreparedPage, prepare_source_pages
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
@@ -368,15 +369,24 @@ def iter_problem_block_ids(page: PageModel, problem: ProblemUnit) -> list[str]:
     return [block.block_id for block in page.blocks]
 
 
-def merge_boxes(boxes: list[Box], *, page_width: int, page_height: int, padding_px: int = PROBLEM_PADDING_PX) -> Box:
+def merge_boxes(
+    boxes: list[Box],
+    *,
+    page_width: int,
+    page_height: int,
+    padding_px: int = PROBLEM_PADDING_PX,
+    top_padding_px: int | None = None,
+) -> Box:
     left = min(box.left for box in boxes)
     top = min(box.top for box in boxes)
     right = max(box.right for box in boxes)
     bottom = max(box.bottom for box in boxes)
-    return Box.from_points(left, top, right, bottom).expanded(
-        float(padding_px),
-        max_width=float(page_width),
-        max_height=float(page_height),
+    resolved_top_padding = padding_px if top_padding_px is None else top_padding_px
+    return Box.from_points(
+        max(0.0, left - float(padding_px)),
+        max(0.0, top - float(resolved_top_padding)),
+        min(float(page_width), right + float(padding_px)),
+        min(float(page_height), bottom + float(padding_px)),
     )
 
 
@@ -487,6 +497,36 @@ def _problem_top_y(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -
     if not blocks:
         return 0.0
     return min(block.bbox.top for block in blocks)
+
+
+def _problem_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> tuple[object, ...]:
+    raw_number = problem.metadata.get("problem_number")
+    if isinstance(raw_number, int):
+        return (0, raw_number, problem.unit_id)
+    if isinstance(raw_number, str) and raw_number.isdigit():
+        return (0, int(raw_number), problem.unit_id)
+
+    ids = _iter_problem_block_ids_raw(problem)
+    blocks = [block_by_id[bid] for bid in ids if bid in block_by_id]
+    first_block = min(blocks, key=lambda block: (block.bbox.top, block.bbox.left)) if blocks else None
+
+    column_index = problem.metadata.get("column_index")
+    if column_index is None and first_block is not None:
+        column_index = first_block.metadata.get("column_index")
+    question_band_index = problem.metadata.get("question_band_index")
+    if question_band_index is None and first_block is not None:
+        question_band_index = first_block.metadata.get("question_band_index")
+
+    try:
+        column_value = int(column_index)
+    except (TypeError, ValueError):
+        column_value = 0
+    try:
+        band_value = int(question_band_index)
+    except (TypeError, ValueError):
+        band_value = 0
+
+    return (1, column_value, band_value, _problem_top_y(problem, block_by_id), problem.unit_id)
 
 
 def _expand_problem_blocks_by_gap(
@@ -656,7 +696,7 @@ def build_problem_entries(
         # grouping pass produced them out of order.
         ordered_problems = sorted(
             page.problems,
-            key=lambda p: (_problem_top_y(p, block_by_id), p.unit_id),
+            key=lambda p: _problem_order_key(p, block_by_id),
         )
 
         # Drop pre-first-problem header bands (e.g. cover-page title, 성명 /
@@ -697,8 +737,13 @@ def build_problem_entries(
                 boxes = [block.bbox for block in blocks]
                 if not boxes:
                     boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
-                merged_box = merge_boxes(boxes, page_width=page.width_px, page_height=page.height_px)
                 has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
+                merged_box = merge_boxes(
+                    boxes,
+                    page_width=page.width_px,
+                    page_height=page.height_px,
+                    top_padding_px=4 if has_document_band_metadata else PROBLEM_PADDING_PX,
+                )
                 if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())
@@ -770,7 +815,7 @@ def _build_ai_fallback_config(
     threshold = 0.72 if threshold is None else float(threshold)
     max_tokens = 4096 if max_tokens is None else int(max_tokens)
     max_regions = 48 if max_regions is None else int(max_regions)
-    timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
+    timeout_ms = 30000 if timeout_ms is None else int(timeout_ms)
     resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
     if resolved_mode not in {"off", "auto", "force"}:
         resolved_mode = "auto" if enabled else "off"
@@ -784,7 +829,7 @@ def _build_ai_fallback_config(
         and temperature is None
         and threshold == 0.72
         and max_regions == 48
-        and timeout_ms == 12000
+        and timeout_ms == 30000
         and not save_debug
         and not fail_on_error
     ):
@@ -793,7 +838,7 @@ def _build_ai_fallback_config(
         "enabled": effective_enabled,
         "mode": resolved_mode,
         "provider": provider or "gemini",
-        "model": model or "gemini-2.5-pro",
+        "model": model or DEFAULT_GEMINI_REPAIR_MODEL,
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -815,7 +860,7 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 48),
         max_tokens=int(ai_fallback_config.get("max_tokens") or 4096),
-        timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
+        timeout_ms=int(ai_fallback_config.get("timeout_ms") or 30000),
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
     )
@@ -1184,6 +1229,8 @@ def normalize_text_payload(text: str | None) -> str:
 
 
 def choose_block_record_mode(block: ContentBlock, *, text_confidence_threshold: float) -> str:
+    if block.metadata.get("force_image_record"):
+        return "image"
     if block.block_type in IMAGE_ONLY_BLOCK_TYPES:
         return "image"
     text = normalize_text_payload(block.text)
@@ -1648,7 +1695,7 @@ def run_problem_export(
     ai_fallback_temperature: float | None = None,
     ai_fallback_threshold: float = 0.72,
     ai_fallback_max_regions: int = 48,
-    ai_fallback_timeout_ms: int = 12000,
+    ai_fallback_timeout_ms: int = 30000,
     ai_fallback_save_debug: bool = False,
     fail_on_ai_error: bool = False,
 ) -> dict[str, Any]:
@@ -1852,7 +1899,7 @@ def main() -> int:
     parser.add_argument("--ai-fallback-temperature", type=float, default=None, help="AI fallback sampling temperature")
     parser.add_argument("--ai-fallback-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
     parser.add_argument("--ai-fallback-max-regions", type=int, default=48, help="Maximum number of regions sent to AI fallback")
-    parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
+    parser.add_argument("--ai-fallback-timeout-ms", type=int, default=30000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
     parser.add_argument(

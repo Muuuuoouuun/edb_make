@@ -344,7 +344,7 @@ class GeminiOCRBackend(OCRBackend):
     def __init__(
         self,
         *,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3.1-pro-preview",
         api_key: str | None = None,
         timeout_ms: int = 15000,
         max_tokens: int = 1024,

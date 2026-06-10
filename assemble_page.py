@@ -526,6 +526,8 @@ def group_problem_units(page: PageModel) -> PageModel:
             # accidentally collapse genuinely unrelated blocks.
             if source_band is None:
                 key: tuple[int, object] = ("__solo__", index)
+            elif block.metadata.get("grid_balance_split"):
+                key = (column_index, f"grid-{int(block.metadata.get('question_band_index') or index)}")
             else:
                 key = (column_index, int(source_band))
             if key not in groups:

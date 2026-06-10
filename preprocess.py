@@ -109,7 +109,13 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                     page_index=page_index,
                     width_px=pix.width,
                     height_px=pix.height,
-                    metadata={"source_type": "pdf", "dpi": dpi},
+                    metadata={
+                        "source_type": "pdf",
+                        "dpi": dpi,
+                        "pdf_page_width_pt": float(page.rect.width),
+                        "pdf_page_height_pt": float(page.rect.height),
+                        "pdf_problem_markers": _extract_pdf_problem_markers(page, scale),
+                    },
                 )
             )
     finally:
@@ -117,21 +123,125 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
     return pages
 
 
+def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
+    """Extract problem-number line anchors from a PDF text layer.
+
+    Coordinates are returned in rendered-pixel space so downstream image
+    segmentation can create page crops without calling OCR.
+    """
+    import re
+
+    markers: list[dict[str, Any]] = []
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return markers
+
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            text = "".join(
+                str(span.get("text") or "")
+                for span in line.get("spans") or []
+                if isinstance(span, dict)
+            ).strip()
+            match = re.match(r"^([1-9][0-9]?)\.\s*", text)
+            if not match:
+                continue
+            number = int(match.group(1))
+            if not 1 <= number <= 99:
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            left, top, right, bottom = [float(value) * scale for value in bbox]
+            markers.append(
+                {
+                    "number": number,
+                    "text": text[:120],
+                    "bbox": {
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                        "width": max(0.0, right - left),
+                        "height": max(0.0, bottom - top),
+                    },
+                }
+            )
+
+    return markers
+
+
 def load_image(source: str | Path) -> Image.Image:
     return Image.open(source).convert("RGB")
 
 
-def crop_uniform_margin(image: Image.Image, background_threshold: int = 245, padding: int = 12) -> Image.Image:
+def _crop_uniform_margin_with_box(
+    image: Image.Image,
+    background_threshold: int = 245,
+    padding: int = 12,
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
     gray = ImageOps.grayscale(image)
     mask = gray.point(lambda px: 255 if px < background_threshold else 0)
     bbox = mask.getbbox()
     if bbox is None:
-        return image
+        return image, (0, 0, image.width, image.height)
     left = max(0, bbox[0] - padding)
     top = max(0, bbox[1] - padding)
     right = min(image.width, bbox[2] + padding)
     bottom = min(image.height, bbox[3] + padding)
-    return image.crop((left, top, right, bottom))
+    return image.crop((left, top, right, bottom)), (left, top, right, bottom)
+
+
+def crop_uniform_margin(image: Image.Image, background_threshold: int = 245, padding: int = 12) -> Image.Image:
+    cropped, _ = _crop_uniform_margin_with_box(
+        image,
+        background_threshold=background_threshold,
+        padding=padding,
+    )
+    return cropped
+
+
+def _transform_pdf_problem_markers(
+    metadata: dict[str, Any],
+    *,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    scale: float = 1.0,
+) -> None:
+    markers = metadata.get("pdf_problem_markers")
+    if not isinstance(markers, list):
+        return
+
+    transformed: list[dict[str, Any]] = []
+    for marker in markers:
+        if not isinstance(marker, dict):
+            continue
+        bbox = marker.get("bbox")
+        if not isinstance(bbox, dict):
+            continue
+        try:
+            left = (float(bbox.get("left", 0.0)) - offset_x) * scale
+            top = (float(bbox.get("top", 0.0)) - offset_y) * scale
+            right = (float(bbox.get("right", bbox.get("left", 0.0))) - offset_x) * scale
+            bottom = (float(bbox.get("bottom", bbox.get("top", 0.0))) - offset_y) * scale
+        except (TypeError, ValueError):
+            continue
+        updated = dict(marker)
+        updated["bbox"] = {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+            "width": max(0.0, right - left),
+            "height": max(0.0, bottom - top),
+        }
+        transformed.append(updated)
+    metadata["pdf_problem_markers"] = transformed
 
 
 def deskew_image(image: Image.Image) -> Image.Image:
@@ -259,7 +369,14 @@ def normalize_image(
         image = deskew_image(image)
         metadata["deskewed"] = True
     if enable_margin_crop:
-        image = crop_uniform_margin(image)
+        image, crop_box = _crop_uniform_margin_with_box(image)
+        metadata["margin_crop_box"] = {
+            "left": crop_box[0],
+            "top": crop_box[1],
+            "right": crop_box[2],
+            "bottom": crop_box[3],
+        }
+        _transform_pdf_problem_markers(metadata, offset_x=float(crop_box[0]), offset_y=float(crop_box[1]))
         metadata["margin_cropped"] = True
 
     if max_dimension:
@@ -268,6 +385,7 @@ def normalize_image(
         if scale < 1.0:
             new_size = (int(round(width * scale)), int(round(height * scale)))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
+            _transform_pdf_problem_markers(metadata, scale=scale)
             metadata["resized_to_max_dimension"] = max_dimension
 
     resolved_page_id = page_id or f"{source_path.stem}-page-{page_index + 1:03d}"

@@ -34,7 +34,7 @@ class SegmentOptions:
     fallback_padding_px: int = 10
     fallback_board_margin_ratio: float = 0.04
     fallback_board_min_hit_ratio: float = 0.08
-    document_dark_threshold: int = 235
+    document_dark_threshold: int = 210
     document_projection_window_px: int = 10
     document_row_density_ratio: float = 0.11
     # Gap below which consecutive row-bands are merged into one block.
@@ -295,7 +295,10 @@ def _is_document_like_page(image_source: Any, image: Image.Image) -> bool:
 
 
 def _dark_mask(image: Image.Image, threshold: int) -> Image.Image:
-    gray = ImageOps.autocontrast(ImageOps.grayscale(image))
+    # Use the raw grayscale image instead of autocontrast. Autocontrast makes
+    # light UI highlights or translucent selection fills look like ink, which
+    # causes adjacent questions to merge into one dense band.
+    gray = ImageOps.grayscale(image)
     return gray.point(lambda px: 255 if px < threshold else 0, mode="L")
 
 
@@ -335,6 +338,10 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
     if not smoothed:
         return [content_box]
 
+    separator_split = _detect_document_separator_split_x(column_projection, crop.width, crop.height)
+    if separator_split is not None:
+        return _build_document_split_columns(mask, content_box, separator_split)
+
     search_start = int(crop.width * 0.3)
     search_end = max(search_start + 1, int(crop.width * 0.7))
     center_slice = smoothed[search_start:search_end]
@@ -348,14 +355,66 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
     if peak_score <= 0 or valley_score > peak_score * 0.22:
         return [content_box]
 
+    return _build_document_split_columns(mask, content_box, split_x)
+
+
+def _detect_document_separator_split_x(
+    column_projection: list[int],
+    crop_width: int,
+    crop_height: int,
+) -> int | None:
+    """Detect a narrow vertical rule between two document columns.
+
+    Some Korean workbook pages have a printed or UI-highlighted center rule
+    instead of a white gutter. The older valley-only column detector treats
+    that rule as dense content and misses the two-column layout.
+    """
+    if crop_width <= 1 or crop_height <= 1:
+        return None
+
+    search_start = int(crop_width * 0.35)
+    search_end = max(search_start + 1, int(crop_width * 0.65))
+    min_height = max(40, int(crop_height * 0.42))
+    max_run_width = max(3, int(crop_width * 0.035))
+
+    runs: list[tuple[int, int, int]] = []
+    run_start: int | None = None
+    for column_index in range(search_start, search_end):
+        if column_projection[column_index] >= min_height:
+            if run_start is None:
+                run_start = column_index
+            continue
+        if run_start is not None:
+            runs.append((run_start, column_index - 1, max(column_projection[run_start:column_index])))
+            run_start = None
+    if run_start is not None:
+        runs.append((run_start, search_end - 1, max(column_projection[run_start:search_end])))
+
+    narrow_runs = [
+        run
+        for run in runs
+        if (run[1] - run[0] + 1) <= max_run_width
+    ]
+    if not narrow_runs:
+        return None
+
+    best = max(narrow_runs, key=lambda item: item[2])
+    split_x = (best[0] + best[1]) // 2
+    if split_x < crop_width * 0.25 or split_x > crop_width * 0.75:
+        return None
+    return split_x
+
+
+def _build_document_split_columns(mask: Image.Image, content_box: Box, split_x: int) -> list[Box]:
+    gutter = max(10, int(content_box.width * 0.025))
     left_box = Box.from_points(
         content_box.left,
         content_box.top,
-        content_box.left + float(split_x - 15),
+        content_box.left + float(split_x - gutter),
         content_box.bottom,
     )
     right_box = Box.from_points(
-        content_box.left + float(split_x + 15),
+        content_box.left + float(split_x + gutter),
         content_box.top,
         content_box.right,
         content_box.bottom,
@@ -472,6 +531,177 @@ def _document_band_box(mask: Image.Image, column_box: Box, band: tuple[int, int]
         max_width=float(mask.width),
         max_height=float(mask.height),
     )
+
+
+def _marker_bbox(marker: dict[str, Any]) -> Box | None:
+    bbox = marker.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        left = float(bbox.get("left", 0.0))
+        top = float(bbox.get("top", 0.0))
+        right = float(bbox.get("right", left + float(bbox.get("width", 0.0))))
+        bottom = float(bbox.get("bottom", top + float(bbox.get("height", 0.0))))
+    except (TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return Box.from_points(left, top, right, bottom)
+
+
+def _cluster_pdf_marker_columns(markers: list[dict[str, Any]], page_width: int) -> list[list[dict[str, Any]]]:
+    marker_pairs: list[tuple[float, dict[str, Any]]] = []
+    for marker in markers:
+        box = _marker_bbox(marker)
+        if box is None:
+            continue
+        marker_pairs.append(((box.left + box.right) / 2.0, marker))
+    if not marker_pairs:
+        return []
+    if len(marker_pairs) == 1:
+        return [[marker_pairs[0][1]]]
+
+    sorted_pairs = sorted(marker_pairs, key=lambda item: item[0])
+    gaps = [
+        (sorted_pairs[index + 1][0] - sorted_pairs[index][0], index)
+        for index in range(len(sorted_pairs) - 1)
+    ]
+    largest_gap, split_index = max(gaps, key=lambda item: item[0])
+    if largest_gap < max(80.0, float(page_width) * 0.18):
+        return [[marker for _, marker in sorted_pairs]]
+
+    return [
+        [marker for _, marker in sorted_pairs[: split_index + 1]],
+        [marker for _, marker in sorted_pairs[split_index + 1 :]],
+    ]
+
+
+def _column_bounds_from_marker_columns(
+    columns: list[list[dict[str, Any]]],
+    page_width: int,
+) -> list[tuple[float, float]]:
+    if len(columns) != 2:
+        return [(0.0, float(page_width)) for _ in columns]
+
+    left_centers = [
+        (_marker_bbox(marker).left + _marker_bbox(marker).right) / 2.0
+        for marker in columns[0]
+        if _marker_bbox(marker) is not None
+    ]
+    right_centers = [
+        (_marker_bbox(marker).left + _marker_bbox(marker).right) / 2.0
+        for marker in columns[1]
+        if _marker_bbox(marker) is not None
+    ]
+    if not left_centers or not right_centers:
+        return [(0.0, float(page_width)) for _ in columns]
+
+    # The marker x positions are near the problem-number glyphs, not the true
+    # column edges. For rendered exam PDFs the physical columns are balanced,
+    # so the page midpoint is a better crop boundary than the midpoint between
+    # left and right marker numbers.
+    split_x = float(page_width) / 2.0
+    return [(0.0, split_x), (split_x, float(page_width))]
+
+
+def _segment_pdf_problem_markers(
+    image: Image.Image,
+    page_id: str,
+    markers: list[dict[str, Any]],
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    cleaned_markers = [
+        marker
+        for marker in markers
+        if isinstance(marker, dict) and isinstance(marker.get("number"), int) and _marker_bbox(marker) is not None
+    ]
+    if not cleaned_markers:
+        return None
+
+    columns = _cluster_pdf_marker_columns(cleaned_markers, image.width)
+    if not columns:
+        return None
+    column_bounds = _column_bounds_from_marker_columns(columns, image.width)
+    page_area = _page_area_px(image.width, image.height)
+    blocks: list[ContentBlock] = []
+
+    for column_index, column_markers in enumerate(columns, start=1):
+        sorted_markers = sorted(
+            column_markers,
+            key=lambda marker: (_marker_bbox(marker).top if _marker_bbox(marker) else 0.0),
+        )
+        left_bound, right_bound = column_bounds[column_index - 1]
+        for marker_index, marker in enumerate(sorted_markers, start=1):
+            marker_box = _marker_bbox(marker)
+            if marker_box is None:
+                continue
+            next_marker_box = (
+                _marker_bbox(sorted_markers[marker_index])
+                if marker_index < len(sorted_markers)
+                else None
+            )
+            top = max(0.0, marker_box.top - max(10.0, image.height * 0.006))
+            bottom = (
+                max(top + 40.0, next_marker_box.top - max(8.0, image.height * 0.004))
+                if next_marker_box is not None
+                else float(image.height)
+            )
+            box = Box.from_points(left_bound, top, right_bound, min(float(image.height), bottom))
+            number = int(marker["number"])
+            metadata = _enrich_block_segmentation_metadata(
+                {
+                    "segmenter": "pdf-text-markers",
+                    "column_index": column_index,
+                    "question_band_index": marker_index,
+                    "source_band_index": marker_index,
+                    "pdf_problem_number": number,
+                    "problem_number": number,
+                    "problem_number_source": "pdf_text_marker",
+                    "force_problem_start": True,
+                    "force_image_record": True,
+                    "display_title": f"{number}.",
+                    "marker_text": str(marker.get("text") or "")[:120],
+                },
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                block_area=box.area,
+                page_area=page_area,
+                large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+                page_width=image.width,
+                page_height=image.height,
+            )
+            blocks.append(
+                ContentBlock(
+                    block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
+                    block_type=BlockType.TITLE,
+                    bbox=box,
+                    reading_order=len(blocks),
+                    text=f"{number}.",
+                    confidence=1.0,
+                    metadata=metadata,
+                )
+            )
+
+    if not blocks:
+        return None
+
+    blocks = sorted(
+        blocks,
+        key=lambda block: (
+            int(block.metadata.get("column_index") or 0),
+            int(block.metadata.get("question_band_index") or 0),
+            block.bbox.top,
+        ),
+    )
+    for index, block in enumerate(blocks):
+        block.reading_order = index
+
+    return blocks, {
+        "segmenter": "pdf-text-markers",
+        "pdf_text_marker_count": len(cleaned_markers),
+        "column_count": len(columns),
+        "document_split_block_count": len(blocks),
+        "document_split_applied": True,
+        "content_box_area_ratio": 1.0,
+    }
 
 
 def _row_dark_projection(mask: Image.Image) -> list[int]:
@@ -805,6 +1035,406 @@ def _split_document_band_box(
     )
 
 
+DocumentColumnEntry = tuple[Box, int, int, int, bool]
+
+
+def _split_grid_balance_candidate(
+    mask: Image.Image,
+    entry: DocumentColumnEntry,
+    options: SegmentOptions,
+) -> list[DocumentColumnEntry] | None:
+    box, source_band_index, _split_index, _split_count, _grid_balance_split = entry
+    if box.height < max(260.0, float(mask.height) * 0.24):
+        return None
+
+    split_row = _find_document_split_row(mask, box, options)
+    if split_row is None:
+        return None
+
+    top_box = _fit_document_slice_box(mask, box, 0, split_row, options)
+    bottom_box = _fit_document_slice_box(mask, box, split_row, int(box.height), options)
+    if top_box is None or bottom_box is None:
+        return None
+    if top_box.height < 90.0 or bottom_box.height < 90.0:
+        return None
+    if top_box.area < box.area * 0.18 or bottom_box.area < box.area * 0.18:
+        return None
+
+    return [
+        (top_box, source_band_index, 1, 2, True),
+        (bottom_box, source_band_index, 2, 2, True),
+    ]
+
+
+def _balance_document_grid_columns(
+    mask: Image.Image,
+    columns: list[list[DocumentColumnEntry]],
+    options: SegmentOptions,
+) -> tuple[list[list[DocumentColumnEntry]], int]:
+    """Balance obvious two-column worksheet grids.
+
+    When one column is split into three question regions and the other into
+    two, the missing region is usually a large merged block caused by light
+    highlights, diagrams, or horizontal rules. Split the tallest candidate
+    until column counts match, but keep the heuristic narrow so long single
+    questions are not cut apart.
+    """
+    if len(columns) < 2:
+        return columns, 0
+
+    target_count = max(len(entries) for entries in columns)
+    min_count = min(len(entries) for entries in columns)
+    if target_count <= 1 or target_count > 4 or target_count - min_count > 2:
+        return columns, 0
+
+    balanced = [list(entries) for entries in columns]
+    split_count = 0
+    for column_index, entries in enumerate(balanced):
+        while len(entries) < target_count:
+            candidate_indexes = sorted(
+                range(len(entries)),
+                key=lambda idx: entries[idx][0].height,
+                reverse=True,
+            )
+            replacement: list[DocumentColumnEntry] | None = None
+            replacement_index: int | None = None
+            for candidate_index in candidate_indexes:
+                replacement = _split_grid_balance_candidate(mask, entries[candidate_index], options)
+                if replacement is not None:
+                    replacement_index = candidate_index
+                    break
+
+            if replacement is None or replacement_index is None:
+                break
+
+            entries[replacement_index : replacement_index + 1] = replacement
+            split_count += 1
+
+    return balanced, split_count
+
+
+def _align_balanced_document_grid_rows(
+    columns: list[list[DocumentColumnEntry]],
+    *,
+    content_box: Box,
+    page_width: int,
+    page_height: int,
+) -> tuple[list[list[DocumentColumnEntry]], int]:
+    if len(columns) < 2:
+        return columns, 0
+    if not columns or any(len(entries) != len(columns[0]) for entries in columns):
+        return columns, 0
+
+    row_count = len(columns[0])
+    if row_count < 2 or row_count > 4:
+        return columns, 0
+
+    sorted_columns = [sorted(entries, key=lambda entry: (entry[0].top, entry[0].left)) for entries in columns]
+    row_starts: list[float] = [content_box.top]
+    spread_threshold = max(48.0, float(page_height) * 0.08)
+    for row_index in range(1, row_count):
+        starts = [entries[row_index][0].top for entries in sorted_columns]
+        if max(starts) - min(starts) > spread_threshold:
+            # A much earlier "start" in one column is usually the previous
+            # question's answer choices leaking into the next row. Use the
+            # later boundary so the next question crop does not inherit them.
+            row_starts.append(max(starts))
+        else:
+            row_starts.append(min(starts))
+    row_starts.append(content_box.bottom)
+
+    aligned_columns: list[list[DocumentColumnEntry]] = []
+    adjusted_count = 0
+    for entries in sorted_columns:
+        if not entries:
+            aligned_columns.append(entries)
+            continue
+
+        column_left = max(0.0, min(entry[0].left for entry in entries))
+        column_right = min(float(page_width), max(entry[0].right for entry in entries))
+        aligned_entries: list[DocumentColumnEntry] = []
+        for row_index, entry in enumerate(entries):
+            box, source_band_index, split_index, split_count, grid_balance_split = entry
+            top = row_starts[row_index]
+            bottom = row_starts[row_index + 1]
+            if bottom - top < 80.0:
+                aligned_entries.append(entry)
+                continue
+            aligned_box = Box.from_points(column_left, top, column_right, bottom)
+            if (
+                abs(aligned_box.top - box.top) > 1.0
+                or abs(aligned_box.bottom - box.bottom) > 1.0
+                or abs(aligned_box.left - box.left) > 1.0
+                or abs(aligned_box.right - box.right) > 1.0
+            ):
+                adjusted_count += 1
+            aligned_entries.append((aligned_box, source_band_index, split_index, split_count, grid_balance_split))
+        aligned_columns.append(aligned_entries)
+
+    return aligned_columns, adjusted_count
+
+
+def _colored_problem_marker_rows(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+    """Find teal/blue-green problem-number ink rows near the left edge.
+
+    Many workbook scans use colored problem numbers while answer choices remain
+    black. When projection-based bands split a question into "stem" and
+    "choices", this gives us a cheap way to keep real starts separate while
+    merging continuation fragments.
+    """
+    left = int(max(0.0, column_box.left))
+    top = int(max(0.0, box.top))
+    right = int(min(float(image.width), column_box.left + max(58.0, min(82.0, column_box.width * 0.22))))
+    bottom = int(min(float(image.height), box.bottom))
+    if right <= left or bottom <= top:
+        return []
+
+    data = image.crop((left, top, right, bottom)).convert("RGB").tobytes()
+    width = right - left
+    rows: list[int] = []
+    for y in range(bottom - top):
+        row_offset = y * width * 3
+        hit = False
+        for x in range(width):
+            index = row_offset + (x * 3)
+            r = data[index]
+            g = data[index + 1]
+            b = data[index + 2]
+            if g >= 70 and b >= 70 and g > r + 22 and b > r + 10 and max(g, b) - r > 30:
+                hit = True
+                break
+        if hit:
+            rows.append(y)
+    return rows
+
+
+def _colored_problem_marker_component_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+    if cv2 is None or np is None:
+        return []
+
+    left = int(max(0.0, column_box.left))
+    top = int(max(0.0, box.top))
+    right = int(min(float(image.width), column_box.left + max(58.0, min(86.0, column_box.width * 0.24))))
+    bottom = int(min(float(image.height), box.bottom))
+    if right <= left or bottom <= top:
+        return []
+
+    rgb = np.array(image.crop((left, top, right, bottom)).convert("RGB"))
+    red = rgb[:, :, 0].astype(np.int16)
+    green = rgb[:, :, 1].astype(np.int16)
+    blue = rgb[:, :, 2].astype(np.int16)
+    marker_mask = (
+        (green >= 70)
+        & (blue >= 70)
+        & (green > red + 22)
+        & (blue > red + 10)
+        & ((np.maximum(green, blue) - red) > 30)
+    ).astype(np.uint8)
+    if not marker_mask.any():
+        return []
+
+    component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(marker_mask, 8)
+    offsets: list[int] = []
+    for component_index in range(1, component_count):
+        x, y, width, height, area = (int(value) for value in stats[component_index])
+        if area < 35 or area > 180:
+            continue
+        if width < 3 or height < 10:
+            continue
+        if x > 48 or width > 28 or height > 36:
+            continue
+        offsets.append(y)
+
+    if not offsets:
+        return []
+
+    clustered: list[int] = []
+    for offset in sorted(offsets):
+        if not clustered or offset - clustered[-1] > 10:
+            clustered.append(offset)
+        else:
+            clustered[-1] = min(clustered[-1], offset)
+    return clustered
+
+
+def _colored_problem_marker_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+    component_offsets = _colored_problem_marker_component_offsets(image, column_box, box)
+    if component_offsets or (cv2 is not None and np is not None):
+        return component_offsets
+
+    # Fallback for environments without cv2/numpy component analysis.
+    rows = _colored_problem_marker_rows(image, column_box, box)
+    if len(rows) < 8:
+        return []
+    return [min(rows)]
+
+
+def _problem_marker_start_limit(box: Box) -> float:
+    return max(96.0, min(118.0, box.height * 0.58))
+
+
+def _select_colored_problem_marker_offset(offsets: list[int], box: Box) -> float | None:
+    start_offsets = [offset for offset in sorted(offsets) if offset <= _problem_marker_start_limit(box)]
+    if not start_offsets:
+        return None
+
+    for index, offset in enumerate(start_offsets):
+        if (
+            offset < 40
+            and index + 1 < len(start_offsets)
+            and start_offsets[index + 1] - offset >= 18
+        ):
+            continue
+        return float(offset)
+    return float(start_offsets[-1])
+
+
+def _entry_has_colored_problem_marker(image: Image.Image, column_box: Box, entry: DocumentColumnEntry) -> bool:
+    box = entry[0]
+    offsets = _colored_problem_marker_offsets(image, column_box, box)
+    return _select_colored_problem_marker_offset(offsets, box) is not None
+
+
+def _merge_box_pair(first: Box, second: Box) -> Box:
+    return Box.from_points(
+        min(first.left, second.left),
+        min(first.top, second.top),
+        max(first.right, second.right),
+        max(first.bottom, second.bottom),
+    )
+
+
+def _merge_document_continuation_entries(
+    image: Image.Image,
+    columns: list[list[DocumentColumnEntry]],
+    column_boxes: list[Box],
+) -> tuple[list[list[DocumentColumnEntry]], int]:
+    if len(columns) < 2 or len(columns) != len(column_boxes):
+        return columns, 0
+
+    adjusted_columns: list[list[DocumentColumnEntry]] = []
+    embedded_marker_move_count = 0
+    for column_box, entries in zip(column_boxes, columns):
+        sorted_entries = sorted(entries, key=lambda entry: (entry[0].top, entry[0].left))
+        adjusted_entries: list[DocumentColumnEntry] = []
+        index = 0
+        while index < len(sorted_entries):
+            entry = sorted_entries[index]
+            box, source_band_index, split_index, split_count, grid_balance_split = entry
+            offsets = _colored_problem_marker_offsets(image, column_box, box)
+            start_marker_limit = _problem_marker_start_limit(box)
+            embedded_offsets = [offset for offset in offsets if offset > start_marker_limit]
+            marker_offset = min(embedded_offsets) if embedded_offsets else None
+            if (
+                marker_offset is not None
+                and marker_offset > start_marker_limit
+                and index + 1 < len(sorted_entries)
+            ):
+                split_y = box.top + max(0.0, float(marker_offset) - 8.0)
+                next_entry = sorted_entries[index + 1]
+                next_box = next_entry[0]
+                if split_y - box.top >= 44.0 and box.bottom - split_y >= 10.0:
+                    upper_box = Box.from_points(box.left, box.top, box.right, split_y)
+                    lower_box = Box.from_points(
+                        min(box.left, next_box.left),
+                        split_y,
+                        max(box.right, next_box.right),
+                        max(box.bottom, next_box.bottom),
+                    )
+                    adjusted_entries.append(
+                        (upper_box, source_band_index, split_index, split_count, grid_balance_split)
+                    )
+                    sorted_entries[index + 1] = (
+                        lower_box,
+                        source_band_index,
+                        1,
+                        split_count + next_entry[3],
+                        grid_balance_split or next_entry[4],
+                    )
+                    embedded_marker_move_count += 1
+                    index += 1
+                    continue
+            adjusted_entries.append(entry)
+            index += 1
+        adjusted_columns.append(adjusted_entries)
+
+    marker_offsets_by_column = [
+        [_colored_problem_marker_offsets(image, column_box, entry[0]) for entry in entries]
+        for column_box, entries in zip(column_boxes, adjusted_columns)
+    ]
+    marker_flags_by_column = []
+    for entries, offsets_for_entries in zip(adjusted_columns, marker_offsets_by_column):
+        marker_flags: list[bool] = []
+        for entry, offsets in zip(entries, offsets_for_entries):
+            marker_flags.append(_select_colored_problem_marker_offset(offsets, entry[0]) is not None)
+        marker_flags_by_column.append(marker_flags)
+    marker_count = sum(1 for flags in marker_flags_by_column for has_marker in flags if has_marker)
+    if marker_count < 2:
+        return columns, 0
+
+    gap_threshold = max(34.0, float(image.height) * 0.04)
+    max_merged_height = max(220.0, float(image.height) * 0.36)
+    merged_columns: list[list[DocumentColumnEntry]] = []
+    merge_count = embedded_marker_move_count
+
+    for entries, marker_flags, marker_offsets in zip(
+        adjusted_columns,
+        marker_flags_by_column,
+        marker_offsets_by_column,
+    ):
+        sorted_pairs = sorted(
+            zip(entries, marker_flags, marker_offsets),
+            key=lambda pair: (pair[0][0].top, pair[0][0].left),
+        )
+        normalized_pairs: list[tuple[DocumentColumnEntry, bool, float | None]] = []
+        for entry, has_marker, offsets in sorted_pairs:
+            box, source_band_index, split_index, split_count, grid_balance_split = entry
+            selected_marker_offset = _select_colored_problem_marker_offset(offsets, box) if has_marker else None
+            marker_top = box.top + selected_marker_offset if selected_marker_offset is not None else None
+            if marker_top is not None:
+                trimmed_top = max(box.top, marker_top)
+                if trimmed_top - box.top >= 6.0 and box.bottom - trimmed_top >= 44.0:
+                    box = Box.from_points(box.left, trimmed_top, box.right, box.bottom)
+                    entry = (box, source_band_index, split_index, split_count, grid_balance_split)
+            normalized_pairs.append((entry, has_marker, marker_top))
+
+        merged_entries: list[DocumentColumnEntry] = []
+        for pair_index, (entry, has_marker, _marker_top) in enumerate(normalized_pairs):
+            box, source_band_index, split_index, split_count, grid_balance_split = entry
+            if merged_entries and not has_marker:
+                previous = merged_entries[-1]
+                previous_box = previous[0]
+                next_marker_top = (
+                    normalized_pairs[pair_index + 1][2]
+                    if pair_index + 1 < len(normalized_pairs)
+                    else None
+                )
+                merge_box = box
+                if next_marker_top is not None:
+                    # Problem-level crops add their own padding later; stop
+                    # the continuation far enough above the next marker that
+                    # the final padded crop does not include the next number.
+                    boundary = next_marker_top - 30.0
+                    if boundary < merge_box.bottom and boundary - merge_box.top >= 24.0:
+                        merge_box = Box.from_points(merge_box.left, merge_box.top, merge_box.right, boundary)
+                gap = box.top - previous_box.bottom
+                combined_height = max(previous_box.bottom, merge_box.bottom) - min(previous_box.top, merge_box.top)
+                if gap <= gap_threshold and combined_height <= max_merged_height:
+                    merged_entries[-1] = (
+                        _merge_box_pair(previous_box, merge_box),
+                        previous[1],
+                        previous[2],
+                        max(previous[3], previous[3] + split_count),
+                        previous[4] or grid_balance_split,
+                    )
+                    merge_count += 1
+                    continue
+            merged_entries.append(entry)
+        merged_columns.append(merged_entries)
+
+    return merged_columns, merge_count
+
+
 def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
     mask = _dark_mask(image, options.document_dark_threshold)
     content_box = _find_document_content_box(mask, image.width, image.height)
@@ -814,19 +1444,40 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
 
     total_split_count = 0
     row_band_count = 0
+    column_entry_groups: list[list[DocumentColumnEntry]] = []
     for column_index, column_box in enumerate(columns, start=1):
         row_bands = _find_document_row_bands(mask, column_box, options)
         row_bands = _merge_small_document_bands(row_bands, options)
         row_band_count += len(row_bands)
-        column_entries: list[tuple[Box, int, int, int]] = []
+        column_entries: list[DocumentColumnEntry] = []
         for source_band_index, band in enumerate(row_bands, start=1):
             box = _document_band_box(mask, column_box, band, options)
             split_boxes = _split_document_band_box(mask, box, options)
             total_split_count += max(0, len(split_boxes) - 1)
             for local_split_index, split_box in enumerate(split_boxes, start=1):
-                column_entries.append((split_box, source_band_index, local_split_index, len(split_boxes)))
+                column_entries.append((split_box, source_band_index, local_split_index, len(split_boxes), False))
 
-        for band_index, (box, source_band_index, split_index, split_count) in enumerate(column_entries, start=1):
+        column_entry_groups.append(column_entries)
+
+    column_entry_groups, continuation_merge_count = _merge_document_continuation_entries(
+        image,
+        column_entry_groups,
+        columns,
+    )
+    column_entry_groups, balance_split_count = _balance_document_grid_columns(mask, column_entry_groups, options)
+    total_split_count += balance_split_count
+    if continuation_merge_count:
+        row_alignment_count = 0
+    else:
+        column_entry_groups, row_alignment_count = _align_balanced_document_grid_rows(
+            column_entry_groups,
+            content_box=content_box,
+            page_width=image.width,
+            page_height=image.height,
+        )
+
+    for column_index, column_entries in enumerate(column_entry_groups, start=1):
+        for band_index, (box, source_band_index, split_index, split_count, grid_balance_split) in enumerate(column_entries, start=1):
             metadata = _enrich_block_segmentation_metadata(
                 {
                     "segmenter": "document-bands",
@@ -836,6 +1487,7 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
                     "split_from_band": split_count > 1,
                     "band_split_index": split_index,
                     "band_split_count": split_count,
+                    "grid_balance_split": grid_balance_split,
                 },
                 segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
                 block_area=box.area,
@@ -887,6 +1539,9 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
         },
         "column_count": len(columns),
         "document_band_split_count": total_split_count,
+        "document_column_balance_split_count": balance_split_count,
+        "document_continuation_merge_count": continuation_merge_count,
+        "document_grid_row_alignment_count": row_alignment_count,
         "document_row_band_count": row_band_count,
         "document_split_block_count": len(blocks),
         "document_split_applied": total_split_count > 0,
@@ -1182,7 +1837,15 @@ def segment_page(
     image = _load_image(image_path)
     page_area = _page_area_px(image.width, image.height)
     if _is_document_like_page(image_path, image):
-        blocks, metadata = _segment_document_page(image, page_id, resolved_options)
+        source_metadata = _source_metadata(image_path)
+        marker_result = None
+        raw_markers = source_metadata.get("pdf_problem_markers")
+        if isinstance(raw_markers, list):
+            marker_result = _segment_pdf_problem_markers(image, page_id, raw_markers)
+        if marker_result is not None:
+            blocks, metadata = marker_result
+        else:
+            blocks, metadata = _segment_document_page(image, page_id, resolved_options)
         source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
         if source_path is None and not isinstance(image_path, Image.Image):
             source_path = str(image_path)
@@ -1191,7 +1854,7 @@ def segment_page(
             page_height=image.height,
             blocks=blocks,
             segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
-            segmenter="document-bands",
+            segmenter=str(metadata.get("segmenter") or "document-bands"),
             base_metadata=metadata,
         )
         return PageModel(

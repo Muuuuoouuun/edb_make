@@ -639,7 +639,7 @@ function ItemsRail({
         >
           {Icon.upload}
           <strong style={{marginTop:6}}>이미지·PDF 대기열에 추가</strong>
-          <small>추가한 순서대로 등록됩니다</small>
+          <small>파일별로 그대로 등록하거나 AI 인식합니다</small>
         </div>
 
         {!!pendingFiles?.length && (
@@ -653,31 +653,46 @@ function ItemsRail({
               </button>
             </div>
             <div className="source-queue-list">
-              {pendingFiles.map((file, index) => (
-                <div className="source-queue-row" key={fileQueueKey(file)}>
+              {pendingFiles.map((file, index) => {
+                const key = fileQueueKey(file);
+                return (
+                <div className="source-queue-row" key={key}>
                   <span className="idx">{String(index + 1).padStart(2, '0')}</span>
                   <div className="file">
                     <div className="name">{file.name || '이름 없는 파일'}</div>
                     <div className="meta">{/\.pdf$/i.test(file.name || '') ? 'PDF' : 'IMG'} · {formatBytes(file.size)}</div>
                   </div>
                   <button
+                    className="icon-btn queue-row-action"
+                    title="이 파일을 한 문제/한 자료로 그대로 등록"
+                    onClick={() => processQueuedFiles('register', key)}
+                    disabled={queueBusy}
+                  >
+                    {Icon.check}
+                  </button>
+                  <button
+                    className="icon-btn queue-row-action"
+                    title="이 파일만 AI 문제 인식"
+                    onClick={() => processQueuedFiles('recognize', key)}
+                    disabled={queueBusy}
+                  >
+                    {Icon.aiBatch}
+                  </button>
+                  <button
                     className="icon-btn"
                     title="대기열에서 제거"
-                    onClick={() => removePendingFile(fileQueueKey(file))}
+                    onClick={() => removePendingFile(key)}
                     disabled={queueBusy}
                   >
                     {Icon.trash}
                   </button>
                 </div>
-              ))}
+              );})}
             </div>
             <div className="source-queue-actions">
-              <button className="btn" type="button" onClick={() => processQueuedFiles('register')} disabled={queueBusy}>
-                {Icon.check} 그대로 등록
-              </button>
-              <button className="btn primary" type="button" onClick={() => processQueuedFiles('recognize')} disabled={queueBusy}>
-                {Icon.aiBatch} 문제 인식
-              </button>
+              <div className="btn full" style={{cursor:'default', justifyContent:'center', color:'var(--muted)'}}>
+                각 파일 행에서 처리 방식을 선택하세요
+              </div>
               {!aiAvailable && (
                 <div className="btn full" style={{cursor:'default', justifyContent:'center', color:'var(--muted)'}}>
                   Gemini 키 없음 · 기본 인식으로 실행
@@ -1926,7 +1941,7 @@ const AI_FALLBACK_ON = {
   enabled: true,
   mode: 'auto',
   provider: 'gemini',
-  model: 'gemini-2.5-pro',
+  model: 'gemini-3.1-pro-preview',
   threshold: 0.72,
   maxRegions: 48,
   maxTokens: 4096,
@@ -2679,10 +2694,12 @@ function App(){
     showToast('업로드 대기열을 비웠어요');
   }, []);
 
-  const processQueuedFiles = useCallback(async (mode) => {
-    const files = [...pendingFiles];
+  const processQueuedFiles = useCallback(async (mode, targetKey = null) => {
+    const files = targetKey
+      ? pendingFiles.filter(file => fileQueueKey(file) === targetKey)
+      : [...pendingFiles];
     if (!files.length) {
-      showToast('대기열에 파일이 없습니다');
+      showToast(targetKey ? '해당 파일이 대기열에 없습니다' : '대기열에 파일이 없습니다');
       return;
     }
     const isRecognition = mode === 'recognize';
@@ -2694,7 +2711,7 @@ function App(){
       const fileKeys = files.map(fileQueueKey);
       const job = startBackgroundJob({
         scope: 'queue-recognition',
-        label: `${files.length}개 파일 문제 인식 중`,
+        label: files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`,
         hint: aiFallback.enabled
           ? 'Gemini AI 보정으로 문항 경계를 확인합니다.'
           : '기본 문항 인식으로 실행 중입니다.',
@@ -2714,7 +2731,9 @@ function App(){
         setRecognitionReview({
           id: `review-${job.id}`,
           kind: 'queue-recognition',
-          title: `${summary.problems}개 문제로 인식했어요`,
+          title: files.length === 1
+            ? `${files[0].name || '파일'} · ${summary.problems}개 문제로 인식했어요`
+            : `${summary.problems}개 문제로 인식했어요`,
           subtitle: '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
           session: incomingSession,
           incomingSession,
@@ -2745,7 +2764,7 @@ function App(){
     setLoading({
       label: isRecognition
         ? `${files.length}개 파일에서 문제 인식 중...`
-        : `${files.length}개 파일을 순서대로 등록 중...`,
+        : files.length === 1 ? '1개 파일을 그대로 등록 중...' : `${files.length}개 파일을 순서대로 등록 중...`,
       hint: isRecognition
         ? (aiFallback.enabled
             ? 'Gemini AI 보정으로 문항 경계를 다시 확인합니다.'
@@ -2762,7 +2781,8 @@ function App(){
         sessionToApply = await postRestore(merged);
       }
       applySession(sessionToApply);
-      setPendingFiles([]);
+      const appliedKeys = new Set(files.map(fileQueueKey));
+      setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
       const intentLabel = isRecognition ? '문제 인식' : '순서 등록';
       showToast(`${intentLabel} 완료 · ${(sessionToApply.problems || []).length}개 문항`);
       const folder = sessionToApply?.output_dir || sessionToApply?.outputDir || s?.output_dir || s?.outputDir;

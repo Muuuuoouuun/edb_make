@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
 from layout_template_schema import build_default_template
-from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
+from page_repair import AIFallbackConfig, DEFAULT_GEMINI_REPAIR_MODEL, build_ai_fallback_config as build_page_ai_fallback_config
 from placement_engine import build_export_plan
 from preprocess import prepare_source_pages, prepare_source_pages_batch
 from structured_schema import Box, PageModel, ProblemUnit, Subject, save_pages_json
@@ -66,7 +66,7 @@ def _build_ai_fallback_config(
     threshold = 0.72 if threshold is None else float(threshold)
     max_tokens = 4096 if max_tokens is None else int(max_tokens)
     max_regions = 48 if max_regions is None else int(max_regions)
-    timeout_ms = 12000 if timeout_ms is None else int(timeout_ms)
+    timeout_ms = 30000 if timeout_ms is None else int(timeout_ms)
     resolved_mode = (mode or "").strip().lower() or ("auto" if enabled else "off")
     if resolved_mode not in {"off", "auto", "force"}:
         resolved_mode = "auto" if enabled else "off"
@@ -80,7 +80,7 @@ def _build_ai_fallback_config(
         and temperature is None
         and threshold == 0.72
         and max_regions == 48
-        and timeout_ms == 12000
+        and timeout_ms == 30000
         and not save_debug
         and not fail_on_error
     ):
@@ -89,7 +89,7 @@ def _build_ai_fallback_config(
         "enabled": effective_enabled,
         "mode": resolved_mode,
         "provider": provider or "gemini",
-        "model": model or "gemini-2.5-pro",
+        "model": model or DEFAULT_GEMINI_REPAIR_MODEL,
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -111,7 +111,7 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         threshold=float(ai_fallback_config.get("threshold") or 0.72),
         max_regions=int(ai_fallback_config.get("max_regions") or 48),
         max_tokens=int(ai_fallback_config.get("max_tokens") or 4096),
-        timeout_ms=int(ai_fallback_config.get("timeout_ms") or 12000),
+        timeout_ms=int(ai_fallback_config.get("timeout_ms") or 30000),
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
     )
@@ -450,7 +450,7 @@ def run_export(
     ai_fallback_temperature: float | None = None,
     ai_fallback_threshold: float = 0.72,
     ai_fallback_max_regions: int = 48,
-    ai_fallback_timeout_ms: int = 12000,
+    ai_fallback_timeout_ms: int = 30000,
     ai_fallback_save_debug: bool = False,
     fail_on_ai_error: bool = False,
 ) -> dict[str, Any]:
@@ -579,7 +579,7 @@ def main() -> int:
     parser.add_argument("--ai-fallback-temperature", type=float, default=None, help="AI fallback sampling temperature")
     parser.add_argument("--ai-fallback-threshold", type=float, default=0.72, help="Low-confidence trigger threshold for AI fallback")
     parser.add_argument("--ai-fallback-max-regions", type=int, default=48, help="Maximum number of regions sent to AI fallback")
-    parser.add_argument("--ai-fallback-timeout-ms", type=int, default=12000, help="Timeout in milliseconds for AI fallback")
+    parser.add_argument("--ai-fallback-timeout-ms", type=int, default=30000, help="Timeout in milliseconds for AI fallback")
     parser.add_argument("--ai-fallback-save-debug", action="store_true", help="Write AI fallback debug artifacts")
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
     args = parser.parse_args()
