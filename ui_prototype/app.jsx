@@ -710,6 +710,7 @@ function ItemsRail({
                 </div>
               )}
             </div>
+
           </div>
         )}
 
@@ -1107,6 +1108,7 @@ function SidePanel({
   accent, setAccent,
   onConfirm,
   userSettings, onSaveGeminiKey,
+  onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
   aiEnabled, setAiEnabled,
   inputIntent, setInputIntent,
   onRecognizeSession, canRecognizeSession,
@@ -1115,7 +1117,9 @@ function SidePanel({
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
   const [compareX, setCompareX] = useState(50);
   const [keyDraft, setKeyDraft] = useState('');
+  const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [showOpenAiKey, setShowOpenAiKey] = useState(false);
   const dragging = useRef(false);
   const wrapRef = useRef(null);
 
@@ -1143,6 +1147,7 @@ function SidePanel({
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
+  const canEnhanceCurrent = !!item && !!userSettings?.hasOpenAiApiKey && !imageEnhanceBusy;
   const updatePlacement = (patch) => {
     if (!item) return;
     setPlacement?.(item.id, patch);
@@ -1381,6 +1386,23 @@ function SidePanel({
                     <div className="meta-r">제작시<strong>~ 8s</strong></div>
                   </button>
                 </div>
+                <div className="panel-section-hd" style={{marginTop: 6}}>
+                  추가 업스케일 <span className="line" />
+                </div>
+                <button
+                  className="btn primary"
+                  type="button"
+                  style={{width: '100%', justifyContent: 'space-between'}}
+                  onClick={() => onEnhanceImage?.([item.id])}
+                  disabled={!canEnhanceCurrent}
+                  title={userSettings?.hasOpenAiApiKey ? 'GPT Image 2로 선택 문항을 고화질 재구성합니다' : 'OpenAI API 키를 저장하면 사용할 수 있습니다'}
+                >
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} AI 업스케일 재구성</span>
+                  <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>GPT Image 2</span>
+                </button>
+                <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
+                  원문은 유지하고 선명도와 배경만 개선합니다. 적용 후 텍스트 검토 표시가 남습니다.
+                </div>
               </>
             ) : (
               <div style={{
@@ -1568,6 +1590,56 @@ function SidePanel({
                 style={{flex: 1, justifyContent: 'center'}}
                 onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
                 disabled={!userSettings?.hasStoredGeminiApiKey}
+              >
+                저장된 키 삭제
+              </button>
+            </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>OpenAI API 키 <span className="line" /></div>
+
+            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
+              <div className="lbl">
+                <span style={{display:'flex', alignItems:'center', gap:8}}>
+                  <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
+                    {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
+                  </span>
+                  {userSettings?.hasOpenAiApiKey && (
+                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
+                      {userSettings.openAiApiKeyPreview}
+                    </span>
+                  )}
+                </span>
+                <small>GPT Image 2 기반 추가 업스케일 재구성에 사용합니다.</small>
+              </div>
+            </div>
+            <div className="key-input-row">
+              <input
+                type={showOpenAiKey ? 'text' : 'password'}
+                className="key-input"
+                placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
+                value={openAiKeyDraft}
+                onChange={e => setOpenAiKeyDraft(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <button className="btn icon" type="button" onClick={() => setShowOpenAiKey(s => !s)} title={showOpenAiKey ? '숨기기' : '보기'}>
+                {showOpenAiKey ? '숨' : '보기'}
+              </button>
+            </div>
+            <div style={{display: 'flex', gap: 6}}>
+              <button
+                className="btn primary"
+                style={{flex: 1, justifyContent: 'center'}}
+                onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
+                disabled={!openAiKeyDraft.trim()}
+              >
+                키 저장
+              </button>
+              <button
+                className="btn"
+                style={{flex: 1, justifyContent: 'center'}}
+                onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
+                disabled={!userSettings?.hasStoredOpenAiApiKey}
               >
                 저장된 키 삭제
               </button>
@@ -2328,6 +2400,18 @@ async function postRetryAi(args, options = {}){
   return json;
 }
 
+async function postEnhanceImage(args, options = {}){
+  const resp = await fetch('/api/session/enhance-image', {
+    method: 'POST',
+    signal: options.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args || {}),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `AI 업스케일 실패 (${resp.status})`);
+  return json;
+}
+
 async function postRestore(snapshot){
   const resp = await fetch('/api/session/restore', {
     method: 'POST',
@@ -2356,11 +2440,14 @@ async function openOutputFolder(path){
   }
 }
 
-async function saveUserSettings(geminiApiKey){
+async function saveUserSettings(settings){
+  const payload = typeof settings === 'string'
+    ? { geminiApiKey: settings }
+    : { ...(settings || {}) };
   const resp = await fetch('/api/user-settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ geminiApiKey }),
+    body: JSON.stringify(payload),
   });
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `설정 저장 실패 (${resp.status})`);
@@ -2416,6 +2503,7 @@ function App(){
   const progress = items.length ? processed / items.length : 0;
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
+  const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
 
   const showToast = msg => {
     setToast(msg);
@@ -2727,13 +2815,74 @@ function App(){
 
   const onSaveGeminiKey = useCallback(async (key) => {
     try {
-      const s = await saveUserSettings(key || '');
+      const s = await saveUserSettings({ geminiApiKey: key || '' });
       setUserSettings(s);
       showToast(key ? 'Gemini 키 저장됨' : 'Gemini 키 삭제됨');
     } catch (e) {
       showToast('저장 실패: ' + e.message);
     }
   }, []);
+
+  const onSaveOpenAiKey = useCallback(async (key) => {
+    try {
+      const s = await saveUserSettings({ openAiApiKey: key || '' });
+      setUserSettings(s);
+      showToast(key ? 'OpenAI 키 저장됨' : 'OpenAI 키 삭제됨');
+    } catch (e) {
+      showToast('저장 실패: ' + e.message);
+    }
+  }, []);
+
+  const enhanceImageSession = useCallback(async (problemIds) => {
+    if (!session) {
+      showToast('변경할 세션이 없습니다');
+      return;
+    }
+    if (!userSettings?.hasOpenAiApiKey) {
+      showToast('OpenAI API 키를 먼저 저장해 주세요');
+      return;
+    }
+    const ids = listUnique((problemIds || []).filter(Boolean));
+    if (!ids.length) {
+      showToast('업스케일할 문항을 선택해 주세요');
+      return;
+    }
+    const snapshotBefore = materializeSessionForItems(session, items, fileName) || cloneSession(session);
+    const job = startBackgroundJob({
+      scope: 'image-enhance',
+      label: ids.length === 1 ? 'AI 업스케일 재구성 중' : `${ids.length}개 문항 AI 업스케일 중`,
+      hint: 'GPT Image 2로 재구성합니다. 완료 후 텍스트 검토 표시가 남습니다.',
+    });
+    try {
+      const result = await postEnhanceImage({ problemIds: ids }, { signal: job.controller.signal });
+      if (job.controller.signal.aborted) return;
+      const next = result.session;
+      const applied = (result.enhance || []).filter(row => row.status === 'applied').length;
+      setHistoryStack(prev => [...prev, snapshotBefore]);
+      adoptMutatedSession(next, snapshotBefore);
+      settleBackgroundJob(job.id, {
+        status: 'done',
+        label: 'AI 업스케일 완료',
+        hint: applied ? `${applied}개 문항을 재구성했습니다.` : '적용된 문항이 없습니다. 결과를 확인해 주세요.',
+      });
+      showToast(applied ? `AI 업스케일 적용 · ${applied}개 문항` : 'AI 업스케일 결과를 확인해 주세요');
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        settleBackgroundJob(job.id, {
+          status: 'canceled',
+          label: 'AI 업스케일 취소됨',
+          hint: '결과를 적용하지 않았습니다.',
+        });
+        return;
+      }
+      settleBackgroundJob(job.id, {
+        status: 'failed',
+        label: 'AI 업스케일 실패',
+        hint: e.message,
+      }, 5000);
+      showToast(`AI 업스케일 실패: ${e.message}`);
+    }
+  }, [session, userSettings, items, fileName, startBackgroundJob, settleBackgroundJob, adoptMutatedSession]);
 
   const resetSession = useCallback(async () => {
     if (loading) {
@@ -3238,6 +3387,9 @@ function App(){
           onConfirm={onConfirm}
           userSettings={userSettings}
           onSaveGeminiKey={onSaveGeminiKey}
+          onSaveOpenAiKey={onSaveOpenAiKey}
+          onEnhanceImage={enhanceImageSession}
+          imageEnhanceBusy={hasRunningImageEnhance}
           aiEnabled={aiEnabled}
           setAiEnabled={setAiEnabled}
           inputIntent={inputIntent}

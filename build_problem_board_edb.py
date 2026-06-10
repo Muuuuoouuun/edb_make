@@ -67,7 +67,8 @@ V1_LAYOUT_MARGIN_Y_PX = 24.0
 V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
 V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
-PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 18
+CHOICE_BOTTOM_SAFE_PADDING_PX = 28.0
+PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 28
 PROCESSING_STEP_RAW = "raw"
 PROCESSING_STEP_ORIGINAL = "s1"
 PROCESSING_STEP_CHALK = "s2"
@@ -183,10 +184,14 @@ def _normalize_processing_step(value: Any) -> str:
 # the width of a printed Korean exam problem at 200 DPI.
 PROBLEM_CROP_TARGET_MIN_WIDTH_PX = 1024
 PROBLEM_CROP_MAX_UPSCALE = 2.6
-EDGE_GUIDE_SCAN_RATIO = 0.12
-EDGE_GUIDE_SCAN_MAX_PX = 52
+EDGE_GUIDE_SCAN_RATIO = 0.16
+EDGE_GUIDE_SCAN_MAX_PX = 120
 EDGE_GUIDE_DARK_THRESHOLD = 200
 EDGE_GUIDE_MIN_COLUMN_RATIO = 0.55
+EDGE_GUIDE_CLUSTER_MIN_COLUMN_RATIO = 0.035
+EDGE_GUIDE_CLUSTER_MIN_COVERAGE_RATIO = 0.55
+EDGE_GUIDE_CLUSTER_MAX_WIDTH_PX = 24
+EDGE_GUIDE_CLUSTER_GAP_PX = 2
 EDGE_GUIDE_TRIM_PADDING_PX = 4
 
 
@@ -201,12 +206,17 @@ def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
         return image
 
     gray = image.convert("L")
+    if ImageStat.Stat(gray).mean[0] <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
+        return image
+
     pixels = gray.load()
     scan_width = min(int(round(width * EDGE_GUIDE_SCAN_RATIO)), EDGE_GUIDE_SCAN_MAX_PX)
     if scan_width <= 0:
         return image
 
     min_dark_pixels = int(round(height * EDGE_GUIDE_MIN_COLUMN_RATIO))
+    min_cluster_column_pixels = max(4, int(round(height * EDGE_GUIDE_CLUSTER_MIN_COLUMN_RATIO)))
+    min_cluster_coverage = int(round(height * EDGE_GUIDE_CLUSTER_MIN_COVERAGE_RATIO))
 
     def is_guide_column(x: int) -> bool:
         dark_count = 0
@@ -215,15 +225,59 @@ def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
                 dark_count += 1
         return dark_count >= min_dark_pixels
 
+    def find_slanted_guide_cluster(x_values: range) -> tuple[int, int] | None:
+        candidates: list[tuple[int, int, set[int]]] = []
+        for x in x_values:
+            dark_rows: set[int] = set()
+            for y in range(height):
+                if pixels[x, y] <= EDGE_GUIDE_DARK_THRESHOLD:
+                    dark_rows.add(y)
+            if len(dark_rows) >= min_cluster_column_pixels:
+                candidates.append((x, len(dark_rows), dark_rows))
+
+        clusters: list[list[tuple[int, int, set[int]]]] = []
+        current: list[tuple[int, int, set[int]]] = []
+        for candidate in candidates:
+            if current and candidate[0] > current[-1][0] + EDGE_GUIDE_CLUSTER_GAP_PX + 1:
+                clusters.append(current)
+                current = []
+            current.append(candidate)
+        if current:
+            clusters.append(current)
+
+        valid_clusters: list[tuple[int, int]] = []
+        for cluster in clusters:
+            start_x = min(item[0] for item in cluster)
+            end_x = max(item[0] for item in cluster)
+            if end_x - start_x + 1 > EDGE_GUIDE_CLUSTER_MAX_WIDTH_PX:
+                continue
+            covered_rows: set[int] = set()
+            for item in cluster:
+                covered_rows.update(item[2])
+            if len(covered_rows) >= min_cluster_coverage:
+                valid_clusters.append((start_x, end_x))
+
+        if not valid_clusters:
+            return None
+        if x_values.start <= 0:
+            return min(valid_clusters, key=lambda item: item[0])
+        return max(valid_clusters, key=lambda item: item[1])
+
     left_trim = 0
     for x in range(scan_width):
         if is_guide_column(x):
             left_trim = max(left_trim, x + EDGE_GUIDE_TRIM_PADDING_PX + 1)
+    left_cluster = find_slanted_guide_cluster(range(scan_width))
+    if left_cluster is not None:
+        left_trim = max(left_trim, left_cluster[1] + EDGE_GUIDE_TRIM_PADDING_PX + 1)
 
     right_trim = width
     for x in range(width - scan_width, width):
         if is_guide_column(x):
             right_trim = min(right_trim, x - EDGE_GUIDE_TRIM_PADDING_PX)
+    right_cluster = find_slanted_guide_cluster(range(width - scan_width, width))
+    if right_cluster is not None:
+        right_trim = min(right_trim, right_cluster[0] - EDGE_GUIDE_TRIM_PADDING_PX)
 
     if left_trim <= 0 and right_trim >= width:
         return image
@@ -784,6 +838,8 @@ def _clamp_box_to_next_problem(
     box: Box,
     next_problem: ProblemUnit | None,
     block_by_id: dict[str, ContentBlock],
+    *,
+    min_bottom: float | None = None,
 ) -> Box:
     if next_problem is None:
         return box
@@ -791,6 +847,8 @@ def _clamp_box_to_next_problem(
     if next_top <= box.top + 1.0:
         return box
     limit = max(box.top + 1.0, next_top - DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX)
+    if min_bottom is not None:
+        limit = max(limit, min(float(min_bottom), box.bottom))
     if box.bottom <= limit:
         return box
     return Box.from_points(box.left, box.top, box.right, limit)
@@ -1013,15 +1071,34 @@ def build_problem_entries(
                 if not boxes:
                     boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
                 has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
+                has_choice_blocks = any(block.block_type == BlockType.CHOICE for block in blocks)
+                bottom_padding_px = (
+                    max(DOCUMENT_BAND_BOTTOM_PADDING_PX, CHOICE_BOTTOM_SAFE_PADDING_PX)
+                    if has_choice_blocks
+                    else DOCUMENT_BAND_BOTTOM_PADDING_PX
+                    if has_document_band_metadata
+                    else PROBLEM_PADDING_PX
+                )
+                content_bottom = max(box.bottom for box in boxes)
+                min_bottom = (
+                    min(float(page.height_px), content_bottom + float(bottom_padding_px))
+                    if has_choice_blocks
+                    else None
+                )
                 merged_box = merge_boxes(
                     boxes,
                     page_width=page.width_px,
                     page_height=page.height_px,
                     top_padding_px=int(DOCUMENT_BAND_TOP_PADDING_PX) if has_document_band_metadata else PROBLEM_PADDING_PX,
-                    bottom_padding_px=DOCUMENT_BAND_BOTTOM_PADDING_PX if has_document_band_metadata else PROBLEM_PADDING_PX,
+                    bottom_padding_px=bottom_padding_px,
                 )
                 if has_document_band_metadata:
-                    merged_box = _clamp_box_to_next_problem(merged_box, next_problem, block_by_id)
+                    merged_box = _clamp_box_to_next_problem(
+                        merged_box,
+                        next_problem,
+                        block_by_id,
+                        min_bottom=min_bottom,
+                    )
                 if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())
@@ -2133,7 +2210,7 @@ def run_problem_export(
     ocr_summary = _summarize_ocr_usage(pages)
     if ocr_summary["no_ocr_fallback_active"]:
         print(
-            "[run_problem_export] WARNING: OCR resolved to 'none' for every block — "
+            "[run_problem_export] WARNING: OCR resolved to 'none' for every block - "
             "problem-number detection will be disabled and each detected band "
             "will become its own pseudo-problem. Set GEMINI_API_KEY (or pass "
             "ocr='gemini') to enable Gemini OCR.",

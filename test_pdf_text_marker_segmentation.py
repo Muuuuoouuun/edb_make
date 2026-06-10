@@ -6,6 +6,7 @@ import fitz
 
 from build_structured_page_json import build_page_model
 from page_repair import build_ai_fallback_config
+import preprocess as preprocess_module
 from preprocess import prepare_source_pages
 from segment import segment_page
 from structured_schema import Subject
@@ -28,9 +29,11 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 pdf_path,
                 pdf_dpi=144,
                 detect_perspective=False,
-                deskew=False,
+                deskew=True,
                 crop_margins=True,
             )[0]
+            self.assertFalse(prepared.metadata.get("deskewed"))
+            self.assertEqual("pdf_text_layer", prepared.metadata.get("deskew_skipped_reason"))
             segmented = segment_page(prepared, page_id=prepared.page_id, subject=Subject.MATH)
 
             self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
@@ -44,6 +47,31 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 ai_config=build_ai_fallback_config(mode="off"),
             )
             self.assertEqual(4, len(page_model.problems))
+
+    def test_pdf_render_uses_external_pymupdf_when_module_missing(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            pdf_path = Path(temp_dir) / "single_problem.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=300, height=240)
+            page.insert_text((48, 80), "1. problem stem", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            original_fitz = preprocess_module.fitz
+            preprocess_module.fitz = None
+            try:
+                pages = preprocess_module.render_pdf_pages(
+                    pdf_path,
+                    Path(temp_dir) / "rendered",
+                    dpi=72,
+                )
+            finally:
+                preprocess_module.fitz = original_fitz
+
+            self.assertEqual(1, len(pages))
+            self.assertTrue(Path(pages[0].normalized_path).exists())
+            self.assertEqual("external_pymupdf", pages[0].metadata.get("pdf_renderer"))
+            self.assertEqual(1, len(pages[0].metadata.get("pdf_problem_markers") or []))
 
 
 if __name__ == "__main__":

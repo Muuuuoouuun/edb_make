@@ -1,0 +1,154 @@
+{
+  "session_name": "20260610_223707_1781098627053740000_고1_샘플_7f796ebe63",
+  "generated_at": "2026-06-10T22:37:14+09:00",
+  "data_source": "question_export",
+  "output_dir": "C:\\Projects\\Class_project\\edb_make\\20260610_223707_1781098627053740000_고1_샘플_7f796ebe63",
+  "source_mode": "single",
+  "input_intent": "multi-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260610_223707_1781098627053740000_고1 샘플_7f796ebe63.jpeg"
+  ],
+  "source_page_count": 1,
+  "detected_problem_count": 1,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "crop_format": "v1",
+  "pages_json_path": "C:\\Projects\\Class_project\\edb_make\\20260610_223707_1781098627053740000_고1_샘플_7f796ebe63\\pages.json",
+  "placements_json_path": "C:\\Projects\\Class_project\\edb_make\\20260610_223707_1781098627053740000_고1_샘플_7f796ebe63\\placements.json",
+  "board_render_dir": "C:\\Projects\\Class_project\\edb_make\\20260610_223707_1781098627053740000_고1_샘플_7f796ebe63\\problem_cutouts",
+  "edb_path": null,
+  "edb_file_uri": null,
+  "rendered_page_paths": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260610_223707_1781098627053740000_%EA%B3%A01%20%EC%83%98%ED%94%8C_7f796ebe63-page-001.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {}
+  },
+  "ai_fallback": {
+    "enabled": true,
+    "mode": "auto",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "prompt": "",
+    "max_tokens": 4096,
+    "temperature": null,
+    "threshold": 0.72,
+    "max_regions": 48,
+    "timeout_ms": 30000,
+    "save_debug": false,
+    "fail_on_error": false
+  },
+  "ai_summary": {
+    "requested": true,
+    "mode": "auto",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "attempted_page_count": 1,
+    "applied_page_count": 0,
+    "ai_cache_hit_count": 0,
+    "ocr_cache_hit_count": 0,
+    "ocr_cache_miss_count": 1,
+    "status_counts": {
+      "error": 1
+    },
+    "route_counts": {
+      "ai_patch": 1
+    },
+    "route_tier_counts": {
+      "red": 1
+    },
+    "model_fallbacks": []
+  },
+  "warning_messages": [
+    "감지된 문항 수가 원본 페이지 수와 비슷합니다. 여러 문제가 있는 페이지라면 검수 화면에서 분리 상태를 확인해 주세요."
+  ],
+  "problems": [
+    {
+      "id": "20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001-problem-1",
+      "title": "문항 01 · 20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/20260610_223707_1781098627053740000_%EA%B3%A01_%EC%83%98%ED%94%8C_7f796ebe63/problem_crops/problem_001_5d41e93e.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260610_223707_1781098627053740000_%EA%B3%A01%20%EC%83%98%ED%94%8C_7f796ebe63-page-001.png",
+      "sourceFileName": "20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001.png",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/20260610_223707_1781098627053740000_%EA%B3%A01_%EC%83%98%ED%94%8C_7f796ebe63/problem_cutouts/problem_001_5d41e93e.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 245.0,
+        "height": 205.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 0.12,
+        "ocr": 1.0,
+        "grouping": 0.0
+      },
+      "aiStatus": "error"
+    }
+  ],
+  "pages": [
+    {
+      "id": "20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260610_223707_1781098627053740000_%EA%B3%A01%20%EC%83%98%ED%94%8C_7f796ebe63-page-001.png",
+      "sourceImagePath": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001.png",
+      "width": 245,
+      "height": 205,
+      "problemIds": [
+        "20260610_223707_1781098627053740000_고1 샘플_7f796ebe63-page-001-problem-1"
+      ],
+      "riskFlags": [
+        "sparse_segmentation",
+        "large_block_dominance",
+        "fallback_grouping",
+        "full_page_image"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 1.0,
+      "riskTier": "red",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 0.12,
+        "ocr": 1.0,
+        "grouping": 0.0
+      },
+      "aiStatus": "error"
+    }
+  ]
+}

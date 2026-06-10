@@ -1,0 +1,296 @@
+{
+  "source_paths": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260610_215725_1781096245430410700_6문제_2014607891.png"
+  ],
+  "output_dir": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891",
+  "pages_json_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\pages.json",
+  "problem_crop_dir": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops",
+  "board_render_dir": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\board_renders",
+  "block_crop_dir": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\block_crops",
+  "record_count": 6,
+  "record_mode": "image-only",
+  "dark_board": true,
+  "board_theme": "charcoal",
+  "crop_format": "v2",
+  "header_flag": 0,
+  "text_confidence_threshold": 0.78,
+  "ai_fallback": {
+    "enabled": true,
+    "mode": "auto",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "prompt": "",
+    "max_tokens": 4096,
+    "temperature": null,
+    "threshold": 0.72,
+    "max_regions": 48,
+    "timeout_ms": 30000,
+    "save_debug": false,
+    "fail_on_error": false
+  },
+  "ai_summary": {
+    "requested": true,
+    "mode": "auto",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "attempted_page_count": 1,
+    "applied_page_count": 0,
+    "ai_cache_hit_count": 0,
+    "ocr_cache_hit_count": 0,
+    "ocr_cache_miss_count": 6,
+    "status_counts": {
+      "error": 1
+    },
+    "route_counts": {
+      "ai_patch": 1
+    },
+    "route_tier_counts": {
+      "red": 1
+    },
+    "model_fallbacks": []
+  },
+  "placement_summary": {
+    "problem_count": 6,
+    "overflow_count": 0,
+    "overflow_violation_count": 0,
+    "max_bottom_y_pages": 6.72,
+    "text_record_count": 0,
+    "image_record_count": 6
+  },
+  "placements": [
+    {
+      "problem_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001-problem-1",
+      "title": "문항 1",
+      "problem_number": null,
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops\\problem_001_f68c3a56.png",
+      "board_render_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_cutouts\\problem_001_f68c3a56.png",
+      "source_page_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_215725_1781096245430410700_6문제_2014607891-page-001.png",
+      "start_y_pages": 0.0,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 0.72,
+      "snapped_next_start_y_pages": 1.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 16.0,
+        "width": 371.0,
+        "height": 303.0
+      },
+      "risk_flags": [
+        "fallback_grouping"
+      ],
+      "record_mode": "image-only",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "board_theme": "charcoal",
+      "crop_format": "v2",
+      "image_pixel_width": 301,
+      "image_pixel_height": 246,
+      "placement_x_ratio": 0.0,
+      "placement_y_ratio": 0.0,
+      "placement_scale_ratio": 1.0
+    },
+    {
+      "problem_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001-problem-2",
+      "title": "문항 2",
+      "problem_number": null,
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops\\problem_002_9b2db405.png",
+      "board_render_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_cutouts\\problem_002_9b2db405.png",
+      "source_page_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_215725_1781096245430410700_6문제_2014607891-page-001.png",
+      "start_y_pages": 1.2,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 1.92,
+      "snapped_next_start_y_pages": 2.4,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 359.0,
+        "width": 371.0,
+        "height": 295.0
+      },
+      "risk_flags": [
+        "fallback_grouping"
+      ],
+      "record_mode": "image-only",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "board_theme": "charcoal",
+      "crop_format": "v2",
+      "image_pixel_width": 301,
+      "image_pixel_height": 239,
+      "placement_x_ratio": 0.0,
+      "placement_y_ratio": 0.0,
+      "placement_scale_ratio": 1.0
+    },
+    {
+      "problem_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001-problem-3",
+      "title": "문항 3",
+      "problem_number": null,
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops\\problem_003_e5faf05c.png",
+      "board_render_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_cutouts\\problem_003_e5faf05c.png",
+      "source_page_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_215725_1781096245430410700_6문제_2014607891-page-001.png",
+      "start_y_pages": 2.4,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 3.12,
+      "snapped_next_start_y_pages": 3.6,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 677.0,
+        "width": 371.0,
+        "height": 232.0
+      },
+      "risk_flags": [
+        "fallback_grouping"
+      ],
+      "record_mode": "image-only",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "board_theme": "charcoal",
+      "crop_format": "v2",
+      "image_pixel_width": 301,
+      "image_pixel_height": 188,
+      "placement_x_ratio": 0.0,
+      "placement_y_ratio": 0.0,
+      "placement_scale_ratio": 1.0
+    },
+    {
+      "problem_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001-problem-4",
+      "title": "문항 4",
+      "problem_number": null,
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops\\problem_004_f57ed263.png",
+      "board_render_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_cutouts\\problem_004_f57ed263.png",
+      "source_page_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_215725_1781096245430410700_6문제_2014607891-page-001.png",
+      "start_y_pages": 3.6,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 4.32,
+      "snapped_next_start_y_pages": 4.8,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 355.0,
+        "top": 14.0,
+        "width": 371.0,
+        "height": 298.0
+      },
+      "risk_flags": [
+        "fallback_grouping"
+      ],
+      "record_mode": "image-only",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "board_theme": "charcoal",
+      "crop_format": "v2",
+      "image_pixel_width": 301,
+      "image_pixel_height": 242,
+      "placement_x_ratio": 0.0,
+      "placement_y_ratio": 0.0,
+      "placement_scale_ratio": 1.0
+    },
+    {
+      "problem_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001-problem-5",
+      "title": "문항 5",
+      "problem_number": null,
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops\\problem_005_d28eace8.png",
+      "board_render_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_cutouts\\problem_005_d28eace8.png",
+      "source_page_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_215725_1781096245430410700_6문제_2014607891-page-001.png",
+      "start_y_pages": 4.8,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 5.52,
+      "snapped_next_start_y_pages": 6.0,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 355.0,
+        "top": 391.0,
+        "width": 371.0,
+        "height": 335.0
+      },
+      "risk_flags": [
+        "fallback_grouping"
+      ],
+      "record_mode": "image-only",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "board_theme": "charcoal",
+      "crop_format": "v2",
+      "image_pixel_width": 301,
+      "image_pixel_height": 272,
+      "placement_x_ratio": 0.0,
+      "placement_y_ratio": 0.0,
+      "placement_scale_ratio": 1.0
+    },
+    {
+      "problem_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001-problem-6",
+      "title": "문항 6",
+      "problem_number": null,
+      "subject": "unknown",
+      "crop_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_crops\\problem_006_e4a73632.png",
+      "board_render_path": "C:\\Projects\\Class_project\\edb_make\\20260610_215725_1781096245430410700_6문제_2014607891\\problem_cutouts\\problem_006_e4a73632.png",
+      "source_page_id": "20260610_215725_1781096245430410700_6문제_2014607891-page-001",
+      "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260610_215725_1781096245430410700_6문제_2014607891-page-001.png",
+      "start_y_pages": 6.0,
+      "actual_content_height_pages": 0.72,
+      "actual_bottom_y_pages": 6.72,
+      "snapped_next_start_y_pages": 7.2,
+      "overflow_allowed": false,
+      "overflow_amount_pages": 0.0,
+      "overflow_violation": false,
+      "slot_span_count": 1,
+      "bbox": {
+        "left": 355.0,
+        "top": 713.0,
+        "width": 371.0,
+        "height": 258.0
+      },
+      "risk_flags": [
+        "fallback_grouping"
+      ],
+      "record_mode": "image-only",
+      "text_record_count": 0,
+      "image_record_count": 1,
+      "board_theme": "charcoal",
+      "crop_format": "v2",
+      "image_pixel_width": 301,
+      "image_pixel_height": 209,
+      "placement_x_ratio": 0.0,
+      "placement_y_ratio": 0.0,
+      "placement_scale_ratio": 1.0
+    }
+  ],
+  "ocr_backend_requested": "auto",
+  "ocr_summary": {
+    "resolved_backend": "gemini",
+    "backend_counts": {
+      "gemini": 6
+    },
+    "block_count": 6,
+    "empty_text_block_count": 6,
+    "populated_text_block_count": 0,
+    "no_ocr_fallback_active": false
+  },
+  "input_intent": "multi-problem"
+}

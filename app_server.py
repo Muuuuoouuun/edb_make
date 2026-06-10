@@ -41,11 +41,17 @@ from edb_builder import (
     write_edb,
 )
 from layout_template_schema import LayoutTemplate
+from openai_image_backend import (
+    DEFAULT_OPENAI_IMAGE_MODEL,
+    DEFAULT_RECONSTRUCTION_PROMPT,
+    reconstruct_problem_image,
+)
 from structured_schema import Box, Subject
 from user_settings import (
     apply_to_env as apply_user_settings_to_env,
     load_user_settings,
     summarize_for_response as summarize_user_settings,
+    update_api_keys,
     update_gemini_api_key,
 )
 
@@ -400,7 +406,7 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         add_path(value)
 
     for problem in session.get("problems", []):
-        for key in ("imagePath", "sourceImagePath", "boardRenderPath"):
+        for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
             add_path(problem.get(key))
 
     for page in session.get("pages", []):
@@ -502,6 +508,7 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
         problem["imagePath"] = path_to_api_url(problem.get("imagePath"))
         problem["sourceImagePath"] = path_to_api_url(problem.get("sourceImagePath"))
         problem["boardRenderPath"] = path_to_api_url(problem.get("boardRenderPath"))
+        problem["originalImagePath"] = path_to_api_url(problem.get("originalImagePath"))
 
     for page in rewritten.get("pages", []):
         # Front-end loads page images through /api/file; the original
@@ -870,6 +877,33 @@ def _retry_target_page_ids(session: dict[str, Any], payload: dict[str, Any]) -> 
     return list(dict.fromkeys(ids))
 
 
+def _enhance_target_problem_ids(session: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    raw_problem_ids = payload.get("problemIds") or payload.get("problem_ids") or []
+    if payload.get("problemId") or payload.get("problem_id"):
+        raw_problem_ids = [payload.get("problemId") or payload.get("problem_id")]
+    ids = [str(pid) for pid in raw_problem_ids if pid]
+
+    raw_page_ids = payload.get("pageIds") or payload.get("page_ids") or []
+    if payload.get("pageId") or payload.get("page_id"):
+        raw_page_ids = [payload.get("pageId") or payload.get("page_id")]
+    page_ids = {str(pid) for pid in raw_page_ids if pid}
+    if page_ids:
+        for problem in session.get("problems", []):
+            if not isinstance(problem, dict):
+                continue
+            if str(problem.get("sourcePageId") or "") in page_ids and problem.get("id"):
+                ids.append(str(problem["id"]))
+
+    if not ids:
+        for problem in session.get("problems", []):
+            if not isinstance(problem, dict) or not problem.get("id"):
+                continue
+            if _problem_review_status(problem) != "normal":
+                ids.append(str(problem["id"]))
+
+    return list(dict.fromkeys(ids))
+
+
 def _replace_page_problems(session: dict[str, Any], page_id: str, replacements: list[dict[str, Any]]) -> None:
     page = _find_page(session, page_id)
     old_ids = {str(pid) for pid in (page.get("problemIds") or []) if pid}
@@ -896,6 +930,111 @@ def _replace_page_problems(session: dict[str, Any], page_id: str, replacements: 
     session["problems"] = next_problems
     page["problemIds"] = [str(problem.get("id")) for problem in replacements if problem.get("id")]
     session["detected_problem_count"] = len(next_problems)
+
+
+def _image_reconstruction_dir(session: dict[str, Any]) -> Path:
+    if session.get("output_dir"):
+        target = Path(str(session["output_dir"])).resolve() / "ai_image_reconstructions"
+    else:
+        target = RUNTIME_DIR / "ai_image_reconstructions"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("OpenAI API 키가 필요합니다. 칠판 설정에서 OPENAI_API_KEY를 저장한 뒤 다시 시도해 주세요.")
+
+    problem_ids = _enhance_target_problem_ids(session, payload)
+    if not problem_ids:
+        raise ValueError("AI 업스케일할 문항이 없습니다.")
+
+    model = str(payload.get("model") or payload.get("imageModel") or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
+    prompt = str(payload.get("prompt") or payload.get("imagePrompt") or DEFAULT_RECONSTRUCTION_PROMPT)
+    quality = str(payload.get("quality") or "high")
+    size = str(payload.get("size") or "auto")
+    timeout_ms = int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)
+    output_dir = _image_reconstruction_dir(session)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    summaries: list[dict[str, Any]] = []
+
+    for problem_id in problem_ids:
+        _index, problem = _find_problem(session, problem_id)
+        source_path = _resolve_session_path(problem.get("imagePath") or problem.get("boardRenderPath"))
+        if source_path is None or not source_path.exists():
+            flags = list(problem.get("riskFlags") or [])
+            flags.append("ai_image_missing_source")
+            problem["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+            problem["reviewStatus"] = "failed"
+            problem["aiImageReconstruction"] = {
+                "status": "missing_source",
+                "error": f"problem image missing: {source_path}",
+                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            summaries.append({
+                "problemId": problem_id,
+                "status": "missing_source",
+                "error": f"problem image missing: {source_path}",
+            })
+            continue
+
+        safe_problem = sanitize_output_dir_name(problem_id) or "problem"
+        output_path = output_dir / f"{safe_problem}_{stamp}_{DEFAULT_OPENAI_IMAGE_MODEL}.png"
+        try:
+            result = reconstruct_problem_image(
+                source_path,
+                output_path,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+                quality=quality,
+                size=size,
+                timeout_ms=timeout_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface the provider message to the UI
+            flags = list(problem.get("riskFlags") or [])
+            flags.append("ai_image_reconstruction_failed")
+            problem["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+            problem["reviewStatus"] = "check_needed"
+            problem["aiImageReconstruction"] = {
+                "status": "failed",
+                "provider": "openai",
+                "model": model,
+                "error": str(exc),
+                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            summaries.append({"problemId": problem_id, "status": "failed", "error": str(exc)})
+            continue
+
+        if not problem.get("originalImagePath"):
+            problem["originalImagePath"] = problem.get("imagePath")
+        uri = result.output_path.resolve().as_uri()
+        problem["imagePath"] = uri
+        problem["boardRenderPath"] = uri
+        problem["step"] = "s3"
+        problem["processingStep"] = "s3"
+        problem["processing_step"] = "s3"
+        flags = [str(flag) for flag in (problem.get("riskFlags") or []) if flag]
+        flags.append("ai_image_reconstructed_check_text")
+        problem["riskFlags"] = list(dict.fromkeys(flags))
+        problem["reviewStatus"] = "check_needed"
+        problem["aiImageReconstruction"] = {
+            **result.to_metadata(),
+            "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "quality": quality,
+            "size": size,
+        }
+        summaries.append({
+            "problemId": problem_id,
+            "status": "applied",
+            "model": result.model,
+            "outputPath": uri,
+            "latencyMs": result.latency_ms,
+        })
+
+    session["ai_image_reconstruction_summary"] = summaries
+    return session
 
 
 def _normalized_retry_problem(
@@ -1079,7 +1218,7 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
     for problem in cloned.get("problems", []) or []:
         if not isinstance(problem, dict):
             continue
-        for key in ("imagePath", "sourceImagePath", "boardRenderPath"):
+        for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
             problem[key] = fix(problem.get(key))
     for page in cloned.get("pages", []) or []:
         if not isinstance(page, dict):
@@ -1152,6 +1291,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/session/retry-ai":
             self._handle_session_retry_ai()
+            return
+        if parsed.path == "/api/session/enhance-image":
+            self._handle_session_enhance_image()
             return
         if parsed.path == "/api/session/restore":
             self._handle_session_restore()
@@ -1382,9 +1524,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_exclude(session, problem_id)
             elif action in {"retry-ai", "retry_ai"}:
                 new_session = _mutate_retry_ai(session, payload)
+            elif action in {"enhance-image", "enhance_image"}:
+                new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|exclude|retry-ai)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|exclude|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
@@ -1434,6 +1578,31 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "session": rewrite_session_for_http(new_session),
             "retry": new_session.get("ai_retry_summary") or [],
             "preview": preview_only,
+        })
+
+    def _handle_session_enhance_image(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+            new_session = _mutate_enhance_image(session, payload)
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
+            return
+
+        self.app_server.remember_session(new_session)
+        self._send_json({
+            "ok": True,
+            "session": rewrite_session_for_http(new_session),
+            "enhance": new_session.get("ai_image_reconstruction_summary") or [],
         })
 
     # ── /api/session/restore ────────────────────────────────────────────
@@ -1526,11 +1695,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
-        raw_key = payload.get("geminiApiKey")
-        if raw_key is None:
-            raw_key = payload.get("gemini_api_key")
+        raw_key = payload.get("geminiApiKey") if "geminiApiKey" in payload else payload.get("gemini_api_key")
+        raw_openai_key = payload.get("openAiApiKey") if "openAiApiKey" in payload else payload.get("openai_api_key")
         try:
-            summary = update_gemini_api_key(RUNTIME_DIR, raw_key if isinstance(raw_key, str) else "")
+            if raw_openai_key is None:
+                summary = update_gemini_api_key(RUNTIME_DIR, raw_key if isinstance(raw_key, str) else "")
+            else:
+                summary = update_api_keys(
+                    RUNTIME_DIR,
+                    gemini_api_key=raw_key if isinstance(raw_key, str) else None,
+                    openai_api_key=raw_openai_key if isinstance(raw_openai_key, str) else "",
+                )
         except OSError as exc:
             self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return

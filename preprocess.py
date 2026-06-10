@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import math
+import json
+import os
+import shutil
+import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,13 +88,188 @@ def _bgr_to_pil(image_bgr) -> Image.Image:
     return Image.fromarray(rgb)
 
 
-def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
-    if fitz is None:
-        raise RuntimeError("PyMuPDF is required to render PDF pages")
+_EXTERNAL_PYMUPDF_RENDER_SCRIPT = r"""
+import json
+import re
+import sys
+from pathlib import Path
 
+import fitz
+
+
+def extract_pdf_problem_markers(page, scale):
+    markers = []
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return markers
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            text = "".join(
+                str(span.get("text") or "")
+                for span in line.get("spans") or []
+                if isinstance(span, dict)
+            ).strip()
+            match = re.match(r"^([1-9][0-9]?)\.\s*", text)
+            if not match:
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            number = int(match.group(1))
+            left, top, right, bottom = [float(value) * scale for value in bbox]
+            markers.append(
+                {
+                    "number": number,
+                    "text": text[:120],
+                    "bbox": {
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                        "width": max(0.0, right - left),
+                        "height": max(0.0, bottom - top),
+                    },
+                }
+            )
+    return markers
+
+
+source_path = Path(sys.argv[1])
+target_dir = Path(sys.argv[2])
+dpi = int(sys.argv[3])
+target_dir.mkdir(parents=True, exist_ok=True)
+scale = dpi / 72.0
+matrix = fitz.Matrix(scale, scale)
+doc = fitz.open(source_path)
+pages = []
+try:
+    for page_index in range(doc.page_count):
+        page = doc.load_page(page_index)
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
+        pix.save(out_path.as_posix())
+        pages.append(
+            {
+                "page_id": f"{source_path.stem}-page-{page_index + 1:03d}",
+                "source_path": str(source_path),
+                "normalized_path": str(out_path),
+                "page_index": page_index,
+                "width_px": pix.width,
+                "height_px": pix.height,
+                "metadata": {
+                    "source_type": "pdf",
+                    "dpi": dpi,
+                    "pdf_page_width_pt": float(page.rect.width),
+                    "pdf_page_height_pt": float(page.rect.height),
+                    "pdf_problem_markers": extract_pdf_problem_markers(page, scale),
+                },
+            }
+        )
+finally:
+    doc.close()
+print(json.dumps(pages, ensure_ascii=True))
+"""
+
+
+def _iter_external_pymupdf_python_candidates() -> list[Path]:
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_PYMUPDF_PYTHON"),
+        sys.executable,
+        Path(__file__).resolve().parent / ".venv" / "Scripts" / "python.exe",
+        Path.home() / "AppData" / "Local" / "Python" / "bin" / "python.exe",
+        shutil.which("python"),
+        shutil.which("python3"),
+        shutil.which("py"),
+    ]
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
+
+
+def _render_pdf_pages_with_external_pymupdf(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    dpi: int,
+) -> list[NormalizedPageImage]:
+    errors: list[str] = []
+    for python_exe in _iter_external_pymupdf_python_candidates():
+        command = [
+            str(python_exe),
+            "-c",
+            _EXTERNAL_PYMUPDF_RENDER_SCRIPT,
+            str(source_path),
+            str(target_dir),
+            str(dpi),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=180,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(f"{python_exe}: {exc}")
+            continue
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip().replace("\n", " ")[:240]
+            errors.append(f"{python_exe}: exit {completed.returncode} {detail}")
+            continue
+        try:
+            payload = json.loads(completed.stdout.strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            errors.append(f"{python_exe}: invalid renderer output {exc}")
+            continue
+
+        pages: list[NormalizedPageImage] = []
+        for item in payload:
+            metadata = dict(item.get("metadata") or {})
+            metadata["pdf_renderer"] = "external_pymupdf"
+            metadata["pdf_renderer_python"] = str(python_exe)
+            pages.append(
+                NormalizedPageImage(
+                    page_id=str(item["page_id"]),
+                    source_path=str(item["source_path"]),
+                    normalized_path=str(item["normalized_path"]),
+                    page_index=int(item["page_index"]),
+                    width_px=int(item["width_px"]),
+                    height_px=int(item["height_px"]),
+                    metadata=metadata,
+                )
+            )
+        return pages
+
+    detail = "; ".join(errors) if errors else "no Python candidates found"
+    if len(detail) > 1200:
+        detail = f"{detail[:1200]}..."
+    raise RuntimeError(f"PyMuPDF is required to render PDF pages ({detail})")
+
+
+def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
     source_path = Path(source)
     target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    if fitz is None:
+        return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
 
     doc = fitz.open(source_path)
     pages: list[NormalizedPageImage] = []
@@ -244,6 +424,12 @@ def _transform_pdf_problem_markers(
     metadata["pdf_problem_markers"] = transformed
 
 
+def _should_skip_deskew_for_pdf_text_layer(metadata: dict[str, Any]) -> bool:
+    """PDF text markers are tied to the original rendered page coordinates."""
+    markers = metadata.get("pdf_problem_markers")
+    return metadata.get("source_type") == "pdf" and isinstance(markers, list) and bool(markers)
+
+
 def deskew_image(image: Image.Image) -> Image.Image:
     if cv2 is None or np is None:
         return image
@@ -366,8 +552,12 @@ def normalize_image(
         image, changed = perspective_correct(image)
         metadata["perspective_corrected"] = changed
     if enable_deskew:
-        image = deskew_image(image)
-        metadata["deskewed"] = True
+        if _should_skip_deskew_for_pdf_text_layer(metadata):
+            metadata["deskewed"] = False
+            metadata["deskew_skipped_reason"] = "pdf_text_layer"
+        else:
+            image = deskew_image(image)
+            metadata["deskewed"] = True
     if enable_margin_crop:
         image, crop_box = _crop_uniform_margin_with_box(image)
         metadata["margin_crop_box"] = {

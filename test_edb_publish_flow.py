@@ -242,6 +242,32 @@ class TestEdbPublishFlow(unittest.TestCase):
         ]
         self.assertTrue(internal_dark_columns)
 
+    def test_slanted_edge_vertical_guides_are_trimmed(self):
+        image = Image.new("RGB", (180, 180), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 36), "1. problem", fill="black")
+        draw.line((90, 24, 90, 154), fill="black", width=2)
+        draw.line((156, 0, 148, 179), fill=(40, 40, 40), width=3)
+        draw.text((164, 36), "4", fill="black")
+
+        trimmed = _trim_edge_vertical_guides(image)
+
+        self.assertLess(trimmed.width, 150)
+        gray = trimmed.convert("L")
+        right_band_dark_pixels = sum(
+            1
+            for x in range(max(0, trimmed.width - 8), trimmed.width)
+            for y in range(trimmed.height)
+            if gray.getpixel((x, y)) < 80
+        )
+        self.assertLess(right_band_dark_pixels, 20)
+        internal_dark_columns = [
+            x
+            for x in range(50, trimmed.width - 20)
+            if sum(1 for y in range(trimmed.height) if gray.getpixel((x, y)) < 80) >= 80
+        ]
+        self.assertTrue(internal_dark_columns)
+
     def test_problem_crop_bottom_padding_preserves_last_choice(self):
         image = Image.new("RGB", (120, 80), "white")
         draw = ImageDraw.Draw(image)
@@ -251,6 +277,80 @@ class TestEdbPublishFlow(unittest.TestCase):
 
         self.assertEqual(padded.size, (120, 98))
         self.assertEqual(padded.getpixel((12, 96)), (255, 255, 255))
+
+    def test_choice_bottom_survives_near_next_problem_clamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            Image.new("RGB", (600, 420), "white").save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=Image.open(source).convert("RGB"),
+                original_size=(600, 420),
+            )
+            blocks = [
+                ContentBlock(
+                    block_id="p1-stem",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 100, 360, 60),
+                    reading_order=0,
+                    text="1. problem",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+                ContentBlock(
+                    block_id="p1-choice",
+                    block_type=BlockType.CHOICE,
+                    bbox=Box(72, 192, 330, 28),
+                    reading_order=1,
+                    text="⑤ choice",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+                ContentBlock(
+                    block_id="p2-stem",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 225, 360, 55),
+                    reading_order=2,
+                    text="2. next",
+                    metadata={"column_index": 0, "question_band_index": 1},
+                ),
+            ]
+            page = PageModel(
+                page_id="page-1",
+                width_px=600,
+                height_px=420,
+                subject=Subject.MATH,
+                source_path=str(source),
+                blocks=blocks,
+                problems=[
+                    ProblemUnit(
+                        unit_id="problem-1",
+                        subject=Subject.MATH,
+                        title="1.",
+                        stem_block_ids=["p1-stem"],
+                        choice_block_ids=["p1-choice"],
+                        metadata={"problem_number": 1, "column_index": 0, "question_band_index": 0},
+                    ),
+                    ProblemUnit(
+                        unit_id="problem-2",
+                        subject=Subject.MATH,
+                        title="2.",
+                        stem_block_ids=["p2-stem"],
+                        metadata={"problem_number": 2, "column_index": 0, "question_band_index": 1},
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            problem_1 = next(entry for entry in entries if entry.problem_number == 1)
+            self.assertGreaterEqual(problem_1.bounds.bottom, 248)
 
     def test_session_source_images_point_to_rendered_images(self):
         with tempfile.TemporaryDirectory() as tmp:
