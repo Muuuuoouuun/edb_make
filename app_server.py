@@ -41,9 +41,12 @@ from edb_builder import (
     write_edb,
 )
 from layout_template_schema import LayoutTemplate
-from openai_image_backend import (
-    DEFAULT_OPENAI_IMAGE_MODEL,
+from image_reconstruction_backend import (
+    DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER,
     DEFAULT_RECONSTRUCTION_PROMPT,
+    default_image_model,
+    normalize_image_model,
+    normalize_image_provider,
     reconstruct_problem_image,
 )
 from structured_schema import Box, Subject
@@ -941,20 +944,41 @@ def _image_reconstruction_dir(session: dict[str, Any]) -> Path:
     return target
 
 
+def _payload_bool(payload: dict[str, Any], camel_key: str, snake_key: str, default: bool) -> bool:
+    raw = payload.get(camel_key)
+    if raw is None:
+        raw = payload.get(snake_key, default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(raw)
+
+
 def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    provider = normalize_image_provider(
+        payload.get("provider")
+        or payload.get("imageProvider")
+        or payload.get("image_provider")
+        or DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER
+    )
+    env_key = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
+    provider_label = "Gemini" if provider == "gemini" else "OpenAI"
+    api_key = os.environ.get(env_key, "").strip()
     if not api_key:
-        raise ValueError("OpenAI API 키가 필요합니다. 칠판 설정에서 OPENAI_API_KEY를 저장한 뒤 다시 시도해 주세요.")
+        raise ValueError(f"{provider_label} API 키가 필요합니다. 칠판 설정에서 {env_key}를 저장한 뒤 다시 시도해 주세요.")
 
     problem_ids = _enhance_target_problem_ids(session, payload)
     if not problem_ids:
         raise ValueError("AI 업스케일할 문항이 없습니다.")
 
-    model = str(payload.get("model") or payload.get("imageModel") or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
+    model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
     prompt = str(payload.get("prompt") or payload.get("imagePrompt") or DEFAULT_RECONSTRUCTION_PROMPT)
     quality = str(payload.get("quality") or "high")
     size = str(payload.get("size") or "auto")
     timeout_ms = int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)
+    transparent_background = _payload_bool(payload, "transparentBackground", "transparent_background", True)
+    sharpen = _payload_bool(payload, "sharpen", "sharpen", True)
     output_dir = _image_reconstruction_dir(session)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     summaries: list[dict[str, Any]] = []
@@ -980,17 +1004,21 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             continue
 
         safe_problem = sanitize_output_dir_name(problem_id) or "problem"
-        output_path = output_dir / f"{safe_problem}_{stamp}_{DEFAULT_OPENAI_IMAGE_MODEL}.png"
+        safe_model = sanitize_output_dir_name(model) or provider
+        output_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}.png"
         try:
             result = reconstruct_problem_image(
                 source_path,
                 output_path,
                 api_key=api_key,
+                provider=provider,
                 model=model,
                 prompt=prompt,
                 quality=quality,
                 size=size,
                 timeout_ms=timeout_ms,
+                transparent_background=transparent_background,
+                sharpen=sharpen,
             )
         except Exception as exc:  # noqa: BLE001 - surface the provider message to the UI
             flags = list(problem.get("riskFlags") or [])
@@ -999,12 +1027,18 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             problem["reviewStatus"] = "check_needed"
             problem["aiImageReconstruction"] = {
                 "status": "failed",
-                "provider": "openai",
+                "provider": provider,
                 "model": model,
                 "error": str(exc),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             }
-            summaries.append({"problemId": problem_id, "status": "failed", "error": str(exc)})
+            summaries.append({
+                "problemId": problem_id,
+                "status": "failed",
+                "provider": provider,
+                "model": model,
+                "error": str(exc),
+            })
             continue
 
         if not problem.get("originalImagePath"):
@@ -1024,13 +1058,17 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "quality": quality,
             "size": size,
+            "transparent_background": transparent_background,
+            "sharpen": sharpen,
         }
         summaries.append({
             "problemId": problem_id,
             "status": "applied",
+            "provider": result.provider,
             "model": result.model,
             "outputPath": uri,
             "latencyMs": result.latency_ms,
+            "postprocess": result.postprocess or {},
         })
 
     session["ai_image_reconstruction_summary"] = summaries

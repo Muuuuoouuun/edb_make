@@ -43,6 +43,7 @@ from edb_builder import (
     write_edb,
 )
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
+from image_reconstruction_backend import clean_problem_image_transparency
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from placement_engine import place_problems
@@ -316,7 +317,10 @@ def _enhance_problem_crop(
     if image.width <= 0 or image.height <= 0:
         return image
 
-    rgb = image.convert("RGB")
+    has_alpha = "A" in image.getbands()
+    converted = image.convert("RGBA" if has_alpha else "RGB")
+    alpha = converted.getchannel("A") if has_alpha else None
+    rgb = converted.convert("RGB")
     if rgb.width < target_min_width_px:
         scale = min(
             max_upscale,
@@ -325,11 +329,18 @@ def _enhance_problem_crop(
         if scale > 1.05:
             new_size = (int(round(rgb.width * scale)), int(round(rgb.height * scale)))
             rgb = rgb.resize(new_size, Image.Resampling.LANCZOS)
+            if alpha is not None:
+                alpha = alpha.resize(new_size, Image.Resampling.LANCZOS)
 
     # Unsharp mask brings ink-on-paper transitions back after upscale and also
     # helps thin-stroke text survive the alpha-mask threshold inside
     # _extract_problem_cutout.
-    return rgb.filter(ImageFilter.UnsharpMask(radius=1.4, percent=140, threshold=2))
+    sharpened = rgb.filter(ImageFilter.UnsharpMask(radius=1.4, percent=140, threshold=2))
+    if alpha is not None:
+        rgba = sharpened.convert("RGBA")
+        rgba.putalpha(alpha)
+        return rgba
+    return sharpened
 
 
 def _extract_problem_cutout(
@@ -351,6 +362,40 @@ def _extract_problem_cutout(
         if chalk_color is not None
         else BOARD_THEME_PALETTES[DEFAULT_BOARD_THEME]["chalk"]
     )
+
+    original_alpha = image.getchannel("A") if "A" in image.getbands() else None
+    has_existing_transparency = bool(original_alpha and original_alpha.getextrema()[0] < 245)
+    cleaned, clean_stats = clean_problem_image_transparency(
+        image,
+        transparent_background=not has_existing_transparency,
+        remove_corner_page_artifacts=True,
+    )
+    if "A" in cleaned.getbands():
+        alpha_mask = cleaned.getchannel("A")
+        alpha_min, alpha_max = alpha_mask.getextrema()
+        if alpha_min < 245 and alpha_max > 12:
+            # Reuse the model/paper background removal directly. This catches
+            # both black model backgrounds and white PDF paper, and it removes
+            # small lower-corner page number badges before they get encoded.
+            if np is not None:
+                alpha_array = np.asarray(alpha_mask, dtype=np.float32) / 255.0
+                if clean_stats.get("background_kind") == "light":
+                    dilated = np.copy(alpha_array)
+                    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        shifted = np.roll(np.roll(alpha_array, dy, axis=0), dx, axis=1)
+                        if dy < 0:
+                            shifted[-1, :] = 0.0
+                        elif dy > 0:
+                            shifted[0, :] = 0.0
+                        if dx < 0:
+                            shifted[:, -1] = 0.0
+                        elif dx > 0:
+                            shifted[:, 0] = 0.0
+                        dilated = np.maximum(dilated, shifted)
+                    alpha_array = np.clip((0.75 * alpha_array) + (0.25 * dilated), 0.0, 1.0)
+                return _compose_chalk_rgba(alpha_array, resolved_chalk)
+            return _compose_chalk_rgba_pil(alpha_mask, cleaned.size, resolved_chalk)
+
     rgb = image.convert("RGB")
     gray = ImageOps.autocontrast(rgb.convert("L"))
     stat = ImageStat.Stat(gray)
@@ -469,11 +514,19 @@ def _load_board_export_image(
         if target_size is not None and rendered.size != target_size:
             rendered = rendered.resize(target_size, Image.Resampling.LANCZOS)
         if "A" in rendered.getbands():
-            return _composite_on_board_background(rendered, board_theme=board_theme)
+            cleaned, _stats = clean_problem_image_transparency(
+                rendered,
+                transparent_background=rendered.getchannel("A").getextrema()[0] >= 245,
+                remove_corner_page_artifacts=True,
+            )
+            return cleaned
         rendered_rgb = rendered.convert("RGB")
         mean_brightness = ImageStat.Stat(rendered_rgb.convert("L")).mean[0]
         if mean_brightness <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
-            return rendered_rgb
+            return _extract_problem_cutout(
+                rendered_rgb,
+                chalk_color=_resolve_chalk_color(board_theme),
+            )
 
     cutout = _extract_problem_cutout(
         _enhance_problem_crop(crop_image),
@@ -481,7 +534,7 @@ def _load_board_export_image(
     )
     if target_size is not None and cutout.size != target_size:
         cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
-    return _composite_on_board_background(cutout, board_theme=board_theme)
+    return cutout
 
 
 def _build_transparent_reconstruction_image(
@@ -1728,7 +1781,8 @@ def build_image_only_records(
         )
         crop_path = Path(str(placement.metadata["crop_path"]))
         board_render_path = Path(str(placement.metadata["board_render_path"]))
-        crop_image = Image.open(crop_path).convert("RGB")
+        loaded_crop = Image.open(crop_path)
+        crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
         if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
             board_image = _build_transparent_reconstruction_image(
                 crop_image,

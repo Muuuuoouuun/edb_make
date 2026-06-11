@@ -1147,7 +1147,7 @@ function SidePanel({
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
-  const canEnhanceCurrent = !!item && !!userSettings?.hasOpenAiApiKey && !imageEnhanceBusy;
+  const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
   const updatePlacement = (patch) => {
     if (!item) return;
     setPlacement?.(item.id, patch);
@@ -1395,13 +1395,13 @@ function SidePanel({
                   style={{width: '100%', justifyContent: 'space-between'}}
                   onClick={() => onEnhanceImage?.([item.id])}
                   disabled={!canEnhanceCurrent}
-                  title={userSettings?.hasOpenAiApiKey ? 'GPT Image 2로 선택 문항을 고화질 재구성합니다' : 'OpenAI API 키를 저장하면 사용할 수 있습니다'}
+                  title={userSettings?.hasGeminiApiKey ? 'Nano Banana 2로 선택 문항을 투명 PNG로 재구성합니다' : 'Gemini API 키를 저장하면 사용할 수 있습니다'}
                 >
                   <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} AI 업스케일 재구성</span>
-                  <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>GPT Image 2</span>
+                  <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 2</span>
                 </button>
                 <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
-                  원문은 유지하고 선명도와 배경만 개선합니다. 적용 후 텍스트 검토 표시가 남습니다.
+                  원문은 유지하고 문자·숫자 선명도와 투명 배경을 개선합니다. 적용 후 텍스트 검토 표시가 남습니다.
                 </div>
               </>
             ) : (
@@ -1609,7 +1609,7 @@ function SidePanel({
                     </span>
                   )}
                 </span>
-                <small>GPT Image 2 기반 추가 업스케일 재구성에 사용합니다.</small>
+                <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
               </div>
             </div>
             <div className="key-input-row">
@@ -2838,8 +2838,8 @@ function App(){
       showToast('변경할 세션이 없습니다');
       return;
     }
-    if (!userSettings?.hasOpenAiApiKey) {
-      showToast('OpenAI API 키를 먼저 저장해 주세요');
+    if (!userSettings?.hasGeminiApiKey) {
+      showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
     }
     const ids = listUnique((problemIds || []).filter(Boolean));
@@ -2851,10 +2851,10 @@ function App(){
     const job = startBackgroundJob({
       scope: 'image-enhance',
       label: ids.length === 1 ? 'AI 업스케일 재구성 중' : `${ids.length}개 문항 AI 업스케일 중`,
-      hint: 'GPT Image 2로 재구성합니다. 완료 후 텍스트 검토 표시가 남습니다.',
+      hint: 'Nano Banana 2로 투명 배경과 문자·숫자 선명도를 개선합니다.',
     });
     try {
-      const result = await postEnhanceImage({ problemIds: ids }, { signal: job.controller.signal });
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini' }, { signal: job.controller.signal });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       const applied = (result.enhance || []).filter(row => row.status === 'applied').length;
