@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import json
 import os
 import shutil
@@ -31,6 +32,7 @@ except ImportError:  # pragma: no cover
 
 
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 
 
 @dataclass(slots=True)
@@ -303,6 +305,243 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
     return pages
 
 
+def _iter_hwp_pdf_converter_commands() -> list[list[str]]:
+    candidates: list[list[str]] = []
+    for executable in ("soffice", "libreoffice"):
+        resolved = shutil.which(executable)
+        if resolved:
+            candidates.append([resolved, "--headless"])
+
+    mac_soffice = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+    if mac_soffice.exists():
+        candidates.append([str(mac_soffice), "--headless"])
+
+    hwp5pdf = shutil.which("hwp5pdf")
+    if hwp5pdf:
+        candidates.append([hwp5pdf])
+
+    seen: set[str] = set()
+    unique: list[list[str]] = []
+    for command in candidates:
+        key = "\0".join(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(command)
+    return unique
+
+
+def _iter_hwp_hwpx_converter_commands() -> list[list[str]]:
+    hwpilot = shutil.which("hwpilot")
+    return [[hwpilot]] if hwpilot else []
+
+
+def _hwp_pdf_candidates(output_dir: Path, source_path: Path) -> list[Path]:
+    expected = output_dir / f"{source_path.stem}.pdf"
+    candidates = [expected]
+    for path in sorted(
+        output_dir.glob("*.pdf"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    ):
+        if path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def _file_sha1(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hwp_conversion_cache_path(target_dir: Path, source_path: Path) -> Path:
+    return target_dir / f".{source_path.stem}.conversion.json"
+
+
+def _load_cached_hwp_pdf(source_path: Path, target_dir: Path) -> Path | None:
+    cache_path = _hwp_conversion_cache_path(target_dir, source_path)
+    if not cache_path.exists():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    try:
+        source_sha1 = _file_sha1(source_path)
+    except OSError:
+        return None
+    if payload.get("source_sha1") != source_sha1:
+        return None
+    if payload.get("source_suffix") != source_path.suffix.lower():
+        return None
+
+    pdf_name = payload.get("pdf_name")
+    if not isinstance(pdf_name, str) or not pdf_name:
+        return None
+    pdf_path = target_dir / pdf_name
+    if not pdf_path.exists() or pdf_path.stat().st_size <= 0:
+        return None
+    return pdf_path
+
+
+def _save_hwp_pdf_cache(source_path: Path, target_dir: Path, pdf_path: Path) -> None:
+    try:
+        source_sha1 = _file_sha1(source_path)
+        pdf_name = pdf_path.relative_to(target_dir).as_posix()
+    except (OSError, ValueError):
+        return
+    payload = {
+        "version": 1,
+        "source_name": source_path.name,
+        "source_suffix": source_path.suffix.lower(),
+        "source_sha1": source_sha1,
+        "pdf_name": pdf_name,
+        "pdf_size": pdf_path.stat().st_size,
+    }
+    _hwp_conversion_cache_path(target_dir, source_path).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _run_hwp_pdf_converter_commands(
+    source_path: Path,
+    target_dir: Path,
+    commands: list[list[str]],
+    timeout_seconds: int,
+) -> tuple[Path | None, list[str]]:
+    errors: list[str] = []
+    for command_prefix in commands:
+        tool_name = Path(command_prefix[0]).name.lower()
+        expected_pdf = target_dir / f"{source_path.stem}.pdf"
+        if "hwp5pdf" in tool_name:
+            command = [*command_prefix, str(source_path), str(expected_pdf)]
+        else:
+            command = [
+                *command_prefix,
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(target_dir),
+                str(source_path),
+            ]
+        before_mtime_ns = {
+            candidate: candidate.stat().st_mtime_ns
+            for candidate in _hwp_pdf_candidates(target_dir, source_path)
+            if candidate.exists()
+        }
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"{command[0]}: {exc}")
+            continue
+
+        for pdf_path in _hwp_pdf_candidates(target_dir, source_path):
+            if not pdf_path.exists():
+                continue
+            previous_mtime_ns = before_mtime_ns.get(pdf_path)
+            if previous_mtime_ns is None or pdf_path.stat().st_mtime_ns != previous_mtime_ns:
+                return pdf_path, errors
+        output = " ".join(
+            part for part in [result.stdout.strip(), result.stderr.strip()] if part
+        )
+        errors.append(
+            f"{command[0]} exited {result.returncode}: {output or 'no PDF output'}"
+        )
+    return None, errors
+
+
+def _convert_hwp_to_hwpx_with_hwpilot(
+    source_path: Path,
+    output_dir: Path,
+    timeout_seconds: int,
+) -> tuple[Path | None, list[str]]:
+    if source_path.suffix.lower() != ".hwp":
+        return None, []
+
+    commands = _iter_hwp_hwpx_converter_commands()
+    if not commands:
+        return None, []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target_path = output_dir / f"{source_path.stem}.hwpx"
+    errors: list[str] = []
+    for command_prefix in commands:
+        command = [*command_prefix, "convert", str(source_path), str(target_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"{command[0]}: {exc}")
+            continue
+
+        if target_path.exists():
+            return target_path, errors
+        output = " ".join(
+            part for part in [result.stdout.strip(), result.stderr.strip()] if part
+        )
+        errors.append(f"{command[0]} exited {result.returncode}: {output or 'no HWPX output'}")
+    return None, errors
+
+
+def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_seconds: int = 90) -> Path:
+    source_path = Path(source)
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_pdf = _load_cached_hwp_pdf(source_path, target_dir)
+    if cached_pdf:
+        return cached_pdf
+
+    commands = _iter_hwp_pdf_converter_commands()
+    if not commands:
+        raise ValueError(
+            "HWP/HWPX input requires a local converter such as LibreOffice with HWP support "
+            "or hwp5pdf. HWPilot can only help normalize HWP to HWPX and still needs a PDF "
+            "converter. Install one, or convert the HWP file to PDF first."
+        )
+
+    pdf_path, errors = _run_hwp_pdf_converter_commands(source_path, target_dir, commands, timeout_seconds)
+    if pdf_path:
+        _save_hwp_pdf_cache(source_path, target_dir, pdf_path)
+        return pdf_path
+
+    hwpx_path, hwpilot_errors = _convert_hwp_to_hwpx_with_hwpilot(source_path, target_dir / "_hwpilot", timeout_seconds)
+    errors.extend(hwpilot_errors)
+    if hwpx_path:
+        pdf_path, hwpx_pdf_errors = _run_hwp_pdf_converter_commands(hwpx_path, target_dir, commands, timeout_seconds)
+        if pdf_path:
+            _save_hwp_pdf_cache(source_path, target_dir, pdf_path)
+            return pdf_path
+        errors.extend(f"after HWPilot bridge: {error}" for error in hwpx_pdf_errors)
+
+    detail = "; ".join(errors) if errors else "no converter produced a PDF"
+    raise ValueError(
+        "HWP/HWPX conversion failed. Install LibreOffice with HWP support, "
+        f"or convert the HWP file to PDF first. Details: {detail}"
+    )
+
+
 def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
     """Extract problem-number line anchors from a PDF text layer.
 
@@ -428,6 +667,51 @@ def _should_skip_deskew_for_pdf_text_layer(metadata: dict[str, Any]) -> bool:
     """PDF text markers are tied to the original rendered page coordinates."""
     markers = metadata.get("pdf_problem_markers")
     return metadata.get("source_type") == "pdf" and isinstance(markers, list) and bool(markers)
+
+
+def _is_blank_rendered_page(path: str | Path, *, dark_threshold: int = 245, min_dark_ratio: float = 0.001) -> bool:
+    try:
+        image = Image.open(path).convert("L")
+    except OSError:
+        return False
+    image.thumbnail((256, 256))
+    histogram = image.histogram()
+    dark_pixels = sum(histogram[:dark_threshold])
+    total_pixels = max(1, sum(histogram))
+    return (dark_pixels / total_pixels) < min_dark_ratio
+
+
+def _summarize_pdf_render_quality(pages: list[NormalizedPageImage]) -> dict[str, Any]:
+    marker_counts: list[int] = []
+    blank_page_count = 0
+    for page in pages:
+        markers = page.metadata.get("pdf_problem_markers")
+        marker_counts.append(len(markers) if isinstance(markers, list) else 0)
+        if _is_blank_rendered_page(page.normalized_path):
+            blank_page_count += 1
+
+    marker_count = sum(marker_counts)
+    pages_with_markers = sum(1 for count in marker_counts if count > 0)
+    warnings: list[str] = []
+    if not pages:
+        warnings.append("no_rendered_pages")
+    if pages and marker_count == 0:
+        warnings.append("no_pdf_text_markers")
+    if pages_with_markers and pages_with_markers < len(pages):
+        warnings.append("some_pages_without_text_markers")
+    if blank_page_count:
+        warnings.append("blank_pages_detected")
+
+    return {
+        "page_count": len(pages),
+        "pdf_text_marker_count": marker_count,
+        "pdf_pages_with_text_markers": pages_with_markers,
+        "pdf_pages_without_text_markers": max(0, len(pages) - pages_with_markers),
+        "blank_page_count": blank_page_count,
+        "has_pdf_text_markers": marker_count > 0,
+        "preferred_segmentation_path": "pdf_text_markers" if marker_count > 0 else "ocr_fallback",
+        "warnings": warnings,
+    }
 
 
 def deskew_image(image: Image.Image) -> Image.Image:
@@ -625,6 +909,32 @@ def prepare_pages(
             normalized.metadata.setdefault("source_pdf_path", str(source_path))
             normalized.metadata["source_type"] = "pdf"
             normalized.metadata["document_like"] = True
+            normalized_pages.append(normalized)
+        return normalized_pages
+
+    if suffix in HWP_DOCUMENT_EXTENSIONS:
+        converted_pdf = convert_hwp_to_pdf(source_path, normalized_dir / "converted")
+        rendered = render_pdf_pages(converted_pdf, normalized_dir / "rendered", dpi=dpi)
+        conversion_quality = _summarize_pdf_render_quality(rendered)
+        normalized_pages: list[NormalizedPageImage] = []
+        for page in rendered:
+            normalized = normalize_image(
+                page.normalized_path,
+                normalized_dir / "normalized",
+                page_id=page.page_id,
+                page_index=page.page_index,
+                enable_perspective=False,
+                enable_deskew=enable_deskew,
+                enable_margin_crop=enable_margin_crop,
+                max_dimension=max_dimension,
+                base_metadata=dict(page.metadata),
+            )
+            normalized.metadata.setdefault("source_pdf_path", str(converted_pdf))
+            normalized.metadata["source_type"] = "hwp"
+            normalized.metadata["document_like"] = True
+            normalized.metadata["source_hwp_path"] = str(source_path)
+            normalized.metadata["converted_pdf_path"] = str(converted_pdf)
+            normalized.metadata["hwp_conversion_quality"] = dict(conversion_quality)
             normalized_pages.append(normalized)
         return normalized_pages
 

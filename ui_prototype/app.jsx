@@ -1,5 +1,5 @@
 // 칠판 자료 편집기 — main app
-const { useState, useRef, useEffect, useMemo, useCallback } = React;
+const { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "dark": false,
@@ -21,6 +21,25 @@ const SAMPLE_NAMES = [
 const SAMPLE_SOURCES = ['고1 기하 · p.42', '개념원리 · p.15', 'PDF · 3쪽', '함수 단원 · p.78', '교재 자체 촬영', '모의고사 · 6월', '쎈 · 78번', '마플 · 단원평가', '판서노트 · 4/12', '학생 질문 캡처'];
 const SAMPLE_KINDS = ['geometry-circle','equation','table','graph','geometry-triangles','paragraph'];
 const SAMPLE_STEPS = ['raw','raw','raw','s1','s2','raw'];
+
+const REORDER_HELPERS = window.EDB_REORDER || {};
+const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, fromId, toId, position = 'before') => {
+  const sourceId = fromId == null ? '' : String(fromId);
+  const targetId = toId == null ? '' : String(toId);
+  if (!Array.isArray(items) || !sourceId || !targetId || sourceId === targetId) return items;
+  const fromIndex = items.findIndex(item => String(item.id) === sourceId);
+  const toIndex = items.findIndex(item => String(item.id) === targetId);
+  if (fromIndex < 0 || toIndex < 0) return items;
+  const next = items.slice();
+  const [moved] = next.splice(fromIndex, 1);
+  const targetIndex = next.findIndex(item => String(item.id) === targetId);
+  if (targetIndex < 0) return items;
+  next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, moved);
+  return next;
+});
+const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
+  clientY > rect.top + rect.height / 2 ? 'after' : 'before'
+));
 
 // 자료별 자연 높이 (1.0 = 한 페이지)
 const HEIGHT_BY_KIND = {
@@ -584,10 +603,142 @@ function ItemsRail({
   addMockSample, canAddDummy,
 }){
   const dragId = useRef(null);
-  const [overId, setOverId] = useState(null);
+  const [draggingId, setDraggingId] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
   const railRef = useRef(null);
   const itemRefs = useRef({});
+  const previousItemRects = useRef(new Map());
+  const pointerDragRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  const dropTargetRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const nextRects = new Map();
+    items.forEach(it => {
+      const el = itemRefs.current[it.id];
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const prevRect = previousItemRects.current.get(it.id);
+      if (prevRect && !reduceMotion) {
+        const dx = prevRect.left - rect.left;
+        const dy = prevRect.top - rect.top;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          el.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px)` },
+              { transform: 'translate(0, 0)' },
+            ],
+            { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
+          );
+        }
+      }
+      nextRects.set(it.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
+    });
+    previousItemRects.current = nextRects;
+  }, [items]);
+
+  const clearDragState = () => {
+    dragId.current = null;
+    setDraggingId(null);
+    dropTargetRef.current = null;
+    setDropTarget(null);
+  };
+
+  const setCurrentDropTarget = (target) => {
+    dropTargetRef.current = target;
+    setDropTarget(prev => (
+      prev?.id === target?.id && prev?.position === target?.position ? prev : target
+    ));
+  };
+
+  const updateDropTarget = (event, targetId) => {
+    if (!dragId.current || dragId.current === targetId) {
+      setCurrentDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const position = dropPositionFromClientY(event.currentTarget.getBoundingClientRect(), event.clientY);
+    setCurrentDropTarget({ id: targetId, position });
+  };
+
+  const findPointerDropTarget = (clientX, clientY, sourceId) => {
+    const rail = railRef.current;
+    if (!rail) return null;
+    const hit = document.elementFromPoint(clientX, clientY);
+    const row = hit?.closest?.('.item[data-item-id]');
+    if (row && rail.contains(row)) {
+      const id = row.getAttribute('data-item-id');
+      if (!id || id === sourceId) return null;
+      return {
+        id,
+        position: dropPositionFromClientY(row.getBoundingClientRect(), clientY),
+      };
+    }
+
+    const rows = Array.from(rail.querySelectorAll('.item[data-item-id]'));
+    if (!rows.length) return null;
+    const first = rows[0].getBoundingClientRect();
+    if (clientY < first.top) {
+      const id = rows[0].getAttribute('data-item-id');
+      return id && id !== sourceId ? { id, position: 'before' } : null;
+    }
+    for (const candidate of rows) {
+      const rect = candidate.getBoundingClientRect();
+      const id = candidate.getAttribute('data-item-id');
+      if (clientY < rect.top + rect.height / 2) {
+        return id && id !== sourceId ? { id, position: 'before' } : null;
+      }
+    }
+    const last = rows[rows.length - 1];
+    const id = last.getAttribute('data-item-id');
+    return id && id !== sourceId ? { id, position: 'after' } : null;
+  };
+
+  const startPointerDrag = (event, itemId) => {
+    if (event.button !== 0 || event.target.closest?.('button')) return;
+    pointerDragRef.current = {
+      id: itemId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    dragId.current = itemId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const movePointerDrag = (event) => {
+    const drag = pointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true;
+    event.preventDefault();
+    setDraggingId(drag.id);
+    const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
+    setCurrentDropTarget(target);
+  };
+
+  const finishPointerDrag = (event) => {
+    const drag = pointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const target = drag.moved
+      ? findPointerDropTarget(event.clientX, event.clientY, drag.id) || dropTargetRef.current
+      : null;
+    if (drag.moved) {
+      event.preventDefault();
+      suppressClickRef.current = true;
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+      if (target) reorder(drag.id, target.id, target.position);
+    }
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    pointerDragRef.current = null;
+    clearDragState();
+  };
 
   // keep active item visible
   useEffect(() => {
@@ -649,7 +800,7 @@ function ItemsRail({
           }}
         >
           {Icon.upload}
-          <strong style={{marginTop:6}}>이미지·PDF 대기열에 추가</strong>
+          <strong style={{marginTop:6}}>이미지·PDF·HWP 대기열에 추가</strong>
           <small>파일별로 그대로 등록하거나 AI 인식합니다</small>
         </div>
 
@@ -671,7 +822,7 @@ function ItemsRail({
                   <span className="idx">{String(index + 1).padStart(2, '0')}</span>
                   <div className="file">
                     <div className="name">{file.name || '이름 없는 파일'}</div>
-                    <div className="meta">{/\.pdf$/i.test(file.name || '') ? 'PDF' : 'IMG'} · {formatBytes(file.size)}</div>
+                    <div className="meta">{sourceFileKindLabel(file)} · {formatBytes(file.size)}</div>
                   </div>
                   <button
                     className="icon-btn queue-row-action"
@@ -714,22 +865,45 @@ function ItemsRail({
           </div>
         )}
 
-        {items.map((it, i) => (
+        {items.map((it, i) => {
+          const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
+          return (
           <div
             key={it.id}
-            ref={el => { itemRefs.current[it.id] = el; }}
-            className={`item ${activeId === it.id ? 'active' : ''} ${dragId.current === it.id ? 'dragging' : ''} ${overId === it.id ? 'drop-target' : ''}`}
-            draggable
-            onClick={() => setActive(it.id)}
-            onDragStart={e => { dragId.current = it.id; e.dataTransfer.effectAllowed = 'move'; }}
-            onDragOver={e => { e.preventDefault(); setOverId(it.id); }}
-            onDragLeave={() => setOverId(null)}
+            ref={el => {
+              if (el) itemRefs.current[it.id] = el;
+              else delete itemRefs.current[it.id];
+            }}
+            className={`item ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            data-item-id={it.id}
+            onClick={() => {
+              if (suppressClickRef.current) return;
+              setActive(it.id);
+            }}
+            onPointerDown={e => startPointerDrag(e, it.id)}
+            onPointerMove={movePointerDrag}
+            onPointerUp={finishPointerDrag}
+            onPointerCancel={finishPointerDrag}
+            onDragStart={e => {
+              dragId.current = it.id;
+              setDraggingId(it.id);
+              e.dataTransfer.effectAllowed = 'move';
+              e.dataTransfer.setData('text/plain', it.id);
+            }}
+            onDragEnter={e => updateDropTarget(e, it.id)}
+            onDragOver={e => updateDropTarget(e, it.id)}
+            onDragLeave={e => {
+              if (e.currentTarget.contains(e.relatedTarget)) return;
+              if (dropTargetRef.current?.id === it.id) setCurrentDropTarget(null);
+            }}
             onDrop={e => {
               e.preventDefault();
-              if (dragId.current && dragId.current !== it.id) reorder(dragId.current, it.id);
-              dragId.current = null; setOverId(null);
+              const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
+              const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
+              if (sourceId && sourceId !== it.id) reorder(sourceId, it.id, position);
+              clearDragState();
             }}
-            onDragEnd={() => { dragId.current = null; setOverId(null); }}
+            onDragEnd={clearDragState}
           >
             <div className="grip" title="끌어 옮기기">
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
@@ -766,7 +940,7 @@ function ItemsRail({
               </button>
             </div>
           </div>
-        ))}
+        );})}
       </div>
     </div>
   );
@@ -1864,6 +2038,29 @@ function fileQueueKey(file){
   return [file?.name || 'file', file?.size || 0, file?.lastModified || 0].join('::');
 }
 
+function sourceFileExtension(file){
+  const match = String(file?.name || '').toLowerCase().match(/\.([^.]+)$/);
+  return match ? match[1] : '';
+}
+
+function isPdfFile(file){
+  return sourceFileExtension(file) === 'pdf';
+}
+
+function isHwpFile(file){
+  return ['hwp', 'hwpx'].includes(sourceFileExtension(file));
+}
+
+function isDocumentLikeFile(file){
+  return isPdfFile(file) || isHwpFile(file);
+}
+
+function sourceFileKindLabel(file){
+  if (isPdfFile(file)) return 'PDF';
+  if (isHwpFile(file)) return 'HWP';
+  return 'IMG';
+}
+
 function formatBytes(bytes){
   const size = Number(bytes);
   if (!Number.isFinite(size) || size <= 0) return '0KB';
@@ -2353,7 +2550,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       subject: 'unknown',
       ocr: 'auto',
       exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
-      detectPerspective: files.some(f => !/\.pdf$/i.test(f.name)),
+      detectPerspective: files.some(f => !isDocumentLikeFile(f)),
       maxDimension: 2400,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     }),
@@ -3158,15 +3355,9 @@ function App(){
     }));
     setPublished(false);
   };
-  const reorder = (fromId, toId) => {
+  const reorder = (fromId, toId, dropPosition = 'before') => {
     setItems(it => {
-      const a = it.findIndex(x => x.id === fromId);
-      const b = it.findIndex(x => x.id === toId);
-      if (a < 0 || b < 0) return it;
-      const arr = [...it];
-      const [moved] = arr.splice(a, 1);
-      arr.splice(b, 0, moved);
-      return arr;
+      return reorderItemsForDrop(it, fromId, toId, dropPosition);
     });
     setPublished(false);
   };
@@ -3417,7 +3608,7 @@ function App(){
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/*"
+        accept=".pdf,.hwp,.hwpx,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/*"
         multiple
         style={{ display: 'none' }}
         onChange={e => handleFiles(e.target.files)}

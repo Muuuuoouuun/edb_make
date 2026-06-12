@@ -51,7 +51,7 @@ const INPUT_INTENTS = Object.freeze({
     payloadSnake: "page_as_is",
   },
 });
-const SUPPORTED_SOURCE_EXTENSIONS = /\.(pdf|png|jpe?g|webp|bmp|tiff?|heic|heif)$/i;
+const SUPPORTED_SOURCE_EXTENSIONS = /\.(pdf|hwp|hwpx|png|jpe?g|webp|bmp|tiff?|heic|heif)$/i;
 
 const fallbackProblems = [
   {

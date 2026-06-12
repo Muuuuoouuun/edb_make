@@ -1090,9 +1090,17 @@
     border-radius: var(--radius);
     border: 1px solid transparent;
     cursor: pointer;
-    transition: background .1s;
+    position: relative;
+    touch-action: none;
+    user-select: none;
+    transition:
+      background .12s ease,
+      border-color .12s ease,
+      box-shadow .12s ease,
+      opacity .12s ease,
+      transform .12s ease;
   }
-  .item:hover{ background: var(--surface-2); }
+  .item:hover{ background: var(--surface-2); transform: translateY(-1px); }
   .item.active{
     background: var(--accent-soft);
     border-color: rgba(47,111,237,.25);
@@ -1203,8 +1211,34 @@
   body.dark .item .meta .sub .tag.s3{ background: #0f332f; border-color: #1f6f66; color: #61d7c7; }
   .item .actions{ opacity: 0; display: flex; gap: 2px; padding-right: 2px;}
   .item:hover .actions, .item.active .actions{ opacity: 1; }
-  .item.dragging{ opacity: .35; }
-  .item.drop-target{ box-shadow: 0 -2px 0 0 var(--accent); }
+  .item.dragging{
+    opacity: .42;
+    transform: scale(.985);
+    box-shadow: none;
+  }
+  .item.drop-before,
+  .item.drop-after{
+    background: var(--accent-soft);
+    border-color: rgba(47,111,237,.24);
+  }
+  .item.drop-before::before,
+  .item.drop-after::after{
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(47,111,237,.12);
+  }
+  .item.drop-before::before{ top: -4px; }
+  .item.drop-after::after{ bottom: -4px; }
+  @media (prefers-reduced-motion: reduce){
+    .item{ transition: none; }
+    .item:hover,
+    .item.dragging{ transform: none; }
+  }
 
   /* Center workspace */
   .work{
@@ -2266,6 +2300,7 @@
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
+<script src="reorder.js?v=reorder-20260612"></script>
 <script type="text/babel" src="art.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="app.jsx?v=gemini-image-upscale-20260611"></script>
