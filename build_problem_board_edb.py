@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import io
 import json
@@ -18,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     np = None
 
-from build_structured_page_json import build_page_model
+from build_structured_page_json import build_page_models_for_prepared_pages, resolve_recognition_worker_count
 from segment import draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
@@ -678,10 +679,12 @@ def build_pages(
         max_dimension=max_dimension,
     )
     page_ai_config = _to_page_ai_config(ai_fallback_config)
-    page_models = [
-        build_page_model(prepared_page, subject=subject, ocr_mode=ocr_mode, ai_config=page_ai_config)
-        for prepared_page in prepared_pages
-    ]
+    page_models = build_page_models_for_prepared_pages(
+        prepared_pages,
+        subject=subject,
+        ocr_mode=ocr_mode,
+        ai_config=page_ai_config,
+    )
     if debug_segments_dir is not None:
         for prepared_page, page in zip(prepared_pages, page_models):
             debug_path = debug_segments_dir / f"{page.page_id}_segments.png"
@@ -2239,10 +2242,8 @@ def run_problem_export(
         fail_on_error=fail_on_ai_error,
     )
 
-    prepared_pages: list[PreparedPage] = []
-    pages: list[PageModel] = []
-    for source_path in source_paths:
-        prepared, page_models = build_pages(
+    def _build_source_pages(source_path: Path) -> tuple[list[PreparedPage], list[PageModel]]:
+        return build_pages(
             source_path,
             subject=subject,
             ocr_mode=ocr,
@@ -2253,6 +2254,21 @@ def run_problem_export(
             crop_margins=not skip_crop,
             max_dimension=max_dimension,
         )
+
+    source_worker_count = resolve_recognition_worker_count(
+        len(source_paths),
+        ocr_mode=ocr,
+        ai_config=_to_page_ai_config(ai_fallback_config),
+    )
+    if source_worker_count <= 1:
+        source_results = [_build_source_pages(source_path) for source_path in source_paths]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=source_worker_count) as executor:
+            source_results = list(executor.map(_build_source_pages, source_paths))
+
+    prepared_pages: list[PreparedPage] = []
+    pages: list[PageModel] = []
+    for prepared, page_models in source_results:
         prepared_pages.extend(prepared)
         pages.extend(page_models)
 

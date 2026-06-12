@@ -1,0 +1,3166 @@
+[
+  {
+    "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001",
+    "width_px": 1672,
+    "height_px": 2400,
+    "subject": "unknown",
+    "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001.png",
+    "blocks": [
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 383.65541381054254,
+          "width": 836.0,
+          "height": 1148.7749197738387
+        },
+        "reading_order": 0,
+        "text": "1.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 1,
+          "problem_number": 1,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "1.",
+          "marker_text": "1. 그림은 태양에서 일어나는 핵반응에 대해 학생 A, B, C가 대화",
+          "segmentation_mode": "document",
+          "page_area_px": 4012800,
+          "block_area_ratio": 0.239328,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4960,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1527.630333584381,
+          "width": 836.0,
+          "height": 872.3696664156189
+        },
+        "reading_order": 1,
+        "text": "2.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 2,
+          "problem_number": 2,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "2.",
+          "marker_text": "2. 그림과 같이 균일한 자기장에 의해 자기화된 상태에 있는 크기와",
+          "segmentation_mode": "document",
+          "page_area_px": 4012800,
+          "block_area_ratio": 0.181744,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4676,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 836.0,
+          "top": 383.65541381054254,
+          "width": 836.0,
+          "height": 688.2789137996274
+        },
+        "reading_order": 2,
+        "text": "3.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 3,
+          "problem_number": 3,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "3.",
+          "marker_text": "3. 다음은 어느 자율 주행 자동차에 이용되는 파동에 대한 설명이다.",
+          "segmentation_mode": "document",
+          "page_area_px": 4012800,
+          "block_area_ratio": 0.143391,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 5120,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 836.0,
+          "top": 1067.1343276101697,
+          "width": 836.0,
+          "height": 752.5471070373446
+        },
+        "reading_order": 3,
+        "text": "4.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 4,
+          "problem_number": 4,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "4.",
+          "marker_text": "4. 그림은 보어의 수소 원자 모형에서 양자수 에 따른 전자의 궤도",
+          "segmentation_mode": "document",
+          "page_area_px": 4012800,
+          "block_area_ratio": 0.156781,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4582,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 836.0,
+          "top": 1814.8814346475142,
+          "width": 836.0,
+          "height": 585.1185653524858
+        },
+        "reading_order": 4,
+        "text": "5.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 5,
+          "problem_number": 5,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "5.",
+          "marker_text": "5. 그림은 매질 A에서 주기가 인 물결파가",
+          "segmentation_mode": "document",
+          "page_area_px": 4012800,
+          "block_area_ratio": 0.1219,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4580,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-problem-1",
+        "subject": "unknown",
+        "title": "1.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 1,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-problem-2",
+        "subject": "unknown",
+        "title": "2.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 2,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-problem-3",
+        "subject": "unknown",
+        "title": "3.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 3,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-problem-4",
+        "subject": "unknown",
+        "title": "4.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 4,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-problem-5",
+        "subject": "unknown",
+        "title": "5.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 5,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 1,
+          "text": "1. 그림은 태양에서 일어나는 핵반응에 대해 학생 A, B, C가 대화",
+          "bbox": {
+            "left": 11.875658460540002,
+            "top": 398.0554138105425,
+            "right": 751.2557651183563,
+            "bottom": 429.02295655234894,
+            "width": 739.3801066578163,
+            "height": 30.967542741806426
+          }
+        },
+        {
+          "number": 2,
+          "text": "2. 그림과 같이 균일한 자기장에 의해 자기화된 상태에 있는 크기와",
+          "bbox": {
+            "left": 11.875658460540002,
+            "top": 1542.0303335843812,
+            "right": 751.0917540103985,
+            "bottom": 1572.9978763261875,
+            "width": 739.2160955498586,
+            "height": 30.967542741806255
+          }
+        },
+        {
+          "number": 3,
+          "text": "3. 다음은 어느 자율 주행 자동차에 이용되는 파동에 대한 설명이다.",
+          "bbox": {
+            "left": 823.751304129919,
+            "top": 398.0554138105425,
+            "right": 1563.0957554266356,
+            "bottom": 429.02295655234894,
+            "width": 739.3444512967166,
+            "height": 30.967542741806426
+          }
+        },
+        {
+          "number": 4,
+          "text": "4. 그림은 보어의 수소 원자 모형에서 양자수 에 따른 전자의 궤도",
+          "bbox": {
+            "left": 823.751304129919,
+            "top": 1081.5343276101698,
+            "right": 1562.9641485930406,
+            "bottom": 1112.5018703519763,
+            "width": 739.2128444631215,
+            "height": 30.967542741806483
+          }
+        },
+        {
+          "number": 5,
+          "text": "5. 그림은 매질 A에서 주기가 인 물결파가",
+          "bbox": {
+            "left": 823.751304129919,
+            "top": 1829.2814346475143,
+            "right": 1349.3366958737192,
+            "bottom": 1861.9371263844014,
+            "width": 525.5853917438002,
+            "height": 32.65569173688709
+          }
+        }
+      ],
+      "pdf_renderer": "external_pymupdf",
+      "pdf_renderer_python": "C:\\Users\\aaaha\\AppData\\Local\\Python\\bin\\python.exe",
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 230,
+        "top": 245,
+        "right": 2225,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "resized_to_max_dimension": 2400,
+      "source_pdf_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260611_012552_1781108752763116800_25수능 물리_f888209b51.pdf",
+      "document_like": true,
+      "original_source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260611_012552_1781108752763116800_25수능 물리_f888209b51_page_001.png",
+      "normalized_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 5,
+      "column_count": 2,
+      "document_split_block_count": 5,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 4012800,
+      "block_count": 5,
+      "text_block_count": 5,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 2,
+      "large_block_ratio": 0.4,
+      "max_block_area_ratio": 0.239328,
+      "mean_block_area_ratio": 0.168629,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 4012800,
+        "block_count": 5,
+        "text_block_count": 5,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 2,
+        "large_block_ratio": 0.4,
+        "max_block_area_ratio": 0.239328,
+        "mean_block_area_ratio": 0.168629,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\.pipeline_cache",
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 5,
+        "problem_count": 5,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 5,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 5
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 5,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "1.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 1,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              1
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "2.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 2,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              2
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "3.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 3,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              3
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "4.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 4,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              4
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "5.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 5,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              5
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 5,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 5,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 5
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 5
+      },
+      "difficulty_profile": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "document",
+            "block_count": 5,
+            "large_block_count": 2,
+            "large_block_ratio": 0.4,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 5,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.239328
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 5,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 5,
+            "backend_counts": {
+              "gemini": 5
+            },
+            "backend_latency_ms_avg": 4783.6
+          },
+          "grouping": {
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 5,
+            "block_count": 5,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 5,
+            "problem_number_source_counts": {
+              "text_prefix": 5
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001",
+        "route": "ai_patch",
+        "should_use_ai": true,
+        "next_best_action": null,
+        "trigger_reasons": [
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-001",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmentation_mode": "document",
+              "block_count": 5,
+              "large_block_count": 2,
+              "large_block_ratio": 0.4,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 5,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.239328
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 5,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 5,
+              "backend_counts": {
+                "gemini": 5
+              },
+              "backend_latency_ms_avg": 4783.6
+            },
+            "grouping": {
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 5,
+              "block_count": 5,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 5,
+              "problem_number_source_counts": {
+                "text_prefix": 5
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": true,
+        "mode": "auto",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": true,
+        "applied": false,
+        "cache_hit": false,
+        "status": "error",
+        "route": "ai_patch",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 5,
+        "baseline_block_count": 5,
+        "error": "AI repair failed after model fallback: AI repair failed after retries: Gemini request failed with HTTP 400: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API Key not found. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API Key not found. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n"
+      }
+    }
+  },
+  {
+    "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002",
+    "width_px": 1636,
+    "height_px": 2400,
+    "subject": "unknown",
+    "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002.png",
+    "blocks": [
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 111.58244205334873,
+          "width": 818.0,
+          "height": 489.8730085129438
+        },
+        "reading_order": 0,
+        "text": "6.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 6,
+          "problem_number": 6,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "6.",
+          "marker_text": "6. 그림은 평면에 고정된 두 지점",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.102057,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4228,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 596.6554505662925,
+          "width": 818.0,
+          "height": 960.1242080809882
+        },
+        "reading_order": 1,
+        "text": "7.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 7,
+          "problem_number": 7,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "7.",
+          "marker_text": "7. 그림 (가)와 같이 높이가 각각 , 인 지점에 가만히 놓은 물체",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.200026,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4831,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1551.9796586472805,
+          "width": 818.0,
+          "height": 848.0203413527195
+        },
+        "reading_order": 2,
+        "text": "8.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 8,
+          "problem_number": 8,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "8.",
+          "marker_text": "8. 그림과 같이 관찰자 A에 대해",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.176671,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4980,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 818.0,
+          "top": 111.58244205334873,
+          "width": 818.0,
+          "height": 745.3771460021819
+        },
+        "reading_order": 3,
+        "text": "9.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 9,
+          "problem_number": 9,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "9.",
+          "marker_text": "9. 그림은 받침대 위에 있는 사람이 도르래를",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.155287,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4705,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 818.0,
+          "top": 852.1595880555307,
+          "width": 818.0,
+          "height": 826.6025376940833
+        },
+        "reading_order": 4,
+        "text": "10.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 10,
+          "problem_number": 10,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "10.",
+          "marker_text": "10. 그림과 같이 마찰이 없는 수평면에서 운동량의 크기가 로",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.172209,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4503,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-006",
+        "block_type": "title",
+        "bbox": {
+          "left": 818.0,
+          "top": 1673.9621257496137,
+          "width": 818.0,
+          "height": 726.0378742503863
+        },
+        "reading_order": 5,
+        "text": "11.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 11,
+          "problem_number": 11,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "11.",
+          "marker_text": "11. 그림과 같이 단색광 P가 공기에서",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.151258,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4875,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-problem-1",
+        "subject": "unknown",
+        "title": "6.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 6,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-problem-2",
+        "subject": "unknown",
+        "title": "7.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 7,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-problem-3",
+        "subject": "unknown",
+        "title": "8.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 8,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-problem-4",
+        "subject": "unknown",
+        "title": "9.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 9,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-problem-5",
+        "subject": "unknown",
+        "title": "10.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 10,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-problem-6",
+        "subject": "unknown",
+        "title": "11.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002-block-006"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 11,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 6,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 6,
+          "text": "6. 그림은 평면에 고정된 두 지점",
+          "bbox": {
+            "left": 11.257573983799796,
+            "top": 125.98244205334873,
+            "right": 430.43397713862663,
+            "bottom": 157.56775489429327,
+            "width": 419.17640315482686,
+            "height": 31.58531284094454
+          }
+        },
+        {
+          "number": 7,
+          "text": "7. 그림 (가)와 같이 높이가 각각 , 인 지점에 가만히 놓은 물체",
+          "bbox": {
+            "left": 11.257573983799796,
+            "top": 611.0554505662925,
+            "right": 765.3681841248813,
+            "bottom": 642.6407996470875,
+            "width": 754.1106101410815,
+            "height": 31.585349080795027
+          }
+        },
+        {
+          "number": 8,
+          "text": "8. 그림과 같이 관찰자 A에 대해",
+          "bbox": {
+            "left": 11.257573983799796,
+            "top": 1566.3796586472806,
+            "right": 426.1844922663579,
+            "bottom": 1597.9667472409008,
+            "width": 414.9269182825581,
+            "height": 31.587088593620138
+          }
+        },
+        {
+          "number": 9,
+          "text": "9. 그림은 받침대 위에 있는 사람이 도르래를",
+          "bbox": {
+            "left": 839.3302400156603,
+            "top": 125.98244205334873,
+            "right": 1386.8310297544829,
+            "bottom": 157.56775489429327,
+            "width": 547.5007897388226,
+            "height": 31.58531284094454
+          }
+        },
+        {
+          "number": 10,
+          "text": "10. 그림과 같이 마찰이 없는 수평면에서 운동량의 크기가 로",
+          "bbox": {
+            "left": 839.3302400156603,
+            "top": 866.5595880555306,
+            "right": 1603.5373631119373,
+            "bottom": 898.1449371363259,
+            "width": 764.2071230962771,
+            "height": 31.585349080795254
+          }
+        },
+        {
+          "number": 11,
+          "text": "11. 그림과 같이 단색광 P가 공기에서",
+          "bbox": {
+            "left": 839.3302400156603,
+            "top": 1688.3621257496138,
+            "right": 1275.6302081013982,
+            "bottom": 1719.9474748304092,
+            "width": 436.299968085738,
+            "height": 31.585349080795368
+          }
+        }
+      ],
+      "pdf_renderer": "external_pymupdf",
+      "pdf_renderer_python": "C:\\Users\\aaaha\\AppData\\Local\\Python\\bin\\python.exe",
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 231,
+        "top": 301,
+        "right": 2145,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "resized_to_max_dimension": 2400,
+      "source_pdf_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260611_012552_1781108752763116800_25수능 물리_f888209b51.pdf",
+      "document_like": true,
+      "original_source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260611_012552_1781108752763116800_25수능 물리_f888209b51_page_002.png",
+      "normalized_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 6,
+      "column_count": 2,
+      "document_split_block_count": 6,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3926400,
+      "block_count": 6,
+      "text_block_count": 6,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 1,
+      "large_block_ratio": 0.166667,
+      "max_block_area_ratio": 0.200026,
+      "mean_block_area_ratio": 0.159585,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3926400,
+        "block_count": 6,
+        "text_block_count": 6,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 1,
+        "large_block_ratio": 0.166667,
+        "max_block_area_ratio": 0.200026,
+        "mean_block_area_ratio": 0.159585,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\.pipeline_cache",
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 6,
+        "problem_count": 6,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 6,
+          "problem_marker_block_count": 6,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 6
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 6,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 6,
+          "problem_number_block_count": 6,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 6
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "6.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 6,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              6
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "7.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 7,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              7
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "8.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 8,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              8
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "9.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 9,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              9
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "10.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 10,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              10
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "11.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 11,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              11
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 6,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 6,
+        "problem_number_block_count": 6,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 6,
+        "problem_marker_block_count": 6,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 6
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 6
+      },
+      "difficulty_profile": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "document",
+            "block_count": 6,
+            "large_block_count": 1,
+            "large_block_ratio": 0.166667,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 6,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.200026
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 6,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 6,
+            "backend_counts": {
+              "gemini": 6
+            },
+            "backend_latency_ms_avg": 4687.0
+          },
+          "grouping": {
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 6,
+            "block_count": 6,
+            "problem_marker_count": 6,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 6,
+            "problem_number_source_counts": {
+              "text_prefix": 6
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002",
+        "route": "ai_patch",
+        "should_use_ai": true,
+        "next_best_action": null,
+        "trigger_reasons": [
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-002",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmentation_mode": "document",
+              "block_count": 6,
+              "large_block_count": 1,
+              "large_block_ratio": 0.166667,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 6,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.200026
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 6,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 6,
+              "backend_counts": {
+                "gemini": 6
+              },
+              "backend_latency_ms_avg": 4687.0
+            },
+            "grouping": {
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 6,
+              "block_count": 6,
+              "problem_marker_count": 6,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 6,
+              "problem_number_source_counts": {
+                "text_prefix": 6
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": true,
+        "mode": "auto",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": true,
+        "applied": false,
+        "cache_hit": false,
+        "status": "error",
+        "route": "ai_patch",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 6,
+        "baseline_block_count": 6,
+        "error": "AI repair failed after model fallback: AI repair failed after retries: Gemini request failed with HTTP 400: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API Key not found. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API Key not found. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n"
+      }
+    }
+  },
+  {
+    "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003",
+    "width_px": 1635,
+    "height_px": 2400,
+    "subject": "unknown",
+    "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003.png",
+    "blocks": [
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 113.20153607823065,
+          "width": 817.5,
+          "height": 585.3605830311053
+        },
+        "reading_order": 0,
+        "text": "12.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 12,
+          "problem_number": 12,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "12.",
+          "marker_text": "12. 표는 입자 A, B, C의 질량과 운동",
+          "segmentation_mode": "document",
+          "page_area_px": 3924000,
+          "block_area_ratio": 0.12195,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4398,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 693.762119109336,
+          "width": 817.5,
+          "height": 1192.2706521356208
+        },
+        "reading_order": 1,
+        "text": "13.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 13,
+          "problem_number": 13,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "13.",
+          "marker_text": "13. 다음은 p-n 접합 발광 다이오드(LED)의 특성을 알아보는",
+          "segmentation_mode": "document",
+          "page_area_px": 3924000,
+          "block_area_ratio": 0.24839,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4735,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1881.2327712449567,
+          "width": 817.5,
+          "height": 518.7672287550433
+        },
+        "reading_order": 2,
+        "text": "14.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 14,
+          "problem_number": 14,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "14.",
+          "marker_text": "14. 그림은 동일 직선상에서 같은 가속도로",
+          "segmentation_mode": "document",
+          "page_area_px": 3924000,
+          "block_area_ratio": 0.108077,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4228,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 817.5,
+          "top": 113.20153607823065,
+          "width": 817.5,
+          "height": 1408.7140490573456
+        },
+        "reading_order": 3,
+        "text": "15.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 15,
+          "problem_number": 15,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "15.",
+          "marker_text": "15. 그림과 같이 평면에 가늘고 무한히 긴 직선 도선 A, B, C가",
+          "segmentation_mode": "document",
+          "page_area_px": 3924000,
+          "block_area_ratio": 0.293482,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4511,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 817.5,
+          "top": 1517.115585135576,
+          "width": 817.5,
+          "height": 882.8844148644239
+        },
+        "reading_order": 4,
+        "text": "16.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 16,
+          "problem_number": 16,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "16.",
+          "marker_text": "16. 그림은 열기관에서 일정량의 이상 기체가 상태 A →B →C →",
+          "segmentation_mode": "document",
+          "page_area_px": 3924000,
+          "block_area_ratio": 0.183934,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4790,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-problem-1",
+        "subject": "unknown",
+        "title": "12.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 12,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-problem-2",
+        "subject": "unknown",
+        "title": "13.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 13,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-problem-3",
+        "subject": "unknown",
+        "title": "14.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 14,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-problem-4",
+        "subject": "unknown",
+        "title": "15.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 15,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-problem-5",
+        "subject": "unknown",
+        "title": "16.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 16,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 12,
+          "text": "12. 표는 입자 A, B, C의 질량과 운동",
+          "bbox": {
+            "left": 11.249558623184772,
+            "top": 127.60153607823065,
+            "right": 501.91171930624773,
+            "bottom": 159.16436026638706,
+            "width": 490.66216068306295,
+            "height": 31.562824188156412
+          }
+        },
+        {
+          "number": 13,
+          "text": "13. 다음은 p-n 접합 발광 다이오드(LED)의 특성을 알아보는",
+          "bbox": {
+            "left": 11.249558623184772,
+            "top": 708.162119109336,
+            "right": 774.9160992939361,
+            "bottom": 739.7268626420284,
+            "width": 763.6665406707514,
+            "height": 31.564743532692432
+          }
+        },
+        {
+          "number": 14,
+          "text": "14. 그림은 동일 직선상에서 같은 가속도로",
+          "bbox": {
+            "left": 11.249558623184772,
+            "top": 1895.6327712449568,
+            "right": 526.9829943466684,
+            "bottom": 1927.1956316471608,
+            "width": 515.7334357234837,
+            "height": 31.562860402204024
+          }
+        },
+        {
+          "number": 15,
+          "text": "15. 그림과 같이 평면에 가늘고 무한히 긴 직선 도선 A, B, C가",
+          "bbox": {
+            "left": 838.7326392751721,
+            "top": 127.60153607823065,
+            "right": 1602.5406501238576,
+            "bottom": 159.16436026638706,
+            "width": 763.8080108486855,
+            "height": 31.562824188156412
+          }
+        },
+        {
+          "number": 16,
+          "text": "16. 그림은 열기관에서 일정량의 이상 기체가 상태 A →B →C →",
+          "bbox": {
+            "left": 838.7326392751721,
+            "top": 1531.5155851355762,
+            "right": 1592.3222046695143,
+            "bottom": 1563.0803286682687,
+            "width": 753.5895653943422,
+            "height": 31.564743532692546
+          }
+        }
+      ],
+      "pdf_renderer": "external_pymupdf",
+      "pdf_renderer_python": "C:\\Users\\aaaha\\AppData\\Local\\Python\\bin\\python.exe",
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 231,
+        "top": 299,
+        "right": 2145,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "resized_to_max_dimension": 2400,
+      "source_pdf_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260611_012552_1781108752763116800_25수능 물리_f888209b51.pdf",
+      "document_like": true,
+      "original_source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260611_012552_1781108752763116800_25수능 물리_f888209b51_page_003.png",
+      "normalized_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 5,
+      "column_count": 2,
+      "document_split_block_count": 5,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3924000,
+      "block_count": 5,
+      "text_block_count": 5,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 3,
+      "large_block_ratio": 0.6,
+      "max_block_area_ratio": 0.293482,
+      "mean_block_area_ratio": 0.191167,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3924000,
+        "block_count": 5,
+        "text_block_count": 5,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 3,
+        "large_block_ratio": 0.6,
+        "max_block_area_ratio": 0.293482,
+        "mean_block_area_ratio": 0.191167,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\.pipeline_cache",
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 5,
+        "problem_count": 5,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 5,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 5
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 5,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "12.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 12,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              12
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "13.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 13,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              13
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "14.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 14,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              14
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "15.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 15,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              15
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "16.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 16,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              16
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 5,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 5,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 5
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 5
+      },
+      "difficulty_profile": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003",
+        "segmentation_risk": 0.52,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "large_block_dominance",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "document",
+            "block_count": 5,
+            "large_block_count": 3,
+            "large_block_ratio": 0.6,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 5,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.293482
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 5,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 5,
+            "backend_counts": {
+              "gemini": 5
+            },
+            "backend_latency_ms_avg": 4532.4
+          },
+          "grouping": {
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 5,
+            "block_count": 5,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 5,
+            "problem_number_source_counts": {
+              "text_prefix": 5
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003",
+        "route": "ai_patch",
+        "should_use_ai": true,
+        "next_best_action": null,
+        "trigger_reasons": [
+          "large_block_dominance",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-003",
+          "segmentation_risk": 0.52,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "large_block_dominance",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmentation_mode": "document",
+              "block_count": 5,
+              "large_block_count": 3,
+              "large_block_ratio": 0.6,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 5,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.293482
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 5,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 5,
+              "backend_counts": {
+                "gemini": 5
+              },
+              "backend_latency_ms_avg": 4532.4
+            },
+            "grouping": {
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 5,
+              "block_count": 5,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 5,
+              "problem_number_source_counts": {
+                "text_prefix": 5
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": true,
+        "mode": "auto",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": true,
+        "applied": false,
+        "cache_hit": false,
+        "status": "error",
+        "route": "ai_patch",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "large_block_dominance",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 5,
+        "baseline_block_count": 5,
+        "error": "AI repair failed after model fallback: AI repair failed after retries: Gemini request failed with HTTP 400: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API Key not found. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API Key not found. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n"
+      }
+    }
+  },
+  {
+    "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004",
+    "width_px": 1636,
+    "height_px": 2400,
+    "subject": "unknown",
+    "source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004.png",
+    "blocks": [
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 111.58244205334873,
+          "width": 818.0,
+          "height": 1479.3973433696265
+        },
+        "reading_order": 0,
+        "text": "17.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 17,
+          "problem_number": 17,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "17.",
+          "marker_text": "17. 그림과 같이 두 변의 길이가 각각 , 인 직사각형 금속",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.308208,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4848,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1586.179785422975,
+          "width": 818.0,
+          "height": 813.8202145770249
+        },
+        "reading_order": 1,
+        "text": "18.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 18,
+          "problem_number": 18,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "18.",
+          "marker_text": "18. 그림 (가)와 같이 실로 연결된 물체 A～D가 등가속도 운동을",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.169546,
+          "large_block": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4666,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 818.0,
+          "top": 111.58244205334873,
+          "width": 818.0,
+          "height": 929.3457030322262
+        },
+        "reading_order": 2,
+        "text": "19.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 19,
+          "problem_number": 19,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "19.",
+          "marker_text": "19. 그림과 같이 빗면의 높이가 인 지점에 질량이 인 물체 A를",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.193614,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4730,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 818.0,
+          "top": 1036.1281450855747,
+          "width": 818.0,
+          "height": 1363.8718549144253
+        },
+        "reading_order": 3,
+        "text": "20.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 20,
+          "problem_number": 20,
+          "problem_number_source": "text_prefix",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "display_title": "20.",
+          "marker_text": "20. 그림 (가)와 같이 축상에서 점전하 A, B, C가 각각 ,",
+          "segmentation_mode": "document",
+          "page_area_px": 3926400,
+          "block_area_ratio": 0.28414,
+          "large_block": true,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 4965,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-problem-1",
+        "subject": "unknown",
+        "title": "17.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 17,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-problem-2",
+        "subject": "unknown",
+        "title": "18.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 18,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-problem-3",
+        "subject": "unknown",
+        "title": "19.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 19,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-problem-4",
+        "subject": "unknown",
+        "title": "20.",
+        "stem_block_ids": [
+          "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 20,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 17,
+          "text": "17. 그림과 같이 두 변의 길이가 각각 , 인 직사각형 금속",
+          "bbox": {
+            "left": 11.257573983799796,
+            "top": 125.98244205334873,
+            "right": 775.6168863323462,
+            "bottom": 157.56775489429327,
+            "width": 764.3593123485464,
+            "height": 31.58531284094454
+          }
+        },
+        {
+          "number": 18,
+          "text": "18. 그림 (가)와 같이 실로 연결된 물체 A～D가 등가속도 운동을",
+          "bbox": {
+            "left": 11.257573983799796,
+            "top": 1600.5797854229752,
+            "right": 775.5922432339908,
+            "bottom": 1632.1670189759973,
+            "width": 764.3346692501909,
+            "height": 31.587233553022088
+          }
+        },
+        {
+          "number": 19,
+          "text": "19. 그림과 같이 빗면의 높이가 인 지점에 질량이 인 물체 A를",
+          "bbox": {
+            "left": 839.3302400156603,
+            "top": 125.98244205334873,
+            "right": 1603.6801481229961,
+            "bottom": 157.56775489429327,
+            "width": 764.3499081073359,
+            "height": 31.58531284094454
+          }
+        },
+        {
+          "number": 20,
+          "text": "20. 그림 (가)와 같이 축상에서 점전하 A, B, C가 각각 ,",
+          "bbox": {
+            "left": 839.3302400156603,
+            "top": 1050.5281450855748,
+            "right": 1593.4409407563678,
+            "bottom": 1082.1134941663697,
+            "width": 754.1107007407076,
+            "height": 31.585349080794913
+          }
+        }
+      ],
+      "pdf_renderer": "external_pymupdf",
+      "pdf_renderer_python": "C:\\Users\\aaaha\\AppData\\Local\\Python\\bin\\python.exe",
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 231,
+        "top": 301,
+        "right": 2145,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "resized_to_max_dimension": 2400,
+      "source_pdf_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260611_012552_1781108752763116800_25수능 물리_f888209b51.pdf",
+      "document_like": true,
+      "original_source_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\rendered\\20260611_012552_1781108752763116800_25수능 물리_f888209b51_page_004.png",
+      "normalized_path": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 4,
+      "column_count": 2,
+      "document_split_block_count": 4,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3926400,
+      "block_count": 4,
+      "text_block_count": 4,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 3,
+      "large_block_ratio": 0.75,
+      "max_block_area_ratio": 0.308208,
+      "mean_block_area_ratio": 0.238877,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3926400,
+        "block_count": 4,
+        "text_block_count": 4,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 3,
+        "large_block_ratio": 0.75,
+        "max_block_area_ratio": 0.308208,
+        "mean_block_area_ratio": 0.238877,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\.pipeline_cache",
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 4,
+        "problem_count": 4,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 4,
+          "problem_marker_block_count": 4,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 4
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 4,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 4,
+          "problem_number_block_count": 4,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 4
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "17.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 17,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              17
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "18.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 18,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              18
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "19.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 19,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              19
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "20.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 20,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              20
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 4,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 4,
+        "problem_number_block_count": 4,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 4,
+        "problem_marker_block_count": 4,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 4
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 4
+      },
+      "difficulty_profile": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004",
+        "segmentation_risk": 0.52,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "large_block_dominance",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "document",
+            "block_count": 4,
+            "large_block_count": 3,
+            "large_block_ratio": 0.75,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 4,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.308208
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 4,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 4,
+            "backend_counts": {
+              "gemini": 4
+            },
+            "backend_latency_ms_avg": 4802.25
+          },
+          "grouping": {
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 4,
+            "block_count": 4,
+            "problem_marker_count": 4,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 4,
+            "problem_number_source_counts": {
+              "text_prefix": 4
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004",
+        "route": "ai_patch",
+        "should_use_ai": true,
+        "next_best_action": null,
+        "trigger_reasons": [
+          "large_block_dominance",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "20260611_012552_1781108752763116800_25수능 물리_f888209b51-page-004",
+          "segmentation_risk": 0.52,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "large_block_dominance",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmentation_mode": "document",
+              "block_count": 4,
+              "large_block_count": 3,
+              "large_block_ratio": 0.75,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 4,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.308208
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 4,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 4,
+              "backend_counts": {
+                "gemini": 4
+              },
+              "backend_latency_ms_avg": 4802.25
+            },
+            "grouping": {
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 4,
+              "block_count": 4,
+              "problem_marker_count": 4,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 4,
+              "problem_number_source_counts": {
+                "text_prefix": 4
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": true,
+        "mode": "auto",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": true,
+        "applied": false,
+        "cache_hit": false,
+        "status": "error",
+        "route": "ai_patch",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "large_block_dominance",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 4,
+        "baseline_block_count": 4,
+        "error": "AI repair failed after model fallback: AI repair failed after retries: Gemini request failed with HTTP 400: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API Key not found. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API Key not found. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n"
+      }
+    }
+  }
+]

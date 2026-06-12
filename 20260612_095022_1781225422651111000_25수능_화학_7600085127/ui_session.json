@@ -1,0 +1,321 @@
+{
+  "session_name": "20260612_095022_1781225422651111000_25수능_화학_7600085127",
+  "generated_at": "2026-06-12T09:51:32+09:00",
+  "data_source": "question_export",
+  "output_dir": "C:\\Projects\\Class_project\\edb_make\\20260612_095022_1781225422651111000_25수능_화학_7600085127",
+  "source_mode": "single",
+  "input_intent": "single-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\20260612_095022_1781225422651111000_25수능 화학_7600085127.pdf"
+  ],
+  "source_page_count": 4,
+  "detected_problem_count": 4,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "board_theme": "charcoal",
+  "crop_format": "v1",
+  "pages_json_path": "C:\\Projects\\Class_project\\edb_make\\20260612_095022_1781225422651111000_25수능_화학_7600085127\\pages.json",
+  "placements_json_path": "C:\\Projects\\Class_project\\edb_make\\20260612_095022_1781225422651111000_25수능_화학_7600085127\\placements.json",
+  "board_render_dir": "C:\\Projects\\Class_project\\edb_make\\20260612_095022_1781225422651111000_25수능_화학_7600085127\\problem_cutouts",
+  "edb_path": "C:\\Projects\\Class_project\\edb_make\\20260612_095022_1781225422651111000_25수능_화학_7600085127\\mvp_board.edb",
+  "edb_file_uri": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/mvp_board.edb",
+  "rendered_page_paths": [
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001.png",
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002.png",
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003.png",
+    "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-001.png",
+    "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-002.png",
+    "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-003.png",
+    "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-004.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {
+      "placement_mode": "one-problem-per-page"
+    }
+  },
+  "ai_fallback": null,
+  "ai_summary": null,
+  "warning_messages": [],
+  "problems": [
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001-problem-1",
+      "title": "문항 1",
+      "problemNumber": 1,
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_crops/problem_001_957d4ca8.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-001.png",
+      "sourceFileName": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001.png",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_cutouts/problem_001_957d4ca8.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1704.0,
+        "height": 2400.0
+      },
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002-problem-1",
+      "title": "문항 2",
+      "problemNumber": 2,
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_crops/problem_002_e86c16ca.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-002.png",
+      "sourceFileName": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002.png",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_cutouts/problem_002_e86c16ca.png",
+      "actualHeightPages": 0.7261226914204411,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1636.0,
+        "height": 2400.0
+      },
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003-problem-1",
+      "title": "문항 3",
+      "problemNumber": 3,
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_crops/problem_003_a459c24a.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-003.png",
+      "sourceFileName": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003.png",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_cutouts/problem_003_a459c24a.png",
+      "actualHeightPages": 0.726566803158313,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003",
+      "startYPages": 2.4,
+      "snappedNextStartYPages": 3.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1635.0,
+        "height": 2400.0
+      },
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004-problem-1",
+      "title": "문항 4",
+      "problemNumber": 4,
+      "subject": "unknown",
+      "imagePath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_crops/problem_004_fbae57b1.png",
+      "sourceImagePath": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-004.png",
+      "sourceFileName": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004.png",
+      "boardRenderPath": "file:///C:/Projects/Class_project/edb_make/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5_%ED%99%94%ED%95%99_7600085127/problem_cutouts/problem_004_fbae57b1.png",
+      "actualHeightPages": 0.7261226914204411,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004",
+      "startYPages": 3.6,
+      "snappedNextStartYPages": 4.8,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1636.0,
+        "height": 2400.0
+      },
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    }
+  ],
+  "pages": [
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-001.png",
+      "sourceImagePath": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001.png",
+      "width": 1704,
+      "height": 2400,
+      "problemIds": [
+        "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-001-problem-1"
+      ],
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "riskScore": 0.0,
+      "riskTier": "green",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002",
+      "pageNumber": 2,
+      "sourceImageUri": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-002.png",
+      "sourceImagePath": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002.png",
+      "width": 1636,
+      "height": 2400,
+      "problemIds": [
+        "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-002-problem-1"
+      ],
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "riskScore": 0.0,
+      "riskTier": "green",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003",
+      "pageNumber": 3,
+      "sourceImageUri": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-003.png",
+      "sourceImagePath": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003.png",
+      "width": 1635,
+      "height": 2400,
+      "problemIds": [
+        "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-003-problem-1"
+      ],
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "riskScore": 0.0,
+      "riskTier": "green",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004",
+      "pageNumber": 4,
+      "sourceImageUri": "file:///C:/Projects/Class_project/edb_make/.app_runtime/uploads/.pipeline_cache/normalized/20260612_095022_1781225422651111000_25%EC%88%98%EB%8A%A5%20%ED%99%94%ED%95%99_7600085127-page-004.png",
+      "sourceImagePath": "C:\\Projects\\Class_project\\edb_make\\.app_runtime\\uploads\\.pipeline_cache\\normalized\\20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004.png",
+      "width": 1636,
+      "height": 2400,
+      "problemIds": [
+        "20260612_095022_1781225422651111000_25수능 화학_7600085127-page-004-problem-1"
+      ],
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "riskScore": 0.0,
+      "riskTier": "green",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    }
+  ]
+}

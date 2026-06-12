@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import gzip
 import hashlib
 import json
@@ -33,6 +34,7 @@ from build_problem_board_edb import (
     resolve_subject,
     run_problem_export,
 )
+from build_structured_page_json import resolve_recognition_worker_count
 from edb_builder import (
     CROP_FORMAT_V1,
     CROP_FORMAT_V2,
@@ -1121,35 +1123,31 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
         output_root = (RUNTIME_DIR / "ai_retries").resolve()
     ai_config = session.get("ai_fallback") if isinstance(session.get("ai_fallback"), dict) else {}
     summaries: list[dict[str, Any]] = []
+    retry_jobs: list[dict[str, Any]] = []
+    retry_results_by_page_id: dict[str, dict[str, Any]] = {}
 
     for page_id in page_ids:
         page = _find_page(session, page_id)
         source_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
         if source_path is None or not source_path.exists():
-            # Mark this page failed and continue; aborting the whole batch
-            # mid-loop would leak partial mutations into latest_session because
-            # ``session`` is the same object the HTTP handler resolved.
-            page["reviewStatus"] = "failed"
-            flags = list(page.get("riskFlags") or [])
-            flags.append("ai_retry_missing_source")
-            page["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
-            page["aiRetry"] = {
-                "status": "missing_source",
-                "error": f"source page image missing for retry: {page_id}",
-                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            }
-            summaries.append({
+            retry_results_by_page_id[page_id] = {
                 "pageId": page_id,
                 "status": "missing_source",
                 "error": f"source page image missing for retry: {page_id}",
+            }
+        else:
+            retry_jobs.append({
+                "pageId": page_id,
+                "sourcePath": source_path,
+                "retryDir": output_root / sanitize_output_dir_name(f"{page_id}_{stamp}"),
             })
-            continue
 
-        retry_dir = output_root / sanitize_output_dir_name(f"{page_id}_{stamp}")
+    def _run_retry_job(job: dict[str, Any]) -> dict[str, Any]:
+        page_id = str(job["pageId"])
         try:
             result = run_problem_export(
-                source_path,
-                output_dir=retry_dir,
+                job["sourcePath"],
+                output_dir=job["retryDir"],
                 subject_name=str(payload.get("subject") or "unknown"),
                 ocr=str(payload.get("ocr") or "auto"),
                 pdf_dpi=int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
@@ -1175,18 +1173,63 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
                 ai_fallback_save_debug=bool(ai_config.get("save_debug")),
             )
         except Exception as exc:  # noqa: BLE001 - show the actionable pipeline message to the UI
+            return {"pageId": page_id, "status": "failed", "error": str(exc)}
+        return {"pageId": page_id, "status": "ok", "result": result}
+
+    retry_worker_count = resolve_recognition_worker_count(
+        len(retry_jobs),
+        ocr_mode=str(payload.get("ocr") or "auto"),
+        ai_config=None,
+    )
+    if retry_worker_count <= 1:
+        retry_job_results = [_run_retry_job(job) for job in retry_jobs]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=retry_worker_count) as executor:
+            retry_job_results = list(executor.map(_run_retry_job, retry_jobs))
+    for retry_result in retry_job_results:
+        retry_results_by_page_id[str(retry_result["pageId"])] = retry_result
+
+    for page_id in page_ids:
+        page = _find_page(session, page_id)
+        retry_result = retry_results_by_page_id.get(page_id) or {
+            "pageId": page_id,
+            "status": "failed",
+            "error": "retry did not produce a result",
+        }
+        if retry_result.get("status") == "missing_source":
+            page["reviewStatus"] = "failed"
+            flags = list(page.get("riskFlags") or [])
+            flags.append("ai_retry_missing_source")
+            page["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+            page["aiRetry"] = {
+                "status": "missing_source",
+                "error": str(retry_result.get("error") or f"source page image missing for retry: {page_id}"),
+                "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            summaries.append({
+                "pageId": page_id,
+                "status": "missing_source",
+                "error": str(retry_result.get("error") or f"source page image missing for retry: {page_id}"),
+            })
+            continue
+        if retry_result.get("status") != "ok":
             page["reviewStatus"] = "failed"
             flags = list(page.get("riskFlags") or [])
             flags.append("ai_retry_failed")
             page["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
             page["aiRetry"] = {
                 "status": "failed",
-                "error": str(exc),
+                "error": str(retry_result.get("error") or "AI retry failed"),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             }
-            summaries.append({"pageId": page_id, "status": "failed", "error": str(exc)})
+            summaries.append({
+                "pageId": page_id,
+                "status": "failed",
+                "error": str(retry_result.get("error") or "AI retry failed"),
+            })
             continue
 
+        result = retry_result.get("result") or {}
         retry_session = result.get("ui_session") or {}
         retry_problems = [p for p in retry_session.get("problems", []) if isinstance(p, dict)]
         retry_pages = [p for p in retry_session.get("pages", []) if isinstance(p, dict)]

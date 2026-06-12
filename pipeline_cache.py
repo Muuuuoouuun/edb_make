@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,13 @@ def _image_hash(image: Image.Image) -> str:
 def _safe_slug(value: str) -> str:
     slug = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value.strip())
     return slug or "default"
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
 
 
 def default_pipeline_cache_dir(source_path: str | Path | None) -> Path:
@@ -155,10 +164,9 @@ class PipelineCache:
 
     def save_ocr_result(self, image: Image.Image, result: OCRResult, *, backend_name: str) -> Path:
         path = self._ocr_cache_path(image, backend_name)
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = _serialize_ocr_result(result)
         payload["cached_backend_name"] = backend_name
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json_atomic(path, payload)
         return path
 
     def _ai_cache_path(
@@ -217,7 +225,7 @@ class PipelineCache:
             "response_id": response_id,
             "repair_payload": repair_payload,
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json_atomic(path, payload)
         return path
 
 

@@ -139,6 +139,77 @@ def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
     return float(confidence) < float(threshold)
 
 
+def resolve_recognition_worker_count(
+    item_count: int,
+    *,
+    ocr_mode: str = "auto",
+    ai_config: AIFallbackConfig | None = None,
+) -> int:
+    if item_count <= 1:
+        return 1
+
+    raw_worker_count = (
+        os.environ.get("EDB_RECOGNITION_PAGE_WORKERS", "").strip()
+        or os.environ.get("EDB_RECOGNITION_WORKERS", "").strip()
+    )
+    if raw_worker_count:
+        try:
+            requested_workers = int(raw_worker_count)
+        except ValueError:
+            requested_workers = 2
+        return max(1, min(item_count, requested_workers))
+
+    # OCR/AI repair is mostly network-bound when Gemini is active, but each
+    # page already parallelizes block OCR. Keep the default modest to overlap
+    # page waits without inviting rate-limit failures.
+    normalized_ocr = (ocr_mode or "auto").strip().lower()
+    gemini_primary = normalized_ocr in {"auto", "gemini", "google", "claude", "anthropic"} and bool(
+        os.environ.get("GEMINI_API_KEY", "").strip()
+    )
+    ai_enabled = bool(ai_config and ai_config.enabled)
+    default_workers = 2 if gemini_primary or ai_enabled else min(2, os.cpu_count() or 2)
+    return max(1, min(item_count, default_workers))
+
+
+def build_page_models_for_prepared_pages(
+    prepared_pages: list[PreparedPage],
+    *,
+    subject: Subject,
+    ocr_mode: str,
+    ai_config: AIFallbackConfig | None = None,
+) -> list[PageModel]:
+    worker_count = resolve_recognition_worker_count(
+        len(prepared_pages),
+        ocr_mode=ocr_mode,
+        ai_config=ai_config,
+    )
+    if worker_count <= 1:
+        pages = [
+            build_page_model(
+                prepared_page,
+                subject=subject,
+                ocr_mode=ocr_mode,
+                ai_config=ai_config,
+            )
+            for prepared_page in prepared_pages
+        ]
+    else:
+        def _build(prepared_page: PreparedPage) -> PageModel:
+            return build_page_model(
+                prepared_page,
+                subject=subject,
+                ocr_mode=ocr_mode,
+                ai_config=ai_config,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            pages = list(executor.map(_build, prepared_pages))
+
+    for page in pages:
+        page.metadata["recognition_page_worker_count"] = worker_count
+    return pages
+
+
 def build_page_model(
     prepared_page: PreparedPage,
     subject: Subject,
@@ -298,15 +369,12 @@ def build_pages_from_source(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
-    return [
-        build_page_model(
-            prepared_page,
-            subject=subject,
-            ocr_mode=ocr_mode,
-            ai_config=ai_config,
-        )
-        for prepared_page in prepared_pages
-    ]
+    return build_page_models_for_prepared_pages(
+        prepared_pages,
+        subject=subject,
+        ocr_mode=ocr_mode,
+        ai_config=ai_config,
+    )
 
 
 def process_source(
@@ -333,15 +401,12 @@ def process_source(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
-    pages = [
-        build_page_model(
-            prepared_page,
-            subject=subject,
-            ocr_mode=ocr_mode,
-            ai_config=ai_config,
-        )
-        for prepared_page in prepared_pages
-    ]
+    pages = build_page_models_for_prepared_pages(
+        prepared_pages,
+        subject=subject,
+        ocr_mode=ocr_mode,
+        ai_config=ai_config,
+    )
     for page in pages:
         page.metadata["schema_version"] = "v0.2"
         page.metadata["ocr_mode"] = ocr_mode
