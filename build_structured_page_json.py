@@ -7,13 +7,14 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from ocr_backend import GeminiOCRBackend, NoOcrBackend, create_ocr_backend
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from pipeline_cache import PipelineCache
 from preprocess import PreparedPage, prepare_source_pages
 from segment import crop_block_image, draw_segment_debug, segment_page
-from structured_schema import BlockType, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
+from structured_schema import BlockType, ContentBlock, PageModel, Subject, classify_text_block, infer_math_like_text, save_pages_json, TextStyle
 
 
 def load_env_local() -> None:
@@ -139,6 +140,135 @@ def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
     return float(confidence) < float(threshold)
 
 
+def _should_skip_ocr_for_trusted_block(
+    block: ContentBlock,
+    *,
+    page_segmenter: str | None,
+) -> bool:
+    return (
+        page_segmenter == "pdf-text-markers"
+        and block.metadata.get("segmenter") == "pdf-text-markers"
+        and bool(block.metadata.get("force_image_record"))
+        and bool(block.metadata.get("force_problem_start"))
+        and isinstance(block.metadata.get("problem_number"), int)
+        and block.metadata.get("problem_number_source") == "pdf_text_marker"
+        and bool((block.text or "").strip())
+        and block.confidence is not None
+    )
+
+
+_OCR_IDENTITY_NORMALIZATION_KEYS = (
+    "source_type",
+    "dpi",
+    "pdf_renderer",
+    "pdf_page_width_pt",
+    "pdf_page_height_pt",
+    "perspective_corrected",
+    "deskewed",
+    "deskew_skipped_reason",
+    "margin_cropped",
+    "margin_crop_box",
+    "resized_to_max_dimension",
+    "document_like",
+)
+
+
+def _file_identity(path_value: object) -> dict[str, Any]:
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        return {"path": ""}
+    path = Path(path_text).expanduser().resolve()
+    identity: dict[str, Any] = {"path": str(path)}
+    try:
+        stat = path.stat()
+    except OSError:
+        return identity
+    identity["stat"] = {
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+    return identity
+
+
+def _bucket_coordinate(value: float, *, bucket_size: int = 4) -> int:
+    return int(round(float(value) / float(bucket_size)) * bucket_size)
+
+
+def _normalization_identity(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: metadata[key]
+        for key in _OCR_IDENTITY_NORMALIZATION_KEYS
+        if key in metadata
+    }
+
+
+def _build_ocr_cache_identity(
+    prepared_page: PreparedPage,
+    block: ContentBlock,
+) -> dict[str, Any]:
+    metadata = dict(prepared_page.metadata)
+    source_path = metadata.get("original_source_path") or prepared_page.source_path
+    bucket_size = 4
+    return {
+        "version": "ocr_block_identity_v1",
+        "source": _file_identity(source_path),
+        "page": {
+            "id": prepared_page.page_id,
+            "number": int(prepared_page.page_number),
+            "size": {
+                "width": int(prepared_page.image.width),
+                "height": int(prepared_page.image.height),
+            },
+        },
+        "normalization": _normalization_identity(metadata),
+        "block": {
+            "id": block.block_id,
+            "reading_order": int(block.reading_order),
+            "type": block.block_type.value,
+            "bbox_bucket_size_px": bucket_size,
+            "bbox_bucket_px": {
+                "left": _bucket_coordinate(block.bbox.left, bucket_size=bucket_size),
+                "top": _bucket_coordinate(block.bbox.top, bucket_size=bucket_size),
+                "right": _bucket_coordinate(block.bbox.right, bucket_size=bucket_size),
+                "bottom": _bucket_coordinate(block.bbox.bottom, bucket_size=bucket_size),
+            },
+        },
+    }
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int(round(max(0.0, time.perf_counter() - started_at) * 1000.0))
+
+
+def resolve_block_ocr_worker_count(
+    item_count: int,
+    *,
+    ocr_mode: str,
+    backend_name: str,
+) -> int:
+    raw_worker_count = os.environ.get("EDB_RECOGNITION_BLOCK_WORKERS", "").strip()
+    if raw_worker_count:
+        try:
+            requested_workers = int(raw_worker_count)
+        except ValueError:
+            requested_workers = 0
+        if requested_workers > 0:
+            return requested_workers
+
+    normalized_mode = (ocr_mode or "").strip().lower()
+    normalized_backend = (backend_name or "").strip().lower()
+    if normalized_mode in {"none", "noop"} or normalized_backend in {"none", "noop"}:
+        return 1
+    if normalized_mode in {"gemini", "google", "claude", "anthropic"}:
+        return 3
+    if normalized_backend in {"gemini", "google", "claude", "anthropic"}:
+        return 3
+
+    bounded_item_count = max(0, int(item_count))
+    default_workers = min(8, bounded_item_count, os.cpu_count() or 2)
+    return max(1, default_workers)
+
+
 def resolve_recognition_worker_count(
     item_count: int,
     *,
@@ -218,21 +348,52 @@ def build_page_model(
     ai_config: AIFallbackConfig | None = None,
     cache: PipelineCache | None = None,
 ) -> PageModel:
+    recognition_started_at = time.perf_counter()
     backend = create_ocr_backend(ocr_mode)
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
+    segmentation_started_at = time.perf_counter()
     segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
+    segmentation_elapsed_ms = _elapsed_ms(segmentation_started_at)
     blocks = segmented_page.blocks
     escalation_backend = _maybe_build_gemini_escalation(
         ai_config=ai_config, primary_backend_name=backend.engine_name
     )
     escalation_threshold = float(ai_config.threshold) if ai_config else 0.0
+    page_segmenter = segmented_page.metadata.get("segmenter")
+
+    ocr_eligible_block_count = sum(
+        1
+        for block in blocks
+        if block.block_type not in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}
+        and not _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter)
+    )
+    ocr_skipped_block_count = len(blocks) - ocr_eligible_block_count
+    block_worker_count = resolve_block_ocr_worker_count(
+        ocr_eligible_block_count,
+        ocr_mode=ocr_mode,
+        backend_name=backend.engine_name,
+    )
 
     def _process_block(block):
+        if _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter):
+            block.metadata["ocr_backend"] = "pdf_text_marker"
+            block.metadata["ocr_skipped"] = True
+            block.metadata["ocr_skipped_reason"] = "trusted_pdf_text_marker"
+            block.metadata["ocr_empty_text"] = False
+            block.metadata["ocr_text_length"] = len((block.text or "").strip())
+            block.metadata["ocr_line_count"] = len(block.ocr_lines)
+            return
+
         if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
             return
 
         crop = crop_block_image(prepared_page, block)
-        cached_ocr = pipeline_cache.load_ocr_result(crop, backend_name=backend.engine_name)
+        cache_identity = _build_ocr_cache_identity(prepared_page, block)
+        cached_ocr = pipeline_cache.load_ocr_result(
+            crop,
+            backend_name=backend.engine_name,
+            cache_identity=cache_identity,
+        )
         if cached_ocr is not None:
             ocr_result = cached_ocr
             block.metadata["ocr_cache_hit"] = True
@@ -242,7 +403,12 @@ def build_page_model(
             ocr_result = backend.recognize(crop)
             elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
             ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
-            pipeline_cache.save_ocr_result(crop, ocr_result, backend_name=backend.engine_name)
+            pipeline_cache.save_ocr_result(
+                crop,
+                ocr_result,
+                backend_name=backend.engine_name,
+                cache_identity=cache_identity,
+            )
             block.metadata["ocr_cache_hit"] = False
             block.metadata["ocr_cache_miss"] = True
 
@@ -250,7 +416,9 @@ def build_page_model(
             ocr_result, threshold=escalation_threshold
         ):
             escalated_cached = pipeline_cache.load_ocr_result(
-                crop, backend_name="gemini_escalated"
+                crop,
+                backend_name="gemini_escalated",
+                cache_identity=cache_identity,
             )
             if escalated_cached is not None:
                 escalated_result = escalated_cached
@@ -265,7 +433,10 @@ def build_page_model(
                     "backend_latency_ms", escalation_elapsed_ms
                 )
                 pipeline_cache.save_ocr_result(
-                    crop, escalated_result, backend_name="gemini_escalated"
+                    crop,
+                    escalated_result,
+                    backend_name="gemini_escalated",
+                    cache_identity=cache_identity,
                 )
                 block.metadata["ocr_escalation_cache_hit"] = False
 
@@ -329,8 +500,15 @@ def build_page_model(
             block.block_type = BlockType.IMAGE
             block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "gemini_no_text"
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    block_ocr_started_at = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=block_worker_count) as executor:
         list(executor.map(_process_block, blocks))
+    block_ocr_elapsed_ms = _elapsed_ms(block_ocr_started_at)
+
+    ocr_cache_hit_count = sum(1 for block in blocks if block.metadata.get("ocr_cache_hit"))
+    ocr_cache_miss_count = sum(1 for block in blocks if block.metadata.get("ocr_cache_miss"))
+    ocr_escalated_block_count = sum(1 for block in blocks if block.metadata.get("ocr_escalated"))
+    total_before_repair_ms = _elapsed_ms(recognition_started_at)
 
     page = PageModel(
         page_id=prepared_page.page_id,
@@ -344,6 +522,17 @@ def build_page_model(
             **dict(segmented_page.metadata),
             "ocr_mode": ocr_mode,
             "pipeline_cache_dir": str(pipeline_cache.root_dir),
+            "recognition_timing_ms": {
+                "segmentation": segmentation_elapsed_ms,
+                "block_ocr": block_ocr_elapsed_ms,
+                "total_before_repair": total_before_repair_ms,
+            },
+            "ocr_block_worker_count": block_worker_count,
+            "ocr_eligible_block_count": ocr_eligible_block_count,
+            "ocr_skipped_block_count": ocr_skipped_block_count,
+            "ocr_cache_hit_count": ocr_cache_hit_count,
+            "ocr_cache_miss_count": ocr_cache_miss_count,
+            "ocr_escalated_block_count": ocr_escalated_block_count,
         },
     )
     return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config, cache=pipeline_cache)

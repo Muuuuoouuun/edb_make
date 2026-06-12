@@ -20,6 +20,9 @@ DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_IMAGE_QUALITY = "high"
 DEFAULT_IMAGE_SIZE = "auto"
+DEFAULT_RECONSTRUCTION_UPSCALE_FACTOR = 2.0
+DEFAULT_RECONSTRUCTION_MAX_PIXELS = 16_000_000
+DEFAULT_TRANSPARENT_INK_RGB = (248, 248, 246)
 
 
 DEFAULT_RECONSTRUCTION_PROMPT = """Edit the provided exam-problem crop into a clean high-resolution transparent PNG.
@@ -31,8 +34,9 @@ Preserve the source content exactly:
 - If a PDF page number, footer marker, page-corner badge, or scanner overlay appears at the lower-right/lower-left edge, remove it.
 
 Improve only visual quality:
-- Reconstruct as a sharp, high-resolution asset at about 2x the source detail while keeping the original aspect ratio and composition.
-- Make letters, numbers, math symbols, thin lines, table borders, axes, arrows, and diagram labels crisp and readable.
+- Reconstruct as a sharp, high-resolution asset at least 2x the source pixel detail while keeping the original aspect ratio and composition.
+- Rebuild glyph strokes and mathematical notation as OCR-safe clean print: Korean letters, numbers, operators, subscripts, superscripts, fractions, roots, vectors, units, and labels must be crisp and readable.
+- Make thin lines, table borders, axes, arrows, graph ticks, diagram labels, and small option text clear without thickening or changing geometry.
 - Remove blur, scanner noise, paper texture, compression artifacts, and low-resolution jagged edges.
 - Output chalk-white ink/lines on a fully transparent alpha background. The background must be transparent, not black, white, gray, or checkerboard.
 - Keep diagrams and tables faithful to the original geometry.
@@ -231,6 +235,7 @@ def _reconstruct_with_gemini(
         output,
         transparent_background=transparent_background,
         sharpen=sharpen,
+        source_size=_read_image_size(source),
     )
     latency_ms = int(round((time.perf_counter() - started_at) * 1000.0))
     return ImageReconstructionResult(
@@ -321,6 +326,7 @@ def _reconstruct_with_openai(
         output,
         transparent_background=transparent_background,
         sharpen=sharpen,
+        source_size=_read_image_size(source),
     )
     latency_ms = int(round((time.perf_counter() - started_at) * 1000.0))
     return ImageReconstructionResult(
@@ -343,6 +349,9 @@ def postprocess_reconstructed_problem_image(
     *,
     transparent_background: bool = True,
     sharpen: bool = True,
+    source_size: tuple[int, int] | None = None,
+    upscale_factor: float = DEFAULT_RECONSTRUCTION_UPSCALE_FACTOR,
+    max_upscaled_pixels: int = DEFAULT_RECONSTRUCTION_MAX_PIXELS,
 ) -> dict[str, Any]:
     try:
         from PIL import Image, ImageFilter, ImageOps
@@ -365,14 +374,137 @@ def postprocess_reconstructed_problem_image(
         remove_corner_page_artifacts=True,
     )
 
+    target_size, resize_stats = _reconstruction_resize_target(
+        current_size=image.size,
+        source_size=source_size,
+        upscale_factor=upscale_factor,
+        max_pixels=max_upscaled_pixels,
+    )
+    if target_size != image.size:
+        image = image.resize(target_size, _lanczos_resample(Image))
+
+    clarity_stats: dict[str, Any] = {}
+    if transparent_background and sharpen:
+        image, clarity_stats = _boost_transparent_ink_clarity(image)
+
     image.save(path, format="PNG", optimize=True)
     return {
         "status": "applied",
         "transparent_background": bool(transparent_background),
         "sharpen": bool(sharpen),
-        "width": original_size[0],
-        "height": original_size[1],
+        "input_width": original_size[0],
+        "input_height": original_size[1],
+        "width": image.width,
+        "height": image.height,
+        "source_width": source_size[0] if source_size else None,
+        "source_height": source_size[1] if source_size else None,
+        **resize_stats,
+        **clarity_stats,
         **transparency_stats,
+    }
+
+
+def _read_image_size(path: Path) -> tuple[int, int] | None:
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as image:
+            return image.size
+    except OSError:
+        return None
+
+
+def _lanczos_resample(image_module: Any) -> Any:
+    resampling = getattr(image_module, "Resampling", image_module)
+    return resampling.LANCZOS
+
+
+def _reconstruction_resize_target(
+    *,
+    current_size: tuple[int, int],
+    source_size: tuple[int, int] | None,
+    upscale_factor: float,
+    max_pixels: int,
+) -> tuple[tuple[int, int], dict[str, Any]]:
+    width, height = current_size
+    source_width, source_height = _valid_size(source_size)
+    if width <= 0 or height <= 0 or not source_width or not source_height or upscale_factor <= 1:
+        return current_size, {
+            "upscaled": False,
+            "upscale_scale": 1.0,
+            "upscale_factor": float(upscale_factor),
+            "upscale_capped": False,
+        }
+
+    target_width = max(width, int(round(source_width * upscale_factor)))
+    target_height = max(height, int(round(source_height * upscale_factor)))
+    scale = max(target_width / width, target_height / height, 1.0)
+    next_width = max(width, int(round(width * scale)))
+    next_height = max(height, int(round(height * scale)))
+    capped = False
+
+    pixel_cap = max(width * height, int(max_pixels or 0))
+    if next_width * next_height > pixel_cap:
+        capped = True
+        cap_scale = (pixel_cap / max(1, next_width * next_height)) ** 0.5
+        next_width = max(width, int(round(next_width * cap_scale)))
+        next_height = max(height, int(round(next_height * cap_scale)))
+        scale = next_width / width
+
+    return (next_width, next_height), {
+        "upscaled": (next_width, next_height) != current_size,
+        "upscale_scale": round(float(scale), 4),
+        "upscale_factor": float(upscale_factor),
+        "upscale_capped": capped,
+    }
+
+
+def _valid_size(value: tuple[int, int] | None) -> tuple[int | None, int | None]:
+    if not value or len(value) != 2:
+        return None, None
+    width, height = value
+    if width <= 0 or height <= 0:
+        return None, None
+    return int(width), int(height)
+
+
+def _boost_transparent_ink_clarity(image: Any) -> tuple[Any, dict[str, Any]]:
+    try:
+        from PIL import Image, ImageFilter, ImageOps
+    except ImportError:
+        return image, {}
+
+    alpha = image.getchannel("A")
+    alpha_values = alpha.get_flattened_data() if hasattr(alpha, "get_flattened_data") else alpha.getdata()
+    visible_before = [int(value) for value in alpha_values if value > 6]
+    if not visible_before:
+        return image, {"ink_clarity": "empty"}
+
+    alpha = ImageOps.autocontrast(alpha)
+    alpha = alpha.filter(ImageFilter.UnsharpMask(radius=0.7, percent=180, threshold=1))
+
+    def boost_alpha(value: int) -> int:
+        if value <= 6:
+            return 0
+        if value >= 210:
+            return 255
+        boosted = int(round(((value / 255.0) ** 0.45) * 255))
+        return max(value, min(255, boosted))
+
+    alpha = alpha.point(boost_alpha)
+    next_values = alpha.get_flattened_data() if hasattr(alpha, "get_flattened_data") else alpha.getdata()
+    visible_after = [int(value) for value in next_values if value > 6]
+
+    clarified = Image.new("RGBA", image.size, (*DEFAULT_TRANSPARENT_INK_RGB, 0))
+    clarified.putalpha(alpha)
+    before_mean = sum(visible_before) / len(visible_before)
+    after_mean = sum(visible_after) / len(visible_after) if visible_after else 0.0
+    return clarified, {
+        "ink_clarity": "boosted",
+        "ink_alpha_mean_before": round(before_mean, 2),
+        "ink_alpha_mean_after": round(after_mean, 2),
     }
 
 

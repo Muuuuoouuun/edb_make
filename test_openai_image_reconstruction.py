@@ -145,6 +145,27 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertLess(output.getpixel((1, 0))[3], 255)
             self.assertEqual(output.getpixel((2, 0))[3], 255)
 
+    def test_postprocess_upscales_undersized_reconstruction_and_boosts_ink_alpha(self):
+        with TemporaryDirectory() as raw_tmp:
+            path = Path(raw_tmp) / "undersized_reconstructed.png"
+            image = Image.new("RGBA", (40, 20), (18, 22, 26, 255))
+            pixels = image.load()
+            for x in range(8, 32):
+                pixels[x, 10] = (210, 214, 214, 128)
+            image.save(path)
+
+            stats = postprocess_reconstructed_problem_image(
+                path,
+                source_size=(60, 30),
+                upscale_factor=2.0,
+            )
+            output = Image.open(path).convert("RGBA")
+
+            self.assertEqual(output.size, (120, 60))
+            self.assertTrue(stats["upscaled"])
+            self.assertGreaterEqual(stats["upscale_scale"], 3.0)
+            self.assertGreater(output.getpixel((60, 30))[3], 180)
+
     def test_postprocess_removes_dark_model_background_without_erasing_chalk(self):
         with TemporaryDirectory() as raw_tmp:
             path = Path(raw_tmp) / "dark_reconstructed.png"

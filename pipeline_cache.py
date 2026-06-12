@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from PIL import Image
 
 from ocr_backend import OCRLine, OCRResult
 from structured_schema import BlockType, Box, ContentBlock, PageModel
+
+OCRCacheIdentity = Mapping[str, Any]
 
 
 def _sha1_text(text: str) -> str:
@@ -28,6 +31,10 @@ def _image_hash(image: Image.Image) -> str:
 def _safe_slug(value: str) -> str:
     slug = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value.strip())
     return slug or "default"
+
+
+def _stable_ocr_key(identity: OCRCacheIdentity) -> str:
+    return _sha1_text(json.dumps(identity, ensure_ascii=False, sort_keys=True))
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -150,8 +157,10 @@ class PipelineCache:
         image_key = _image_hash(image)
         return self.root_dir / "ocr" / _safe_slug(backend_name) / f"{image_key}.json"
 
-    def load_ocr_result(self, image: Image.Image, *, backend_name: str) -> OCRResult | None:
-        path = self._ocr_cache_path(image, backend_name)
+    def _ocr_stable_index_path(self, *, backend_name: str, cache_identity: OCRCacheIdentity) -> Path:
+        return self.root_dir / "ocr_index" / _safe_slug(backend_name) / f"{_stable_ocr_key(cache_identity)}.json"
+
+    def _load_ocr_payload(self, path: Path, *, cache_key_kind: str) -> OCRResult | None:
         if not path.exists():
             return None
         try:
@@ -160,13 +169,86 @@ class PipelineCache:
             return None
         result = _deserialize_ocr_result(payload)
         result.metadata["cache_path"] = str(path)
+        result.metadata["cache_key_kind"] = cache_key_kind
         return result
 
-    def save_ocr_result(self, image: Image.Image, result: OCRResult, *, backend_name: str) -> Path:
+    def _load_ocr_result_from_index(self, *, backend_name: str, cache_identity: OCRCacheIdentity) -> OCRResult | None:
+        index_path = self._ocr_stable_index_path(
+            backend_name=backend_name,
+            cache_identity=cache_identity,
+        )
+        if not index_path.exists():
+            return None
+        try:
+            index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(index_payload, dict):
+            return None
+
+        target_value = index_payload.get("target") or index_payload.get("payload_path")
+        if not isinstance(target_value, str) or not target_value.strip():
+            return None
+        target_path = Path(target_value)
+        if not target_path.is_absolute():
+            target_path = self.root_dir / target_path
+        try:
+            expected_dir = (self.root_dir / "ocr" / _safe_slug(backend_name)).resolve()
+            resolved_target = target_path.resolve()
+        except OSError:
+            return None
+        if resolved_target.parent != expected_dir:
+            return None
+
+        result = self._load_ocr_payload(resolved_target, cache_key_kind="stable_index")
+        if result is not None:
+            result.metadata["cache_index_path"] = str(index_path)
+        return result
+
+    def load_ocr_result(
+        self,
+        image: Image.Image,
+        *,
+        backend_name: str,
+        cache_identity: OCRCacheIdentity | None = None,
+    ) -> OCRResult | None:
+        if cache_identity is not None:
+            result = self._load_ocr_result_from_index(
+                backend_name=backend_name,
+                cache_identity=cache_identity,
+            )
+            if result is not None:
+                return result
+
+        path = self._ocr_cache_path(image, backend_name)
+        return self._load_ocr_payload(path, cache_key_kind="image_hash")
+
+    def save_ocr_result(
+        self,
+        image: Image.Image,
+        result: OCRResult,
+        *,
+        backend_name: str,
+        cache_identity: OCRCacheIdentity | None = None,
+    ) -> Path:
         path = self._ocr_cache_path(image, backend_name)
         payload = _serialize_ocr_result(result)
         payload["cached_backend_name"] = backend_name
         _write_json_atomic(path, payload)
+        if cache_identity is not None:
+            index_path = self._ocr_stable_index_path(
+                backend_name=backend_name,
+                cache_identity=cache_identity,
+            )
+            _write_json_atomic(
+                index_path,
+                {
+                    "version": "ocr_index_v1",
+                    "target": str(path.relative_to(self.root_dir)),
+                    "image_sha1": path.stem,
+                    "backend_name": backend_name,
+                },
+            )
         return path
 
     def _ai_cache_path(
