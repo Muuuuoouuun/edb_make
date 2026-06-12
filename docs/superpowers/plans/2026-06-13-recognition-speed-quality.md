@@ -95,9 +95,10 @@ Add a helper in `build_structured_page_json.py`:
 def _should_skip_ocr_for_trusted_block(block: ContentBlock, *, page_segmenter: str) -> bool:
     return (
         page_segmenter == "pdf-text-markers"
-        and
-        bool(block.metadata.get("force_image_record"))
         and block.metadata.get("segmenter") == "pdf-text-markers"
+        and bool(block.metadata.get("force_image_record"))
+        and bool(block.metadata.get("force_problem_start"))
+        and isinstance(block.metadata.get("problem_number"), int)
         and block.metadata.get("problem_number_source") == "pdf_text_marker"
         and bool((block.text or "").strip())
         and block.confidence is not None
@@ -107,7 +108,7 @@ def _should_skip_ocr_for_trusted_block(block: ContentBlock, *, page_segmenter: s
 At the top of `_process_block`, before cropping/cache lookup, set metadata and return:
 
 ```python
-if _should_skip_ocr_for_trusted_block(block):
+if _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter):
     block.metadata["ocr_backend"] = "pdf_text_marker"
     block.metadata["ocr_skipped"] = True
     block.metadata["ocr_skipped_reason"] = "trusted_pdf_text_marker"

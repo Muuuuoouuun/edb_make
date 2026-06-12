@@ -222,9 +222,6 @@ def _build_ocr_cache_identity(
         },
         "normalization": _normalization_identity(metadata),
         "block": {
-            "id": block.block_id,
-            "reading_order": int(block.reading_order),
-            "type": block.block_type.value,
             "bbox_bucket_size_px": bucket_size,
             "bbox_bucket_px": {
                 "left": _bucket_coordinate(block.bbox.left, bucket_size=bucket_size),
@@ -246,6 +243,10 @@ def resolve_block_ocr_worker_count(
     ocr_mode: str,
     backend_name: str,
 ) -> int:
+    bounded_item_count = max(0, int(item_count))
+    if bounded_item_count <= 0:
+        return 1
+    max_workers = max(1, min(8, bounded_item_count or 1))
     raw_worker_count = os.environ.get("EDB_RECOGNITION_BLOCK_WORKERS", "").strip()
     if raw_worker_count:
         try:
@@ -253,7 +254,7 @@ def resolve_block_ocr_worker_count(
         except ValueError:
             requested_workers = 0
         if requested_workers > 0:
-            return requested_workers
+            return max(1, min(max_workers, requested_workers))
 
     normalized_mode = (ocr_mode or "").strip().lower()
     normalized_backend = (backend_name or "").strip().lower()
@@ -264,8 +265,7 @@ def resolve_block_ocr_worker_count(
     if normalized_backend in {"gemini", "google", "claude", "anthropic"}:
         return 3
 
-    bounded_item_count = max(0, int(item_count))
-    default_workers = min(8, bounded_item_count, os.cpu_count() or 2)
+    default_workers = min(max_workers, os.cpu_count() or 2)
     return max(1, default_workers)
 
 

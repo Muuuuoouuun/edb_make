@@ -241,6 +241,40 @@ def test_ocr_cache_identity_uses_original_source_normalization_and_bucketed_bbox
     assert "ocr_latency" not in serialized
 
 
+def test_ocr_cache_identity_ignores_segmentation_labels_when_bbox_bucket_matches(tmp_path):
+    from PIL import Image
+
+    import build_structured_page_json as pipeline
+    from preprocess import PreparedPage
+    from structured_schema import BlockType, Box, ContentBlock
+
+    source = tmp_path / "source.png"
+    image = Image.new("RGB", (240, 160), "white")
+    image.save(source)
+    prepared = PreparedPage(
+        page_id="page-001",
+        source_path=str(source),
+        page_number=1,
+        image=image,
+        original_size=image.size,
+        metadata={"original_source_path": str(source)},
+    )
+    first = ContentBlock(
+        block_id="page-001-block-001",
+        block_type=BlockType.STEM,
+        bbox=Box.from_points(20.1, 28.1, 120.2, 80.2),
+        reading_order=0,
+    )
+    relabeled = ContentBlock(
+        block_id="page-001-block-009",
+        block_type=BlockType.TITLE,
+        bbox=Box.from_points(20.4, 29.9, 120.1, 80.4),
+        reading_order=8,
+    )
+
+    assert pipeline._build_ocr_cache_identity(prepared, first) == pipeline._build_ocr_cache_identity(prepared, relabeled)
+
+
 def test_build_page_model_passes_stable_cache_identity_to_primary_and_escalated_ocr(
     monkeypatch,
     tmp_path,
@@ -392,6 +426,16 @@ def test_block_worker_count_defaults_and_env_override(monkeypatch):
         == 6
     )
 
+    monkeypatch.setenv("EDB_RECOGNITION_BLOCK_WORKERS", "100000")
+    assert (
+        pipeline.resolve_block_ocr_worker_count(
+            2,
+            ocr_mode="gemini",
+            backend_name="gemini",
+        )
+        == 2
+    )
+
     monkeypatch.setenv("EDB_RECOGNITION_BLOCK_WORKERS", "bogus")
     assert (
         pipeline.resolve_block_ocr_worker_count(
@@ -405,11 +449,11 @@ def test_block_worker_count_defaults_and_env_override(monkeypatch):
     monkeypatch.setenv("EDB_RECOGNITION_BLOCK_WORKERS", "0")
     assert (
         pipeline.resolve_block_ocr_worker_count(
-            10,
+            0,
             ocr_mode="gemini",
             backend_name="gemini",
         )
-        == 3
+        == 1
     )
 
 
