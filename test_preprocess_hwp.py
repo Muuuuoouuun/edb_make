@@ -56,6 +56,24 @@ class TestPreprocessHwp(unittest.TestCase):
             ranges,
         )
 
+    def test_extract_hwp_passage_ranges_accepts_compact_english_and_korean_ranges(self) -> None:
+        text = (
+            "Questions 18-21 refer to the following passage.\n"
+            "18. first question\n"
+            "18-21번은 다음 글을 읽고 물음에 답하시오.\n"
+            "문항 24~26은 다음 자료를 보고 물음에 답하시오.\n"
+        )
+
+        ranges = preprocess._extract_hwp_passage_ranges(text)
+
+        self.assertEqual(
+            [
+                {"start": 18, "end": 21, "text": "Questions 18-21 refer to the following passage."},
+                {"start": 24, "end": 26, "text": "문항 24~26은 다음 자료를 보고 물음에 답하시오."},
+            ],
+            ranges,
+        )
+
     def test_hwp_normalized_cache_rejects_pre_snippet_cache_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

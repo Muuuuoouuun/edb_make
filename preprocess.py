@@ -1464,6 +1464,11 @@ HWP_TEXT_PASSAGE_RANGE_KOREAN_RE = re.compile(
     r"(?:[~\-]|부터|에서)\s*"
     r"(?:제\s*)?(?P<end>[0-9]{1,3})\s*번(?:까지)?"
 )
+HWP_TEXT_PASSAGE_RANGE_COMPACT_RE = re.compile(
+    r"^\s*(?:(?:문항|문제|questions?)\s*)?"
+    r"(?P<start>[0-9]{1,3})\s*[~\-\u2010-\u2015]\s*(?P<end>[0-9]{1,3})\s*(?:번)?",
+    re.IGNORECASE,
+)
 HWP_TEXT_PASSAGE_RANGE_CUES = (
     "다음",
     "글",
@@ -1558,7 +1563,11 @@ def _extract_hwp_passage_ranges(
             continue
         if not any(cue in line.lower() for cue in HWP_TEXT_PASSAGE_RANGE_CUES):
             continue
-        match = HWP_TEXT_PASSAGE_RANGE_BRACKET_RE.match(line) or HWP_TEXT_PASSAGE_RANGE_KOREAN_RE.match(line)
+        match = (
+            HWP_TEXT_PASSAGE_RANGE_BRACKET_RE.match(line)
+            or HWP_TEXT_PASSAGE_RANGE_KOREAN_RE.match(line)
+            or HWP_TEXT_PASSAGE_RANGE_COMPACT_RE.match(line)
+        )
         if not match:
             continue
         try:
