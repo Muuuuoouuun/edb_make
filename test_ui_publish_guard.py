@@ -52,7 +52,7 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.jsx?v=preflight-issues-20260614", html)
+        self.assertIn("app.jsx?v=passage-publish-20260614", html)
         self.assertIn("publish_guard.js?v=source-overlap-20260614", html)
 
 

@@ -667,6 +667,10 @@ def _session_publish_summary(
     classin_handoff_path: str | Path | None = None,
     classin_handoff_markdown_path: str | Path | None = None,
     classin_preflight: dict[str, Any] | None = None,
+    passage_groups: list[dict[str, Any]] | None = None,
+    passage_group_count: int | None = None,
+    passage_problem_count: int | None = None,
+    cross_page_passage_group_count: int | None = None,
     published_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_edb_path = Path(edb_path).resolve()
@@ -694,6 +698,24 @@ def _session_publish_summary(
     preflight_status = str(preflight.get("status") or "")
     preflight_issue_count = int(preflight.get("issueCount") or preflight.get("issue_count") or 0)
     preflight_passed = bool(preflight.get("passed")) if preflight else False
+    normalized_passage_groups = [
+        dict(group)
+        for group in (passage_groups or [])
+        if isinstance(group, dict)
+    ]
+    if passage_group_count is None:
+        passage_group_count = len(normalized_passage_groups)
+    if passage_problem_count is None:
+        passage_problem_count = sum(
+            int(group.get("problemCount") or group.get("problem_count") or 0)
+            for group in normalized_passage_groups
+        )
+    if cross_page_passage_group_count is None:
+        cross_page_passage_group_count = sum(
+            1
+            for group in normalized_passage_groups
+            if group.get("continuesAcrossPages") or group.get("continues_across_pages")
+        )
     handoff_status, ready_for_classin = _classin_handoff_readiness(resolved_classin_handoff_path)
     if ready_for_classin is None and handoff_status:
         ready_for_classin = handoff_status == "ready_for_classin_review"
@@ -719,6 +741,10 @@ def _session_publish_summary(
         "classinPreflightStatus": preflight_status,
         "classinPreflightPassed": preflight_passed,
         "classinPreflightIssueCount": preflight_issue_count,
+        "passageGroups": normalized_passage_groups,
+        "passageGroupCount": max(0, int(passage_group_count or 0)),
+        "passageProblemCount": max(0, int(passage_problem_count or 0)),
+        "crossPagePassageGroupCount": max(0, int(cross_page_passage_group_count or 0)),
         "edbFileExists": resolved_edb_path.is_file(),
         "outputDirExists": resolved_output_dir.is_dir(),
         "recordCount": int(record_count or record_count_actual),
@@ -749,6 +775,10 @@ def _session_publish_summary(
         "classin_preflight_status": summary["classinPreflightStatus"],
         "classin_preflight_passed": summary["classinPreflightPassed"],
         "classin_preflight_issue_count": summary["classinPreflightIssueCount"],
+        "passage_groups": summary["passageGroups"],
+        "passage_group_count": summary["passageGroupCount"],
+        "passage_problem_count": summary["passageProblemCount"],
+        "cross_page_passage_group_count": summary["crossPagePassageGroupCount"],
         "edb_file_exists": summary["edbFileExists"],
         "output_dir_exists": summary["outputDirExists"],
         "record_count": summary["recordCount"],
@@ -2642,8 +2672,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         classin_preflight: dict[str, Any] = {}
+        handoff_payload: dict[str, Any] = {}
         try:
-            handoff_payload = json.loads(classin_handoff_path.read_text(encoding="utf-8"))
+            raw_handoff_payload = json.loads(classin_handoff_path.read_text(encoding="utf-8"))
+            handoff_payload = raw_handoff_payload if isinstance(raw_handoff_payload, dict) else {}
             if isinstance(handoff_payload.get("classinPreflight"), dict):
                 classin_preflight = dict(handoff_payload["classinPreflight"])
         except (OSError, json.JSONDecodeError):
@@ -2666,6 +2698,29 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             classin_handoff_path=classin_handoff_path,
             classin_handoff_markdown_path=classin_handoff_markdown_path,
             classin_preflight=classin_preflight,
+            passage_groups=(
+                handoff_payload.get("passageGroups")
+                if isinstance(handoff_payload.get("passageGroups"), list)
+                else None
+            ),
+            passage_group_count=(
+                int(handoff_payload.get("passageGroupCount"))
+                if isinstance(handoff_payload.get("passageGroupCount"), (int, float, str))
+                and str(handoff_payload.get("passageGroupCount")).isdigit()
+                else None
+            ),
+            passage_problem_count=(
+                int(handoff_payload.get("passageProblemCount"))
+                if isinstance(handoff_payload.get("passageProblemCount"), (int, float, str))
+                and str(handoff_payload.get("passageProblemCount")).isdigit()
+                else None
+            ),
+            cross_page_passage_group_count=(
+                int(handoff_payload.get("crossPagePassageGroupCount"))
+                if isinstance(handoff_payload.get("crossPagePassageGroupCount"), (int, float, str))
+                and str(handoff_payload.get("crossPagePassageGroupCount")).isdigit()
+                else None
+            ),
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary

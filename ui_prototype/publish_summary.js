@@ -53,6 +53,30 @@
     return `${recordCount}개 자료`;
   }
 
+  function normalizePassageGroups(raw, session = null) {
+    const groups = raw?.passageGroups || raw?.passage_groups || session?.passageGroups || session?.passage_groups || [];
+    return Array.isArray(groups)
+      ? groups.filter(group => group && typeof group === "object")
+      : [];
+  }
+
+  function passageProblemCount(groups) {
+    return groups.reduce((total, group) => {
+      return total + positiveNumber(group.problemCount ?? group.problem_count);
+    }, 0);
+  }
+
+  function crossPagePassageGroupCount(groups) {
+    return groups.filter(group => Boolean(group.continuesAcrossPages || group.continues_across_pages)).length;
+  }
+
+  function formatPassageGroupLabel({ groupCount, problemCount, crossPageCount }) {
+    if (groupCount <= 0) return "";
+    const parts = [`긴 지문 그룹 ${groupCount}`, `${problemCount}문항`];
+    if (crossPageCount > 0) parts.push(`페이지 넘김 ${crossPageCount}`);
+    return parts.join(" · ");
+  }
+
   function normalizePublishSummary(raw, session = null) {
     if (!raw || typeof raw !== "object") return null;
     const recordCount = positiveNumber(raw.recordCount ?? raw.record_count ?? raw.recordCountActual ?? raw.record_count_actual);
@@ -143,6 +167,37 @@
       || raw.classin_preflight_issue_summary_label
       || classinPreflightIssueLabelList.join(" · ")
     ).trim();
+    const passageGroups = normalizePassageGroups(raw, session);
+    const passageGroupCount = positiveNumber(
+      raw.passageGroupCount
+      ?? raw.passage_group_count
+      ?? session?.passageGroupCount
+      ?? session?.passage_group_count
+      ?? passageGroups.length
+    );
+    const normalizedPassageProblemCount = positiveNumber(
+      raw.passageProblemCount
+      ?? raw.passage_problem_count
+      ?? session?.passageProblemCount
+      ?? session?.passage_problem_count
+      ?? passageProblemCount(passageGroups)
+    );
+    const normalizedCrossPagePassageGroupCount = positiveNumber(
+      raw.crossPagePassageGroupCount
+      ?? raw.cross_page_passage_group_count
+      ?? session?.crossPagePassageGroupCount
+      ?? session?.cross_page_passage_group_count
+      ?? crossPagePassageGroupCount(passageGroups)
+    );
+    const passageGroupLabel = String(
+      raw.passageGroupLabel
+      || raw.passage_group_label
+      || formatPassageGroupLabel({
+        groupCount: passageGroupCount,
+        problemCount: normalizedPassageProblemCount,
+        crossPageCount: normalizedCrossPagePassageGroupCount,
+      })
+    ).trim();
     const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
     const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
     if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -171,6 +226,11 @@
       classinPreflightIssueCount,
       classinPreflightIssueLabels: classinPreflightIssueLabelList,
       classinPreflightIssueSummaryLabel,
+      passageGroups,
+      passageGroupCount,
+      passageProblemCount: normalizedPassageProblemCount,
+      crossPagePassageGroupCount: normalizedCrossPagePassageGroupCount,
+      passageGroupLabel,
       edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
       outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
       recordCount,
@@ -214,6 +274,7 @@
     formatPublishHistoryMeta,
     formatRecordCountLabel,
     formatPublishTime,
+    formatPassageGroupLabel,
     normalizePublishSummary,
   };
 });

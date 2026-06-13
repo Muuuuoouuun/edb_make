@@ -1403,6 +1403,45 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(2, summary["classinPreflightIssueCount"])
             self.assertFalse(summary["classinPreflightPassed"])
 
+    def test_publish_summary_exposes_passage_group_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            edb_path = root / "lesson.edb"
+            edb_path.write_bytes(b"placeholder")
+            passage_groups = [
+                {
+                    "id": "page-1-passage-13-16",
+                    "problemCount": 4,
+                    "problemNumbers": [13, 14, 15, 16],
+                    "continuesAcrossPages": True,
+                    "sourcePageIds": ["page-1", "page-2"],
+                }
+            ]
+
+            summary = _session_publish_summary(
+                edb_path=edb_path,
+                output_dir=root,
+                edb_validation={
+                    "outerSize": 1234,
+                    "innerSize": 987,
+                    "pageCountHint": 50,
+                    "recordCountHint": 4,
+                    "recordCountActual": 4,
+                },
+                record_count=4,
+                passage_groups=passage_groups,
+                published_at="2026-06-13T12:00:00+09:00",
+            )
+
+            self.assertEqual(passage_groups, summary["passageGroups"])
+            self.assertEqual(passage_groups, summary["passage_groups"])
+            self.assertEqual(1, summary["passageGroupCount"])
+            self.assertEqual(1, summary["passage_group_count"])
+            self.assertEqual(4, summary["passageProblemCount"])
+            self.assertEqual(4, summary["passage_problem_count"])
+            self.assertEqual(1, summary["crossPagePassageGroupCount"])
+            self.assertEqual(1, summary["cross_page_passage_group_count"])
+
     def test_publish_summary_preserves_core_and_supplemental_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

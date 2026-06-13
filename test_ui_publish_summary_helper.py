@@ -214,6 +214,39 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_passage_group_metrics(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              passageGroups: [
+                {
+                  id: 'page-1-passage-13-16',
+                  problemCount: 4,
+                  problemNumbers: [13, 14, 15, 16],
+                  continuesAcrossPages: true,
+                },
+              ],
+              passageProblemCount: 4,
+              crossPagePassageGroupCount: 1,
+            });
+            if (summary.passageGroupCount !== 1) {
+              throw new Error(`passage group count not normalized: ${summary.passageGroupCount}`);
+            }
+            if (summary.passageProblemCount !== 4) {
+              throw new Error(`passage problem count not normalized: ${summary.passageProblemCount}`);
+            }
+            if (summary.crossPagePassageGroupCount !== 1) {
+              throw new Error(`cross-page group count not normalized: ${summary.crossPagePassageGroupCount}`);
+            }
+            if (summary.passageGroupLabel !== '긴 지문 그룹 1 · 4문항 · 페이지 넘김 1') {
+              throw new Error(`unexpected passage label: ${summary.passageGroupLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_classin_handoff_readiness(self) -> None:
         run_node(
             """

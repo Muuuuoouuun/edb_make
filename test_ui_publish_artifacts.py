@@ -26,7 +26,9 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("summary.classinHandoffStatusLabel", panel)
         self.assertIn("summary.classinPreflightStatusLabel", panel)
         self.assertIn("summary.classinPreflightIssueSummaryLabel", panel)
+        self.assertIn("summary.passageGroupLabel", panel)
         self.assertIn("사전점검", panel)
+        self.assertIn("긴 지문", panel)
         self.assertIn("summary.canMarkClassinReviewComplete", panel)
         self.assertIn("검수 완료", panel)
 
@@ -64,6 +66,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("classinHandoffStatusLabel", helper)
         self.assertIn("classinPreflightStatus", helper)
         self.assertIn("classinPreflightStatusLabel", helper)
+        self.assertIn("passageGroupCount", helper)
+        self.assertIn("passageGroupLabel", helper)
         self.assertIn("canMarkClassinReviewComplete", helper)
 
     def test_app_posts_classin_review_completion(self) -> None:
@@ -77,8 +81,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
     def test_board_uses_publish_artifact_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("publish_summary.js?v=preflight-issues-20260614", html)
-        self.assertIn("app.jsx?v=preflight-issues-20260614", html)
+        self.assertIn("publish_summary.js?v=passage-publish-20260614", html)
+        self.assertIn("app.jsx?v=passage-publish-20260614", html)
 
 
 if __name__ == "__main__":

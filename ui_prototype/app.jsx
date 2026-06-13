@@ -1671,6 +1671,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
         {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
         {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
         {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
+        {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
         {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
       </div>
       <div className="publish-result-actions">
@@ -3574,6 +3575,54 @@ function normalizePublishSummary(raw, session = null){
     || raw.classin_preflight_issue_summary_label
     || classinPreflightIssueLabelList.join(' · ')
   ).trim();
+  const passageGroupsRaw = raw.passageGroups || raw.passage_groups || session?.passageGroups || session?.passage_groups || [];
+  const passageGroups = Array.isArray(passageGroupsRaw)
+    ? passageGroupsRaw.filter(group => group && typeof group === 'object')
+    : [];
+  const passageGroupCount = Number(
+    raw.passageGroupCount
+    ?? raw.passage_group_count
+    ?? session?.passageGroupCount
+    ?? session?.passage_group_count
+    ?? passageGroups.length
+  );
+  const passageProblemCountFallback = passageGroups.reduce((total, group) => {
+    const count = Number(group.problemCount ?? group.problem_count ?? 0);
+    return total + (Number.isFinite(count) ? Math.max(0, count) : 0);
+  }, 0);
+  const passageProblemCount = Number(
+    raw.passageProblemCount
+    ?? raw.passage_problem_count
+    ?? session?.passageProblemCount
+    ?? session?.passage_problem_count
+    ?? passageProblemCountFallback
+  );
+  const crossPagePassageGroupCountFallback = passageGroups.filter(group => (
+    group.continuesAcrossPages || group.continues_across_pages
+  )).length;
+  const crossPagePassageGroupCount = Number(
+    raw.crossPagePassageGroupCount
+    ?? raw.cross_page_passage_group_count
+    ?? session?.crossPagePassageGroupCount
+    ?? session?.cross_page_passage_group_count
+    ?? crossPagePassageGroupCountFallback
+  );
+  const normalizedPassageGroupCount = Number.isFinite(passageGroupCount) ? Math.max(0, passageGroupCount) : 0;
+  const normalizedPassageProblemCount = Number.isFinite(passageProblemCount) ? Math.max(0, passageProblemCount) : 0;
+  const normalizedCrossPagePassageGroupCount = Number.isFinite(crossPagePassageGroupCount)
+    ? Math.max(0, crossPagePassageGroupCount)
+    : 0;
+  const passageGroupLabel = String(
+    raw.passageGroupLabel
+    || raw.passage_group_label
+    || (normalizedPassageGroupCount > 0
+      ? [
+        `긴 지문 그룹 ${normalizedPassageGroupCount}`,
+        `${normalizedPassageProblemCount}문항`,
+        normalizedCrossPagePassageGroupCount > 0 ? `페이지 넘김 ${normalizedCrossPagePassageGroupCount}` : '',
+      ].filter(Boolean).join(' · ')
+      : '')
+  ).trim();
   const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
   const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
   if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -3606,6 +3655,11 @@ function normalizePublishSummary(raw, session = null){
     classinPreflightIssueCount: Number.isFinite(classinPreflightIssueCount) ? Math.max(0, classinPreflightIssueCount) : 0,
     classinPreflightIssueLabels: classinPreflightIssueLabelList,
     classinPreflightIssueSummaryLabel,
+    passageGroups,
+    passageGroupCount: normalizedPassageGroupCount,
+    passageProblemCount: normalizedPassageProblemCount,
+    crossPagePassageGroupCount: normalizedCrossPagePassageGroupCount,
+    passageGroupLabel,
     edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
     outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
     recordCount: fallbackRecordCount,
