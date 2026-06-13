@@ -654,6 +654,21 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                 {reviewSummary.passageContinuationBlockCount > 0 ? ` · 이어짐 ${reviewSummary.passageContinuationBlockCount}` : ''}
               </button>
             )}
+            {reviewSummary.passageReviewItemCount > 0 && (
+              <button
+                type="button"
+                className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
+                title={[
+                  '긴 지문 검수 큐',
+                  reviewSummary.passageReviewLabel,
+                  reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
+                ].filter(Boolean).join(' · ')}
+                aria-pressed={reviewFilter === 'passage'}
+                onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
+              >
+                {reviewSummary.passageReviewLabel}
+              </button>
+            )}
             {reviewSummary.topRiskFlags.map(item => (
               <button
                 key={item.flag}
@@ -3428,10 +3443,49 @@ function collectPassageGroupSummary(session){
   };
 }
 
+function collectPassageReviewSummary(session){
+  const rawItems = Array.isArray(session?.passageReviewItems)
+    ? session.passageReviewItems
+    : Array.isArray(session?.passage_review_items)
+      ? session.passage_review_items
+      : [];
+  const passageReviewItems = rawItems.filter(item => item && typeof item === 'object');
+  const explicitCount = Number(session?.passageReviewItemCount ?? session?.passage_review_item_count);
+  const passageReviewItemCount = Number.isFinite(explicitCount)
+    ? Math.max(0, explicitCount)
+    : passageReviewItems.length;
+  const explicitCrossPageCount = Number(
+    session?.crossPagePassageReviewItemCount
+    ?? session?.cross_page_passage_review_item_count
+  );
+  const crossPagePassageReviewItemCount = Number.isFinite(explicitCrossPageCount)
+    ? Math.max(0, explicitCrossPageCount)
+    : passageReviewItems.filter(item => item.continuesAcrossPages || item.continues_across_pages).length;
+  const passageReviewLabel = passageReviewItemCount > 0
+    ? [
+      `긴 지문 검수 ${passageReviewItemCount}`,
+      crossPagePassageReviewItemCount > 0 ? `페이지 넘김 ${crossPagePassageReviewItemCount}` : '',
+    ].filter(Boolean).join(' · ')
+    : '';
+  const passageReviewPreview = passageReviewItems
+    .map(item => String(item.numberLabel || item.number_label || item.groupId || item.group_id || '').trim())
+    .filter(Boolean)
+    .slice(0, 5)
+    .join(', ');
+  return {
+    passageReviewItems,
+    passageReviewItemCount,
+    crossPagePassageReviewItemCount,
+    passageReviewLabel,
+    passageReviewPreview,
+  };
+}
+
 function sessionReviewSummary(session){
   const raw = session?.review_summary || session?.reviewSummary || {};
   const counts = sessionProblemCounts(session);
   const passageSummary = collectPassageGroupSummary(session);
+  const passageReviewSummary = collectPassageReviewSummary(session);
   const fallbackStatusCounts = collectReviewStatusCounts(session);
   const rawStatusCounts = raw.reviewStatusCounts && typeof raw.reviewStatusCounts === 'object'
     ? raw.reviewStatusCounts
@@ -3569,6 +3623,11 @@ function sessionReviewSummary(session){
     passageProblemCount: passageSummary.passageProblemCount,
     crossPagePassageGroupCount: passageSummary.crossPagePassageGroupCount,
     passageContinuationBlockCount: passageSummary.passageContinuationBlockCount,
+    passageReviewItems: passageReviewSummary.passageReviewItems,
+    passageReviewItemCount: passageReviewSummary.passageReviewItemCount,
+    crossPagePassageReviewItemCount: passageReviewSummary.crossPagePassageReviewItemCount,
+    passageReviewLabel: passageReviewSummary.passageReviewLabel,
+    passageReviewPreview: passageReviewSummary.passageReviewPreview,
   };
 }
 

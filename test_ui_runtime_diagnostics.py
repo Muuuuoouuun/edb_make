@@ -117,6 +117,24 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("passage_cross_page_merge_check", risk_meta)
         self.assertIn("긴 지문 병합 확인", risk_meta)
 
+    def test_review_summary_surfaces_passage_review_queue(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]
+        review_stage = review_stage.split("{reviewSummary.warningPreview &&", 1)[0]
+        queue_helper = source.split("function collectPassageReviewSummary(session)", 1)[1]
+        queue_helper = queue_helper.split("function sessionReviewSummary(session)", 1)[0]
+        summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
+        summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
+
+        self.assertIn("긴 지문 검수", review_stage)
+        self.assertIn("passageReviewLabel", review_stage)
+        self.assertIn("passageReviewItems", queue_helper)
+        self.assertIn("passage_review_items", queue_helper)
+        self.assertIn("passageReviewItemCount", queue_helper)
+        self.assertIn("crossPagePassageReviewItemCount", queue_helper)
+        self.assertIn("passageReviewItems", summary_helper)
+        self.assertIn("passageReviewLabel", summary_helper)
+
 
 if __name__ == "__main__":
     unittest.main()
