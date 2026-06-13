@@ -419,6 +419,45 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(["평가원 국어 양식.hwp"], seen_sources)
         self.assertEqual(["평가원 국어 양식.hwp"], [row["file"] for row in rows])
 
+    def test_run_batch_writes_markdown_report(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_dir = root / "samples"
+            source_dir.mkdir()
+            sample = source_dir / "평가원 영어 양식.hwp"
+            sample.write_bytes(b"hwp")
+            output_dir = root / "out"
+
+            def fake_post_export(**_kwargs):
+                return {
+                    "ok": True,
+                    "edbPath": str(output_dir / "mvp_board.edb"),
+                    "edbValidation": {
+                        "validated": True,
+                        "recordCountActual": 45,
+                        "recordCountHint": 45,
+                    },
+                    "session": {
+                        "pages": [],
+                        "problems": [],
+                        "reviewSummary": {},
+                    },
+                }
+
+            with mock.patch.object(verify_hwp_samples, "post_export", side_effect=fake_post_export):
+                verify_hwp_samples.run_batch(
+                    source_dir=source_dir,
+                    output_dir=output_dir,
+                    export_edb=True,
+                )
+
+            markdown = (output_dir / "summary.md").read_text(encoding="utf-8")
+
+        self.assertIn("# HWP Batch Verification", markdown)
+        self.assertIn("Batch summary: samples 1/1 OK", markdown)
+        self.assertIn("| file | ok | problems | pages | cache | review | risk | edb | elapsed |", markdown)
+        self.assertIn("| 평가원 영어 양식.hwp | OK | 0 | 0 | - | - | - | OK 45/45 |", markdown)
+
     def test_post_export_sends_export_edb_flag(self):
         requests = []
 

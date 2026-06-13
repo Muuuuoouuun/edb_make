@@ -579,9 +579,14 @@ def run_batch(
             }
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False), flush=True)
+    batch_summary = summarize_batch(rows)
     (output_dir / "summary.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "batch_summary.json").write_text(
-        json.dumps(summarize_batch(rows), ensure_ascii=False, indent=2),
+        json.dumps(batch_summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (output_dir / "summary.md").write_text(
+        format_markdown_report(rows, batch_summary),
         encoding="utf-8",
     )
     return rows
@@ -638,6 +643,20 @@ def format_markdown_table(rows: list[dict[str, Any]]) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def format_markdown_report(rows: list[dict[str, Any]], summary: dict[str, Any] | None = None) -> str:
+    resolved_summary = summary if summary is not None else summarize_batch(rows)
+    return "\n".join(
+        [
+            "# HWP Batch Verification",
+            "",
+            format_batch_summary(resolved_summary),
+            "",
+            format_markdown_table(rows),
+            "",
+        ]
+    )
 
 
 def format_batch_summary(summary: dict[str, Any]) -> str:
