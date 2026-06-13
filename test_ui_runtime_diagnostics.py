@@ -60,6 +60,30 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("duplicate_problem_number_groups", summary_helper)
         self.assertIn("duplicateProblemNumberLabel", summary_helper)
 
+    def test_review_summary_surfaces_passage_groups(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+        passage_id_helper = source.split("function passageGroupIdFor(problem)", 1)[1]
+        passage_id_helper = passage_id_helper.split("function isPassageProblem(problem)", 1)[0]
+        passage_helper = source.split("function collectPassageGroupSummary(session)", 1)[1]
+        passage_helper = passage_helper.split("function sessionReviewSummary(session)", 1)[0]
+        summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
+        summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
+
+        self.assertIn("'passage', '긴 지문'", review_stage)
+        self.assertIn("긴 지문 그룹", review_stage)
+        self.assertIn("passageGroupCount", review_stage)
+        self.assertIn("review-bbox-passage", review_stage)
+        self.assertIn("review-bbox-passage-tag", review_stage)
+        self.assertIn(".review-bbox-passage", board_html)
+        self.assertIn("passageGroupCount", summary_helper)
+        self.assertIn("passageProblemCount", summary_helper)
+        self.assertIn("passageGroupIdFor(problem)", passage_helper)
+        self.assertIn("passageGroupId", passage_id_helper)
+        self.assertIn("passage_group_id", passage_id_helper)
+
 
 if __name__ == "__main__":
     unittest.main()

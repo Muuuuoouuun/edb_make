@@ -27,6 +27,21 @@
     return id.endsWith("-continuation");
   }
 
+  function passageGroupIdFor(problem) {
+    if (!problem || typeof problem !== "object") return "";
+    return String(
+      problem.passageGroupId
+      || problem.passage_group_id
+      || problem.metadata?.passageGroupId
+      || problem.metadata?.passage_group_id
+      || ""
+    ).trim();
+  }
+
+  function isPassageProblem(problem) {
+    return Boolean(passageGroupIdFor(problem));
+  }
+
   function deriveProblemStatus(problem) {
     const rawStatus = String(problem?.reviewStatus || problem?.review_status || "").trim();
     if (rawStatus === "normal" || rawStatus === "check_needed" || rawStatus === "failed") {
@@ -42,18 +57,26 @@
     const normalizedFilter = String(filter || "all").trim() || "all";
     if (normalizedFilter === "all") return true;
     if (normalizedFilter === "supplemental") return isSupplementalProblem(problem);
+    if (normalizedFilter === "passage") return isPassageProblem(problem);
     return deriveProblemStatus(problem) === normalizedFilter;
   }
 
   function countReviewFilters(problems) {
-    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, supplemental: 0 };
+    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, supplemental: 0, passage: 0, passageGroups: 0 };
     if (!Array.isArray(problems)) return counts;
+    const passageGroups = new Set();
     problems.forEach(problem => {
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
       if (isSupplementalProblem(problem)) counts.supplemental += 1;
+      const passageGroupId = passageGroupIdFor(problem);
+      if (passageGroupId) {
+        counts.passage += 1;
+        passageGroups.add(passageGroupId);
+      }
     });
+    counts.passageGroups = passageGroups.size;
     return counts;
   }
 
@@ -61,7 +84,9 @@
     countReviewFilters,
     deriveProblemStatus,
     hasRiskFlag,
+    isPassageProblem,
     isSupplementalProblem,
+    passageGroupIdFor,
     problemMatchesReviewFilter,
     riskFlagsFor,
   };

@@ -31,6 +31,24 @@ class TestUiReviewFilterHelper(unittest.TestCase):
             """
         )
 
+    def test_passage_filter_matches_shared_passage_problem_variants(self) -> None:
+        run_node(
+            """
+            const { problemMatchesReviewFilter } = require('./ui_prototype/review_filters.js');
+            const cases = [
+              { id: 'p1', passageGroupId: 'page-1-passage-13-16' },
+              { id: 'p2', passage_group_id: 'page-1-passage-13-16' },
+              { id: 'p3', metadata: { passage_group_id: 'page-1-passage-13-16' } },
+            ];
+            if (!cases.every(problem => problemMatchesReviewFilter(problem, 'passage'))) {
+              throw new Error('passage filter should match shared passage variants');
+            }
+            if (problemMatchesReviewFilter({ id: 'p4', reviewStatus: 'normal' }, 'passage')) {
+              throw new Error('normal ungrouped problem should not match passage filter');
+            }
+            """
+        )
+
     def test_status_filters_still_match_review_status(self) -> None:
         run_node(
             """
@@ -62,6 +80,25 @@ class TestUiReviewFilterHelper(unittest.TestCase):
               if (counts[key] !== value) {
                 throw new Error(`${key} expected ${value}, got ${counts[key]}`);
               }
+            }
+            """
+        )
+
+    def test_count_review_filters_includes_passage_problem_and_group_counts(self) -> None:
+        run_node(
+            """
+            const { countReviewFilters } = require('./ui_prototype/review_filters.js');
+            const counts = countReviewFilters([
+              { id: 'p13', reviewStatus: 'normal', passageGroupId: 'page-1-passage-13-16' },
+              { id: 'p14', reviewStatus: 'normal', passage_group_id: 'page-1-passage-13-16' },
+              { id: 'p21', reviewStatus: 'normal', passageGroupId: 'page-2-passage-21-22' },
+              { id: 'p1', reviewStatus: 'normal' },
+            ]);
+            if (counts.passage !== 3) {
+              throw new Error(`passage expected 3, got ${counts.passage}`);
+            }
+            if (counts.passageGroups !== 2) {
+              throw new Error(`passageGroups expected 2, got ${counts.passageGroups}`);
             }
             """
         )

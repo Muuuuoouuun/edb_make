@@ -292,13 +292,20 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const statusCounts = useMemo(() => {
     const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(session?.problems || []);
     if (helperCounts) return helperCounts;
-    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
+    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
+    const passageGroups = new Set();
     (session?.problems || []).forEach(problem => {
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
+      const passageGroupId = passageGroupIdFor(problem);
+      if (passageGroupId) {
+        counts.passage += 1;
+        passageGroups.add(passageGroupId);
+      }
     });
     counts.supplemental = (session?.problems || []).filter(isSupplementalProblem).length;
+    counts.passageGroups = passageGroups.size;
     return counts;
   }, [session]);
   const sessionCounts = useMemo(() => sessionProblemCounts(session), [session]);
@@ -444,6 +451,9 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   ];
   if (sessionCounts.supplemental > 0) {
     filterOptions.push(['supplemental', '자료', sessionCounts.supplemental]);
+  }
+  if (statusCounts.passage > 0) {
+    filterOptions.push(['passage', '긴 지문', statusCounts.passage]);
   }
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
@@ -616,6 +626,17 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                 중복 번호 {reviewSummary.duplicateProblemNumberLabel}
               </span>
             )}
+            {reviewSummary.passageGroupCount > 0 && (
+              <button
+                type="button"
+                className={`review-summary-chip risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
+                title={`${reviewSummary.passageProblemCount}개 문항이 긴 지문 그룹에 연결되어 있습니다.`}
+                aria-pressed={reviewFilter === 'passage'}
+                onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
+              >
+                긴 지문 그룹 {reviewSummary.passageGroupCount}
+              </button>
+            )}
             {reviewSummary.topRiskFlags.map(item => (
               <button
                 key={item.flag}
@@ -746,12 +767,16 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                     const statusMeta = reviewStatusMeta(status);
                     const isRisky = status !== 'normal';
                     const isSplitting = splitTarget === prob.id;
+                    const passageGroupId = passageGroupIdFor(prob);
+                    const isPassage = Boolean(passageGroupId);
                     const order = orderMap.get(prob.id);
                     const tooltipParts = [prob.title || ''];
                     const problemRiskFlags = riskFlagsFor(prob);
                     if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
+                    if (isPassage) tooltipParts.push(`긴 지문 ${passageGroupId}`);
                     const classes = [
                       'review-bbox',
+                      isPassage ? 'review-bbox-passage' : '',
                       isSelected ? 'selected' : '',
                       isActive ? 'active' : '',
                       isRisky ? 'risky' : '',
@@ -774,6 +799,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                       >
                         <div className="review-bbox-label">
                           {String(order || '?').padStart(2, '0')}
+                          {isPassage && <span className="review-bbox-passage-tag">지문</span>}
                           {isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
                         {isSplitting && (
@@ -3029,12 +3055,31 @@ function isSupplementalProblem(problem){
   return id.endsWith('-continuation');
 }
 
+function passageGroupIdFor(problem){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.passageGroupIdFor;
+  if (typeof helper === 'function') return helper(problem);
+  return String(
+    problem?.passageGroupId
+    || problem?.passage_group_id
+    || problem?.metadata?.passageGroupId
+    || problem?.metadata?.passage_group_id
+    || ''
+  ).trim();
+}
+
+function isPassageProblem(problem){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.isPassageProblem;
+  if (typeof helper === 'function') return helper(problem);
+  return Boolean(passageGroupIdFor(problem));
+}
+
 function problemMatchesReviewFilter(problem, filter){
   const helper = globalThis.EDB_REVIEW_FILTERS?.problemMatchesReviewFilter;
   if (typeof helper === 'function') return helper(problem, filter);
   const normalizedFilter = String(filter || 'all').trim() || 'all';
   if (normalizedFilter === 'all') return true;
   if (normalizedFilter === 'supplemental') return isSupplementalProblem(problem);
+  if (normalizedFilter === 'passage') return isPassageProblem(problem);
   return deriveProblemStatus(problem) === normalizedFilter;
 }
 
@@ -3190,9 +3235,53 @@ function countActionableReviewMatches(session, actionableRiskFlagCounts, failedC
   return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
 }
 
+function collectPassageGroupSummary(session){
+  const groups = new Map();
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  problems.forEach(problem => {
+    const groupId = passageGroupIdFor(problem);
+    if (!groupId) return;
+    const group = groups.get(groupId) || {
+      id: groupId,
+      problemCount: 0,
+      sourcePageIds: new Set(),
+      range: problem.passageRange || problem.passage_range || null,
+      continuesAcrossPages: false,
+    };
+    group.problemCount += 1;
+    const rawPageIds = problem.passageSourcePageIds || problem.passage_source_page_ids || [];
+    if (Array.isArray(rawPageIds)) {
+      rawPageIds.forEach(pageId => {
+        const normalized = String(pageId || '').trim();
+        if (normalized) group.sourcePageIds.add(normalized);
+      });
+    }
+    const sourcePageId = String(problem.sourcePageId || problem.source_page_id || '').trim();
+    if (sourcePageId) group.sourcePageIds.add(sourcePageId);
+    group.continuesAcrossPages = group.continuesAcrossPages
+      || Boolean(problem.passageContinuesAcrossPages || problem.passage_continues_across_pages);
+    groups.set(groupId, group);
+  });
+  const items = Array.from(groups.values()).map(group => ({
+    id: group.id,
+    problemCount: group.problemCount,
+    sourcePageIds: Array.from(group.sourcePageIds),
+    sourcePageCount: group.sourcePageIds.size,
+    range: group.range,
+    continuesAcrossPages: group.continuesAcrossPages || group.sourcePageIds.size > 1,
+  }));
+  return {
+    passageGroups: items,
+    passageGroupCount: items.length,
+    passageProblemCount: items.reduce((total, group) => total + group.problemCount, 0),
+    crossPagePassageGroupCount: items.filter(group => group.continuesAcrossPages).length,
+  };
+}
+
 function sessionReviewSummary(session){
   const raw = session?.review_summary || session?.reviewSummary || {};
   const counts = sessionProblemCounts(session);
+  const passageSummary = collectPassageGroupSummary(session);
   const fallbackStatusCounts = collectReviewStatusCounts(session);
   const rawStatusCounts = raw.reviewStatusCounts && typeof raw.reviewStatusCounts === 'object'
     ? raw.reviewStatusCounts
@@ -3303,6 +3392,10 @@ function sessionReviewSummary(session){
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
     duplicateProblemNumberLabel,
+    passageGroups: passageSummary.passageGroups,
+    passageGroupCount: passageSummary.passageGroupCount,
+    passageProblemCount: passageSummary.passageProblemCount,
+    crossPagePassageGroupCount: passageSummary.crossPagePassageGroupCount,
   };
 }
 

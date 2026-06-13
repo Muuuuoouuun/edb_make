@@ -2120,6 +2120,14 @@
     background: rgba(47,111,237,.16);
     border-color: var(--accent);
   }
+  .review-bbox-passage{
+    border-color: rgba(15,118,110,.78);
+    background: rgba(15,118,110,.08);
+  }
+  .review-bbox-passage:hover{
+    border-color: #0f766e;
+    background: rgba(15,118,110,.16);
+  }
   .review-bbox.active{
     border-color: var(--chalk-warm);
     background: rgba(246,211,101,.18);
@@ -2160,6 +2168,12 @@
   .review-bbox-risk{
     font-size: 9px;
     background: rgba(255,255,255,.25);
+    padding: 0 4px;
+    border-radius: 2px;
+  }
+  .review-bbox-passage-tag{
+    font-size: 9px;
+    background: rgba(255,255,255,.28);
     padding: 0 4px;
     border-radius: 2px;
   }
@@ -2709,10 +2723,10 @@
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
 <script src="reorder.js?v=reorder-20260612"></script>
-<script src="review_filters.js?v=review-filters-20260613"></script>
+<script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=publish-summary-preflight-20260614"></script>
 <script type="text/babel" src="art.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="app.jsx?v=classin-preflight-20260614"></script>
+<script type="text/babel" src="app.jsx?v=passage-ui-20260614"></script>
 </body>
 </html>

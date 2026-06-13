@@ -22,7 +22,7 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.jsx?v=classin-preflight-20260614", html)
+        self.assertIn("app.jsx?v=passage-ui-20260614", html)
 
 
 if __name__ == "__main__":
