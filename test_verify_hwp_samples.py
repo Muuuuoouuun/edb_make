@@ -458,6 +458,51 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(1, summary["cross_page_passage_group_count"])
         self.assertFalse(summary["needs_review"])
 
+    def test_summarize_export_response_infers_passage_groups_from_problem_metadata(self):
+        payload = {
+            "ok": True,
+            "session": {
+                "pages": [],
+                "problems": [
+                    {
+                        "id": "page-002-problem-1",
+                        "problemNumber": 4,
+                        "passageGroupId": "hwp-preview-passage-4-9",
+                        "passageRole": "child_question",
+                        "sourcePageId": "page-002",
+                    },
+                    {
+                        "id": "page-003-problem-1",
+                        "problemNumber": 5,
+                        "passageGroupId": "hwp-preview-passage-4-9",
+                        "passageRole": "child_question",
+                        "sourcePageId": "page-003",
+                    },
+                    {
+                        "id": "page-003-problem-2",
+                        "problemNumber": 6,
+                        "passageGroupId": "hwp-preview-passage-4-9",
+                        "passageRole": "child_question",
+                        "sourcePageId": "page-003",
+                    },
+                ],
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("passage-metadata.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+        )
+
+        self.assertEqual(1, summary["passage_group_count"])
+        self.assertEqual(3, summary["passage_problem_count"])
+        self.assertEqual(0, summary["passage_fragment_count"])
+        self.assertEqual(1, summary["cross_page_passage_group_count"])
+
     def test_summarize_export_response_prefers_review_summary_hwp_segmentation_counts(self):
         payload = {
             "ok": True,

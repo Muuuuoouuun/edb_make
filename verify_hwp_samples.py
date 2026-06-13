@@ -197,6 +197,74 @@ def _passage_group_child_count(group: dict[str, Any]) -> int:
     return max(0, raw_count - fragment_count)
 
 
+def _infer_passage_metrics_from_problems(problems: Any) -> dict[str, int]:
+    if not isinstance(problems, list):
+        return {
+            "passage_group_count": 0,
+            "passage_problem_count": 0,
+            "passage_fragment_count": 0,
+            "cross_page_passage_group_count": 0,
+        }
+
+    groups: dict[str, dict[str, Any]] = {}
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        group_id = str(problem.get("passageGroupId") or problem.get("passage_group_id") or "").strip()
+        if not group_id:
+            continue
+        group = groups.setdefault(
+            group_id,
+            {
+                "child_keys": set(),
+                "fragment_count": 0,
+                "source_page_ids": set(),
+                "cross_page_hint": False,
+            },
+        )
+        role = str(problem.get("passageRole") or problem.get("passage_role") or "").strip()
+        if role == "passage_fragment":
+            group["fragment_count"] += 1
+        else:
+            child_key = (
+                problem.get("problemNumber")
+                or problem.get("problem_number")
+                or problem.get("title")
+                or problem.get("id")
+                or problem.get("problem_id")
+            )
+            child_key_text = str(child_key or "").strip()
+            if child_key_text:
+                group["child_keys"].add(child_key_text)
+        source_page_id = str(
+            problem.get("sourcePageId")
+            or problem.get("source_page_id")
+            or problem.get("pageId")
+            or problem.get("page_id")
+            or ""
+        ).strip()
+        if source_page_id:
+            group["source_page_ids"].add(source_page_id)
+        risk_flags = {
+            str(flag or "").strip()
+            for flag in (problem.get("riskFlags") or problem.get("risk_flags") or [])
+            if str(flag or "").strip()
+        }
+        if "passage_cross_page_merge_check" in risk_flags:
+            group["cross_page_hint"] = True
+
+    return {
+        "passage_group_count": len(groups),
+        "passage_problem_count": sum(len(group["child_keys"]) for group in groups.values()),
+        "passage_fragment_count": sum(int(group["fragment_count"]) for group in groups.values()),
+        "cross_page_passage_group_count": sum(
+            1
+            for group in groups.values()
+            if len(group["source_page_ids"]) > 1 or bool(group["cross_page_hint"])
+        ),
+    }
+
+
 def _passage_metrics(payload: dict[str, Any], session: dict[str, Any], review_summary: dict[str, Any]) -> dict[str, int]:
     sources = [
         session,
@@ -231,6 +299,13 @@ def _passage_metrics(payload: dict[str, Any], session: dict[str, Any], review_su
     problem_count = first_count("passageProblemCount", "passage_problem_count")
     cross_page_count = first_count("crossPagePassageGroupCount", "cross_page_passage_group_count")
     fragment_count = first_count("passageFragmentCount", "passage_fragment_count", "fragmentProblemCount", "fragment_problem_count")
+    inferred_problem_metrics = _infer_passage_metrics_from_problems(session.get("problems"))
+    if not group_count:
+        group_count = inferred_problem_metrics["passage_group_count"]
+    if not problem_count:
+        problem_count = inferred_problem_metrics["passage_problem_count"]
+    if not cross_page_count:
+        cross_page_count = inferred_problem_metrics["cross_page_passage_group_count"]
     if groups:
         if not problem_count:
             problem_count = sum(_passage_group_child_count(group) for group in groups)
@@ -246,14 +321,7 @@ def _passage_metrics(payload: dict[str, Any], session: dict[str, Any], review_su
                 for group in groups
             )
     if not fragment_count:
-        problems = session.get("problems")
-        if isinstance(problems, list):
-            fragment_count = sum(
-                1
-                for problem in problems
-                if isinstance(problem, dict)
-                and str(problem.get("passageRole") or problem.get("passage_role") or "").strip() == "passage_fragment"
-            )
+        fragment_count = inferred_problem_metrics["passage_fragment_count"]
     return {
         "passage_group_count": group_count,
         "passage_problem_count": problem_count,
