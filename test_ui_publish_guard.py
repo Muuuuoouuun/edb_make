@@ -44,7 +44,7 @@ class TestUiPublishGuard(unittest.TestCase):
         on_publish = source.split("const onPublish = async () => {", 1)[1]
         on_publish = on_publish.split("  return (", 1)[0]
 
-        self.assertIn("duplicateProblemNumberGroups", on_publish)
+        self.assertIn("blockingDuplicateProblemNumberGroups", on_publish)
         self.assertIn("중복 문항 번호", on_publish)
         self.assertIn("제작을 멈췄어요", on_publish)
         self.assertIn("setView('review')", on_publish)

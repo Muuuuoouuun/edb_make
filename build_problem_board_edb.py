@@ -2449,6 +2449,13 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
             message = f"문항 번호 {label}가 각 {min_occurrences}회 등장합니다."
         else:
             message = f"문항 번호 {label} 범위에서 중복 번호가 {sum(counts[number] - 1 for number in numbers)}개 있습니다."
+        classification = "alternate_section" if _duplicate_number_group_looks_like_alternate_section(
+            start=start,
+            end=end,
+            min_occurrences=min_occurrences,
+            max_occurrences=max_occurrences,
+        ) else "duplicate"
+        blocking = classification != "alternate_section"
         groups.append(
             {
                 "numberStart": start,
@@ -2460,10 +2467,29 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
                 "totalRecordCount": sum(counts[number] for number in numbers),
                 "sourcePageIds": _ordered_unique_strings(item["sourcePageId"] for item in group_items),
                 "problemIds": _ordered_unique_strings(item["problemId"] for item in group_items),
+                "classification": classification,
+                "blocking": blocking,
                 "message": message,
             }
         )
     return groups
+
+
+def _duplicate_number_group_looks_like_alternate_section(
+    *,
+    start: int,
+    end: int,
+    min_occurrences: int,
+    max_occurrences: int,
+) -> bool:
+    range_size = end - start + 1
+    return (
+        start >= 20
+        and end <= 45
+        and 6 <= range_size <= 12
+        and min_occurrences == max_occurrences
+        and max_occurrences in {2, 3}
+    )
 
 
 DUPLICATE_PROBLEM_NUMBER_RISK_FLAG = "duplicate_problem_number"
@@ -2476,6 +2502,8 @@ def _mark_duplicate_problem_number_review_flags(
 ) -> None:
     duplicate_problem_ids: set[str] = set()
     for group in groups:
+        if group.get("blocking") is False:
+            continue
         for problem_id in group.get("problemIds") or group.get("problem_ids") or []:
             problem_id_text = str(problem_id or "").strip()
             if problem_id_text:
@@ -2553,6 +2581,8 @@ def _mark_source_problem_overlap_review_flags(
 def _duplicate_problem_number_note(groups: Sequence[dict[str, Any]]) -> str:
     parts: list[str] = []
     for group in groups:
+        if group.get("blocking") is False:
+            continue
         label = str(group.get("numberLabel") or "").strip()
         occurrences = int(group.get("occurrencesPerNumber") or 0)
         if label and occurrences > 1:
@@ -3177,6 +3207,9 @@ def build_ui_session(
     problem_counts = _session_problem_count_payload(problems)
     duplicate_problem_number_groups = _session_duplicate_problem_number_groups(problems)
     _mark_duplicate_problem_number_review_flags(problems, duplicate_problem_number_groups)
+    blocking_duplicate_problem_number_groups = [
+        group for group in duplicate_problem_number_groups if group.get("blocking") is not False
+    ]
     source_problem_overlap_groups = _session_source_problem_overlap_groups(problems)
     _mark_source_problem_overlap_review_flags(problems, source_problem_overlap_groups)
 
@@ -3196,6 +3229,10 @@ def build_ui_session(
         "duplicateProblemNumberGroups": duplicate_problem_number_groups,
         "duplicate_problem_number_group_count": len(duplicate_problem_number_groups),
         "duplicateProblemNumberGroupCount": len(duplicate_problem_number_groups),
+        "blocking_duplicate_problem_number_groups": blocking_duplicate_problem_number_groups,
+        "blockingDuplicateProblemNumberGroups": blocking_duplicate_problem_number_groups,
+        "blocking_duplicate_problem_number_group_count": len(blocking_duplicate_problem_number_groups),
+        "blockingDuplicateProblemNumberGroupCount": len(blocking_duplicate_problem_number_groups),
         "source_problem_overlap_groups": source_problem_overlap_groups,
         "sourceProblemOverlapGroups": source_problem_overlap_groups,
         "source_problem_overlap_group_count": len(source_problem_overlap_groups),
@@ -3256,6 +3293,17 @@ def write_classin_handoff_manifest(
     )
     if not isinstance(duplicate_problem_number_groups, list):
         duplicate_problem_number_groups = []
+    blocking_duplicate_problem_number_groups = (
+        ui_session.get("blockingDuplicateProblemNumberGroups")
+        or ui_session.get("blocking_duplicate_problem_number_groups")
+        or [
+            group
+            for group in duplicate_problem_number_groups
+            if isinstance(group, dict) and group.get("blocking") is not False
+        ]
+    )
+    if not isinstance(blocking_duplicate_problem_number_groups, list):
+        blocking_duplicate_problem_number_groups = []
     duplicate_problem_number_note = _duplicate_problem_number_note(duplicate_problem_number_groups)
     classin_preflight = _classin_handoff_preflight(ui_session)
     raw_problems = ui_session.get("problems")
@@ -3264,7 +3312,7 @@ def write_classin_handoff_manifest(
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
     )
-    ready_for_classin = bool(classin_preflight.get("passed")) and not duplicate_problem_number_groups
+    ready_for_classin = bool(classin_preflight.get("passed")) and not blocking_duplicate_problem_number_groups
     handoff_status = "ready_for_classin_review" if ready_for_classin else "needs_attention_before_classin"
     payload = {
         "status": handoff_status,
@@ -3285,6 +3333,7 @@ def write_classin_handoff_manifest(
         "cropFormat": str(summary.get("crop_format") or ui_session.get("crop_format") or ""),
         "boardTheme": str(summary.get("board_theme") or ui_session.get("board_theme") or ""),
         "duplicateProblemNumberGroups": duplicate_problem_number_groups,
+        "blockingDuplicateProblemNumberGroups": blocking_duplicate_problem_number_groups,
         "duplicateProblemNumberNote": duplicate_problem_number_note,
         "passageGroups": passage_groups,
         "passageGroupCount": len(passage_groups),

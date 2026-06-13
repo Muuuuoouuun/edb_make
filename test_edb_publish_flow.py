@@ -287,6 +287,64 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(groups, ui_session["duplicate_problem_number_groups"])
             self.assertEqual(1, ui_session["duplicateProblemNumberGroupCount"])
 
+    def test_problem_ui_session_marks_official_alternate_section_duplicate_ranges_nonblocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            crop = root / "crop.png"
+            Image.new("RGB", (320, 240), "white").save(crop)
+
+            placements = []
+            problem_numbers = [35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45] * 2
+            for index, number in enumerate(problem_numbers, start=1):
+                section_page_offset = 0 if index <= 11 else 10
+                placements.append(
+                    {
+                        "problem_id": f"problem-{index}",
+                        "title": f"{number}.",
+                        "problem_number": number,
+                        "subject": Subject.KOREAN,
+                        "source_page_id": f"page-{section_page_offset + index:03d}",
+                        "source_path": str(source),
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "bbox": {"left": 0, "top": 0, "width": 320, "height": 240},
+                        "actual_content_height_pages": 0.8,
+                        "overflow_allowed": False,
+                        "start_y_pages": float(index),
+                        "snapped_next_start_y_pages": float(index + 1),
+                        "overflow_amount_pages": 0.0,
+                        "overflow_violation": False,
+                        "slot_span_count": 1,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.0,
+                        "record_mode": "image-only",
+                        "text_record_count": 0,
+                        "image_record_count": 1,
+                        "risk_flags": [],
+                    }
+                )
+
+            ui_session = build_problem_ui_session(
+                [],
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+            )
+
+            groups = ui_session["duplicateProblemNumberGroups"]
+            self.assertEqual(1, len(groups))
+            self.assertEqual("alternate_section", groups[0]["classification"])
+            self.assertFalse(groups[0]["blocking"])
+            self.assertEqual([], ui_session["blockingDuplicateProblemNumberGroups"])
+            for problem in ui_session["problems"]:
+                self.assertNotIn("duplicate_problem_number", problem["riskFlags"])
+                self.assertEqual("normal", problem["reviewStatus"])
+
     def test_problem_ui_session_flags_duplicate_problem_numbers_for_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

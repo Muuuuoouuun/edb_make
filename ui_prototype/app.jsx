@@ -3385,6 +3385,11 @@ function sessionReviewSummary(session){
     : Array.isArray(session?.duplicate_problem_number_groups)
       ? session.duplicate_problem_number_groups
       : [];
+  const blockingDuplicateProblemNumberGroups = Array.isArray(session?.blockingDuplicateProblemNumberGroups)
+    ? session.blockingDuplicateProblemNumberGroups
+    : Array.isArray(session?.blocking_duplicate_problem_number_groups)
+      ? session.blocking_duplicate_problem_number_groups
+      : duplicateProblemNumberGroups.filter(group => group?.blocking !== false);
   const duplicateProblemNumberLabel = duplicateProblemNumberGroups
     .map(group => {
       const label = String(group?.numberLabel || group?.number_label || '').trim();
@@ -3437,6 +3442,7 @@ function sessionReviewSummary(session){
     hwpProblemCountMismatchCount: Number.isFinite(hwpProblemCountMismatchCount) ? Math.max(0, hwpProblemCountMismatchCount) : 0,
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
+    blockingDuplicateProblemNumberGroups,
     duplicateProblemNumberLabel,
     sourceProblemOverlapGroups,
     sourceProblemOverlapLabel,
@@ -4809,8 +4815,8 @@ function App(){
     const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
     const sessionForPublish = materializeSessionForItems(session, items, fileName) || session;
     const publishReviewSummary = sessionReviewSummary(sessionForPublish);
-    const duplicateProblemNumberGroups = Array.isArray(publishReviewSummary.duplicateProblemNumberGroups)
-      ? publishReviewSummary.duplicateProblemNumberGroups
+    const duplicateProblemNumberGroups = Array.isArray(publishReviewSummary.blockingDuplicateProblemNumberGroups)
+      ? publishReviewSummary.blockingDuplicateProblemNumberGroups
       : [];
     if (duplicateProblemNumberGroups.length > 0) {
       setView('review');
