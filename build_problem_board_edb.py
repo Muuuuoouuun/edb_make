@@ -1383,6 +1383,141 @@ def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
         problem.metadata.setdefault("problem_number_source", "inferred_sequence")
 
 
+def _passage_range_tuple(metadata: dict[str, Any]) -> tuple[int, int] | None:
+    value = metadata.get("passage_range")
+    if not isinstance(value, dict):
+        return None
+    start = _coerce_int(value.get("start"))
+    end = _coerce_int(value.get("end"))
+    if start is None or end is None or start <= 0 or end < start:
+        return None
+    return start, end
+
+
+def _passage_child_numbers(metadata: dict[str, Any], start: int, end: int) -> list[int]:
+    value = metadata.get("passage_child_problem_numbers")
+    if isinstance(value, list):
+        numbers: list[int] = []
+        for raw in value:
+            number = _coerce_int(raw)
+            if number is not None and start <= number <= end:
+                numbers.append(number)
+        if numbers:
+            return list(dict.fromkeys(numbers))
+    return list(range(start, end + 1))
+
+
+def _append_unique_string(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def _metadata_string_list(metadata: dict[str, Any], key: str) -> list[str]:
+    value = metadata.get(key)
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item)]
+
+
+def _refresh_cross_page_passage_group(group: dict[str, Any]) -> None:
+    source_page_ids = list(group["source_page_ids"])
+    continues_across_pages = len(source_page_ids) > 1
+    for member in group["members"]:
+        metadata = member.metadata
+        metadata["passage_source_page_ids"] = list(source_page_ids)
+        metadata["passage_continues_across_pages"] = continues_across_pages
+        metadata["passage_fragment_count"] = len(source_page_ids)
+
+
+def _apply_cross_page_passage_group(
+    group: dict[str, Any],
+    *,
+    page_id: str,
+    problem: ProblemUnit,
+) -> None:
+    metadata = problem.metadata
+    metadata.setdefault("passage_group_id", group["group_id"])
+    metadata.setdefault("passage_range", {"start": group["start"], "end": group["end"]})
+    metadata.setdefault("passage_role", "child_question")
+    if group["shared_block_ids"]:
+        metadata.setdefault("shared_passage_block_ids", list(group["shared_block_ids"]))
+    metadata.setdefault("passage_child_problem_numbers", list(group["child_numbers"]))
+
+    _append_unique_string(group["source_page_ids"], page_id)
+    if not any(member is problem for member in group["members"]):
+        group["members"].append(problem)
+    _refresh_cross_page_passage_group(group)
+
+
+def _seed_cross_page_passage_group(
+    active_groups: dict[str, dict[str, Any]],
+    *,
+    page_id: str,
+    problem: ProblemUnit,
+) -> dict[str, Any] | None:
+    metadata = problem.metadata
+    group_id = str(metadata.get("passage_group_id") or "").strip()
+    passage_range = _passage_range_tuple(metadata)
+    if not group_id or passage_range is None:
+        return None
+
+    start, end = passage_range
+    group = active_groups.get(group_id)
+    if group is None:
+        group = {
+            "group_id": group_id,
+            "start": start,
+            "end": end,
+            "shared_block_ids": _metadata_string_list(metadata, "shared_passage_block_ids"),
+            "child_numbers": _passage_child_numbers(metadata, start, end),
+            "source_page_ids": [],
+            "members": [],
+        }
+        active_groups[group_id] = group
+    else:
+        group["start"] = min(int(group["start"]), start)
+        group["end"] = max(int(group["end"]), end)
+        for block_id in _metadata_string_list(metadata, "shared_passage_block_ids"):
+            _append_unique_string(group["shared_block_ids"], block_id)
+        for number in _passage_child_numbers(metadata, start, end):
+            if number not in group["child_numbers"]:
+                group["child_numbers"].append(number)
+        group["child_numbers"].sort()
+
+    _apply_cross_page_passage_group(group, page_id=page_id, problem=problem)
+    return group
+
+
+def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
+    active_groups: dict[str, dict[str, Any]] = {}
+    for page in pages:
+        ordered_problems = sorted(
+            page.problems,
+            key=lambda problem: (_problem_metadata_number(problem) or 10**9, problem.unit_id),
+        )
+        for problem in ordered_problems:
+            problem_number = _problem_metadata_number(problem)
+            if problem_number is not None:
+                for group_id, group in list(active_groups.items()):
+                    if problem_number > int(group["end"]):
+                        active_groups.pop(group_id, None)
+
+            seeded_group = _seed_cross_page_passage_group(
+                active_groups,
+                page_id=page.page_id,
+                problem=problem,
+            )
+            if seeded_group is not None or problem_number is None:
+                continue
+
+            if problem.metadata.get("passage_group_id"):
+                continue
+            for group in active_groups.values():
+                if int(group["start"]) <= problem_number <= int(group["end"]):
+                    _apply_cross_page_passage_group(group, page_id=page.page_id, problem=problem)
+                    break
+
+
 def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
     flags: list[str] = []
     if problem.metadata.get("fallback_grouping"):
@@ -1423,6 +1558,7 @@ def build_problem_entries(
     drafts: list[_ProblemEntryDraft] = []
     _remove_duplicate_marker_document_problem_numbers(pages)
     _remove_hwp_template_instruction_problems(pages)
+    _annotate_cross_page_passage_groups(pages)
 
     for page in pages:
         prepared_page = prepared_by_page_id.get(page.page_id)
@@ -1964,6 +2100,23 @@ def _problem_passage_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
             payload["passageChildProblemNumbers"] = normalized_child_numbers
             payload["passage_child_problem_numbers"] = normalized_child_numbers
 
+    source_page_ids = metadata.get("passage_source_page_ids")
+    if isinstance(source_page_ids, list):
+        normalized_source_page_ids = [str(page_id) for page_id in source_page_ids if str(page_id)]
+        if normalized_source_page_ids:
+            payload["passageSourcePageIds"] = normalized_source_page_ids
+            payload["passage_source_page_ids"] = normalized_source_page_ids
+
+    if "passage_continues_across_pages" in metadata:
+        continues_across_pages = bool(metadata.get("passage_continues_across_pages"))
+        payload["passageContinuesAcrossPages"] = continues_across_pages
+        payload["passage_continues_across_pages"] = continues_across_pages
+
+    fragment_count = _coerce_int(metadata.get("passage_fragment_count"))
+    if fragment_count is not None and fragment_count > 0:
+        payload["passageFragmentCount"] = fragment_count
+        payload["passage_fragment_count"] = fragment_count
+
     return payload
 
 
@@ -2425,6 +2578,8 @@ def build_ui_session(
 
     # Map page_id → PageModel for risk-flag lookup, and page_id → list[problem_id]
     # so the UI can group detected problems by their source page in the review view.
+    if pages:
+        _annotate_cross_page_passage_groups(pages)
     pages_by_id: dict[str, PageModel] = {}
     if pages:
         for page in pages:

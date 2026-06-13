@@ -386,6 +386,147 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["range-header", "shared-passage"], problem["sharedPassageBlockIds"])
             self.assertEqual([13, 14], problem["passageChildProblemNumbers"])
 
+    def test_ui_session_links_cross_page_passage_child_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            crop_13 = root / "crop-13.png"
+            crop_15 = root / "crop-15.png"
+            for path in (page_1_image, page_2_image):
+                Image.new("RGB", (900, 1200), "white").save(path)
+            for path in (crop_13, crop_15):
+                Image.new("RGB", (600, 420), "white").save(path)
+
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=Image.new("RGB", (900, 1200), "white"),
+                    original_size=(900, 1200),
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=Image.new("RGB", (900, 1200), "white"),
+                    original_size=(900, 1200),
+                ),
+            ]
+            pages = [
+                PageModel(
+                    page_id="page-1",
+                    width_px=900,
+                    height_px=1200,
+                    subject=Subject.KOREAN,
+                    source_path=str(page_1_image),
+                    problems=[
+                        ProblemUnit(
+                            unit_id="page-1-problem-13",
+                            subject=Subject.KOREAN,
+                            title="13.",
+                            metadata={
+                                "problem_number": 13,
+                                "passage_group_id": "page-1-passage-13-16",
+                                "passage_range": {"start": 13, "end": 16},
+                                "passage_role": "child_question",
+                                "shared_passage_block_ids": ["range-header", "shared-passage-a"],
+                                "passage_child_problem_numbers": [13, 14, 15, 16],
+                            },
+                        ),
+                    ],
+                ),
+                PageModel(
+                    page_id="page-2",
+                    width_px=900,
+                    height_px=1200,
+                    subject=Subject.KOREAN,
+                    source_path=str(page_2_image),
+                    problems=[
+                        ProblemUnit(
+                            unit_id="page-2-problem-15",
+                            subject=Subject.KOREAN,
+                            title="15.",
+                            metadata={"problem_number": 15},
+                        ),
+                    ],
+                ),
+            ]
+            placements = [
+                {
+                    "problem_id": "page-1-problem-13",
+                    "title": "13.",
+                    "problem_number": 13,
+                    "subject": "국어",
+                    "source_page_id": "page-1",
+                    "source_path": str(page_1_image),
+                    "crop_path": str(crop_13),
+                    "board_render_path": str(crop_13),
+                    "actual_content_height_pages": 0.75,
+                    "overflow_allowed": True,
+                    "overflow_violation": False,
+                    "overflow_amount_pages": 0.0,
+                    "slot_span_count": 1,
+                    "start_y_pages": 0.0,
+                    "snapped_next_start_y_pages": 1.2,
+                    "placement_x_ratio": 0.0,
+                    "placement_y_ratio": 0.0,
+                    "placement_scale_ratio": 1.0,
+                    "record_mode": "image-only",
+                    "processing_step": "raw",
+                    "text_record_count": 0,
+                    "image_record_count": 1,
+                    "bbox": {"left": 40, "top": 40, "width": 500, "height": 560},
+                    "risk_flags": [],
+                },
+                {
+                    "problem_id": "page-2-problem-15",
+                    "title": "15.",
+                    "problem_number": 15,
+                    "subject": "국어",
+                    "source_page_id": "page-2",
+                    "source_path": str(page_2_image),
+                    "crop_path": str(crop_15),
+                    "board_render_path": str(crop_15),
+                    "actual_content_height_pages": 0.75,
+                    "overflow_allowed": True,
+                    "overflow_violation": False,
+                    "overflow_amount_pages": 0.0,
+                    "slot_span_count": 1,
+                    "start_y_pages": 1.2,
+                    "snapped_next_start_y_pages": 2.4,
+                    "placement_x_ratio": 0.0,
+                    "placement_y_ratio": 0.0,
+                    "placement_scale_ratio": 1.0,
+                    "record_mode": "image-only",
+                    "processing_step": "raw",
+                    "text_record_count": 0,
+                    "image_record_count": 1,
+                    "bbox": {"left": 40, "top": 40, "width": 500, "height": 560},
+                    "risk_flags": [],
+                },
+            ]
+
+            ui_session = build_problem_ui_session(
+                prepared_pages,
+                placements,
+                root / "out",
+                None,
+                [page_1_image, page_2_image],
+                record_mode="image-only",
+                pages=pages,
+            )
+
+            problems_by_id = {problem["id"]: problem for problem in ui_session["problems"]}
+            linked_problem = problems_by_id["page-2-problem-15"]
+            self.assertEqual("page-1-passage-13-16", linked_problem["passageGroupId"])
+            self.assertEqual({"start": 13, "end": 16}, linked_problem["passageRange"])
+            self.assertEqual("child_question", linked_problem["passageRole"])
+            self.assertEqual([13, 14, 15, 16], linked_problem["passageChildProblemNumbers"])
+            self.assertEqual(["page-1", "page-2"], linked_problem["passageSourcePageIds"])
+            self.assertTrue(linked_problem["passageContinuesAcrossPages"])
+
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
