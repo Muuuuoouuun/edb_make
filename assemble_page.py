@@ -53,14 +53,21 @@ def _matches_choice_marker(text: str | None) -> bool:
 
 SET_PROBLEM_HEADER_RE = re.compile(
     r"^\s*"
-    r"[\[［](?P<start>[0-9１-９]+)\s*[~\-~〜]\s*(?P<end>[0-9１-９]+)[\]］]"
+    r"[\[［](?P<start>[0-9１-９]+)\s*[~\-〜－]\s*(?P<end>[0-9１-９]+)\s*(?:번)?[\]］]"
+)
+SET_PROBLEM_KOREAN_SUFFIX_HEADER_RE = re.compile(
+    r"^\s*"
+    rf"(?:제\s*)?(?P<start>{_DIGIT_PATTERN})\s*(?:번\s*)?"
+    r"(?:[~\-〜－]|부터|에서)\s*"
+    rf"(?:제\s*)?(?P<end>{_DIGIT_PATTERN})\s*번(?:까지)?"
 )
 
 
 def extract_set_problem_range(text: str | None) -> tuple[int, int] | None:
     if not text:
         return None
-    match = SET_PROBLEM_HEADER_RE.match(text)
+    normalized_text = unicodedata.normalize("NFKC", text)
+    match = SET_PROBLEM_HEADER_RE.match(normalized_text) or SET_PROBLEM_KOREAN_SUFFIX_HEADER_RE.match(normalized_text)
     if not match:
         return None
     try:

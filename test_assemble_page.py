@@ -168,5 +168,109 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
             self.assertEqual(["range-header", "shared-passage"], problem.metadata.get("shared_passage_block_ids"))
             self.assertEqual([13, 14], problem.metadata.get("passage_child_problem_numbers"))
 
+    def test_set_problem_range_parses_korean_number_suffix_header(self):
+        blocks = [
+            ContentBlock(
+                block_id="range-header",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 10, 500, 40),
+                reading_order=0,
+                text="13~14번 다음 글을 읽고 물음에 답하시오."
+            ),
+            ContentBlock(
+                block_id="shared-passage",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 60, 500, 150),
+                reading_order=1,
+                text="이 글은 두 문항이 함께 참조하는 긴 지문이다."
+            ),
+            ContentBlock(
+                block_id="q13-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 220, 500, 50),
+                reading_order=2,
+                text="13. 위 글의 전개 방식으로 적절한 것은?"
+            ),
+            ContentBlock(
+                block_id="q14-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 280, 500, 50),
+                reading_order=3,
+                text="14. 윗글의 내용과 일치하는 것은?"
+            ),
+        ]
+        page = PageModel(
+            page_id="page-korean-suffix-range-test",
+            width_px=1000,
+            height_px=1000,
+            subject=Subject.KOREAN,
+            blocks=blocks
+        )
+
+        grouped = group_problem_units(page)
+        problems = grouped.problems
+        p13 = next(problem for problem in problems if problem.metadata.get("problem_number") == 13)
+        p14 = next(problem for problem in problems if problem.metadata.get("problem_number") == 14)
+
+        self.assertEqual(2, len(problems))
+        for problem in (p13, p14):
+            self.assertEqual("page-korean-suffix-range-test-passage-13-14", problem.metadata.get("passage_group_id"))
+            self.assertEqual({"start": 13, "end": 14}, problem.metadata.get("passage_range"))
+            self.assertEqual(["range-header", "shared-passage"], problem.metadata.get("shared_passage_block_ids"))
+            self.assertIn("range-header", problem.stem_block_ids)
+            self.assertIn("shared-passage", problem.stem_block_ids)
+
+    def test_set_problem_range_parses_bracketed_korean_suffix_header(self):
+        blocks = [
+            ContentBlock(
+                block_id="range-header",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 10, 500, 40),
+                reading_order=0,
+                text="[15~16번] 다음 자료를 보고 물음에 답하시오."
+            ),
+            ContentBlock(
+                block_id="shared-material",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 60, 500, 150),
+                reading_order=1,
+                text="두 문항이 공유하는 탐구 자료이다."
+            ),
+            ContentBlock(
+                block_id="q15-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 220, 500, 50),
+                reading_order=2,
+                text="15. 자료에 대한 설명으로 옳은 것은?"
+            ),
+            ContentBlock(
+                block_id="q16-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 280, 500, 50),
+                reading_order=3,
+                text="16. 자료를 바탕으로 추론한 것은?"
+            ),
+        ]
+        page = PageModel(
+            page_id="page-bracketed-korean-suffix-range-test",
+            width_px=1000,
+            height_px=1000,
+            subject=Subject.SCIENCE,
+            blocks=blocks
+        )
+
+        grouped = group_problem_units(page)
+        problems = grouped.problems
+        p15 = next(problem for problem in problems if problem.metadata.get("problem_number") == 15)
+        p16 = next(problem for problem in problems if problem.metadata.get("problem_number") == 16)
+
+        self.assertEqual(2, len(problems))
+        for problem in (p15, p16):
+            self.assertEqual(
+                "page-bracketed-korean-suffix-range-test-passage-15-16",
+                problem.metadata.get("passage_group_id"),
+            )
+            self.assertEqual(["range-header", "shared-material"], problem.metadata.get("shared_passage_block_ids"))
+
 if __name__ == "__main__":
     unittest.main()
