@@ -937,6 +937,42 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("/api/file?path=", summary["classinHandoffUri"])
             self.assertIn("/api/file?path=", summary["classinHandoffMarkdownUri"])
 
+    def test_publish_summary_exposes_classin_handoff_readiness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            edb_path = root / "lesson.edb"
+            handoff_path = root / "classin_handoff.json"
+            edb_path.write_bytes(b"placeholder")
+            handoff_path.write_text(
+                json.dumps(
+                    {
+                        "status": "needs_attention_before_classin",
+                        "readyForClassIn": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = _session_publish_summary(
+                edb_path=edb_path,
+                output_dir=root,
+                edb_validation={
+                    "outerSize": 1234,
+                    "innerSize": 987,
+                    "pageCountHint": 23,
+                    "recordCountHint": 45,
+                    "recordCountActual": 45,
+                },
+                record_count=45,
+                classin_handoff_path=handoff_path,
+                published_at="2026-06-13T12:00:00+09:00",
+            )
+
+            self.assertEqual("needs_attention_before_classin", summary["classinHandoffStatus"])
+            self.assertFalse(summary["readyForClassIn"])
+            self.assertEqual("needs_attention_before_classin", summary["classin_handoff_status"])
+            self.assertFalse(summary["ready_for_classin"])
+
     def test_publish_summary_exposes_classin_preflight_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -176,6 +176,28 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_classin_handoff_readiness(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              classinHandoffStatus: 'needs_attention_before_classin',
+              readyForClassIn: false,
+            });
+            if (summary.classinHandoffStatus !== 'needs_attention_before_classin') {
+              throw new Error(`handoff status not normalized: ${summary.classinHandoffStatus}`);
+            }
+            if (summary.readyForClassIn !== false) {
+              throw new Error('readyForClassIn should remain false');
+            }
+            if (!summary.classinHandoffStatusLabel.includes('주의')) {
+              throw new Error(`handoff status label missing warning copy: ${summary.classinHandoffStatusLabel}`);
+            }
+            """
+        )
+
     def test_format_publish_history_meta_includes_time_and_record_label(self) -> None:
         run_node(
             """

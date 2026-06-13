@@ -1654,6 +1654,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
         <span>{summary.recordCountActual || summary.recordCount} records</span>
         {summary.pageCountHint > 0 && <span>{summary.pageCountHint}p hint</span>}
         {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
+        {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
         {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
         {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
       </div>
@@ -3444,6 +3445,24 @@ function normalizePublishSummary(raw, session = null){
     || session?.classinHandoffMarkdownUri
     || ''
   ).trim();
+  const classinHandoffStatus = String(
+    raw.classinHandoffStatus
+    || raw.classin_handoff_status
+    || session?.classin_handoff_status
+    || session?.classinHandoffStatus
+    || ''
+  ).trim();
+  const rawReadyForClassIn = raw.readyForClassIn ?? raw.ready_for_classin ?? session?.readyForClassIn ?? session?.ready_for_classin;
+  const readyForClassIn = rawReadyForClassIn === undefined
+    ? classinHandoffStatus === 'ready_for_classin_review'
+    : rawReadyForClassIn !== false;
+  const classinHandoffStatusLabel = String(
+    raw.classinHandoffStatusLabel
+    || raw.classin_handoff_status_label
+    || (classinHandoffStatus
+      ? (readyForClassIn ? 'ClassIn 전달 준비' : 'ClassIn 전달 주의')
+      : '')
+  ).trim();
   const classinPreflight = raw.classinPreflight || raw.classin_preflight || session?.classinPreflight || session?.classin_preflight || {};
   const classinPreflightStatus = String(
     raw.classinPreflightStatus
@@ -3491,6 +3510,9 @@ function normalizePublishSummary(raw, session = null){
       : (raw.classinReviewPassed ?? raw.classin_review_passed) !== false,
     classinHandoffUri,
     classinHandoffMarkdownUri,
+    classinHandoffStatus,
+    classinHandoffStatusLabel,
+    readyForClassIn,
     classinPreflight,
     classinPreflightStatus,
     classinPreflightStatusLabel,

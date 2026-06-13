@@ -517,6 +517,45 @@ class TestSessionHistory(unittest.TestCase):
             self.assertEqual(summary["classinHandoffUri"], summary["classin_handoff_uri"])
             self.assertEqual(summary["classinHandoffMarkdownUri"], summary["classin_handoff_markdown_uri"])
 
+    def test_public_session_history_exposes_classin_handoff_readiness(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            handoff_path = root / "classin_handoff.json"
+            handoff_path.write_text(
+                json.dumps(
+                    {
+                        "status": "needs_attention_before_classin",
+                        "readyForClassIn": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            session = {
+                "session_name": "주의 필요 제작본",
+                "generated_at": "2026-06-13T12:00:00+09:00",
+                "output_dir": str(root),
+                "problems": [{"id": "p1"}],
+                "publishSummary": {
+                    "edbFileName": "lesson.edb",
+                    "edbPath": str(root / "lesson.edb"),
+                    "outputDir": str(root),
+                    "classinHandoffPath": str(handoff_path),
+                },
+            }
+            history = app_server._session_history_with_session(
+                [],
+                session,
+                updated_at="2026-06-13T12:00:00+09:00",
+            )
+
+            public = app_server._public_session_history(history)
+
+            summary = public[0]["publishSummary"]
+            self.assertEqual("needs_attention_before_classin", summary["classinHandoffStatus"])
+            self.assertFalse(summary["readyForClassIn"])
+            self.assertEqual("needs_attention_before_classin", summary["classin_handoff_status"])
+            self.assertFalse(summary["ready_for_classin"])
+
 
 class TestSystemOpenTargets(unittest.TestCase):
     def test_resolve_open_file_target_accepts_runtime_edb(self):

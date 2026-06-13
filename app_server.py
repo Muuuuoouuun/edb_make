@@ -490,6 +490,21 @@ def path_to_api_url(path: str | Path | None) -> str | None:
     return f"/api/file?path={quote(str(resolved))}"
 
 
+def _classin_handoff_readiness(path: Path | None) -> tuple[str, bool | None]:
+    if path is None or not path.is_file():
+        return "", None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "", None
+    if not isinstance(payload, dict):
+        return "", None
+    status = str(payload.get("status") or payload.get("classinHandoffStatus") or "").strip()
+    ready_raw = payload.get("readyForClassIn", payload.get("ready_for_classin"))
+    ready = None if ready_raw is None else bool(ready_raw)
+    return status, ready
+
+
 def _path_exists(value: Any, *, directory: bool = False) -> bool:
     path = decode_file_reference(str(value)) if value else None
     if path is None:
@@ -524,8 +539,27 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
         or annotated.get("classin_handoff_markdown_uri")
         or path_to_api_url(classin_handoff_markdown_path)
     )
+    handoff_status, ready_for_classin = _classin_handoff_readiness(
+        decode_file_reference(str(classin_handoff_path)) if classin_handoff_path else None
+    )
+    annotated["classinHandoffStatus"] = (
+        annotated.get("classinHandoffStatus")
+        or annotated.get("classin_handoff_status")
+        or handoff_status
+    )
+    if "readyForClassIn" in annotated:
+        ready_value = bool(annotated["readyForClassIn"])
+    elif "ready_for_classin" in annotated:
+        ready_value = bool(annotated["ready_for_classin"])
+    elif ready_for_classin is not None:
+        ready_value = ready_for_classin
+    else:
+        ready_value = annotated["classinHandoffStatus"] == "ready_for_classin_review"
+    annotated["readyForClassIn"] = ready_value
     annotated["classin_handoff_uri"] = annotated["classinHandoffUri"]
     annotated["classin_handoff_markdown_uri"] = annotated["classinHandoffMarkdownUri"]
+    annotated["classin_handoff_status"] = annotated["classinHandoffStatus"]
+    annotated["ready_for_classin"] = annotated["readyForClassIn"]
     return annotated
 
 
@@ -567,6 +601,9 @@ def _session_publish_summary(
     preflight_status = str(preflight.get("status") or "")
     preflight_issue_count = int(preflight.get("issueCount") or preflight.get("issue_count") or 0)
     preflight_passed = bool(preflight.get("passed")) if preflight else False
+    handoff_status, ready_for_classin = _classin_handoff_readiness(resolved_classin_handoff_path)
+    if ready_for_classin is None and handoff_status:
+        ready_for_classin = handoff_status == "ready_for_classin_review"
     published_at = published_at or datetime.now().astimezone().isoformat(timespec="seconds")
     summary = {
         "validated": True,
@@ -583,6 +620,8 @@ def _session_publish_summary(
             else None
         ),
         "classinHandoffMarkdownUri": path_to_api_url(resolved_classin_handoff_markdown_path),
+        "classinHandoffStatus": handoff_status,
+        "readyForClassIn": bool(ready_for_classin) if ready_for_classin is not None else False,
         "classinPreflight": preflight,
         "classinPreflightStatus": preflight_status,
         "classinPreflightPassed": preflight_passed,
@@ -611,6 +650,8 @@ def _session_publish_summary(
         "classin_handoff_uri": summary["classinHandoffUri"],
         "classin_handoff_markdown_path": summary["classinHandoffMarkdownPath"],
         "classin_handoff_markdown_uri": summary["classinHandoffMarkdownUri"],
+        "classin_handoff_status": summary["classinHandoffStatus"],
+        "ready_for_classin": summary["readyForClassIn"],
         "classin_preflight": summary["classinPreflight"],
         "classin_preflight_status": summary["classinPreflightStatus"],
         "classin_preflight_passed": summary["classinPreflightPassed"],

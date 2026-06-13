@@ -67,6 +67,24 @@
       || session?.classinHandoffMarkdownUri
       || ""
     ).trim();
+    const classinHandoffStatus = String(
+      raw.classinHandoffStatus
+      || raw.classin_handoff_status
+      || session?.classin_handoff_status
+      || session?.classinHandoffStatus
+      || ""
+    ).trim();
+    const rawReadyForClassIn = raw.readyForClassIn ?? raw.ready_for_classin ?? session?.readyForClassIn ?? session?.ready_for_classin;
+    const readyForClassIn = rawReadyForClassIn === undefined
+      ? classinHandoffStatus === "ready_for_classin_review"
+      : rawReadyForClassIn !== false;
+    const classinHandoffStatusLabel = String(
+      raw.classinHandoffStatusLabel
+      || raw.classin_handoff_status_label
+      || (classinHandoffStatus
+        ? (readyForClassIn ? "ClassIn 전달 준비" : "ClassIn 전달 주의")
+        : "")
+    ).trim();
     const classinPreflight = raw.classinPreflight || raw.classin_preflight || session?.classinPreflight || session?.classin_preflight || {};
     const classinPreflightStatus = String(
       raw.classinPreflightStatus
@@ -109,6 +127,9 @@
         : (raw.classinReviewPassed ?? raw.classin_review_passed) !== false,
       classinHandoffUri,
       classinHandoffMarkdownUri,
+      classinHandoffStatus,
+      classinHandoffStatusLabel,
+      readyForClassIn,
       classinPreflight,
       classinPreflightStatus,
       classinPreflightStatusLabel,
