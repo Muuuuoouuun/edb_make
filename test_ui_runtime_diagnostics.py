@@ -346,6 +346,63 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             """
         )
 
+    def test_publish_blocked_target_focuses_preflight_problem_ids(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('const NON_ACTIONABLE_RISK_FLAGS');
+            if (start < 0 || end < 0) throw new Error('publish preflight helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+            if (typeof sandbox.publishBlockedTarget !== 'function') {
+              throw new Error('publishBlockedTarget missing');
+            }
+            const overlapTarget = sandbox.publishBlockedTarget({
+              issueTypes: ['source_problem_bbox_overlap'],
+              classinPreflight: {
+                issues: [
+                  {
+                    type: 'source_problem_bbox_overlap',
+                    problemId: 'p21',
+                    nextProblemId: 'p22',
+                  },
+                ],
+              },
+            });
+            if (overlapTarget.view !== 'review') {
+              throw new Error(`expected review target, got ${overlapTarget.view}`);
+            }
+            if (overlapTarget.reviewFocus?.filter !== 'all') {
+              throw new Error(`expected all filter, got ${overlapTarget.reviewFocus?.filter}`);
+            }
+            if (overlapTarget.reviewFocus?.problemIds?.join(',') !== 'p21,p22') {
+              throw new Error(`expected p21,p22 focus, got ${overlapTarget.reviewFocus?.problemIds}`);
+            }
+            const duplicateTarget = sandbox.publishBlockedTarget({
+              issueTypes: ['duplicate_problem_number'],
+              classinPreflight: {
+                issues: [
+                  {
+                    type: 'duplicate_problem_number',
+                    problemIds: ['p7-a', 'p7-b'],
+                  },
+                ],
+              },
+            });
+            if (duplicateTarget.reviewFocus?.problemIds?.join(',') !== 'p7-a,p7-b') {
+              throw new Error(`expected duplicate ids focus, got ${duplicateTarget.reviewFocus?.problemIds}`);
+            }
+            const boardTarget = sandbox.publishBlockedTarget({ issueTypes: ['board_placement_overlap'] });
+            if (boardTarget.view !== 'board' || boardTarget.reviewFocus !== null) {
+              throw new Error(`expected board-only target, got ${JSON.stringify(boardTarget)}`);
+            }
+            """
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

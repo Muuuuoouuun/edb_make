@@ -275,11 +275,15 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   }, [session]);
   useEffect(() => {
     const nextFilter = String(reviewFocus?.filter || '').trim();
-    if (!nextFilter) return;
-    setReviewFilter(nextFilter);
+    const focusedProblemIds = Array.isArray(reviewFocus?.problemIds)
+      ? reviewFocus.problemIds.map(id => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (!nextFilter && !focusedProblemIds.length) return;
+    setReviewFilter(nextFilter || 'all');
     setReviewRiskFilter(null);
-    setSelectedIds(new Set());
-  }, [reviewFocus]);
+    setSelectedIds(new Set(focusedProblemIds));
+    if (focusedProblemIds.length && setActive) setActive(focusedProblemIds[0]);
+  }, [reviewFocus, setActive]);
 
   const onBoxClick = (probId, evt) => {
     if (splitTarget) return;  // ignore clicks while splitting
@@ -3083,11 +3087,36 @@ function publishBlockedTarget(blockedPublish){
   const issueTypes = Array.isArray(blockedPublish?.issueTypes)
     ? blockedPublish.issueTypes.map(type => String(type || '').trim()).filter(Boolean)
     : [];
+  const issues = Array.isArray(blockedPublish?.classinPreflight?.issues)
+    ? blockedPublish.classinPreflight.issues.filter(issue => issue && typeof issue === 'object')
+    : [];
+  const focusIssueTypes = [
+    'source_problem_bbox_overlap',
+    'duplicate_problem_number',
+    'passage_group_source_reuse',
+  ];
+  const focusedProblemIds = Array.from(new Set(
+    issues
+      .filter(issue => focusIssueTypes.includes(String(issue?.type || issue?.issueType || issue?.issue_type || '').trim()))
+      .flatMap(issue => [
+        ...(Array.isArray(issue.problemIds || issue.problem_ids) ? (issue.problemIds || issue.problem_ids) : []),
+        issue.problemId || issue.problem_id,
+        issue.nextProblemId || issue.next_problem_id,
+      ])
+      .map(id => String(id || '').trim())
+      .filter(Boolean)
+  ));
   const onlyBoardPlacement = issueTypes.length > 0
     && issueTypes.every(type => type === 'board_placement_overlap');
   if (onlyBoardPlacement) return { view: 'board', reviewFocus: null };
   if (issueTypes.includes('passage_review_queue_remaining')) {
     return { view: 'review', reviewFocus: { filter: 'passage-review', source: 'publish-preflight' } };
+  }
+  if (focusedProblemIds.length) {
+    return {
+      view: 'review',
+      reviewFocus: { filter: 'all', problemIds: focusedProblemIds, source: 'publish-preflight' },
+    };
   }
   return { view: 'review', reviewFocus: null };
 }
@@ -5222,6 +5251,13 @@ function App(){
       ? publishReviewSummary.blockingDuplicateProblemNumberGroups
       : [];
     if (duplicateProblemNumberGroups.length > 0) {
+      setReviewFocus({
+        filter: 'all',
+        problemIds: duplicateProblemNumberGroups.flatMap(group => (
+          Array.isArray(group?.problemIds || group?.problem_ids) ? (group.problemIds || group.problem_ids) : []
+        )),
+        source: 'duplicate-number-preflight',
+      });
       setView('review');
       const duplicateLabel = publishReviewSummary.duplicateProblemNumberLabel || `${duplicateProblemNumberGroups.length}그룹`;
       showToast(`중복 문항 번호가 있어 제작을 멈췄어요. ${duplicateLabel}`);
@@ -5231,6 +5267,11 @@ function App(){
       .filter(issue => issue.type === 'passage_group_source_reuse');
     if (passageSourceReuseIssues.length > 0) {
       const firstIssue = passageSourceReuseIssues[0];
+      setReviewFocus({
+        filter: 'all',
+        problemIds: [firstIssue.problemId, firstIssue.nextProblemId],
+        source: 'passage-source-reuse-preflight',
+      });
       setView('review');
       showToast(
         `긴 지문 그룹 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
@@ -5241,6 +5282,11 @@ function App(){
       .filter(issue => issue.type === 'source_problem_bbox_overlap');
     if (sourceOverlapIssues.length > 0) {
       const firstIssue = sourceOverlapIssues[0];
+      setReviewFocus({
+        filter: 'all',
+        problemIds: [firstIssue.problemId, firstIssue.nextProblemId],
+        source: 'source-overlap-preflight',
+      });
       setView('review');
       showToast(
         `문항 원본 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`

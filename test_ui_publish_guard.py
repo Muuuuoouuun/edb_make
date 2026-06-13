@@ -52,6 +52,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("findSourceProblemOverlaps", on_publish)
         self.assertIn("source_problem_bbox_overlap", on_publish)
+        self.assertIn("problemIds: [firstIssue.problemId, firstIssue.nextProblemId]", on_publish)
+        self.assertIn("source: 'source-overlap-preflight'", on_publish)
         self.assertIn("문항 원본 영역이 겹칠 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
 
@@ -61,8 +63,22 @@ class TestUiPublishGuard(unittest.TestCase):
         on_publish = on_publish.split("  return (", 1)[0]
 
         self.assertIn("blockingDuplicateProblemNumberGroups", on_publish)
+        self.assertIn("duplicateProblemNumberGroups.flatMap", on_publish)
+        self.assertIn("source: 'duplicate-number-preflight'", on_publish)
         self.assertIn("중복 문항 번호", on_publish)
         self.assertIn("제작을 멈췄어요", on_publish)
+        self.assertIn("setView('review')", on_publish)
+
+    def test_publish_blocks_passage_group_source_reuse_before_request(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        on_publish = source.split("const onPublish = async () => {", 1)[1]
+        on_publish = on_publish.split("  return (", 1)[0]
+
+        self.assertIn("findPassageGroupSourceReuse", on_publish)
+        self.assertIn("passage_group_source_reuse", on_publish)
+        self.assertIn("problemIds: [firstIssue.problemId, firstIssue.nextProblemId]", on_publish)
+        self.assertIn("source: 'passage-source-reuse-preflight'", on_publish)
+        self.assertIn("긴 지문 그룹 안에서 원본 영역이 반복될 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
 
     def test_publish_surfaces_server_preflight_block_response(self) -> None:
@@ -71,16 +87,25 @@ class TestUiPublishGuard(unittest.TestCase):
         on_publish = on_publish.split("  return (", 1)[0]
         target_helper = source.split("function publishBlockedTarget", 1)[1]
         target_helper = target_helper.split("const NON_ACTIONABLE_RISK_FLAGS", 1)[0]
-        review_stage_signature = source.split("function ReviewStage", 1)[1].split("){", 1)[0]
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage_signature = review_stage.split("){", 1)[0]
+        review_stage_focus = review_stage.split("const onBoxClick", 1)[0]
 
         self.assertIn("normalizePublishPreflightBlock(json)", on_publish)
         self.assertIn("publishBlockedTarget(blockedPublish)", on_publish)
         self.assertIn("setReviewFocus(blockedTarget.reviewFocus)", on_publish)
         self.assertIn("reviewFocus={reviewFocus}", source)
         self.assertIn("reviewFocus", review_stage_signature)
+        self.assertIn("reviewFocus?.problemIds", review_stage_focus)
+        self.assertIn("setSelectedIds(new Set(focusedProblemIds))", review_stage_focus)
+        self.assertIn("setActive(focusedProblemIds[0])", review_stage_focus)
         self.assertIn("blockedPublish.issueSummaryLabel", on_publish)
         self.assertIn("passage_review_queue_remaining", target_helper)
         self.assertIn("passage-review", target_helper)
+        self.assertIn("source_problem_bbox_overlap", target_helper)
+        self.assertIn("duplicate_problem_number", target_helper)
+        self.assertIn("passage_group_source_reuse", target_helper)
+        self.assertIn("problemIds: focusedProblemIds", target_helper)
         self.assertIn("서버 사전점검", on_publish)
         self.assertIn("setView('review')", on_publish)
 
