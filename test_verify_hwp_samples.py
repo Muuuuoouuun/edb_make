@@ -596,8 +596,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
 
         self.assertIn("# HWP Batch Verification", markdown)
         self.assertIn("Batch summary: samples 1/1 OK", markdown)
-        self.assertIn("| file | ok | problems | pages | cache | review | risk | edb | elapsed |", markdown)
-        self.assertIn("| 평가원 영어 양식.hwp | OK | 0 | 0 | - | - | - | OK 45/45 |", markdown)
+        self.assertIn("| file | ok | problems | pages | cache | review | risk | preflight | edb | elapsed |", markdown)
+        self.assertIn("| 평가원 영어 양식.hwp | OK | 0 | 0 | - | - | - | - | OK 45/45 |", markdown)
 
     def test_post_export_sends_export_edb_flag(self):
         requests = []
@@ -1071,9 +1071,43 @@ class TestVerifyHwpSamples(unittest.TestCase):
 
         table = verify_hwp_samples.format_markdown_table(rows)
 
-        self.assertIn("| file | ok | problems | pages | cache | review | risk | edb | elapsed |", table)
+        self.assertIn("| file | ok | problems | pages | cache | review | risk | preflight | edb | elapsed |", table)
         self.assertIn("problem_per_block:39, ocr_disabled:23", table)
-        self.assertIn("| sample.hwp | OK | 46 | 23 | 20/23 · r5/n15 | check_needed:24, normal:45 | problem_per_block:39, ocr_disabled:23 | OK 46/46 | 41.29 |", table)
+        self.assertIn("| sample.hwp | OK | 46 | 23 | 20/23 · r5/n15 | check_needed:24, normal:45 | problem_per_block:39, ocr_disabled:23 | - | OK 46/46 | 41.29 |", table)
+
+    def test_format_markdown_table_exposes_classin_preflight_issue_types(self):
+        rows = [
+            {
+                "file": "passage.hwp",
+                "ok": True,
+                "problem_count": 2,
+                "pages": 1,
+                "review_status_counts": {},
+                "risk_flags": [],
+                "risk_flag_counts": {},
+                "classin_preflight_expected": True,
+                "classin_preflight_passed": False,
+                "classin_preflight_issue_count": 2,
+                "classin_preflight_blocking_issue_count": 1,
+                "passage_group_source_reuse_count": 1,
+                "classin_preflight_issue_types": [
+                    "passage_group_source_reuse",
+                    "review_flags_remaining",
+                ],
+                "edb_expected": True,
+                "edb_validated": True,
+                "edb_record_count_actual": 2,
+                "edb_record_count_hint": 2,
+                "elapsed_s": 0.5,
+            }
+        ]
+
+        table = verify_hwp_samples.format_markdown_table(rows)
+
+        self.assertIn(
+            "| passage.hwp | OK | 2 | 1 | 0/1 | - | - | BLOCK 1/2 · passage reuse 1 · passage_group_source_reuse, review_flags_remaining | OK 2/2 | 0.5 |",
+            table,
+        )
 
     def test_format_markdown_report_lists_artifact_paths(self):
         rows = [

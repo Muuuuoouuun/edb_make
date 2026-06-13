@@ -358,6 +358,30 @@ def has_classin_preflight(row: dict[str, Any]) -> bool:
     )
 
 
+def format_classin_preflight_label(row: dict[str, Any]) -> str:
+    if not has_classin_preflight(row):
+        return "-"
+    issue_count = classin_preflight_issue_count(row)
+    blocking_count = classin_preflight_blocking_issue_count(row)
+    passed = _coerce_bool(row.get("classin_preflight_passed") or row.get("classinPreflightPassed"))
+    if passed and not issue_count and not blocking_count:
+        return "OK"
+
+    state = "BLOCK" if blocking_count else "WARN" if issue_count else "OK"
+    parts = [f"{state} {blocking_count}/{issue_count}" if issue_count or blocking_count else state]
+    passage_reuse_count = _coerce_non_negative_int(row.get("passage_group_source_reuse_count"))
+    if passage_reuse_count:
+        parts.append(f"passage reuse {passage_reuse_count}")
+    issue_types = [
+        str(issue_type or "").strip()
+        for issue_type in (row.get("classin_preflight_issue_types") or row.get("classinPreflightIssueTypes") or [])
+        if str(issue_type or "").strip()
+    ]
+    if issue_types:
+        parts.append(", ".join(issue_types[:4]))
+    return " · ".join(parts)
+
+
 def _review_summary(session: dict[str, Any]) -> dict[str, Any]:
     for summary_key in ("reviewSummary", "review_summary"):
         summary = session.get(summary_key)
@@ -841,8 +865,8 @@ def run_batch(
 
 def format_markdown_table(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| file | ok | problems | pages | cache | review | risk | edb | elapsed |",
-        "| --- | --- | ---: | ---: | --- | --- | --- | --- | ---: |",
+        "| file | ok | problems | pages | cache | review | risk | preflight | edb | elapsed |",
+        "| --- | --- | ---: | ---: | --- | --- | --- | --- | --- | ---: |",
     ]
     for row in rows:
         review = ", ".join(f"{k}:{v}" for k, v in (row.get("review_status_counts") or {}).items()) or "-"
@@ -876,8 +900,9 @@ def format_markdown_table(rows: list[dict[str, Any]]) -> str:
                 edb_label = "MISS"
         else:
             edb_label = "-"
+        preflight_label = format_classin_preflight_label(row)
         lines.append(
-            "| {file} | {ok} | {problems} | {pages} | {cache} | {review} | {risk} | {edb} | {elapsed} |".format(
+            "| {file} | {ok} | {problems} | {pages} | {cache} | {review} | {risk} | {preflight} | {edb} | {elapsed} |".format(
                 file=str(row.get("file") or "").replace("|", "\\|"),
                 ok="OK" if row.get("ok") else "FAIL",
                 problems=problem_label,
@@ -885,6 +910,7 @@ def format_markdown_table(rows: list[dict[str, Any]]) -> str:
                 cache=cache_label,
                 review=review.replace("|", "\\|"),
                 risk=risk.replace("|", "\\|"),
+                preflight=preflight_label.replace("|", "\\|"),
                 edb=edb_label,
                 elapsed=row.get("elapsed_s", "-"),
             )
