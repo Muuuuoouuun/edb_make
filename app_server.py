@@ -1422,6 +1422,17 @@ HWP_COUNT_MATCH_DISMISSIBLE_REVIEW_RISK_FLAGS = {
     "sparse_segmentation",
 }
 
+PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS = (
+    ("passageGroupId", "passage_group_id"),
+    ("passageRange", "passage_range"),
+    ("passageRole", "passage_role"),
+    ("sharedPassageBlockIds", "shared_passage_block_ids"),
+    ("passageChildProblemNumbers", "passage_child_problem_numbers"),
+    ("passageSourcePageIds", "passage_source_page_ids"),
+    ("passageContinuesAcrossPages", "passage_continues_across_pages"),
+    ("passagePreQuestionContinuationBlockIds", "passage_pre_question_continuation_block_ids"),
+)
+
 
 def _session_problem_is_supplemental(problem: dict[str, Any]) -> bool:
     risk_flags = problem.get("riskFlags") or problem.get("risk_flags") or []
@@ -1432,6 +1443,64 @@ def _session_problem_is_supplemental(problem: dict[str, Any]) -> bool:
         return True
     problem_id = str(problem.get("id") or problem.get("problem_id") or "")
     return problem_id.endswith("-continuation")
+
+
+def _has_session_metadata_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, set, tuple)):
+        return bool(value)
+    return True
+
+
+def _clone_session_metadata_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, set):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _copy_session_metadata_aliases(
+    target: dict[str, Any],
+    source: dict[str, Any],
+    aliases: tuple[str, ...],
+) -> None:
+    if any(_has_session_metadata_value(target.get(key)) for key in aliases):
+        return
+    source_metadata = source.get("metadata")
+    if not isinstance(source_metadata, dict):
+        source_metadata = {}
+    value: Any = None
+    found = False
+    for key in aliases:
+        candidate = source.get(key)
+        if _has_session_metadata_value(candidate):
+            value = candidate
+            found = True
+            break
+    if not found:
+        for key in aliases:
+            candidate = source_metadata.get(key)
+            if _has_session_metadata_value(candidate):
+                value = candidate
+                found = True
+                break
+    if not found:
+        return
+    for key in aliases:
+        target[key] = _clone_session_metadata_value(value)
+
+
+def _copy_publish_problem_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for aliases in PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS:
+        _copy_session_metadata_aliases(target, source, aliases)
 
 
 def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:
@@ -2624,6 +2693,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             prior = prior_problems_by_id.get(str(problem.get("id")))
             if not prior:
                 continue
+            _copy_publish_problem_metadata(problem, prior)
             if "bbox" not in problem or not problem["bbox"]:
                 problem["bbox"] = prior.get("bbox") or {}
             problem["riskFlags"] = [

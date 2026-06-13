@@ -533,6 +533,132 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
         self.assertEqual(0, preflight["issueCount"])
         self.assertEqual([], duplicate_groups)
 
+    def test_session_publish_preserves_passage_groups_in_publish_summary(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            crop_path = root / "p13.png"
+            crop_path.write_bytes(b"fake image")
+            session = {
+                "session_name": "passage-publish",
+                "output_dir": str(root),
+                "input_files": [str(root / "source.hwp")],
+                "pages": [{"id": "page-1", "problemIds": ["p13"]}],
+                "problems": [
+                    {
+                        "id": "p13",
+                        "title": "13.",
+                        "problemNumber": 13,
+                        "sourcePageId": "page-1",
+                        "imagePath": crop_path.resolve().as_uri(),
+                        "bbox": {"left": 10, "top": 10, "width": 120, "height": 100},
+                        "passageGroupId": "page-1-passage-13-16",
+                        "passageRange": {"start": 13, "end": 16},
+                        "passageSourcePageIds": ["page-1", "page-2"],
+                        "passageContinuesAcrossPages": True,
+                    }
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            def fake_build_records(entries, template, **_kwargs):
+                return (
+                    [{"record": "p13"}],
+                    [
+                        {
+                            "problem_id": "p13",
+                            "title": "13.",
+                            "record_index": 0,
+                            "crop_path": str(crop_path),
+                            "board_render_path": str(crop_path),
+                            "start_y_pages": 0.0,
+                            "actual_height_pages": 1.0,
+                        }
+                    ],
+                    0,
+                )
+
+            def fake_build_ui_session(**_kwargs):
+                return {
+                    "session_name": "published",
+                    "output_dir": str(root),
+                    "problems": [
+                        {
+                            "id": "p13",
+                            "title": "13.",
+                            "problemNumber": 13,
+                            "sourcePageId": "page-1",
+                            "imagePath": crop_path.resolve().as_uri(),
+                            "bbox": {},
+                            "riskFlags": [],
+                        }
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_handoff(output_dir, *, ui_session, **_kwargs):
+                grouped = [
+                    problem for problem in ui_session.get("problems", [])
+                    if problem.get("passageGroupId") == "page-1-passage-13-16"
+                ]
+                passage_groups = (
+                    [
+                        {
+                            "id": "page-1-passage-13-16",
+                            "problemCount": len(grouped),
+                            "continuesAcrossPages": True,
+                            "sourcePageIds": ["page-1", "page-2"],
+                        }
+                    ]
+                    if grouped
+                    else []
+                )
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps(
+                        {
+                            "status": "ready_for_classin_review",
+                            "readyForClassIn": True,
+                            "classinPreflight": {"status": "passed", "passed": True, "issueCount": 0, "issues": []},
+                            "passageGroups": passage_groups,
+                            "passageGroupCount": len(passage_groups),
+                            "passageProblemCount": len(grouped),
+                            "crossPagePassageGroupCount": len(passage_groups),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "build_edb", return_value=b"edb"),
+                patch.object(app_server, "write_edb", side_effect=lambda path, data: Path(path).write_bytes(data)),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": 1,
+                    "recordCountActual": 1,
+                }),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
+                handler._handle_session_publish()
+
+            self.assertEqual(1, len(responses))
+            body, _kwargs = responses[0]
+            self.assertTrue(body["ok"])
+            summary = body["publishSummary"]
+            self.assertEqual(1, summary["passageGroupCount"])
+            self.assertEqual(1, summary["passageProblemCount"])
+            self.assertEqual(1, summary["crossPagePassageGroupCount"])
+            self.assertEqual("page-1-passage-13-16", summary["passageGroups"][0]["id"])
+            remembered_problem = handler.server.remembered_session["problems"][0]
+            self.assertEqual("page-1-passage-13-16", remembered_problem["passageGroupId"])
+            self.assertTrue(remembered_problem["passageContinuesAcrossPages"])
+
 
 class TestRuntimeDiagnostics(unittest.TestCase):
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):
