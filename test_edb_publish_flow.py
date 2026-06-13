@@ -282,6 +282,67 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(groups, ui_session["duplicate_problem_number_groups"])
             self.assertEqual(1, ui_session["duplicateProblemNumberGroupCount"])
 
+    def test_problem_ui_session_flags_duplicate_problem_numbers_for_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            crop = root / "crop.png"
+            Image.new("RGB", (320, 240), "white").save(crop)
+
+            placements = []
+            for index, number in enumerate([24, 25, 24], start=1):
+                placements.append(
+                    {
+                        "problem_id": f"problem-{index}",
+                        "title": f"{number}.",
+                        "problem_number": number,
+                        "subject": Subject.KOREAN,
+                        "source_page_id": f"page-{index}",
+                        "source_path": str(source),
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "bbox": {"left": 0, "top": 0, "width": 320, "height": 240},
+                        "actual_content_height_pages": 0.8,
+                        "overflow_allowed": False,
+                        "start_y_pages": float(index),
+                        "snapped_next_start_y_pages": float(index + 1),
+                        "overflow_amount_pages": 0.0,
+                        "overflow_violation": False,
+                        "slot_span_count": 1,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.0,
+                        "record_mode": "image-only",
+                        "text_record_count": 0,
+                        "image_record_count": 1,
+                        "risk_flags": [],
+                    }
+                )
+
+            ui_session = build_problem_ui_session(
+                [],
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+            )
+
+            duplicate_problems = {
+                problem["id"]: problem
+                for problem in ui_session["problems"]
+                if problem["problemNumber"] == 24
+            }
+            self.assertEqual({"problem-1", "problem-3"}, set(duplicate_problems))
+            for problem in duplicate_problems.values():
+                self.assertIn("duplicate_problem_number", problem["riskFlags"])
+                self.assertEqual("check_needed", problem["reviewStatus"])
+
+            unique_problem = next(problem for problem in ui_session["problems"] if problem["problemNumber"] == 25)
+            self.assertNotIn("duplicate_problem_number", unique_problem["riskFlags"])
+            self.assertEqual("normal", unique_problem["reviewStatus"])
+
     def test_ui_session_exposes_shared_passage_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

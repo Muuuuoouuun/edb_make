@@ -53,12 +53,16 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         review_stage = review_stage.split("{reviewSummary.warningPreview &&", 1)[0]
         summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
         summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
+        risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
+        risk_meta = risk_meta.split("};", 1)[0]
 
         self.assertIn("중복 번호", review_stage)
         self.assertIn("duplicateProblemNumberGroups", review_stage)
         self.assertIn("duplicateProblemNumberGroups", summary_helper)
         self.assertIn("duplicate_problem_number_groups", summary_helper)
         self.assertIn("duplicateProblemNumberLabel", summary_helper)
+        self.assertIn("duplicate_problem_number", risk_meta)
+        self.assertIn("중복 번호", risk_meta)
 
     def test_review_summary_surfaces_passage_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

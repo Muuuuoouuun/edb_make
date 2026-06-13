@@ -2205,6 +2205,33 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
     return groups
 
 
+DUPLICATE_PROBLEM_NUMBER_RISK_FLAG = "duplicate_problem_number"
+
+
+def _mark_duplicate_problem_number_review_flags(
+    problems: list[dict[str, Any]],
+    groups: Sequence[dict[str, Any]],
+) -> None:
+    duplicate_problem_ids: set[str] = set()
+    for group in groups:
+        for problem_id in group.get("problemIds") or group.get("problem_ids") or []:
+            problem_id_text = str(problem_id or "").strip()
+            if problem_id_text:
+                duplicate_problem_ids.add(problem_id_text)
+    if not duplicate_problem_ids:
+        return
+
+    for problem in problems:
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
+        if problem_id not in duplicate_problem_ids:
+            continue
+        flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
+        flags.append(DUPLICATE_PROBLEM_NUMBER_RISK_FLAG)
+        problem["riskFlags"] = list(dict.fromkeys(flags))
+        if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
+            problem["reviewStatus"] = "check_needed"
+
+
 def _duplicate_problem_number_note(groups: Sequence[dict[str, Any]]) -> str:
     parts: list[str] = []
     for group in groups:
@@ -2702,6 +2729,7 @@ def build_ui_session(
 
     problem_counts = _session_problem_count_payload(problems)
     duplicate_problem_number_groups = _session_duplicate_problem_number_groups(problems)
+    _mark_duplicate_problem_number_review_flags(problems, duplicate_problem_number_groups)
 
     return {
         "session_name": output_dir.name,

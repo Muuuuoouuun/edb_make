@@ -2934,6 +2934,7 @@ const RISK_FLAG_META = {
   ai_image_reconstructed_check_text: 'AI 보정 확인',
   ai_image_reconstruction_failed: 'AI 보정 실패',
   ai_retry_missing_source: '재인식 원본 없음',
+  duplicate_problem_number: '중복 번호',
   fallback_grouping: '문항 경계 추정',
   hwp_oversegmentation: 'HWP 과분할',
   hwp_problem_count_mismatch: 'HWP 문항 수 차이',
