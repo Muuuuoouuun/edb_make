@@ -771,6 +771,8 @@ def _session_publish_summary(
     passage_review_items: list[dict[str, Any]] | None = None,
     passage_review_item_count: int | None = None,
     cross_page_passage_review_item_count: int | None = None,
+    passage_group_source_reuse_groups: list[dict[str, Any]] | None = None,
+    passage_group_source_reuse_group_count: int | None = None,
     published_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_edb_path = Path(edb_path).resolve()
@@ -826,6 +828,13 @@ def _session_publish_summary(
             for item in normalized_passage_review_items
             if item.get("continuesAcrossPages") or item.get("continues_across_pages")
         )
+    normalized_passage_group_source_reuse_groups = [
+        dict(group)
+        for group in (passage_group_source_reuse_groups or [])
+        if isinstance(group, dict)
+    ]
+    if passage_group_source_reuse_group_count is None:
+        passage_group_source_reuse_group_count = len(normalized_passage_group_source_reuse_groups)
     handoff_status, ready_for_classin = _classin_handoff_readiness(resolved_classin_handoff_path)
     if ready_for_classin is None and handoff_status:
         ready_for_classin = handoff_status == "ready_for_classin_review"
@@ -858,6 +867,8 @@ def _session_publish_summary(
         "passageReviewItems": normalized_passage_review_items,
         "passageReviewItemCount": max(0, int(passage_review_item_count or 0)),
         "crossPagePassageReviewItemCount": max(0, int(cross_page_passage_review_item_count or 0)),
+        "passageGroupSourceReuseGroups": normalized_passage_group_source_reuse_groups,
+        "passageGroupSourceReuseGroupCount": max(0, int(passage_group_source_reuse_group_count or 0)),
         "edbFileExists": resolved_edb_path.is_file(),
         "outputDirExists": resolved_output_dir.is_dir(),
         "recordCount": int(record_count or record_count_actual),
@@ -895,6 +906,8 @@ def _session_publish_summary(
         "passage_review_items": summary["passageReviewItems"],
         "passage_review_item_count": summary["passageReviewItemCount"],
         "cross_page_passage_review_item_count": summary["crossPagePassageReviewItemCount"],
+        "passage_group_source_reuse_groups": summary["passageGroupSourceReuseGroups"],
+        "passage_group_source_reuse_group_count": summary["passageGroupSourceReuseGroupCount"],
         "edb_file_exists": summary["edbFileExists"],
         "output_dir_exists": summary["outputDirExists"],
         "record_count": summary["recordCount"],
@@ -3038,6 +3051,25 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 ),
             )
 
+        passage_group_source_reuse_groups = None
+        for source in (handoff_payload, new_session):
+            for key in ("passageGroupSourceReuseGroups", "passage_group_source_reuse_groups"):
+                value = source.get(key)
+                if isinstance(value, list):
+                    passage_group_source_reuse_groups = value
+                    break
+            if passage_group_source_reuse_groups is not None:
+                break
+        passage_group_source_reuse_group_count = None
+        for source in (handoff_payload, new_session):
+            for key in ("passageGroupSourceReuseGroupCount", "passage_group_source_reuse_group_count"):
+                value = source.get(key)
+                if isinstance(value, (int, float, str)) and str(value).isdigit():
+                    passage_group_source_reuse_group_count = int(value)
+                    break
+            if passage_group_source_reuse_group_count is not None:
+                break
+
         publish_summary = _session_publish_summary(
             edb_path=edb_path,
             output_dir=output_dir,
@@ -3088,6 +3120,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 and str(new_session.get("crossPagePassageReviewItemCount")).isdigit()
                 else None
             ),
+            passage_group_source_reuse_groups=passage_group_source_reuse_groups,
+            passage_group_source_reuse_group_count=passage_group_source_reuse_group_count,
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary

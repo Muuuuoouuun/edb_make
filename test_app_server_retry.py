@@ -930,6 +930,126 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual("page-1-passage-13-16", remembered_problem["passageGroupId"])
             self.assertTrue(remembered_problem["passageContinuesAcrossPages"])
 
+    def test_session_publish_preserves_passage_group_source_reuse_in_publish_summary(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            crop_path = root / "p31.png"
+            crop_path.write_bytes(b"fake image")
+            source_reuse_groups = [
+                {
+                    "passageGroupId": "hwp-text-passage-31-34",
+                    "sourcePageId": "page-004",
+                    "problemIds": ["p31", "p32"],
+                    "overlapAreaRatio": 0.92,
+                }
+            ]
+            session = {
+                "session_name": "passage-reuse-publish",
+                "output_dir": str(root),
+                "input_files": [str(root / "source.hwp")],
+                "pages": [{"id": "page-004", "problemIds": ["p31", "p32"]}],
+                "problems": [
+                    {
+                        "id": "p31",
+                        "title": "31.",
+                        "problemNumber": 31,
+                        "sourcePageId": "page-004",
+                        "imagePath": crop_path.resolve().as_uri(),
+                        "bbox": {"left": 10, "top": 10, "width": 120, "height": 100},
+                    },
+                    {
+                        "id": "p32",
+                        "title": "32.",
+                        "problemNumber": 32,
+                        "sourcePageId": "page-004",
+                        "imagePath": crop_path.resolve().as_uri(),
+                        "bbox": {"left": 200, "top": 10, "width": 120, "height": 100},
+                    },
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            def fake_build_records(entries, template, **_kwargs):
+                return (
+                    [{"record": "p31"}, {"record": "p32"}],
+                    [
+                        {
+                            "problem_id": "p31",
+                            "title": "31.",
+                            "record_index": 0,
+                            "crop_path": str(crop_path),
+                            "board_render_path": str(crop_path),
+                            "start_y_pages": 0.0,
+                            "actual_height_pages": 1.0,
+                        },
+                        {
+                            "problem_id": "p32",
+                            "title": "32.",
+                            "record_index": 1,
+                            "crop_path": str(crop_path),
+                            "board_render_path": str(crop_path),
+                            "start_y_pages": 1.0,
+                            "actual_height_pages": 1.0,
+                        },
+                    ],
+                    0,
+                )
+
+            def fake_build_ui_session(**_kwargs):
+                return {
+                    "session_name": "published",
+                    "output_dir": str(root),
+                    "problems": [
+                        {"id": "p31", "title": "31.", "riskFlags": []},
+                        {"id": "p32", "title": "32.", "riskFlags": []},
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_handoff(output_dir, **_kwargs):
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps(
+                        {
+                            "status": "ready_for_classin_review",
+                            "readyForClassIn": True,
+                            "classinPreflight": {"status": "passed", "passed": True, "issueCount": 0, "issues": []},
+                            "passageGroupSourceReuseGroups": source_reuse_groups,
+                            "passageGroupSourceReuseGroupCount": 1,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "build_edb", return_value=b"edb"),
+                patch.object(app_server, "write_edb", side_effect=lambda path, data: Path(path).write_bytes(data)),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": 2,
+                    "recordCountActual": 2,
+                }),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
+                handler._handle_session_publish()
+
+            self.assertEqual(1, len(responses))
+            body, _kwargs = responses[0]
+            self.assertTrue(body["ok"])
+            summary = body["publishSummary"]
+            self.assertEqual(source_reuse_groups, summary["passageGroupSourceReuseGroups"])
+            self.assertEqual(source_reuse_groups, summary["passage_group_source_reuse_groups"])
+            self.assertEqual(1, summary["passageGroupSourceReuseGroupCount"])
+            self.assertEqual(1, summary["passage_group_source_reuse_group_count"])
+            self.assertEqual(source_reuse_groups, handler.server.remembered_session["publishSummary"]["passageGroupSourceReuseGroups"])
+
     def test_session_publish_summary_prefers_resolved_session_passage_review_queue(self):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)

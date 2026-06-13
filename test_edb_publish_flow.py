@@ -2722,6 +2722,40 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(5, summary["passageProblemCount"])
             self.assertEqual(5, summary["passage_problem_count"])
 
+    def test_publish_summary_exposes_passage_group_source_reuse_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            edb_path = root / "lesson.edb"
+            edb_path.write_bytes(b"placeholder")
+            source_reuse_groups = [
+                {
+                    "passageGroupId": "hwp-text-passage-31-34",
+                    "sourcePageId": "page-004",
+                    "problemIds": ["p31", "p32"],
+                    "overlapAreaRatio": 0.92,
+                }
+            ]
+
+            summary = _session_publish_summary(
+                edb_path=edb_path,
+                output_dir=root,
+                edb_validation={
+                    "outerSize": 1234,
+                    "innerSize": 987,
+                    "pageCountHint": 50,
+                    "recordCountHint": 2,
+                    "recordCountActual": 2,
+                },
+                record_count=2,
+                passage_group_source_reuse_groups=source_reuse_groups,
+                published_at="2026-06-13T12:00:00+09:00",
+            )
+
+            self.assertEqual(source_reuse_groups, summary["passageGroupSourceReuseGroups"])
+            self.assertEqual(source_reuse_groups, summary["passage_group_source_reuse_groups"])
+            self.assertEqual(1, summary["passageGroupSourceReuseGroupCount"])
+            self.assertEqual(1, summary["passage_group_source_reuse_group_count"])
+
     def test_publish_summary_preserves_core_and_supplemental_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
