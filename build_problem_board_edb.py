@@ -3147,10 +3147,18 @@ def _session_passage_group_source_reuse_groups(problems: Sequence[dict[str, Any]
             continue
         source_page_id = str(issue.get("sourcePageId") or "").strip()
         overlap_area_ratio = _coerce_float(issue.get("overlapAreaRatio")) or 0.0
+        passage_range = issue.get("passageRange") if isinstance(issue.get("passageRange"), dict) else {}
+        passage_child_numbers = _ordered_unique_ints(
+            issue.get("passageChildProblemNumbers") or issue.get("passage_child_problem_numbers") or []
+        )
         groups.append(
             {
                 "passageGroupId": passage_group_id,
                 "passage_group_id": passage_group_id,
+                "passageRange": dict(passage_range),
+                "passage_range": dict(passage_range),
+                "passageChildProblemNumbers": passage_child_numbers,
+                "passage_child_problem_numbers": passage_child_numbers,
                 "sourcePageId": source_page_id,
                 "source_page_id": source_page_id,
                 "problemIds": [problem_id, next_problem_id],
@@ -3501,6 +3509,24 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
                 if overlap_area_ratio < threshold:
                     continue
                 union_area = area + next_area - intersection_area
+                passage_range = _session_problem_passage_range(problem) or _session_problem_passage_range(next_problem)
+                passage_range_payload = (
+                    {"start": passage_range[0], "end": passage_range[1]} if passage_range is not None else {}
+                )
+                passage_child_numbers = _ordered_unique_ints(
+                    [
+                        *_session_problem_passage_numbers(
+                            problem,
+                            "passageChildProblemNumbers",
+                            "passage_child_problem_numbers",
+                        ),
+                        *_session_problem_passage_numbers(
+                            next_problem,
+                            "passageChildProblemNumbers",
+                            "passage_child_problem_numbers",
+                        ),
+                    ]
+                )
                 problem_ids = [
                     str(problem.get("id") or problem.get("problem_id") or ""),
                     str(next_problem.get("id") or next_problem.get("problem_id") or ""),
@@ -3522,6 +3548,10 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
                             "problemIds": problem_ids,
                             "problem_ids": problem_ids,
                             "passageGroupId": group_id,
+                            "passageRange": passage_range_payload,
+                            "passage_range": passage_range_payload,
+                            "passageChildProblemNumbers": passage_child_numbers,
+                            "passage_child_problem_numbers": passage_child_numbers,
                             "sourcePageId": source_page_id,
                             "overlapAreaRatio": round(overlap_area_ratio, 6),
                             "intersectionOverUnion": round(intersection_area / union_area, 6) if union_area > 0 else 0.0,
@@ -4127,6 +4157,13 @@ def write_classin_handoff_manifest(
     classin_preflight = _classin_handoff_preflight(ui_session)
     raw_problems = ui_session.get("problems")
     problems = raw_problems if isinstance(raw_problems, list) else []
+    passage_group_source_reuse_groups = (
+        ui_session.get("passageGroupSourceReuseGroups")
+        or ui_session.get("passage_group_source_reuse_groups")
+        or _session_passage_group_source_reuse_groups(problems)
+    )
+    if not isinstance(passage_group_source_reuse_groups, list):
+        passage_group_source_reuse_groups = []
     passage_groups = _session_passage_groups(problems)
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
@@ -4164,6 +4201,8 @@ def write_classin_handoff_manifest(
         "duplicateProblemNumberGroups": duplicate_problem_number_groups,
         "blockingDuplicateProblemNumberGroups": blocking_duplicate_problem_number_groups,
         "duplicateProblemNumberNote": duplicate_problem_number_note,
+        "passageGroupSourceReuseGroups": passage_group_source_reuse_groups,
+        "passageGroupSourceReuseGroupCount": len(passage_group_source_reuse_groups),
         "passageGroups": passage_groups,
         "passageGroupCount": len(passage_groups),
         "passageProblemCount": sum(int(group.get("problemCount") or 0) for group in passage_groups),

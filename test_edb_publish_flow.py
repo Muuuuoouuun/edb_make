@@ -2410,7 +2410,9 @@ class TestEdbPublishFlow(unittest.TestCase):
                             "sourcePageId": "page-004",
                             "bbox": {"left": 42, "top": 120, "width": 520, "height": 430},
                             "passageGroupId": "hwp-continuation-passage-22-26",
+                            "passageRange": {"start": 22, "end": 26},
                             "passageRole": "child_question",
+                            "passageChildProblemNumbers": [22, 23, 24, 25, 26],
                             "riskFlags": [],
                             "reviewStatus": "normal",
                         },
@@ -2421,7 +2423,9 @@ class TestEdbPublishFlow(unittest.TestCase):
                             "sourcePageId": "page-004",
                             "bbox": {"left": 48, "top": 132, "width": 510, "height": 410},
                             "passageGroupId": "hwp-continuation-passage-22-26",
+                            "passageRange": {"start": 22, "end": 26},
                             "passageRole": "child_question",
+                            "passageChildProblemNumbers": [22, 23, 24, 25, 26],
                             "riskFlags": [],
                             "reviewStatus": "normal",
                         },
@@ -2449,7 +2453,19 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["p22", "p23"], reuse_issues[0]["problemIds"])
             self.assertEqual(["p22", "p23"], reuse_issues[0]["problem_ids"])
             self.assertEqual("hwp-continuation-passage-22-26", reuse_issues[0]["passageGroupId"])
+            self.assertEqual({"start": 22, "end": 26}, reuse_issues[0]["passageRange"])
+            self.assertEqual({"start": 22, "end": 26}, reuse_issues[0]["passage_range"])
+            self.assertEqual([22, 23, 24, 25, 26], reuse_issues[0]["passageChildProblemNumbers"])
+            self.assertEqual([22, 23, 24, 25, 26], reuse_issues[0]["passage_child_problem_numbers"])
             self.assertGreaterEqual(reuse_issues[0]["overlapAreaRatio"], 0.8)
+            self.assertEqual(
+                {"start": 22, "end": 26},
+                handoff["passageGroupSourceReuseGroups"][0]["passageRange"],
+            )
+            self.assertEqual(
+                [22, 23, 24, 25, 26],
+                handoff["passageGroupSourceReuseGroups"][0]["passageChildProblemNumbers"],
+            )
             self.assertIn("passage_group_source_reuse", markdown)
 
     def test_classin_preflight_ignores_hwp_text_fallback_passage_bbox_reuse(self):
