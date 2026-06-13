@@ -2140,6 +2140,188 @@ def _ordered_unique_strings(values: Iterable[Any]) -> list[str]:
     return unique
 
 
+def _ordered_unique_ints(values: Iterable[Any]) -> list[int]:
+    seen: set[int] = set()
+    unique: list[int] = []
+    for value in values:
+        number = _coerce_problem_number(value)
+        if number is None or number in seen:
+            continue
+        seen.add(number)
+        unique.append(number)
+    return unique
+
+
+def _is_missing_session_field(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, list) and not value:
+        return True
+    if isinstance(value, dict) and not value:
+        return True
+    return False
+
+
+def _session_problem_field(problem: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in problem and not _is_missing_session_field(problem[key]):
+            return problem[key]
+    metadata = problem.get("metadata")
+    if isinstance(metadata, dict):
+        for key in keys:
+            if key in metadata and not _is_missing_session_field(metadata[key]):
+                return metadata[key]
+    return None
+
+
+def _session_problem_passage_group_id(problem: dict[str, Any]) -> str:
+    return str(
+        _session_problem_field(problem, "passageGroupId", "passage_group_id") or ""
+    ).strip()
+
+
+def _session_problem_passage_range(problem: dict[str, Any]) -> tuple[int, int] | None:
+    value = _session_problem_field(problem, "passageRange", "passage_range")
+    if not isinstance(value, dict):
+        return None
+    start = _coerce_problem_number(value.get("start"))
+    end = _coerce_problem_number(value.get("end"))
+    if start is None or end is None or end < start:
+        return None
+    return start, end
+
+
+def _session_problem_passage_numbers(problem: dict[str, Any], *keys: str) -> list[int]:
+    value = _session_problem_field(problem, *keys)
+    if isinstance(value, list):
+        return _ordered_unique_ints(value)
+    return []
+
+
+def _session_problem_passage_source_page_ids(problem: dict[str, Any]) -> list[str]:
+    values: list[Any] = []
+    explicit = _session_problem_field(problem, "passageSourcePageIds", "passage_source_page_ids")
+    if isinstance(explicit, list):
+        values.extend(explicit)
+    values.append(_session_problem_field(problem, "sourcePageId", "source_page_id"))
+    return _ordered_unique_strings(values)
+
+
+def _passage_number_label(start: int | None, end: int | None, child_numbers: list[int]) -> str:
+    if start is not None and end is not None:
+        return str(start) if start == end else f"{start}-{end}"
+    if child_numbers:
+        first = min(child_numbers)
+        last = max(child_numbers)
+        return str(first) if first == last else f"{first}-{last}"
+    return ""
+
+
+def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        group_id = _session_problem_passage_group_id(problem)
+        if not group_id:
+            continue
+        group = groups.setdefault(
+            group_id,
+            {
+                "groupId": group_id,
+                "problemNumbers": [],
+                "childProblemNumbers": [],
+                "problemIds": [],
+                "sourcePageIds": [],
+                "roles": [],
+                "continuesAcrossPages": False,
+                "_rangeStart": None,
+                "_rangeEnd": None,
+            },
+        )
+
+        problem_number = _coerce_problem_number(
+            _session_problem_field(problem, "problemNumber", "problem_number")
+        )
+        if problem_number is not None and problem_number not in group["problemNumbers"]:
+            group["problemNumbers"].append(problem_number)
+
+        child_numbers = _session_problem_passage_numbers(
+            problem,
+            "passageChildProblemNumbers",
+            "passage_child_problem_numbers",
+        )
+        for child_number in child_numbers:
+            if child_number not in group["childProblemNumbers"]:
+                group["childProblemNumbers"].append(child_number)
+
+        problem_id = str(_session_problem_field(problem, "id", "problem_id") or "").strip()
+        if problem_id and problem_id not in group["problemIds"]:
+            group["problemIds"].append(problem_id)
+
+        for page_id in _session_problem_passage_source_page_ids(problem):
+            if page_id not in group["sourcePageIds"]:
+                group["sourcePageIds"].append(page_id)
+
+        role = str(
+            _session_problem_field(problem, "passageRole", "passage_role") or ""
+        ).strip()
+        if role and role not in group["roles"]:
+            group["roles"].append(role)
+
+        passage_range = _session_problem_passage_range(problem)
+        if passage_range is not None:
+            start, end = passage_range
+            current_start = group["_rangeStart"]
+            current_end = group["_rangeEnd"]
+            group["_rangeStart"] = start if current_start is None else min(current_start, start)
+            group["_rangeEnd"] = end if current_end is None else max(current_end, end)
+
+        group["continuesAcrossPages"] = bool(group["continuesAcrossPages"]) or bool(
+            _session_problem_field(
+                problem,
+                "passageContinuesAcrossPages",
+                "passage_continues_across_pages",
+            )
+        )
+
+    items: list[dict[str, Any]] = []
+    for group in groups.values():
+        child_numbers = _ordered_unique_ints(group["childProblemNumbers"])
+        start = group.pop("_rangeStart")
+        end = group.pop("_rangeEnd")
+        if (start is None or end is None) and child_numbers:
+            start = min(child_numbers)
+            end = max(child_numbers)
+        source_page_ids = _ordered_unique_strings(group["sourcePageIds"])
+        continues_across_pages = bool(group["continuesAcrossPages"]) or len(source_page_ids) > 1
+        label = _passage_number_label(start, end, child_numbers)
+        source_page_count = len(source_page_ids)
+        problem_count = len(group["problemIds"])
+        message_label = label or str(group["groupId"])
+        group.update(
+            {
+                "numberStart": start,
+                "numberEnd": end,
+                "numberLabel": label,
+                "problemNumbers": _ordered_unique_ints(group["problemNumbers"]),
+                "childProblemNumbers": child_numbers,
+                "sourcePageIds": source_page_ids,
+                "sourcePageCount": source_page_count,
+                "problemCount": problem_count,
+                "continuesAcrossPages": continues_across_pages,
+                "message": (
+                    f"긴 지문 그룹 {message_label}이 {source_page_count}개 원본 페이지와 "
+                    f"{problem_count}개 감지 문항에 걸쳐 있습니다."
+                ),
+            }
+        )
+        items.append(group)
+    return items
+
+
 def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> list[dict[str, Any]]:
     numbered: list[dict[str, Any]] = []
     for index, problem in enumerate(problems):
@@ -2805,6 +2987,12 @@ def write_classin_handoff_manifest(
         duplicate_problem_number_groups = []
     duplicate_problem_number_note = _duplicate_problem_number_note(duplicate_problem_number_groups)
     classin_preflight = _classin_handoff_preflight(ui_session)
+    raw_problems = ui_session.get("problems")
+    problems = raw_problems if isinstance(raw_problems, list) else []
+    passage_groups = _session_passage_groups(problems)
+    cross_page_passage_group_count = sum(
+        1 for group in passage_groups if group.get("continuesAcrossPages")
+    )
     payload = {
         "status": "ready_for_classin_review",
         "manualReviewRequired": True,
@@ -2824,6 +3012,10 @@ def write_classin_handoff_manifest(
         "boardTheme": str(summary.get("board_theme") or ui_session.get("board_theme") or ""),
         "duplicateProblemNumberGroups": duplicate_problem_number_groups,
         "duplicateProblemNumberNote": duplicate_problem_number_note,
+        "passageGroups": passage_groups,
+        "passageGroupCount": len(passage_groups),
+        "passageProblemCount": sum(int(group.get("problemCount") or 0) for group in passage_groups),
+        "crossPagePassageGroupCount": cross_page_passage_group_count,
         "classinPreflight": classin_preflight,
         "classin_preflight": classin_preflight,
         "reviewRiskCounts": review_summary.get("riskFlagCounts", {}) if isinstance(review_summary, dict) else {},
@@ -2831,6 +3023,7 @@ def write_classin_handoff_manifest(
             "ClassIn에서 EDB 파일 열기",
             "문항 수와 순서가 기대값과 일치하는지 확인",
             "각 문항 이미지가 잘리지 않고 읽히는지 확인",
+            "긴 지문/공통 지문 그룹이 하위 문항과 함께 자연스럽게 배치됐는지 확인",
             "보충 자료/이어지는 자료가 문항 뒤에 자연스럽게 배치됐는지 확인",
             "확대/축소와 페이지 이동 시 썸네일/보드가 깨지지 않는지 확인",
         ],
@@ -2854,6 +3047,22 @@ def write_classin_handoff_manifest(
         if duplicate_problem_number_note
         else []
     )
+    passage_group_lines: list[str] = []
+    if passage_groups:
+        passage_group_lines = ["", "## Passage Groups"]
+        for group in passage_groups:
+            label = str(group.get("numberLabel") or group.get("groupId") or "").strip()
+            page_label = ", ".join(str(page_id) for page_id in group.get("sourcePageIds") or [])
+            status_parts = [
+                f"{int(group.get('problemCount') or 0)} problems",
+                f"pages {page_label}" if page_label else "",
+                "cross-page" if group.get("continuesAcrossPages") else "single-page",
+            ]
+            status = " · ".join(part for part in status_parts if part)
+            passage_group_lines.append(
+                f"- `{group.get('groupId')}` {label}"
+                + (f" · {status}" if status else "")
+            )
     if classin_preflight["passed"]:
         preflight_lines = ["- OK: no automatic asset issues found."]
     else:
@@ -2873,6 +3082,7 @@ def write_classin_handoff_manifest(
                 f"- Supplemental items: {payload['expectedSupplementalItemCount']}",
                 f"- ClassIn page hint: {payload['classinPageCountHint']}",
                 *duplicate_problem_number_lines,
+                *passage_group_lines,
                 "",
                 "## Manual Checklist",
                 checklist,

@@ -631,6 +631,100 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("35-45 x2", handoff["duplicateProblemNumberNote"])
             self.assertIn("Duplicate problem numbers: 35-45 x2", markdown)
 
+    def test_classin_handoff_manifest_summarizes_passage_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 4,
+                    "supplemental_item_count": 0,
+                    "detected_problem_count": 4,
+                    "source_page_count": 2,
+                    "reviewSummary": {},
+                    "problems": [
+                        {
+                            "id": "p13",
+                            "title": "13.",
+                            "problemNumber": 13,
+                            "sourcePageId": "page-1",
+                            "passageGroupId": "page-1-passage-13-16",
+                            "passageRange": {"start": 13, "end": 16},
+                            "passageRole": "child_question",
+                            "passageChildProblemNumbers": [13, 14, 15, 16],
+                            "passageSourcePageIds": ["page-1", "page-2"],
+                            "passageContinuesAcrossPages": True,
+                        },
+                        {
+                            "id": "p15",
+                            "title": "15.",
+                            "problemNumber": 15,
+                            "sourcePageId": "page-2",
+                            "passageGroupId": "page-1-passage-13-16",
+                            "passageRange": {"start": 13, "end": 16},
+                            "passageRole": "child_question",
+                            "passageChildProblemNumbers": [13, 14, 15, 16],
+                            "passageSourcePageIds": ["page-1", "page-2"],
+                            "passageContinuesAcrossPages": True,
+                        },
+                        {
+                            "id": "p16",
+                            "title": "16.",
+                            "problemNumber": 16,
+                            "sourcePageId": "page-2",
+                            "passageGroupId": "",
+                            "metadata": {
+                                "passage_group_id": "page-1-passage-13-16",
+                                "passage_range": {"start": 13, "end": 16},
+                                "passage_role": "child_question",
+                                "passage_child_problem_numbers": [13, 14, 15, 16],
+                                "passage_source_page_ids": ["page-1", "page-2"],
+                                "passage_continues_across_pages": True,
+                            },
+                        },
+                    ],
+                },
+                summary={"record_count": 4, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=8),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            self.assertEqual(1, handoff["passageGroupCount"])
+            self.assertEqual(1, handoff["crossPagePassageGroupCount"])
+            self.assertEqual(3, handoff["passageProblemCount"])
+            self.assertEqual(
+                [
+                    {
+                        "groupId": "page-1-passage-13-16",
+                        "numberStart": 13,
+                        "numberEnd": 16,
+                        "numberLabel": "13-16",
+                        "problemNumbers": [13, 15, 16],
+                        "childProblemNumbers": [13, 14, 15, 16],
+                        "problemIds": ["p13", "p15", "p16"],
+                        "sourcePageIds": ["page-1", "page-2"],
+                        "sourcePageCount": 2,
+                        "problemCount": 3,
+                        "continuesAcrossPages": True,
+                        "roles": ["child_question"],
+                        "message": "긴 지문 그룹 13-16이 2개 원본 페이지와 3개 감지 문항에 걸쳐 있습니다.",
+                    }
+                ],
+                handoff["passageGroups"],
+            )
+            self.assertIn("## Passage Groups", markdown)
+            self.assertIn("page-1-passage-13-16", markdown)
+            self.assertIn("13-16", markdown)
+            self.assertIn("cross-page", markdown)
+
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
