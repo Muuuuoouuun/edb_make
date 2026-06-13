@@ -2184,6 +2184,17 @@ def _problem_passage_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
         payload["passageFragmentCount"] = fragment_count
         payload["passage_fragment_count"] = fragment_count
 
+    continuation_block_ids = metadata.get("passage_pre_question_continuation_block_ids")
+    if isinstance(continuation_block_ids, list):
+        normalized_continuation_block_ids = [
+            str(block_id)
+            for block_id in continuation_block_ids
+            if str(block_id)
+        ]
+        if normalized_continuation_block_ids:
+            payload["passagePreQuestionContinuationBlockIds"] = normalized_continuation_block_ids
+            payload["passage_pre_question_continuation_block_ids"] = normalized_continuation_block_ids
+
     return payload
 
 

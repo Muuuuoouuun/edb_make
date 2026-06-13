@@ -32,7 +32,7 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.jsx?v=passage-risk-20260614", html)
+        self.assertIn("app.jsx?v=passage-continuation-20260614", html)
         self.assertIn("publish_guard.js?v=publish-overlap-20260614", html)
 
 

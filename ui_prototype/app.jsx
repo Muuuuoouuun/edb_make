@@ -632,11 +632,16 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
               <button
                 type="button"
                 className={`review-summary-chip risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
-                title={`${reviewSummary.passageProblemCount}개 문항이 긴 지문 그룹에 연결되어 있습니다.`}
+                title={`${reviewSummary.passageProblemCount}개 문항이 긴 지문 그룹에 연결되어 있습니다.${
+                  reviewSummary.passageContinuationBlockCount > 0
+                    ? ` 이어짐 블록 ${reviewSummary.passageContinuationBlockCount}개 포함.`
+                    : ''
+                }`}
                 aria-pressed={reviewFilter === 'passage'}
                 onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
               >
                 긴 지문 그룹 {reviewSummary.passageGroupCount}
+                {reviewSummary.passageContinuationBlockCount > 0 ? ` · 이어짐 ${reviewSummary.passageContinuationBlockCount}` : ''}
               </button>
             )}
             {reviewSummary.topRiskFlags.map(item => (
@@ -3252,6 +3257,7 @@ function collectPassageGroupSummary(session){
       sourcePageIds: new Set(),
       range: problem.passageRange || problem.passage_range || null,
       continuesAcrossPages: false,
+      continuationBlockIds: new Set(),
     };
     group.problemCount += 1;
     const rawPageIds = problem.passageSourcePageIds || problem.passage_source_page_ids || [];
@@ -3265,6 +3271,15 @@ function collectPassageGroupSummary(session){
     if (sourcePageId) group.sourcePageIds.add(sourcePageId);
     group.continuesAcrossPages = group.continuesAcrossPages
       || Boolean(problem.passageContinuesAcrossPages || problem.passage_continues_across_pages);
+    const rawContinuationBlockIds = problem.passagePreQuestionContinuationBlockIds
+      || problem.passage_pre_question_continuation_block_ids
+      || [];
+    if (Array.isArray(rawContinuationBlockIds)) {
+      rawContinuationBlockIds.forEach(blockId => {
+        const normalized = String(blockId || '').trim();
+        if (normalized) group.continuationBlockIds.add(normalized);
+      });
+    }
     groups.set(groupId, group);
   });
   const items = Array.from(groups.values()).map(group => ({
@@ -3274,12 +3289,14 @@ function collectPassageGroupSummary(session){
     sourcePageCount: group.sourcePageIds.size,
     range: group.range,
     continuesAcrossPages: group.continuesAcrossPages || group.sourcePageIds.size > 1,
+    continuationBlockCount: group.continuationBlockIds.size,
   }));
   return {
     passageGroups: items,
     passageGroupCount: items.length,
     passageProblemCount: items.reduce((total, group) => total + group.problemCount, 0),
     crossPagePassageGroupCount: items.filter(group => group.continuesAcrossPages).length,
+    passageContinuationBlockCount: items.reduce((total, group) => total + group.continuationBlockCount, 0),
   };
 }
 
@@ -3401,6 +3418,7 @@ function sessionReviewSummary(session){
     passageGroupCount: passageSummary.passageGroupCount,
     passageProblemCount: passageSummary.passageProblemCount,
     crossPagePassageGroupCount: passageSummary.crossPagePassageGroupCount,
+    passageContinuationBlockCount: passageSummary.passageContinuationBlockCount,
   };
 }
 

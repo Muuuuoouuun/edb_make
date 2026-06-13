@@ -404,6 +404,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                             "passage_role": "child_question",
                             "shared_passage_block_ids": ["range-header", "shared-passage"],
                             "passage_child_problem_numbers": [13, 14],
+                            "passage_pre_question_continuation_block_ids": ["continued-line-1"],
                         },
                     )
                 ],
@@ -451,6 +452,8 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual("child_question", problem["passageRole"])
             self.assertEqual(["range-header", "shared-passage"], problem["sharedPassageBlockIds"])
             self.assertEqual([13, 14], problem["passageChildProblemNumbers"])
+            self.assertEqual(["continued-line-1"], problem["passagePreQuestionContinuationBlockIds"])
+            self.assertEqual(["continued-line-1"], problem["passage_pre_question_continuation_block_ids"])
 
     def test_ui_session_links_cross_page_passage_child_questions(self):
         with tempfile.TemporaryDirectory() as tmp:

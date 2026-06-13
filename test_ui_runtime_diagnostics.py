@@ -78,13 +78,18 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
         self.assertIn("'passage', '긴 지문'", review_stage)
         self.assertIn("긴 지문 그룹", review_stage)
+        self.assertIn("이어짐", review_stage)
         self.assertIn("passageGroupCount", review_stage)
+        self.assertIn("passageContinuationBlockCount", review_stage)
         self.assertIn("review-bbox-passage", review_stage)
         self.assertIn("review-bbox-passage-tag", review_stage)
         self.assertIn(".review-bbox-passage", board_html)
         self.assertIn("passageGroupCount", summary_helper)
         self.assertIn("passageProblemCount", summary_helper)
+        self.assertIn("passageContinuationBlockCount", summary_helper)
         self.assertIn("passageGroupIdFor(problem)", passage_helper)
+        self.assertIn("passagePreQuestionContinuationBlockIds", passage_helper)
+        self.assertIn("passage_pre_question_continuation_block_ids", passage_helper)
         self.assertIn("passageGroupId", passage_id_helper)
         self.assertIn("passage_group_id", passage_id_helper)
         risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
