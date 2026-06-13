@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+try:
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover
+    np = None
+
 
 OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits"
 GEMINI_IMAGE_API_BASE = "https://generativelanguage.googleapis.com/v1/models"
@@ -533,29 +538,40 @@ def clean_problem_image_transparency(
     background_color: tuple[int, int, int] | None = None
     background_luminance: float | None = None
     background_kind = "none"
+    alpha_backend = "none"
 
     if transparent_background and rgba.width > 0 and rgba.height > 0:
         background_color = _estimate_border_background(rgba)
         background_luminance = _luminance(background_color)
         background_kind = "dark" if background_luminance <= 128 else "light"
-        pixels = []
-        image_pixels = rgba.get_flattened_data() if hasattr(rgba, "get_flattened_data") else rgba.getdata()
-        for r, g, b, a in image_pixels:
-            next_alpha = _alpha_after_background_removal(
-                r,
-                g,
-                b,
-                a,
+        if np is not None:
+            rgba, transparent_pixels, partial_pixels = _remove_background_with_numpy(
+                rgba,
                 background_color=background_color,
                 background_luminance=background_luminance,
                 background_kind=background_kind,
             )
-            if next_alpha <= 0:
-                transparent_pixels += 1
-            elif next_alpha < a:
-                partial_pixels += 1
-            pixels.append((r, g, b, max(0, min(255, next_alpha))))
-        rgba.putdata(pixels)
+            alpha_backend = "numpy"
+        else:
+            pixels = []
+            image_pixels = rgba.get_flattened_data() if hasattr(rgba, "get_flattened_data") else rgba.getdata()
+            for r, g, b, a in image_pixels:
+                next_alpha = _alpha_after_background_removal(
+                    r,
+                    g,
+                    b,
+                    a,
+                    background_color=background_color,
+                    background_luminance=background_luminance,
+                    background_kind=background_kind,
+                )
+                if next_alpha <= 0:
+                    transparent_pixels += 1
+                elif next_alpha < a:
+                    partial_pixels += 1
+                pixels.append((r, g, b, max(0, min(255, next_alpha))))
+            rgba.putdata(pixels)
+            alpha_backend = "python"
 
     removed_artifacts = 0
     if remove_corner_page_artifacts:
@@ -568,12 +584,85 @@ def clean_problem_image_transparency(
         "background_kind": background_kind,
         "background_color": list(background_color) if background_color else None,
         "background_luminance": round(background_luminance, 2) if background_luminance is not None else None,
+        "alpha_backend": alpha_backend,
         "transparent_pixels": transparent_pixels,
         "partial_alpha_pixels": partial_pixels,
         "transparent_ratio": round(transparent_pixels / total_pixels, 4),
         "removed_corner_artifacts": removed_artifacts,
     }
     return rgba, stats
+
+
+def _remove_background_with_numpy(
+    image: Any,
+    *,
+    background_color: tuple[int, int, int],
+    background_luminance: float,
+    background_kind: str,
+) -> tuple[Any, int, int]:
+    if np is None:
+        raise RuntimeError("numpy is required for _remove_background_with_numpy")
+    from PIL import Image
+
+    arr = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    rgb = arr[..., :3].astype(np.float32)
+    original_alpha = arr[..., 3].astype(np.float32)
+    alpha = original_alpha.copy()
+    background = np.asarray(background_color, dtype=np.float32)
+
+    luminance = (0.299 * rgb[..., 0]) + (0.587 * rgb[..., 1]) + (0.114 * rgb[..., 2])
+    saturation = rgb.max(axis=2) - rgb.min(axis=2)
+    distance = np.sqrt(np.sum((rgb - background) ** 2, axis=2))
+    visible = original_alpha > 0
+
+    if background_kind == "dark":
+        remove = visible & (distance <= 22.0) & (luminance <= background_luminance + 18.0)
+        alpha[remove] = 0.0
+        partial = (
+            visible
+            & ~remove
+            & (distance <= 72.0)
+            & (luminance <= background_luminance + 62.0)
+            & (saturation <= 42.0)
+        )
+        keep = np.clip((distance - 22.0) / 50.0, 0.0, 1.0) * 255.0
+        alpha[partial] = np.minimum(original_alpha[partial], np.rint(keep[partial]))
+    else:
+        handled = np.zeros(alpha.shape, dtype=bool)
+        remove = (
+            visible
+            & (saturation <= 20.0)
+            & (luminance >= max(238.0, background_luminance - 8.0))
+            & (distance <= 34.0)
+        )
+        alpha[remove] = 0.0
+        handled |= remove
+
+        partial = (
+            visible
+            & ~handled
+            & (saturation <= 32.0)
+            & (luminance >= 210.0)
+            & (distance <= 88.0)
+        )
+        keep = np.clip((distance - 34.0) / 54.0, 0.0, 1.0) * 255.0
+        alpha[partial] = np.minimum(original_alpha[partial], np.rint(keep[partial]))
+        handled |= partial
+
+        remove_bright = visible & ~handled & (saturation <= 20.0) & (luminance >= 248.0)
+        alpha[remove_bright] = 0.0
+        handled |= remove_bright
+
+        fade_bright = visible & ~handled & (saturation <= 28.0) & (luminance >= 218.0)
+        faded = np.clip(((255.0 - luminance) / 37.0) * 255.0, 0.0, 255.0)
+        alpha[fade_bright] = np.minimum(original_alpha[fade_bright], np.rint(faded[fade_bright]))
+
+    next_alpha = np.clip(alpha, 0.0, 255.0).astype(np.uint8)
+    out = arr.copy()
+    out[..., 3] = next_alpha
+    transparent_pixels = int(np.count_nonzero(next_alpha <= 0))
+    partial_pixels = int(np.count_nonzero((next_alpha > 0) & (next_alpha < arr[..., 3])))
+    return Image.fromarray(out, mode="RGBA"), transparent_pixels, partial_pixels
 
 
 def _estimate_border_background(image: Any) -> tuple[int, int, int]:

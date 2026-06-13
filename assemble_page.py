@@ -599,15 +599,29 @@ def group_problem_units(page: PageModel) -> PageModel:
 
     # Set-problem range header extraction & shared asset mapping
     shared_blocks_by_number: dict[int, list[str]] = {}
+    shared_metadata_by_number: dict[int, dict[str, object]] = {}
     active_range: tuple[int, int] | None = None
     active_shared_blocks: list[str] = []
+
+    def flush_active_shared_range() -> None:
+        if active_range is None:
+            return
+        start, end = active_range
+        shared_metadata = {
+            "passage_group_id": f"{page.page_id}-passage-{start}-{end}",
+            "passage_range": {"start": start, "end": end},
+            "passage_role": "child_question",
+            "shared_passage_block_ids": list(active_shared_blocks),
+            "passage_child_problem_numbers": list(range(start, end + 1)),
+        }
+        for num in range(start, end + 1):
+            shared_blocks_by_number[num] = list(active_shared_blocks)
+            shared_metadata_by_number[num] = dict(shared_metadata)
 
     for block in classified_blocks:
         range_val = extract_set_problem_range(block.text)
         if range_val is not None:
-            if active_range is not None:
-                for num in range(active_range[0], active_range[1] + 1):
-                    shared_blocks_by_number[num] = list(active_shared_blocks)
+            flush_active_shared_range()
             active_range = range_val
             active_shared_blocks = [block.block_id]
             continue
@@ -615,8 +629,7 @@ def group_problem_units(page: PageModel) -> PageModel:
         prob_num, _ = extract_problem_number_from_block(block)
         if prob_num is not None:
             if active_range is not None:
-                for num in range(active_range[0], active_range[1] + 1):
-                    shared_blocks_by_number[num] = list(active_shared_blocks)
+                flush_active_shared_range()
                 active_range = None
                 active_shared_blocks = []
             continue
@@ -625,8 +638,7 @@ def group_problem_units(page: PageModel) -> PageModel:
             active_shared_blocks.append(block.block_id)
 
     if active_range is not None:
-        for num in range(active_range[0], active_range[1] + 1):
-            shared_blocks_by_number[num] = list(active_shared_blocks)
+        flush_active_shared_range()
 
     all_shared_ids = {bid for bids in shared_blocks_by_number.values() for bid in bids}
 
@@ -649,6 +661,7 @@ def group_problem_units(page: PageModel) -> PageModel:
                 current.metadata["problem_number"] = problem_number
                 current.metadata["problem_number_source"] = number_source
                 if problem_number in shared_blocks_by_number:
+                    current.metadata.update(shared_metadata_by_number.get(problem_number, {}))
                     for shared_bid in shared_blocks_by_number[problem_number]:
                         shared_block = next((b for b in classified_blocks if b.block_id == shared_bid), None)
                         if shared_block:

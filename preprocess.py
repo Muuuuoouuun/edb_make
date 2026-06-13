@@ -5,13 +5,19 @@ import math
 import hashlib
 import json
 import os
+import re
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
+import time
+import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from PIL import Image, ImageOps
 
@@ -19,6 +25,11 @@ try:
     import fitz  # type: ignore
 except ImportError:  # pragma: no cover
     fitz = None
+
+try:
+    import olefile  # type: ignore
+except ImportError:  # pragma: no cover
+    olefile = None
 
 try:
     import cv2  # type: ignore
@@ -33,6 +44,9 @@ except ImportError:  # pragma: no cover
 
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
+HWP_RENDER_TREE_BASE_DPI = 72.0
+HWP_NORMALIZED_CACHE_VERSION = 2
+HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
 
 @dataclass(slots=True)
@@ -99,6 +113,15 @@ from pathlib import Path
 import fitz
 
 
+def looks_like_pdf_print_date_header(text):
+    normalized = str(text or "").strip()
+    if re.match(r"^[0-9]{2,4}\.\s*[0-9]{1,2}\.\s*[0-9]{1,2}\.", normalized):
+        return True
+    if ("오전" in normalized or "오후" in normalized or "AM" in normalized or "PM" in normalized):
+        return normalized[:1].isdigit() and len(re.findall(r"[0-9]+", normalized)) >= 3
+    return False
+
+
 def extract_pdf_problem_markers(page, scale):
     markers = []
     try:
@@ -116,6 +139,8 @@ def extract_pdf_problem_markers(page, scale):
                 for span in line.get("spans") or []
                 if isinstance(span, dict)
             ).strip()
+            if looks_like_pdf_print_date_header(text):
+                continue
             match = re.match(r"^([1-9][0-9]?)\.\s*", text)
             if not match:
                 continue
@@ -297,12 +322,77 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                         "pdf_page_width_pt": float(page.rect.width),
                         "pdf_page_height_pt": float(page.rect.height),
                         "pdf_problem_markers": _extract_pdf_problem_markers(page, scale),
+                        "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale),
                     },
                 )
             )
     finally:
         doc.close()
     return pages
+
+
+def _iter_rhwp_converter_commands() -> list[list[str]]:
+    rhwp_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_RHWP"),
+        shutil.which("rhwp"),
+        Path(__file__).resolve().parent / ".app_runtime" / "rhwp" / "rhwp",
+        Path(__file__).resolve().parent / ".app_runtime" / "rhwp" / "rhwp.exe",
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in rhwp_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append([key])
+    return candidates
+
+
+def _iter_rhwp_core_node_module_dirs() -> list[Path]:
+    base_dir = Path(__file__).resolve().parent
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_RHWP_CORE_NODE_MODULES"),
+        base_dir / ".app_runtime" / "rhwp_core" / "node_modules",
+        base_dir / ".app_runtime" / "kordoc" / "node_modules",
+        base_dir / "node_modules",
+    ]
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        for raw_part in str(raw_candidate).split(os.pathsep):
+            if not raw_part:
+                continue
+            candidate = Path(raw_part)
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            if (
+                (candidate / "@rhwp" / "core" / "rhwp.js").exists()
+                and (candidate / "@rhwp" / "core" / "rhwp_bg.wasm").exists()
+                and (candidate / "sharp" / "package.json").exists()
+            ):
+                candidates.append(candidate)
+    return candidates
+
+
+def _iter_rhwp_core_renderer_commands() -> list[list[str]]:
+    node = os.environ.get("EDB_NODE") or shutil.which("node")
+    script_path = Path(__file__).resolve().parent / "scripts" / "render_hwp_with_rhwp_core.mjs"
+    if not node or not script_path.exists():
+        return []
+    return [
+        [str(node), str(script_path), "--node-modules", str(module_dir)]
+        for module_dir in _iter_rhwp_core_node_module_dirs()
+    ]
 
 
 def _iter_hwp_pdf_converter_commands() -> list[list[str]]:
@@ -320,6 +410,21 @@ def _iter_hwp_pdf_converter_commands() -> list[list[str]]:
     if hwp5pdf:
         candidates.append([hwp5pdf])
 
+    candidates.extend(_iter_rhwp_converter_commands())
+
+    airun_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_AIRUN_HWP"),
+        shutil.which("airun-hwp"),
+        Path(__file__).resolve().parent / ".app_runtime" / "airun_hwp_env" / "bin" / "airun-hwp",
+        Path(__file__).resolve().parent / ".app_runtime" / "airun_hwp_env" / "Scripts" / "airun-hwp.exe",
+    ]
+    for raw_candidate in airun_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if candidate.exists():
+            candidates.append([str(candidate)])
+
     seen: set[str] = set()
     unique: list[list[str]] = []
     for command in candidates:
@@ -331,14 +436,502 @@ def _iter_hwp_pdf_converter_commands() -> list[list[str]]:
     return unique
 
 
+def _render_hwp_pages_with_rhwp_core(
+    source: str | Path,
+    output_dir: str | Path,
+    *,
+    dpi: int = 160,
+    timeout_seconds: int = 90,
+) -> list[NormalizedPageImage]:
+    source_path = Path(source)
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cached_pages = _load_cached_hwp_core_pages(source_path, target_dir, dpi)
+    if cached_pages:
+        return cached_pages
+    for command_prefix in _iter_rhwp_core_renderer_commands():
+        command = [*command_prefix, str(source_path), str(target_dir), "--dpi", str(dpi)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        try:
+            payload = json.loads((result.stdout or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            continue
+        pages: list[NormalizedPageImage] = []
+        if not isinstance(payload, list):
+            continue
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            normalized_path = Path(str(item.get("normalized_path") or ""))
+            if not normalized_path.exists():
+                continue
+            metadata = dict(item.get("metadata") or {})
+            metadata.setdefault("source_type", "hwp")
+            metadata.setdefault("document_like", True)
+            metadata.setdefault("hwp_renderer", "rhwp-core")
+            pages.append(
+                NormalizedPageImage(
+                    page_id=str(item.get("page_id") or f"{source_path.stem}-page-{len(pages) + 1:03d}"),
+                    source_path=str(item.get("source_path") or source_path),
+                    normalized_path=str(normalized_path),
+                    page_index=int(item.get("page_index") or len(pages)),
+                    width_px=int(item.get("width_px") or 0),
+                    height_px=int(item.get("height_px") or 0),
+                    metadata=metadata,
+                )
+            )
+        if pages:
+            _save_hwp_core_render_cache(source_path, target_dir, dpi, pages)
+            return pages
+    return []
+
+
+def _render_hwp_pages_with_rhwp_python(
+    source: str | Path,
+    output_dir: str | Path,
+    *,
+    dpi: int = 160,
+    timeout_seconds: int = 90,
+) -> list[NormalizedPageImage]:
+    source_path = Path(source)
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cached_pages = _load_cached_hwp_core_pages(source_path, target_dir, dpi, renderer="rhwp-python")
+    if cached_pages:
+        return cached_pages
+    for command_prefix in _iter_rhwp_python_renderer_commands():
+        command = [*command_prefix, str(source_path), str(target_dir), str(dpi)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        try:
+            payload = json.loads((result.stdout or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, list):
+            continue
+        pages: list[NormalizedPageImage] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            normalized_path = Path(str(item.get("normalized_path") or ""))
+            if not normalized_path.exists():
+                continue
+            metadata = dict(item.get("metadata") or {})
+            metadata.setdefault("source_type", "hwp")
+            metadata.setdefault("document_like", True)
+            metadata.setdefault("hwp_renderer", "rhwp-python")
+            pages.append(
+                NormalizedPageImage(
+                    page_id=str(item.get("page_id") or f"{source_path.stem}-page-{len(pages) + 1:03d}"),
+                    source_path=str(item.get("source_path") or source_path),
+                    normalized_path=str(normalized_path),
+                    page_index=int(item.get("page_index") if item.get("page_index") is not None else len(pages)),
+                    width_px=int(item.get("width_px") or 0),
+                    height_px=int(item.get("height_px") or 0),
+                    metadata=metadata,
+                )
+            )
+        if pages:
+            _save_hwp_core_render_cache(source_path, target_dir, dpi, pages, renderer="rhwp-python")
+            return pages
+    return []
+
+
 def _iter_hwp_hwpx_converter_commands() -> list[list[str]]:
-    hwpilot = shutil.which("hwpilot")
-    return [[hwpilot]] if hwpilot else []
+    base_dir = Path(__file__).resolve().parent
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_HWPILOT"),
+        shutil.which("hwpilot"),
+        base_dir / ".app_runtime" / "hwpilot-src" / "dist" / "src" / "cli" / "main.js",
+        base_dir / ".app_runtime" / "hwpilot" / "node_modules" / "hwpilot" / "dist" / "src" / "cli" / "main.js",
+    ]
+    node = shutil.which("node")
+    commands: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        if candidate.suffix.lower() == ".js":
+            if not node:
+                continue
+            command = [node, str(candidate)]
+        else:
+            command = [str(candidate)]
+        key = "\0".join(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        commands.append(command)
+    return commands
+
+
+def _iter_pyhwp_html_converter_commands() -> list[list[str]]:
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_HWP5HTML"),
+        Path(sys.executable).resolve().parent / "hwp5html",
+        Path(sys.executable).resolve().parent / "hwp5html.exe",
+        shutil.which("hwp5html"),
+        Path(__file__).resolve().parent / ".app_runtime" / "pyhwp_env" / "bin" / "hwp5html",
+        Path(__file__).resolve().parent / ".app_runtime" / "pyhwp_env" / "Scripts" / "hwp5html.exe",
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append([str(candidate)])
+    return candidates
+
+
+def _iter_pyhwp_text_converter_commands() -> list[list[str]]:
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_HWP5TXT"),
+        Path(sys.executable).resolve().parent / "hwp5txt",
+        Path(sys.executable).resolve().parent / "hwp5txt.exe",
+        shutil.which("hwp5txt"),
+        Path(__file__).resolve().parent / ".app_runtime" / "pyhwp_env" / "bin" / "hwp5txt",
+        Path(__file__).resolve().parent / ".app_runtime" / "pyhwp_env" / "Scripts" / "hwp5txt.exe",
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append([str(candidate)])
+    return candidates
+
+
+def _iter_hwpilot_text_converter_commands() -> list[list[str]]:
+    return _iter_hwp_hwpx_converter_commands()
+
+
+def _iter_kordoc_text_converter_commands() -> list[list[str]]:
+    base_dir = Path(__file__).resolve().parent
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_KORDOC"),
+        shutil.which("kordoc"),
+        base_dir / ".app_runtime" / "kordoc" / "node_modules" / ".bin" / "kordoc",
+        base_dir / ".app_runtime" / "kordoc" / "node_modules" / ".bin" / "kordoc.cmd",
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append([key])
+    return candidates
+
+
+_UNHWP_EXTRACT_TEXT_SCRIPT = (
+    "import sys, unhwp; "
+    "sys.stdout.write((unhwp.extract_text(sys.argv[1]) or '').replace('\\x00', ''))"
+)
+
+_HWP_HWPX_PARSER_EXTRACT_TEXT_SCRIPT = """
+import sys
+from hwp_hwpx_parser import Reader
+with Reader(sys.argv[1]) as reader:
+    text = reader.text or ""
+    if not text:
+        result = reader.extract_text_with_notes()
+        text = result.text if hasattr(result, "text") else str(result or "")
+sys.stdout.write((text or "").replace("\\x00", ""))
+""".strip()
+
+_RHWP_PYTHON_EXTRACT_TEXT_SCRIPT = """
+import sys
+import rhwp
+doc = rhwp.parse(sys.argv[1])
+text = doc.extract_text() if hasattr(doc, "extract_text") else ""
+sys.stdout.write((text or "").replace("\\x00", ""))
+""".strip()
+
+_RHWP_PYTHON_RENDER_PNG_SCRIPT = """
+import json
+import struct
+import sys
+from pathlib import Path
+
+import rhwp
+
+
+def png_size(path):
+    with open(path, "rb") as fh:
+        header = fh.read(24)
+    if len(header) < 24 or header[:8] != b"\\x89PNG\\r\\n\\x1a\\n":
+        return 0, 0
+    return struct.unpack(">II", header[16:24])
+
+
+source_path = Path(sys.argv[1])
+target_dir = Path(sys.argv[2])
+dpi = int(sys.argv[3])
+target_dir.mkdir(parents=True, exist_ok=True)
+doc = rhwp.parse(str(source_path))
+written = doc.export_png(str(target_dir), prefix=f"{source_path.stem}_page")
+pages = []
+for index, raw_path in enumerate(written):
+    page_path = Path(raw_path)
+    width, height = png_size(page_path)
+    pages.append(
+        {
+            "page_id": f"{source_path.stem}-page-{index + 1:03d}",
+            "source_path": str(source_path),
+            "normalized_path": str(page_path),
+            "page_index": index,
+            "width_px": width,
+            "height_px": height,
+            "metadata": {
+                "source_type": "hwp",
+                "document_like": True,
+                "dpi": dpi,
+                "hwp_renderer": "rhwp-python",
+                "hwp_renderer_version": rhwp.version(),
+                "hwp_renderer_core_version": rhwp.rhwp_core_version(),
+                "hwp_renderer_page_count": len(written),
+            },
+        }
+    )
+print(json.dumps(pages, ensure_ascii=False))
+""".strip()
+
+
+def _python_can_import_unhwp(python_path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", "import unhwp"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _python_can_import_hwp_hwpx_parser(python_path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", "import hwp_hwpx_parser"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _python_can_import_rhwp_python(python_path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", "import rhwp"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _iter_unhwp_text_converter_commands() -> list[list[str]]:
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_UNHWP_PYTHON"),
+        Path(__file__).resolve().parent / ".app_runtime" / "unhwp_probe_env" / "bin" / "python",
+        Path(__file__).resolve().parent / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
+        Path(__file__).resolve().parent / ".app_runtime" / "unhwp_probe_env" / "Scripts" / "python.exe",
+        Path(__file__).resolve().parent / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
+        sys.executable,
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen or not _python_can_import_unhwp(candidate):
+            continue
+        seen.add(key)
+        candidates.append([str(candidate), "-c", _UNHWP_EXTRACT_TEXT_SCRIPT])
+    return candidates
+
+
+def _iter_hwp_hwpx_parser_text_converter_commands() -> list[list[str]]:
+    base_dir = Path(__file__).resolve().parent
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_HWP_HWPX_PARSER_PYTHON"),
+        base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
+        base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
+        sys.executable,
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen or not _python_can_import_hwp_hwpx_parser(candidate):
+            continue
+        seen.add(key)
+        candidates.append([str(candidate), "-c", _HWP_HWPX_PARSER_EXTRACT_TEXT_SCRIPT])
+    return candidates
+
+
+def _iter_rhwp_python_text_converter_commands() -> list[list[str]]:
+    base_dir = Path(__file__).resolve().parent
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_RHWP_PYTHON"),
+        base_dir / ".app_runtime" / "rhwp_python_probe_env" / "bin" / "python",
+        base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
+        base_dir / ".app_runtime" / "rhwp_python_probe_env" / "Scripts" / "python.exe",
+        base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
+        sys.executable,
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen or not _python_can_import_rhwp_python(candidate):
+            continue
+        seen.add(key)
+        candidates.append([str(candidate), "-c", _RHWP_PYTHON_EXTRACT_TEXT_SCRIPT])
+    return candidates
+
+
+def _iter_rhwp_python_renderer_commands() -> list[list[str]]:
+    base_dir = Path(__file__).resolve().parent
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_RHWP_PYTHON"),
+        base_dir / ".app_runtime" / "rhwp_python_probe_env" / "bin" / "python",
+        base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
+        base_dir / ".app_runtime" / "rhwp_python_probe_env" / "Scripts" / "python.exe",
+        base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
+        sys.executable,
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen or not _python_can_import_rhwp_python(candidate):
+            continue
+        seen.add(key)
+        candidates.append([str(candidate), "-c", _RHWP_PYTHON_RENDER_PNG_SCRIPT])
+    return candidates
+
+
+def _iter_hwp_text_converter_commands() -> list[list[str]]:
+    return [
+        *_iter_pyhwp_text_converter_commands(),
+        *_iter_unhwp_text_converter_commands(),
+        *_iter_hwp_hwpx_parser_text_converter_commands(),
+        *_iter_rhwp_python_text_converter_commands(),
+        *_iter_rhwp_converter_commands(),
+        *_iter_hwpilot_text_converter_commands(),
+        *_iter_kordoc_text_converter_commands(),
+    ]
+
+
+def _iter_chrome_pdf_commands() -> list[list[str]]:
+    raw_candidates: list[str | Path | None] = [
+        os.environ.get("EDB_CHROME"),
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        shutil.which("google-chrome"),
+        shutil.which("chromium"),
+        shutil.which("chrome"),
+    ]
+    candidates: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = Path(raw_candidate)
+        if not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append([str(candidate)])
+    return candidates
 
 
 def _hwp_pdf_candidates(output_dir: Path, source_path: Path) -> list[Path]:
     expected = output_dir / f"{source_path.stem}.pdf"
+    nested_expected = output_dir / source_path.stem / f"{source_path.stem}.pdf"
     candidates = [expected]
+    if nested_expected not in candidates:
+        candidates.append(nested_expected)
     for path in sorted(
         output_dir.glob("*.pdf"),
         key=lambda item: item.stat().st_mtime,
@@ -347,6 +940,754 @@ def _hwp_pdf_candidates(output_dir: Path, source_path: Path) -> list[Path]:
         if path not in candidates:
             candidates.append(path)
     return candidates
+
+
+def _stage_airun_hwp_source(source_path: Path, target_dir: Path) -> Path:
+    staging_dir = target_dir / source_path.stem
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staged_path = staging_dir / source_path.name
+    try:
+        same_file = source_path.resolve() == staged_path.resolve()
+    except OSError:
+        same_file = False
+    if not same_file:
+        shutil.copyfile(source_path, staged_path)
+    return staged_path
+
+
+def _airun_hwp_env(target_dir: Path) -> dict[str, str] | None:
+    libreoffice = shutil.which("libreoffice")
+    if libreoffice:
+        return None
+
+    soffice = shutil.which("soffice")
+    mac_soffice = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+    if not soffice and mac_soffice.exists():
+        soffice = str(mac_soffice)
+    if not soffice:
+        return None
+
+    shim_dir = target_dir / "_airun_bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    shim_path = shim_dir / "libreoffice"
+    if not shim_path.exists():
+        try:
+            shim_path.symlink_to(soffice)
+        except OSError:
+            shim_path.write_text(
+                f"#!/bin/sh\nexec {json.dumps(str(soffice))} \"$@\"\n",
+                encoding="utf-8",
+            )
+            shim_path.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
+def _hwp_property_flags(properties: int) -> dict[str, bool]:
+    return {
+        "compressed": bool(properties & 0x01),
+        "password": bool(properties & 0x02),
+        "distribution": bool(properties & 0x04),
+        "script": bool(properties & 0x08),
+        "drm": bool(properties & 0x10),
+        "xml_template": bool(properties & 0x20),
+        "history": bool(properties & 0x40),
+        "signed": bool(properties & 0x80),
+        "encrypted_cert": bool(properties & 0x100),
+        "copy_protection": bool(properties & 0x200),
+    }
+
+
+def _extract_hwp_text_with_pyhwp(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_pyhwp_text_converter_commands():
+        command = [*command_prefix, str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode == 0 and text:
+            return text
+    return ""
+
+
+def _extract_hwp_text_with_unhwp(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_unhwp_text_converter_commands():
+        command = [*command_prefix, str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode == 0 and text:
+            return text
+    return ""
+
+
+def _extract_hwp_text_with_hwp_hwpx_parser(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_hwp_hwpx_parser_text_converter_commands():
+        command = [*command_prefix, str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode == 0 and text:
+            return text
+    return ""
+
+
+def _extract_hwp_text_with_rhwp_python(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_rhwp_python_text_converter_commands():
+        command = [*command_prefix, str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode == 0 and text:
+            return text
+    return ""
+
+
+def _extract_hwp_text_with_rhwp(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_rhwp_converter_commands():
+        with tempfile.TemporaryDirectory(prefix="edb-rhwp-text-") as raw_temp_dir:
+            output_dir = Path(raw_temp_dir)
+            command = [*command_prefix, "export-text", str(source_path), "-o", str(output_dir)]
+            try:
+                subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout_seconds,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            chunks: list[str] = []
+            for txt_path in sorted(output_dir.glob("*.txt")):
+                try:
+                    text = txt_path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "").strip()
+                except OSError:
+                    continue
+                if text:
+                    chunks.append(text)
+            extracted = "\n".join(chunks).strip()
+            if extracted:
+                return extracted
+    return ""
+
+
+def _extract_hwp_markdown_with_rhwp(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_rhwp_converter_commands():
+        with tempfile.TemporaryDirectory(prefix="edb-rhwp-markdown-") as raw_temp_dir:
+            output_dir = Path(raw_temp_dir)
+            command = [*command_prefix, "export-markdown", str(source_path), "-o", str(output_dir)]
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout_seconds,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if result.returncode != 0:
+                continue
+            chunks: list[str] = []
+            for md_path in sorted(output_dir.glob("*.md")):
+                try:
+                    text = md_path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "").strip()
+                except OSError:
+                    continue
+                if text:
+                    chunks.append(text)
+            extracted = "\n".join(chunks).strip()
+            if extracted:
+                return extracted
+    return ""
+
+
+def _extract_hwp_text_with_hwpilot(source: str | Path, timeout_seconds: int = 15) -> str:
+    source_path = Path(source)
+    env = {**os.environ, "HWPILOT_NO_DAEMON": "1"}
+    for command_prefix in _iter_hwpilot_text_converter_commands():
+        command = [*command_prefix, "text", str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        raw_text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode != 0 or not raw_text:
+            continue
+        text = raw_text
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "").replace("\x00", "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_hwp_text_with_kordoc(source: str | Path, timeout_seconds: int = 30) -> str:
+    source_path = Path(source)
+    for command_prefix in _iter_kordoc_text_converter_commands():
+        command = [*command_prefix, str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode == 0 and text:
+            return text
+    return ""
+
+
+def _extract_hwp_image_summary_with_hwpilot(source: str | Path, timeout_seconds: int = 15) -> dict[str, Any]:
+    source_path = Path(source)
+    env = {**os.environ, "HWPILOT_NO_DAEMON": "1"}
+    for command_prefix in _iter_hwpilot_text_converter_commands():
+        command = [*command_prefix, "image", "list", str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        raw_text = (result.stdout or "").replace("\x00", "").strip()
+        if result.returncode != 0 or not raw_text:
+            continue
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, list):
+            continue
+        images = [item for item in payload if isinstance(item, dict)]
+        formats = sorted(
+            {
+                str(item.get("format") or "").strip().lower()
+                for item in images
+                if str(item.get("format") or "").strip()
+            }
+        )
+        widths = [int(item.get("width") or 0) for item in images if isinstance(item.get("width"), (int, float))]
+        heights = [int(item.get("height") or 0) for item in images if isinstance(item.get("height"), (int, float))]
+        return {
+            "hwp_image_extractor": "hwpilot",
+            "hwp_image_count": len(images),
+            "hwp_image_formats": formats,
+            "hwp_image_max_width": max(widths) if widths else 0,
+            "hwp_image_max_height": max(heights) if heights else 0,
+        }
+    return {}
+
+
+def _iter_render_tree_objects(node: Any):
+    if not isinstance(node, dict):
+        return
+    yield node
+    children = node.get("children")
+    if isinstance(children, list):
+        for child in children:
+            yield from _iter_render_tree_objects(child)
+
+
+def _render_tree_text_line_text(node: dict[str, Any]) -> str:
+    raw_text = node.get("text")
+    if isinstance(raw_text, str) and raw_text:
+        return raw_text
+    chunks: list[str] = []
+    children = node.get("children")
+    if isinstance(children, list):
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            if child.get("type") == "TextRun" and isinstance(child.get("text"), str):
+                chunks.append(str(child.get("text") or ""))
+    return "".join(chunks)
+
+
+def _summarize_rhwp_render_tree_pages(pages: list[dict[str, Any]]) -> dict[str, Any]:
+    problem_markers: list[dict[str, Any]] = []
+    text_line_count = 0
+    text_run_count = 0
+    problem_numbers: list[int] = []
+    for page_index, page in enumerate(pages):
+        for node in _iter_render_tree_objects(page):
+            node_type = node.get("type")
+            if node_type == "TextRun" and str(node.get("text") or "").strip():
+                text_run_count += 1
+            if node_type != "TextLine":
+                continue
+            line = re.sub(r"\s+", " ", _render_tree_text_line_text(node)).strip()
+            if not line or _looks_like_pdf_print_date_header(line):
+                continue
+            text_line_count += 1
+            match = re.match(r"^([1-9][0-9]?)\s*[\.)]\s*", line)
+            if not match:
+                continue
+            number = int(match.group(1))
+            problem_numbers.append(number)
+            marker = {
+                "pageIndex": page_index,
+                "number": number,
+                "text": line[:120],
+            }
+            bbox = node.get("bbox")
+            if isinstance(bbox, dict):
+                marker["bbox"] = {
+                    key: float(bbox.get(key) or 0.0)
+                    for key in ("x", "y", "w", "h")
+                    if key in bbox
+                }
+            problem_markers.append(marker)
+    return {
+        "hwp_layout_extractor": "rhwp-render-tree",
+        "hwp_layout_page_count": len(pages),
+        "hwp_layout_problem_marker_count": len(problem_markers),
+        "hwp_layout_text_line_count": text_line_count,
+        "hwp_layout_text_run_count": text_run_count,
+        "hwp_layout_problem_numbers": problem_numbers,
+        "hwp_layout_problem_markers": problem_markers[:100],
+    }
+
+
+def _hwp_layout_problem_markers_for_page(
+    conversion_quality: dict[str, Any],
+    *,
+    page_index: int,
+    dpi: int,
+) -> list[dict[str, Any]]:
+    raw_markers = conversion_quality.get("hwp_layout_problem_markers")
+    if not isinstance(raw_markers, list):
+        return []
+
+    scale = float(dpi) / HWP_RENDER_TREE_BASE_DPI
+    markers: list[dict[str, Any]] = []
+    for raw_marker in raw_markers:
+        if not isinstance(raw_marker, dict):
+            continue
+        if int(raw_marker.get("pageIndex", -1)) != int(page_index):
+            continue
+        bbox = raw_marker.get("bbox")
+        if not isinstance(bbox, dict):
+            continue
+        try:
+            number = int(raw_marker.get("number"))
+            left = float(bbox.get("x", bbox.get("left", 0.0))) * scale
+            top = float(bbox.get("y", bbox.get("top", 0.0))) * scale
+            width = float(bbox.get("w", bbox.get("width", 0.0))) * scale
+            height = float(bbox.get("h", bbox.get("height", 0.0))) * scale
+        except (TypeError, ValueError):
+            continue
+        if number < 1 or width <= 0.0 or height <= 0.0:
+            continue
+        right = left + width
+        bottom = top + height
+        markers.append(
+            {
+                "number": number,
+                "text": str(raw_marker.get("text") or f"{number}.")[:120],
+                "bbox": {
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                    "width": width,
+                    "height": height,
+                },
+                "marker_kind": "hwp_layout_number",
+                "source": "hwp_layout_marker",
+                "source_page_index": int(page_index),
+            }
+        )
+    return markers
+
+
+def _attach_hwp_layout_problem_markers(
+    metadata: dict[str, Any],
+    *,
+    conversion_quality: dict[str, Any],
+    page_index: int,
+    dpi: int,
+) -> None:
+    markers = _hwp_layout_problem_markers_for_page(
+        conversion_quality,
+        page_index=page_index,
+        dpi=dpi,
+    )
+    if not markers:
+        return
+    metadata["pdf_problem_markers"] = markers
+    metadata["hwp_layout_problem_markers_as_pdf_markers"] = True
+    metadata["hwp_layout_problem_marker_count_on_page"] = len(markers)
+
+
+def _extract_hwp_render_tree_summary_with_rhwp(source: str | Path, timeout_seconds: int = 30) -> dict[str, Any]:
+    source_path = Path(source)
+    for command_prefix in _iter_rhwp_converter_commands():
+        with tempfile.TemporaryDirectory(prefix="edb-rhwp-render-tree-") as raw_temp_dir:
+            output_dir = Path(raw_temp_dir)
+            command = [*command_prefix, "export-render-tree", str(source_path), "-o", str(output_dir)]
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout_seconds,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if result.returncode != 0:
+                continue
+            pages: list[dict[str, Any]] = []
+            for json_path in sorted(output_dir.glob("*.json")):
+                try:
+                    payload = json.loads(json_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, dict):
+                    pages.append(payload)
+            if pages:
+                return _summarize_rhwp_render_tree_pages(pages)
+    return {}
+
+
+def _summarize_hwp_text_problem_signals(text: str) -> dict[str, int]:
+    numbered_count = 0
+    stem_count = 0
+    for raw_line in str(text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        if re.match(r"^[1-9][0-9]?\s*[\.)]", line):
+            numbered_count += 1
+        elif _looks_like_pdf_problem_stem_line(line):
+            stem_count += 1
+    return {
+        "hwp_text_numbered_problem_count": numbered_count,
+        "hwp_text_stem_problem_count": stem_count,
+    }
+
+
+def _hwp_text_problem_signal_score(text: str) -> int:
+    signals = _summarize_hwp_text_problem_signals(text)
+    numbered = int(signals.get("hwp_text_numbered_problem_count") or 0)
+    stem = int(signals.get("hwp_text_stem_problem_count") or 0)
+    return numbered if numbered > 0 else stem
+
+
+def inspect_hwp_document(source: str | Path) -> dict[str, Any]:
+    source_path = Path(source)
+    inspection: dict[str, Any] = {
+        "ole_file": False,
+        "hwp_signature": None,
+        "hwp_flags": {},
+        "hwp_section_count": 0,
+        "hwp_preview_text_length": 0,
+    }
+    if olefile is None:
+        inspection["inspection_error"] = "olefile_unavailable"
+        return inspection
+
+    try:
+        is_ole = bool(olefile.isOleFile(source_path))
+    except OSError as exc:
+        inspection["inspection_error"] = str(exc)
+        return inspection
+    inspection["ole_file"] = is_ole
+    if not is_ole:
+        return inspection
+
+    ole = None
+    try:
+        ole = olefile.OleFileIO(source_path)
+        streams = ["/".join(parts) for parts in ole.listdir(streams=True, storages=False)]
+        inspection["hwp_section_count"] = sum(1 for stream in streams if stream.startswith("BodyText/Section"))
+
+        full_preview_text = ""
+        if ole.exists("FileHeader"):
+            header = ole.openstream("FileHeader").read(256)
+            signature = header[:32].rstrip(b"\0").decode("latin1", errors="replace").strip()
+            inspection["hwp_signature"] = signature
+            if len(header) >= 40:
+                inspection["hwp_version_raw"] = struct.unpack("<I", header[32:36])[0]
+                properties = struct.unpack("<I", header[36:40])[0]
+                inspection["hwp_properties"] = properties
+                inspection["hwp_flags"] = _hwp_property_flags(properties)
+
+        if ole.exists("PrvText"):
+            data = ole.openstream("PrvText").read()
+            for encoding in ("utf-16le", "utf-8", "cp949"):
+                text = data.decode(encoding, errors="ignore").replace("\x00", "").strip()
+                if text:
+                    inspection["hwp_preview_text_length"] = len(text)
+                    inspection["hwp_preview_text"] = text[:4000]
+                    full_preview_text = text
+                    break
+    except Exception as exc:
+        inspection["inspection_error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        if ole is not None:
+            ole.close()
+    signal_text = full_preview_text if "full_preview_text" in locals() else ""
+    if inspection.get("hwp_signature") == "HWP Document File":
+        fast_extractors = [
+            ("hwp5txt", _extract_hwp_text_with_pyhwp),
+            ("unhwp", _extract_hwp_text_with_unhwp),
+            ("hwp-hwpx-parser", _extract_hwp_text_with_hwp_hwpx_parser),
+            ("rhwp-python", _extract_hwp_text_with_rhwp_python),
+        ]
+        slow_extractors = [
+            ("rhwp", _extract_hwp_text_with_rhwp),
+            ("rhwp-markdown", _extract_hwp_markdown_with_rhwp),
+            ("hwpilot", _extract_hwp_text_with_hwpilot),
+            ("kordoc", _extract_hwp_text_with_kordoc),
+        ]
+        inspection.update(_extract_hwp_render_tree_summary_with_rhwp(source_path))
+        inspection.update(_extract_hwp_image_summary_with_hwpilot(source_path))
+        existing_length = int(inspection.get("hwp_preview_text_length") or 0)
+        best_name = ""
+        best_text = ""
+        best_score = -1
+        scored_candidates: list[tuple[str, str, int]] = []
+        for name, extractor in fast_extractors:
+            text = extractor(source_path)
+            if not text:
+                continue
+            score = _hwp_text_problem_signal_score(text)
+            scored_candidates.append((name, text, score))
+
+        fast_best_score = max((score for _name, _text, score in scored_candidates), default=0)
+        if fast_best_score < HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH:
+            for name, extractor in slow_extractors:
+                text = extractor(source_path)
+                if not text:
+                    continue
+                score = _hwp_text_problem_signal_score(text)
+                scored_candidates.append((name, text, score))
+
+        non_rhwp_candidates = [row for row in scored_candidates if row[0] != "rhwp"]
+        rhwp_candidates = [row for row in scored_candidates if row[0] == "rhwp"]
+        if non_rhwp_candidates and rhwp_candidates:
+            non_rhwp_best = max(non_rhwp_candidates, key=lambda row: (row[2], len(row[1])))
+            rhwp_best = max(rhwp_candidates, key=lambda row: (row[2], len(row[1])))
+            if non_rhwp_best[2] >= 10 and rhwp_best[2] > int(non_rhwp_best[2] * 1.25):
+                scored_candidates = non_rhwp_candidates
+
+        for name, text, score in scored_candidates:
+            if (score, len(text)) > (best_score, len(best_text)):
+                best_name = name
+                best_text = text
+                best_score = score
+        if best_text and len(best_text) > existing_length:
+            inspection["hwp_preview_text_length"] = len(best_text)
+            inspection["hwp_preview_text"] = best_text[:4000]
+            inspection["hwp_text_extractor"] = best_name
+            signal_text = best_text
+    if not signal_text:
+        signal_text = str(inspection.get("hwp_preview_text") or "")
+    if signal_text:
+        inspection.update(_summarize_hwp_text_problem_signals(signal_text))
+    return inspection
+
+
+def inspect_hwpx_document(source: str | Path) -> dict[str, Any]:
+    source_path = Path(source)
+    inspection: dict[str, Any] = {
+        "hwpx_zip_file": False,
+        "hwpx_xml_file_count": 0,
+        "hwp_preview_text_length": 0,
+    }
+    try:
+        is_zip = zipfile.is_zipfile(source_path)
+    except OSError as exc:
+        inspection["inspection_error"] = str(exc)
+        return inspection
+    inspection["hwpx_zip_file"] = bool(is_zip)
+    if not is_zip:
+        return inspection
+
+    text_chunks: list[str] = []
+    try:
+        with zipfile.ZipFile(source_path) as archive:
+            xml_names = [
+                name
+                for name in archive.namelist()
+                if name.lower().endswith(".xml") and not name.endswith("/")
+            ]
+            inspection["hwpx_xml_file_count"] = len(xml_names)
+
+            def xml_sort_key(name: str) -> tuple[int, str]:
+                lowered = name.lower()
+                if lowered.startswith("contents/section"):
+                    return (0, lowered)
+                if lowered.startswith("contents/"):
+                    return (1, lowered)
+                return (2, lowered)
+
+            for name in sorted(xml_names, key=xml_sort_key):
+                try:
+                    data = archive.read(name)
+                except (KeyError, OSError):
+                    continue
+                try:
+                    root = ET.fromstring(data)
+                except ET.ParseError:
+                    continue
+                for part in root.itertext():
+                    text = re.sub(r"\s+", " ", str(part or "")).strip()
+                    if text:
+                        text_chunks.append(text)
+    except (OSError, zipfile.BadZipFile) as exc:
+        inspection["inspection_error"] = str(exc)
+        return inspection
+
+    extracted_text = "\n".join(text_chunks).strip()
+    if extracted_text:
+        inspection["hwp_preview_text_length"] = len(extracted_text)
+        inspection["hwp_preview_text"] = extracted_text[:4000]
+        inspection["hwp_text_extractor"] = "hwpx-xml"
+        inspection.update(_summarize_hwp_text_problem_signals(extracted_text))
+    return inspection
+
+
+def inspect_hangul_document(source: str | Path) -> dict[str, Any]:
+    source_path = Path(source)
+    suffix = source_path.suffix.lower()
+    if suffix == ".hwp":
+        return inspect_hwp_document(source_path)
+    if suffix == ".hwpx":
+        return inspect_hwpx_document(source_path)
+    return {}
+
+
+def _format_hwp_conversion_diagnosis(inspection: dict[str, Any]) -> str:
+    if not inspection:
+        return ""
+    if inspection.get("hwpx_zip_file") is True:
+        xml_count = int(inspection.get("hwpx_xml_file_count") or 0)
+        preview_length = int(inspection.get("hwp_preview_text_length") or 0)
+        return (
+            "Input is a valid HWPX ZIP document "
+            f"(xml_files={xml_count}, preview_text_length={preview_length}), "
+            "but the installed PDF converter could not load this HWPX. "
+            "Export it from Hancom Office as PDF or install a converter with HWPX support. "
+            "한컴오피스에서 PDF로 내보낸 뒤 다시 업로드하거나 HWPX 지원 변환기를 설치해 주세요."
+        )
+    if inspection.get("hwp_signature") == "HWP Document File":
+        flags = dict(inspection.get("hwp_flags") or {})
+        protected_flags = [
+            name
+            for name in ("password", "distribution", "drm", "encrypted_cert", "copy_protection")
+            if flags.get(name)
+        ]
+        if protected_flags:
+            return (
+                "Input is a valid HWP document, but protection flags are set "
+                f"({', '.join(protected_flags)}). Export it from Hancom Office as PDF or use an authorized converter."
+            )
+        section_count = int(inspection.get("hwp_section_count") or 0)
+        preview_length = int(inspection.get("hwp_preview_text_length") or 0)
+        compressed = bool(flags.get("compressed"))
+        return (
+            "Input is a valid HWP document "
+            f"(compressed={compressed}, sections={section_count}, preview_text_length={preview_length}), "
+            "but the installed PDF converter could not load this HWP. "
+            "Use Hancom Office/native HWP export to PDF or install a converter with HWP binary support. "
+            "한컴오피스에서 PDF로 내보낸 뒤 다시 업로드하거나 HWP 지원 변환기를 설치해 주세요."
+        )
+    if inspection.get("ole_file") is False:
+        return "Input does not look like an OLE-based HWP document."
+    if inspection.get("inspection_error"):
+        return f"HWP preflight inspection was incomplete: {inspection['inspection_error']}"
+    return ""
+
+
+def _looks_like_pdf_print_date_header(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if re.match(r"^[0-9]{2,4}\.\s*[0-9]{1,2}\.\s*[0-9]{1,2}\.", normalized):
+        return True
+    if any(marker in normalized for marker in ("오전", "오후", "AM", "PM")):
+        return normalized[:1].isdigit() and len(re.findall(r"[0-9]+", normalized)) >= 3
+    return False
 
 
 def _file_sha1(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -411,6 +1752,300 @@ def _save_hwp_pdf_cache(source_path: Path, target_dir: Path, pdf_path: Path) -> 
     )
 
 
+def _hwp_core_render_cache_path(
+    target_dir: Path,
+    source_path: Path,
+    source_sha1: str | None = None,
+    *,
+    renderer: str = "rhwp-core",
+) -> Path:
+    cache_key = source_sha1 or source_path.stem
+    renderer_key = re.sub(r"[^A-Za-z0-9_.-]+", "-", renderer).strip("-") or "renderer"
+    return target_dir / f".{cache_key}.{renderer_key}-render.json"
+
+
+def _load_cached_hwp_core_pages(
+    source_path: Path,
+    target_dir: Path,
+    dpi: int,
+    *,
+    renderer: str = "rhwp-core",
+) -> list[NormalizedPageImage]:
+    target_root = target_dir.resolve()
+    try:
+        source_sha1 = _file_sha1(source_path)
+    except OSError:
+        return []
+
+    cache_paths = [_hwp_core_render_cache_path(target_dir, source_path, source_sha1, renderer=renderer)]
+    legacy_cache_path = _hwp_core_render_cache_path(target_dir, source_path, renderer=renderer)
+    if renderer == "rhwp-core" and legacy_cache_path not in cache_paths:
+        cache_paths.append(legacy_cache_path)
+
+    for cache_path in cache_paths:
+        if not cache_path.exists():
+            continue
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if payload.get("source_sha1") != source_sha1:
+            continue
+        if payload.get("source_suffix") != source_path.suffix.lower():
+            continue
+        if int(payload.get("dpi") or 0) != int(dpi):
+            continue
+        if payload.get("renderer") and payload.get("renderer") != renderer:
+            continue
+
+        pages: list[NormalizedPageImage] = []
+        for index, item in enumerate(payload.get("pages") or []):
+            if not isinstance(item, dict):
+                pages = []
+                break
+            normalized_name = str(item.get("normalized_name") or "")
+            if not normalized_name:
+                pages = []
+                break
+            normalized_path = target_root / normalized_name
+            try:
+                if not normalized_path.exists() or normalized_path.stat().st_size <= 0:
+                    pages = []
+                    break
+            except OSError:
+                pages = []
+                break
+            metadata = dict(item.get("metadata") or {})
+            metadata.setdefault("source_type", "hwp")
+            metadata.setdefault("document_like", True)
+            metadata.setdefault("hwp_renderer", renderer)
+            metadata["hwp_renderer_cache_hit"] = True
+            pages.append(
+                NormalizedPageImage(
+                    page_id=str(item.get("page_id") or f"{source_path.stem}-page-{index + 1:03d}"),
+                    source_path=str(source_path),
+                    normalized_path=str(normalized_path),
+                    page_index=int(item.get("page_index") if item.get("page_index") is not None else index),
+                    width_px=int(item.get("width_px") or 0),
+                    height_px=int(item.get("height_px") or 0),
+                    metadata=metadata,
+                )
+            )
+        if pages:
+            return pages
+    return []
+
+
+def _save_hwp_core_render_cache(
+    source_path: Path,
+    target_dir: Path,
+    dpi: int,
+    pages: list[NormalizedPageImage],
+    *,
+    renderer: str = "rhwp-core",
+) -> None:
+    if not pages:
+        return
+
+    cache_pages: list[dict[str, Any]] = []
+    try:
+        source_sha1 = _file_sha1(source_path)
+        target_root = target_dir.resolve()
+        for page in pages:
+            page_path = Path(page.normalized_path).resolve()
+            normalized_name = page_path.relative_to(target_root).as_posix()
+            metadata = dict(page.metadata)
+            metadata.pop("hwp_renderer_cache_hit", None)
+            cache_pages.append(
+                {
+                    "page_id": page.page_id,
+                    "normalized_name": normalized_name,
+                    "page_index": page.page_index,
+                    "width_px": page.width_px,
+                    "height_px": page.height_px,
+                    "metadata": metadata,
+                }
+            )
+    except (OSError, ValueError):
+        return
+
+    payload = {
+        "version": 1,
+        "renderer": renderer,
+        "source_name": source_path.name,
+        "source_suffix": source_path.suffix.lower(),
+        "source_sha1": source_sha1,
+        "dpi": int(dpi),
+        "pages": cache_pages,
+    }
+    try:
+        _hwp_core_render_cache_path(target_dir, source_path, source_sha1, renderer=renderer).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def _hwp_normalized_cache_options(
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> dict[str, Any]:
+    return {
+        "dpi": int(dpi),
+        "enable_perspective": False,
+        "enable_deskew": bool(enable_deskew),
+        "enable_margin_crop": bool(enable_margin_crop),
+        "max_dimension": int(max_dimension) if max_dimension is not None else None,
+    }
+
+
+def _hwp_normalized_pages_cache_path(
+    target_dir: Path,
+    source_path: Path,
+    source_sha1: str | None = None,
+) -> Path:
+    cache_key = source_sha1 or source_path.stem
+    return target_dir / f".{cache_key}.hwp-normalized-pages.json"
+
+
+def _load_cached_hwp_normalized_pages(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> list[NormalizedPageImage]:
+    target_root = target_dir.resolve()
+    try:
+        source_sha1 = _file_sha1(source_path)
+    except OSError:
+        return []
+    cache_path = _hwp_normalized_pages_cache_path(target_dir, source_path, source_sha1)
+    if not cache_path.exists():
+        return []
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    expected_options = _hwp_normalized_cache_options(
+        dpi=dpi,
+        enable_deskew=enable_deskew,
+        enable_margin_crop=enable_margin_crop,
+        max_dimension=max_dimension,
+    )
+    if payload.get("source_sha1") != source_sha1:
+        return []
+    if payload.get("version") != HWP_NORMALIZED_CACHE_VERSION:
+        return []
+    if payload.get("source_suffix") != source_path.suffix.lower():
+        return []
+    if payload.get("options") != expected_options:
+        return []
+
+    pages: list[NormalizedPageImage] = []
+    for index, item in enumerate(payload.get("pages") or []):
+        if not isinstance(item, dict):
+            return []
+        normalized_name = str(item.get("normalized_name") or "")
+        if not normalized_name:
+            return []
+        normalized_path = target_root / normalized_name
+        try:
+            if not normalized_path.exists() or normalized_path.stat().st_size <= 0:
+                return []
+        except OSError:
+            return []
+
+        source_name = str(item.get("source_name") or "")
+        page_source_path = str(target_root / source_name) if source_name else str(source_path)
+        metadata = dict(item.get("metadata") or {})
+        metadata["hwp_normalized_cache_hit"] = True
+        metadata["source_hwp_path"] = str(source_path)
+        metadata.setdefault("source_type", "hwp")
+        metadata.setdefault("document_like", True)
+        pages.append(
+            NormalizedPageImage(
+                page_id=str(item.get("page_id") or f"{source_path.stem}-page-{index + 1:03d}"),
+                source_path=page_source_path,
+                normalized_path=str(normalized_path),
+                page_index=int(item.get("page_index") if item.get("page_index") is not None else index),
+                width_px=int(item.get("width_px") or 0),
+                height_px=int(item.get("height_px") or 0),
+                metadata=metadata,
+            )
+        )
+    return pages
+
+
+def _save_hwp_normalized_pages_cache(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+    pages: list[NormalizedPageImage],
+) -> None:
+    if not pages:
+        return
+
+    cache_pages: list[dict[str, Any]] = []
+    try:
+        source_sha1 = _file_sha1(source_path)
+        target_root = target_dir.resolve()
+        for page in pages:
+            normalized_name = Path(page.normalized_path).resolve().relative_to(target_root).as_posix()
+            try:
+                source_name = Path(page.source_path).resolve().relative_to(target_root).as_posix()
+            except ValueError:
+                source_name = ""
+            metadata = dict(page.metadata)
+            metadata.pop("hwp_normalized_cache_hit", None)
+            cache_pages.append(
+                {
+                    "page_id": page.page_id,
+                    "source_name": source_name,
+                    "normalized_name": normalized_name,
+                    "page_index": page.page_index,
+                    "width_px": page.width_px,
+                    "height_px": page.height_px,
+                    "metadata": metadata,
+                }
+            )
+    except (OSError, ValueError):
+        return
+
+    payload = {
+        "version": HWP_NORMALIZED_CACHE_VERSION,
+        "source_name": source_path.name,
+        "source_suffix": source_path.suffix.lower(),
+        "source_sha1": source_sha1,
+        "options": _hwp_normalized_cache_options(
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        ),
+        "pages": cache_pages,
+    }
+    try:
+        _hwp_normalized_pages_cache_path(target_dir, source_path, source_sha1).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
 def _run_hwp_pdf_converter_commands(
     source_path: Path,
     target_dir: Path,
@@ -421,8 +2056,31 @@ def _run_hwp_pdf_converter_commands(
     for command_prefix in commands:
         tool_name = Path(command_prefix[0]).name.lower()
         expected_pdf = target_dir / f"{source_path.stem}.pdf"
+        command_env: dict[str, str] | None = None
         if "hwp5pdf" in tool_name:
             command = [*command_prefix, str(source_path), str(expected_pdf)]
+        elif tool_name == "rhwp":
+            command = [*command_prefix, "export-pdf", str(source_path), "-o", str(expected_pdf)]
+        elif "airun-hwp" in tool_name:
+            if source_path.suffix.lower() != ".hwpx":
+                errors.append(f"{command_prefix[0]} skipped: airun-hwp supports HWPX input; HWP needs a HWPX bridge first")
+                continue
+            try:
+                airun_source_path = _stage_airun_hwp_source(source_path, target_dir)
+            except OSError as exc:
+                errors.append(f"{command_prefix[0]} staging failed: {exc}")
+                continue
+            command = [
+                *command_prefix,
+                str(airun_source_path),
+                "--format",
+                "pdf",
+                "--output",
+                str(target_dir),
+                "--pdf-engine",
+                "auto",
+            ]
+            command_env = _airun_hwp_env(target_dir)
         else:
             command = [
                 *command_prefix,
@@ -438,14 +2096,16 @@ def _run_hwp_pdf_converter_commands(
             if candidate.exists()
         }
         try:
-            result = subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout_seconds,
-            )
+            run_kwargs: dict[str, Any] = {
+                "check": False,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "timeout": timeout_seconds,
+            }
+            if command_env is not None:
+                run_kwargs["env"] = command_env
+            result = subprocess.run(command, **run_kwargs)
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"{command[0]}: {exc}")
             continue
@@ -504,6 +2164,111 @@ def _convert_hwp_to_hwpx_with_hwpilot(
     return None, errors
 
 
+def _terminate_process(process: Any) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _convert_hwp_to_pdf_with_pyhwp_html(
+    source_path: Path,
+    output_dir: Path,
+    timeout_seconds: int,
+) -> tuple[Path | None, list[str]]:
+    hwp5html_commands = _iter_pyhwp_html_converter_commands()
+    chrome_commands = _iter_chrome_pdf_commands()
+    if not hwp5html_commands or not chrome_commands:
+        return None, []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = output_dir.resolve()
+    errors: list[str] = []
+    for hwp5html_prefix in hwp5html_commands:
+        html_root = output_dir / f"{source_path.stem}.html"
+        if html_root.exists():
+            shutil.rmtree(html_root) if html_root.is_dir() else html_root.unlink()
+        command = [*hwp5html_prefix, "--output", str(html_root), str(source_path)]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"{command[0]}: {exc}")
+            continue
+        index_candidates = [
+            html_root / "index.xhtml",
+            html_root / "index.html",
+            html_root if html_root.is_file() else None,
+        ]
+        index_path = next((path for path in index_candidates if path and path.exists()), None)
+        if not index_path:
+            output = " ".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part)
+            errors.append(f"{command[0]} exited {result.returncode}: {output or 'no HTML output'}")
+            continue
+
+        for chrome_prefix in chrome_commands:
+            pdf_path = output_dir / f"{source_path.stem}.pdf"
+            if pdf_path.exists():
+                pdf_path.unlink()
+            user_data_dir = output_dir / "_chrome_profile"
+            chrome_command = [
+                *chrome_prefix,
+                "--headless=new",
+                "--disable-gpu",
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-breakpad",
+                "--disable-crash-reporter",
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"--user-data-dir={user_data_dir}",
+                "--virtual-time-budget=10000",
+                "--print-to-pdf-no-header",
+                "--no-pdf-header-footer",
+                f"--print-to-pdf={pdf_path}",
+                index_path.as_uri(),
+            ]
+            try:
+                process = subprocess.Popen(
+                    chrome_command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+            except OSError as exc:
+                errors.append(f"{chrome_command[0]}: {exc}")
+                continue
+
+            deadline = time.monotonic() + timeout_seconds
+            try:
+                while time.monotonic() < deadline:
+                    if pdf_path.exists() and pdf_path.stat().st_size > 0:
+                        _terminate_process(process)
+                        return pdf_path, errors
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.25)
+                if pdf_path.exists() and pdf_path.stat().st_size > 0:
+                    _terminate_process(process)
+                    return pdf_path, errors
+                errors.append(f"{chrome_command[0]} did not produce PDF output")
+            finally:
+                _terminate_process(process)
+    return None, errors
+
+
 def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_seconds: int = 90) -> Path:
     source_path = Path(source)
     target_dir = Path(output_dir)
@@ -513,15 +2278,28 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     if cached_pdf:
         return cached_pdf
 
+    hwp_inspection = inspect_hangul_document(source_path)
     commands = _iter_hwp_pdf_converter_commands()
     if not commands:
+        diagnosis = _format_hwp_conversion_diagnosis(hwp_inspection)
+        suffix = f" Diagnosis: {diagnosis}" if diagnosis else ""
         raise ValueError(
             "HWP/HWPX input requires a local converter such as LibreOffice with HWP support "
             "or hwp5pdf. HWPilot can only help normalize HWP to HWPX and still needs a PDF "
-            "converter. Install one, or convert the HWP file to PDF first."
+            f"converter. Install one, or convert the HWP file to PDF first.{suffix}"
         )
 
-    pdf_path, errors = _run_hwp_pdf_converter_commands(source_path, target_dir, commands, timeout_seconds)
+    has_html_pdf_fallback = bool(_iter_pyhwp_html_converter_commands() and _iter_chrome_pdf_commands())
+    direct_timeout_seconds = timeout_seconds
+    if source_path.suffix.lower() == ".hwp" and has_html_pdf_fallback:
+        direct_timeout_seconds = min(timeout_seconds, 15)
+
+    pdf_path, errors = _run_hwp_pdf_converter_commands(
+        source_path,
+        target_dir,
+        commands,
+        direct_timeout_seconds,
+    )
     if pdf_path:
         _save_hwp_pdf_cache(source_path, target_dir, pdf_path)
         return pdf_path
@@ -535,10 +2313,25 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
             return pdf_path
         errors.extend(f"after HWPilot bridge: {error}" for error in hwpx_pdf_errors)
 
+    html_pdf_path, html_pdf_errors = _convert_hwp_to_pdf_with_pyhwp_html(
+        source_path,
+        target_dir / "_pyhwp_html",
+        timeout_seconds,
+    )
+    if html_pdf_path:
+        final_pdf = target_dir / f"{source_path.stem}.pdf"
+        final_pdf.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(html_pdf_path, final_pdf)
+        _save_hwp_pdf_cache(source_path, target_dir, final_pdf)
+        return final_pdf
+    errors.extend(f"after pyhwp HTML bridge: {error}" for error in html_pdf_errors)
+
     detail = "; ".join(errors) if errors else "no converter produced a PDF"
+    diagnosis = _format_hwp_conversion_diagnosis(hwp_inspection)
+    suffix = f" Diagnosis: {diagnosis}" if diagnosis else ""
     raise ValueError(
         "HWP/HWPX conversion failed. Install LibreOffice with HWP support, "
-        f"or convert the HWP file to PDF first. Details: {detail}"
+        f"or convert the HWP file to PDF first. Details: {detail}{suffix}"
     )
 
 
@@ -567,6 +2360,8 @@ def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]
                 for span in line.get("spans") or []
                 if isinstance(span, dict)
             ).strip()
+            if _looks_like_pdf_print_date_header(text):
+                continue
             match = re.match(r"^([1-9][0-9]?)\.\s*", text)
             if not match:
                 continue
@@ -580,6 +2375,73 @@ def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]
             markers.append(
                 {
                     "number": number,
+                    "text": text[:120],
+                    "bbox": {
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                        "width": max(0.0, right - left),
+                        "height": max(0.0, bottom - top),
+                    },
+                }
+            )
+
+    return markers
+
+
+def _looks_like_pdf_problem_stem_line(text: str) -> bool:
+    import re
+
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(normalized) < 10:
+        return False
+    if _looks_like_pdf_print_date_header(normalized):
+        return False
+    if re.match(r"^([1-9][0-9]?)\.\s*", normalized):
+        return False
+    if normalized[:1] in {"①", "②", "③", "④", "⑤", "ㄱ", "ㄴ", "ㄷ", "ㄹ", "◦", "○", "*"}:
+        return False
+    if normalized.startswith(("<보기>", "보기", "확인 사항", "제4교시")):
+        return False
+    stem_phrases = (
+        "옳은 것은",
+        "옳은 설명",
+        "가장 적절한 것은",
+        "고른 것은",
+        "분석으로 옳은",
+        "설명으로 옳은",
+    )
+    return any(phrase in normalized for phrase in stem_phrases)
+
+
+def _extract_pdf_text_stem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return markers
+
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            text = "".join(
+                str(span.get("text") or "")
+                for span in line.get("spans") or []
+                if isinstance(span, dict)
+            ).strip()
+            if not _looks_like_pdf_problem_stem_line(text):
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            left, top, right, bottom = [float(value) * scale for value in bbox]
+            markers.append(
+                {
+                    "marker_kind": "text_stem",
                     "text": text[:120],
                     "bbox": {
                         "left": left,
@@ -663,10 +2525,17 @@ def _transform_pdf_problem_markers(
     metadata["pdf_problem_markers"] = transformed
 
 
-def _should_skip_deskew_for_pdf_text_layer(metadata: dict[str, Any]) -> bool:
-    """PDF text markers are tied to the original rendered page coordinates."""
+def _deskew_skip_reason_for_text_markers(metadata: dict[str, Any]) -> str | None:
+    """Text markers are tied to the original rendered page coordinates."""
     markers = metadata.get("pdf_problem_markers")
-    return metadata.get("source_type") == "pdf" and isinstance(markers, list) and bool(markers)
+    if not isinstance(markers, list) or not markers:
+        return None
+    source_type = metadata.get("source_type")
+    if source_type == "pdf":
+        return "pdf_text_layer"
+    if source_type == "hwp" and metadata.get("hwp_layout_problem_markers_as_pdf_markers"):
+        return "hwp_layout_problem_markers"
+    return None
 
 
 def _is_blank_rendered_page(path: str | Path, *, dark_threshold: int = 245, min_dark_ratio: float = 0.001) -> bool:
@@ -683,15 +2552,27 @@ def _is_blank_rendered_page(path: str | Path, *, dark_threshold: int = 245, min_
 
 def _summarize_pdf_render_quality(pages: list[NormalizedPageImage]) -> dict[str, Any]:
     marker_counts: list[int] = []
+    stem_marker_counts: list[int] = []
     blank_page_count = 0
     for page in pages:
         markers = page.metadata.get("pdf_problem_markers")
         marker_counts.append(len(markers) if isinstance(markers, list) else 0)
+        stem_markers = page.metadata.get("pdf_text_stem_markers")
+        stem_marker_counts.append(len(stem_markers) if isinstance(stem_markers, list) else 0)
         if _is_blank_rendered_page(page.normalized_path):
             blank_page_count += 1
 
     marker_count = sum(marker_counts)
+    stem_marker_count = sum(stem_marker_counts)
     pages_with_markers = sum(1 for count in marker_counts if count > 0)
+    nonblank_page_count = max(0, len(pages) - blank_page_count)
+    marker_coverage_denominator = nonblank_page_count if nonblank_page_count else len(pages)
+    marker_coverage_ratio = (
+        pages_with_markers / marker_coverage_denominator
+        if marker_coverage_denominator
+        else 0.0
+    )
+    marker_reliable = marker_count > 0 and marker_coverage_ratio >= 0.5
     warnings: list[str] = []
     if not pages:
         warnings.append("no_rendered_pages")
@@ -699,19 +2580,73 @@ def _summarize_pdf_render_quality(pages: list[NormalizedPageImage]) -> dict[str,
         warnings.append("no_pdf_text_markers")
     if pages_with_markers and pages_with_markers < len(pages):
         warnings.append("some_pages_without_text_markers")
+    if marker_count > 0 and not marker_reliable:
+        warnings.append("low_pdf_text_marker_coverage")
     if blank_page_count:
         warnings.append("blank_pages_detected")
 
     return {
         "page_count": len(pages),
         "pdf_text_marker_count": marker_count,
+        "pdf_text_stem_marker_count": stem_marker_count,
         "pdf_pages_with_text_markers": pages_with_markers,
         "pdf_pages_without_text_markers": max(0, len(pages) - pages_with_markers),
+        "pdf_text_marker_coverage_ratio": round(marker_coverage_ratio, 4),
+        "pdf_text_markers_reliable": marker_reliable,
         "blank_page_count": blank_page_count,
         "has_pdf_text_markers": marker_count > 0,
-        "preferred_segmentation_path": "pdf_text_markers" if marker_count > 0 else "ocr_fallback",
+        "preferred_segmentation_path": "pdf_text_markers" if marker_reliable else "ocr_fallback",
         "warnings": warnings,
     }
+
+
+def _prefer_pdf_text_stem_markers_when_numeric_sparse(
+    pages: list[NormalizedPageImage],
+    quality: dict[str, Any],
+) -> dict[str, Any]:
+    if bool(quality.get("pdf_text_markers_reliable")):
+        return quality
+
+    stem_counts: list[int] = []
+    for page in pages:
+        markers = page.metadata.get("pdf_text_stem_markers")
+        stem_counts.append(len(markers) if isinstance(markers, list) else 0)
+    stem_marker_count = sum(stem_counts)
+    numeric_marker_count = int(quality.get("pdf_text_marker_count") or 0)
+    if stem_marker_count <= max(1, numeric_marker_count):
+        return quality
+
+    for page in pages:
+        numeric_markers = page.metadata.get("pdf_problem_markers")
+        if isinstance(numeric_markers, list):
+            page.metadata["pdf_numeric_problem_markers"] = list(numeric_markers)
+        stem_markers = page.metadata.get("pdf_text_stem_markers")
+        page.metadata["pdf_problem_markers"] = list(stem_markers) if isinstance(stem_markers, list) else []
+
+    pages_with_stems = sum(1 for count in stem_counts if count > 0)
+    blank_page_count = int(quality.get("blank_page_count") or 0)
+    page_count = int(quality.get("page_count") or len(pages))
+    marker_coverage_denominator = max(0, page_count - blank_page_count) or page_count
+    marker_coverage_ratio = (
+        pages_with_stems / marker_coverage_denominator
+        if marker_coverage_denominator
+        else 0.0
+    )
+    warnings = list(quality.get("warnings") or [])
+    if "using_pdf_text_stem_markers" not in warnings:
+        warnings.append("using_pdf_text_stem_markers")
+
+    updated = dict(quality)
+    updated["pdf_numeric_text_marker_count"] = numeric_marker_count
+    updated["pdf_text_marker_count"] = stem_marker_count
+    updated["pdf_pages_with_text_markers"] = pages_with_stems
+    updated["pdf_pages_without_text_markers"] = max(0, page_count - pages_with_stems)
+    updated["pdf_text_marker_coverage_ratio"] = round(marker_coverage_ratio, 4)
+    updated["pdf_text_markers_reliable"] = True
+    updated["has_pdf_text_markers"] = stem_marker_count > 0
+    updated["preferred_segmentation_path"] = "pdf_text_stem_markers"
+    updated["warnings"] = warnings
+    return updated
 
 
 def deskew_image(image: Image.Image) -> Image.Image:
@@ -836,9 +2771,10 @@ def normalize_image(
         image, changed = perspective_correct(image)
         metadata["perspective_corrected"] = changed
     if enable_deskew:
-        if _should_skip_deskew_for_pdf_text_layer(metadata):
+        deskew_skip_reason = _deskew_skip_reason_for_text_markers(metadata)
+        if deskew_skip_reason:
             metadata["deskewed"] = False
-            metadata["deskew_skipped_reason"] = "pdf_text_layer"
+            metadata["deskew_skipped_reason"] = deskew_skip_reason
         else:
             image = deskew_image(image)
             metadata["deskewed"] = True
@@ -913,9 +2849,110 @@ def prepare_pages(
         return normalized_pages
 
     if suffix in HWP_DOCUMENT_EXTENSIONS:
+        cached_hwp_pages = _load_cached_hwp_normalized_pages(
+            source_path,
+            normalized_dir,
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        )
+        if cached_hwp_pages:
+            return cached_hwp_pages
+
+        hwp_inspection = inspect_hangul_document(source_path)
+        can_try_direct_hwp_renderer = (
+            hwp_inspection.get("hwp_signature") == "HWP Document File"
+            or bool(hwp_inspection.get("hwpx_zip_file"))
+        )
+        if can_try_direct_hwp_renderer:
+            rendered = _render_hwp_pages_with_rhwp_python(source_path, normalized_dir / "rhwp_python_rendered", dpi=dpi)
+            if not rendered:
+                rendered = _render_hwp_pages_with_rhwp_core(source_path, normalized_dir / "rhwp_core_rendered", dpi=dpi)
+            if rendered:
+                hwp_renderer = str(rendered[0].metadata.get("hwp_renderer") or "rhwp-core")
+                conversion_quality: dict[str, Any] = {
+                    "page_count": len(rendered),
+                    "hwp_renderer": hwp_renderer,
+                    "hwp_renderer_page_count": int(rendered[0].metadata.get("hwp_renderer_page_count") or len(rendered)),
+                    "warnings": [],
+                }
+                for key in ("hwp_renderer_version", "hwp_renderer_core_version", "hwp_renderer_document_info"):
+                    if key in rendered[0].metadata:
+                        conversion_quality[key] = rendered[0].metadata[key]
+                for key in (
+                    "hwp_preview_text_length",
+                    "hwp_text_extractor",
+                    "hwp_text_numbered_problem_count",
+                    "hwp_text_stem_problem_count",
+                    "hwp_layout_extractor",
+                    "hwp_layout_page_count",
+                    "hwp_layout_problem_marker_count",
+                    "hwp_layout_text_line_count",
+                    "hwp_layout_text_run_count",
+                    "hwp_layout_problem_numbers",
+                    "hwp_layout_problem_markers",
+                ):
+                    if key in hwp_inspection:
+                        conversion_quality[key] = hwp_inspection[key]
+                hwp_preview_text = hwp_inspection.get("hwp_preview_text")
+                normalized_pages: list[NormalizedPageImage] = []
+                for page in rendered:
+                    base_metadata = dict(page.metadata)
+                    _attach_hwp_layout_problem_markers(
+                        base_metadata,
+                        conversion_quality=conversion_quality,
+                        page_index=page.page_index,
+                        dpi=dpi,
+                    )
+                    normalized = normalize_image(
+                        page.normalized_path,
+                        normalized_dir / "normalized",
+                        page_id=page.page_id,
+                        page_index=page.page_index,
+                        enable_perspective=False,
+                        enable_deskew=enable_deskew,
+                        enable_margin_crop=enable_margin_crop,
+                        max_dimension=max_dimension,
+                        base_metadata=base_metadata,
+                    )
+                    normalized.metadata["source_type"] = "hwp"
+                    normalized.metadata["document_like"] = True
+                    normalized.metadata["source_hwp_path"] = str(source_path)
+                    if isinstance(hwp_preview_text, str) and hwp_preview_text.strip():
+                        normalized.metadata["hwp_preview_text"] = hwp_preview_text.strip()
+                    normalized.metadata["hwp_conversion_quality"] = dict(conversion_quality)
+                    normalized_pages.append(normalized)
+                _save_hwp_normalized_pages_cache(
+                    source_path,
+                    normalized_dir,
+                    dpi=dpi,
+                    enable_deskew=enable_deskew,
+                    enable_margin_crop=enable_margin_crop,
+                    max_dimension=max_dimension,
+                    pages=normalized_pages,
+                )
+                return normalized_pages
         converted_pdf = convert_hwp_to_pdf(source_path, normalized_dir / "converted")
         rendered = render_pdf_pages(converted_pdf, normalized_dir / "rendered", dpi=dpi)
         conversion_quality = _summarize_pdf_render_quality(rendered)
+        conversion_quality = _prefer_pdf_text_stem_markers_when_numeric_sparse(rendered, conversion_quality)
+        for key in (
+            "hwp_preview_text_length",
+            "hwp_text_extractor",
+            "hwp_text_numbered_problem_count",
+            "hwp_text_stem_problem_count",
+            "hwp_layout_extractor",
+            "hwp_layout_page_count",
+            "hwp_layout_problem_marker_count",
+            "hwp_layout_text_line_count",
+            "hwp_layout_text_run_count",
+            "hwp_layout_problem_numbers",
+            "hwp_layout_problem_markers",
+        ):
+            if key in hwp_inspection:
+                conversion_quality[key] = hwp_inspection[key]
+        hwp_preview_text = hwp_inspection.get("hwp_preview_text")
         normalized_pages: list[NormalizedPageImage] = []
         for page in rendered:
             normalized = normalize_image(
@@ -934,8 +2971,19 @@ def prepare_pages(
             normalized.metadata["document_like"] = True
             normalized.metadata["source_hwp_path"] = str(source_path)
             normalized.metadata["converted_pdf_path"] = str(converted_pdf)
+            if isinstance(hwp_preview_text, str) and hwp_preview_text.strip():
+                normalized.metadata["hwp_preview_text"] = hwp_preview_text.strip()
             normalized.metadata["hwp_conversion_quality"] = dict(conversion_quality)
             normalized_pages.append(normalized)
+        _save_hwp_normalized_pages_cache(
+            source_path,
+            normalized_dir,
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+            pages=normalized_pages,
+        )
         return normalized_pages
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:

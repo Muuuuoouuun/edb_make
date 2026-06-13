@@ -424,15 +424,30 @@ def _build_document_split_columns(mask: Image.Image, content_box: Box, split_x: 
     return [left_box, right_box]
 
 
+def _band_ink_width_ratio(mask: Image.Image, column_box: Box, band: tuple[int, int]) -> float:
+    band_top, band_bottom = band
+    crop = mask.crop(
+        (
+            int(column_box.left),
+            int(column_box.top + band_top),
+            int(column_box.right),
+            int(column_box.top + band_bottom + 1),
+        )
+    )
+    if crop.width <= 0 or crop.height <= 0:
+        return 0.0
+    bbox = crop.getbbox()
+    if bbox is None:
+        return 0.0
+    return float(bbox[2] - bbox[0]) / max(1.0, float(crop.width))
+
+
 def _find_document_row_bands(mask: Image.Image, column_box: Box, options: SegmentOptions) -> list[tuple[int, int]]:
     crop = mask.crop((int(column_box.left), int(column_box.top), int(column_box.right), int(column_box.bottom)))
     if crop.width <= 1 or crop.height <= 1:
         return []
 
-    row_projection = [
-        int(crop.crop((0, y, crop.width, y + 1)).histogram()[255])
-        for y in range(crop.height)
-    ]
+    row_projection = _row_dark_projection(crop)
     smoothed = _smooth_projection(row_projection, options.document_projection_window_px)
     if not smoothed:
         return []
@@ -463,11 +478,76 @@ def _find_document_row_bands(mask: Image.Image, column_box: Box, options: Segmen
         else:
             merged[-1][1] = band_bottom
 
-    return [
-        (band_top, band_bottom)
-        for band_top, band_bottom in merged
-        if band_bottom - band_top >= options.document_min_band_height_px
-    ]
+    retained: list[list[int]] = []
+    min_tail_height = max(8, int(options.document_min_band_height_px * 0.25))
+    for index, (band_top, band_bottom) in enumerate((int(top), int(bottom)) for top, bottom in merged):
+        band_height = band_bottom - band_top
+        if band_height >= options.document_min_band_height_px:
+            retained.append([band_top, band_bottom])
+            continue
+        if band_height < min_tail_height:
+            continue
+
+        previous_gap = band_top - retained[-1][1] if retained else 10**9
+        next_gap = merged[index + 1][0] - band_bottom if index + 1 < len(merged) else 10**9
+        width_ratio = _band_ink_width_ratio(mask, column_box, (band_top, band_bottom))
+        if retained and previous_gap <= options.document_near_gap_px:
+            retained[-1][1] = max(retained[-1][1], band_bottom)
+            continue
+
+        terminal_tail_gap = max(float(options.document_near_gap_px), float(column_box.height) * 0.14)
+        if (
+            retained
+            and index == len(merged) - 1
+            and previous_gap <= terminal_tail_gap
+            and width_ratio >= 0.18
+        ):
+            retained[-1][1] = max(retained[-1][1], band_bottom)
+            continue
+
+        if next_gap <= options.document_near_gap_px and width_ratio >= 0.12:
+            retained.append([band_top, band_bottom])
+
+    if retained and column_box.width >= float(mask.width) * 0.72:
+        weak_threshold = max(2.0, threshold * 0.45)
+        weak_bands: list[tuple[int, int]] = []
+        band_start = None
+        last_active = None
+        for row_index, score in enumerate(smoothed):
+            if score >= weak_threshold or row_projection[row_index] > 0:
+                if band_start is None:
+                    band_start = row_index
+                last_active = row_index
+                continue
+            if band_start is not None and last_active is not None and row_index - last_active <= 16:
+                continue
+            if band_start is not None and last_active is not None:
+                weak_bands.append((band_start, last_active))
+            band_start = None
+            last_active = None
+        if band_start is not None and last_active is not None:
+            weak_bands.append((band_start, last_active))
+
+        tail_gap_limit = max(float(options.document_near_gap_px), float(column_box.height) * 0.14)
+        for weak_top, weak_bottom in weak_bands:
+            weak_height = weak_bottom - weak_top
+            if weak_height < min_tail_height:
+                continue
+            width_ratio = _band_ink_width_ratio(mask, column_box, (weak_top, weak_bottom))
+            if width_ratio < 0.12:
+                continue
+            for retained_index, retained_band in enumerate(retained):
+                retained_top, retained_bottom = retained_band
+                if weak_top <= retained_bottom:
+                    continue
+                next_retained_top = retained[retained_index + 1][0] if retained_index + 1 < len(retained) else 10**9
+                if weak_top >= next_retained_top:
+                    continue
+                if weak_top - retained_bottom <= tail_gap_limit:
+                    retained_band[1] = max(retained_band[1], weak_bottom)
+                    break
+
+    return [(band_top, band_bottom) for band_top, band_bottom in retained]
 
 
 def _merge_small_document_bands(
@@ -604,6 +684,70 @@ def _column_bounds_from_marker_columns(
     return [(0.0, split_x), (split_x, float(page_width))]
 
 
+def _trim_isolated_pdf_footer_bottom(
+    image: Image.Image,
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+) -> float:
+    if bottom < float(image.height) - 1.0:
+        return bottom
+    crop_box = (
+        max(0, int(left)),
+        max(0, int(top)),
+        min(image.width, int(right)),
+        min(image.height, int(bottom)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        return bottom
+
+    mask = _dark_mask(image.crop(crop_box), threshold=220)
+    row_projection = _row_dark_projection(mask)
+    row_threshold = max(2, int(mask.width * 0.004))
+    runs = [
+        run
+        for run in _find_active_runs(row_projection, threshold=row_threshold)
+        if run[1] - run[0] + 1 >= 2
+    ]
+    if len(runs) < 2:
+        return bottom
+
+    last_run = runs[-1]
+    min_footer_gap = max(44, int(float(image.height) * 0.055))
+    if len(runs) >= 2 and last_run[0] - runs[-2][1] < min_footer_gap:
+        return bottom
+
+    last_run_top = crop_box[1] + last_run[0]
+    if last_run_top < float(image.height) * 0.86:
+        return bottom
+    if last_run[1] - last_run[0] + 1 > max(30, int(float(image.height) * 0.04)):
+        return bottom
+
+    last_run_mask = mask.crop((0, last_run[0], mask.width, last_run[1] + 1))
+    last_bbox = last_run_mask.getbbox()
+    if last_bbox is None:
+        return bottom
+    footer_width_ratio = float(last_bbox[2] - last_bbox[0]) / max(1.0, float(mask.width))
+    if footer_width_ratio > 0.45:
+        return bottom
+    footer_center_ratio = ((last_bbox[0] + last_bbox[2]) / 2.0) / max(1.0, float(mask.width))
+    if not 0.35 <= footer_center_ratio <= 0.65:
+        return bottom
+
+    for previous_run in reversed(runs[:-1]):
+        if last_run[0] - previous_run[1] < min_footer_gap:
+            continue
+        padding = max(14.0, float(image.height) * 0.012)
+        trimmed_bottom = min(bottom, float(crop_box[1] + previous_run[1]) + padding)
+        if trimmed_bottom - top >= 40.0:
+            return trimmed_bottom
+        return bottom
+
+    return bottom
+
+
 def _segment_pdf_problem_markers(
     image: Image.Image,
     page_id: str,
@@ -612,7 +756,12 @@ def _segment_pdf_problem_markers(
     cleaned_markers = [
         marker
         for marker in markers
-        if isinstance(marker, dict) and isinstance(marker.get("number"), int) and _marker_bbox(marker) is not None
+        if isinstance(marker, dict)
+        and (
+            isinstance(marker.get("number"), int)
+            or marker.get("marker_kind") == "text_stem"
+        )
+        and _marker_bbox(marker) is not None
     ]
     if not cleaned_markers:
         return None
@@ -645,21 +794,40 @@ def _segment_pdf_problem_markers(
                 if next_marker_box is not None
                 else float(image.height)
             )
+            bottom = _trim_isolated_pdf_footer_bottom(
+                image,
+                left=left_bound,
+                right=right_bound,
+                top=top,
+                bottom=bottom,
+            )
             box = Box.from_points(left_bound, top, right_bound, min(float(image.height), bottom))
-            number = int(marker["number"])
+            raw_number = marker.get("number")
+            number = int(raw_number) if isinstance(raw_number, int) else None
+            marker_text = str(marker.get("text") or "")[:120]
             metadata = _enrich_block_segmentation_metadata(
                 {
                     "segmenter": "pdf-text-markers",
                     "column_index": column_index,
                     "question_band_index": marker_index,
                     "source_band_index": marker_index,
-                    "pdf_problem_number": number,
-                    "problem_number": number,
-                    "problem_number_source": "pdf_text_marker",
+                    **(
+                        {
+                            "pdf_problem_number": number,
+                            "problem_number": number,
+                            "problem_number_source": "pdf_text_marker",
+                            "display_title": f"{number}.",
+                        }
+                        if number is not None
+                        else {
+                            "problem_number_source": "text_stem",
+                            "display_title": marker_text,
+                        }
+                    ),
                     "force_problem_start": True,
                     "force_image_record": True,
-                    "display_title": f"{number}.",
-                    "marker_text": str(marker.get("text") or "")[:120],
+                    "marker_kind": str(marker.get("marker_kind") or "number"),
+                    "marker_text": marker_text,
                 },
                 segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
                 block_area=box.area,
@@ -674,7 +842,7 @@ def _segment_pdf_problem_markers(
                     block_type=BlockType.TITLE,
                     bbox=box,
                     reading_order=len(blocks),
-                    text=f"{number}.",
+                    text=f"{number}." if number is not None else marker_text,
                     confidence=1.0,
                     metadata=metadata,
                 )
@@ -705,6 +873,10 @@ def _segment_pdf_problem_markers(
 
 
 def _row_dark_projection(mask: Image.Image) -> list[int]:
+    if np is not None:
+        arr = np.asarray(mask, dtype=np.uint8)
+        if arr.ndim == 2:
+            return np.count_nonzero(arr == 255, axis=1).astype(int).tolist()
     return [
         int(mask.crop((0, row_index, mask.width, row_index + 1)).histogram()[255])
         for row_index in range(mask.height)
@@ -712,6 +884,10 @@ def _row_dark_projection(mask: Image.Image) -> list[int]:
 
 
 def _column_dark_projection(mask: Image.Image) -> list[int]:
+    if np is not None:
+        arr = np.asarray(mask, dtype=np.uint8)
+        if arr.ndim == 2:
+            return np.count_nonzero(arr == 255, axis=0).astype(int).tolist()
     return [
         int(mask.crop((column_index, 0, column_index + 1, mask.height)).histogram()[255])
         for column_index in range(mask.width)
@@ -1435,6 +1611,79 @@ def _merge_document_continuation_entries(
     return merged_columns, merge_count
 
 
+def _extend_terminal_document_entries_to_content_tail(
+    mask: Image.Image,
+    columns: list[list[DocumentColumnEntry]],
+    column_boxes: list[Box],
+    *,
+    page_height: int,
+) -> tuple[list[list[DocumentColumnEntry]], int]:
+    if len(columns) != len(column_boxes):
+        return columns, 0
+
+    adjusted_columns: list[list[DocumentColumnEntry]] = []
+    extension_count = 0
+    for entries, column_box in zip(columns, column_boxes):
+        if not entries:
+            adjusted_columns.append(entries)
+            continue
+
+        adjusted_entries = list(entries)
+        last_index = max(range(len(adjusted_entries)), key=lambda idx: (adjusted_entries[idx][0].top, adjusted_entries[idx][0].left))
+        box, source_band_index, split_index, split_count, grid_balance_split = adjusted_entries[last_index]
+        tail_top = int(min(column_box.bottom, max(box.bottom, box.top)))
+        tail_bottom = int(column_box.bottom)
+        if tail_bottom <= tail_top:
+            adjusted_columns.append(adjusted_entries)
+            continue
+
+        crop = mask.crop((int(column_box.left), tail_top, int(column_box.right), tail_bottom))
+        tail_bbox = crop.getbbox()
+        if tail_bbox is None:
+            adjusted_columns.append(adjusted_entries)
+            continue
+
+        tail_abs_top = float(tail_top + tail_bbox[1])
+        tail_abs_bottom = float(tail_top + tail_bbox[3])
+        tail_gap = tail_abs_top - box.bottom
+        max_tail_gap = max(56.0, float(page_height) * 0.1)
+        if tail_gap > max_tail_gap:
+            adjusted_columns.append(adjusted_entries)
+            continue
+
+        tail_width_ratio = float(tail_bbox[2] - tail_bbox[0]) / max(1.0, float(crop.width))
+        tail_height = float(tail_bbox[3] - tail_bbox[1])
+        footer_like_tail = tail_width_ratio < 0.12 and tail_height <= max(24.0, float(page_height) * 0.035)
+        if tail_abs_top >= float(page_height) * 0.86 and footer_like_tail:
+            adjusted_columns.append(adjusted_entries)
+            continue
+
+        padding = max(16.0, float(page_height) * 0.018)
+        left = min(box.left, float(column_box.left + tail_bbox[0]) - padding)
+        right = max(box.right, float(column_box.left + tail_bbox[2]) + padding)
+        new_bottom = min(column_box.bottom, tail_abs_bottom + padding)
+        if new_bottom - box.bottom < 3.0:
+            adjusted_columns.append(adjusted_entries)
+            continue
+
+        adjusted_entries[last_index] = (
+            Box.from_points(
+                max(0.0, left),
+                box.top,
+                min(float(mask.width), right),
+                new_bottom,
+            ),
+            source_band_index,
+            split_index,
+            split_count,
+            grid_balance_split,
+        )
+        extension_count += 1
+        adjusted_columns.append(adjusted_entries)
+
+    return adjusted_columns, extension_count
+
+
 def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
     mask = _dark_mask(image, options.document_dark_threshold)
     content_box = _find_document_content_box(mask, image.width, image.height)
@@ -1475,6 +1724,12 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
             page_width=image.width,
             page_height=image.height,
         )
+    column_entry_groups, terminal_tail_extension_count = _extend_terminal_document_entries_to_content_tail(
+        mask,
+        column_entry_groups,
+        columns,
+        page_height=image.height,
+    )
 
     for column_index, column_entries in enumerate(column_entry_groups, start=1):
         for band_index, (box, source_band_index, split_index, split_count, grid_balance_split) in enumerate(column_entries, start=1):
@@ -1542,6 +1797,7 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
         "document_column_balance_split_count": balance_split_count,
         "document_continuation_merge_count": continuation_merge_count,
         "document_grid_row_alignment_count": row_alignment_count,
+        "document_terminal_tail_extension_count": terminal_tail_extension_count,
         "document_row_band_count": row_band_count,
         "document_split_block_count": len(blocks),
         "document_split_applied": total_split_count > 0,

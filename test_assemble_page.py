@@ -118,5 +118,55 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
         # Also, range-header and shared-passage should not be in q14-stem's normal sequencing
         self.assertNotIn("q13-stem", p14.stem_block_ids)
 
+    def test_set_problem_range_marks_child_question_metadata(self):
+        blocks = [
+            ContentBlock(
+                block_id="range-header",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 10, 500, 40),
+                reading_order=0,
+                text="[13~14] 다음 글을 읽고 물음에 답하시오."
+            ),
+            ContentBlock(
+                block_id="shared-passage",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 60, 500, 150),
+                reading_order=1,
+                text="Long passage text that both child questions depend on."
+            ),
+            ContentBlock(
+                block_id="q13-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 220, 500, 50),
+                reading_order=2,
+                text="13. 위 글의 내용으로 알맞은 것은?"
+            ),
+            ContentBlock(
+                block_id="q14-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(10, 280, 500, 50),
+                reading_order=3,
+                text="14. 윗글을 바탕으로 추론한 것은?"
+            ),
+        ]
+        page = PageModel(
+            page_id="page-range-metadata-test",
+            width_px=1000,
+            height_px=1000,
+            subject=Subject.KOREAN,
+            blocks=blocks
+        )
+
+        grouped = group_problem_units(page)
+        p13 = next(problem for problem in grouped.problems if problem.metadata.get("problem_number") == 13)
+        p14 = next(problem for problem in grouped.problems if problem.metadata.get("problem_number") == 14)
+
+        for problem in (p13, p14):
+            self.assertEqual("page-range-metadata-test-passage-13-14", problem.metadata.get("passage_group_id"))
+            self.assertEqual({"start": 13, "end": 14}, problem.metadata.get("passage_range"))
+            self.assertEqual("child_question", problem.metadata.get("passage_role"))
+            self.assertEqual(["range-header", "shared-passage"], problem.metadata.get("shared_passage_block_ids"))
+            self.assertEqual([13, 14], problem.metadata.get("passage_child_problem_numbers"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,16 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from build_problem_board_edb import (
+    _collapse_marker_document_continuation_page,
+    _collect_problem_risk_flags,
+    _count_core_hwp_problems,
+    _is_hwp_oversegmentation,
+    _is_marker_document_continuation_page,
+    _remove_duplicate_marker_document_problem_numbers,
+    _remove_hwp_template_instruction_problems,
+    _session_problem_count_payload,
+)
 from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
 from layout_template_schema import build_default_template
@@ -46,6 +56,94 @@ def _to_file_uri(path: str | Path | None) -> str | None:
     if path is None:
         return None
     return Path(path).resolve().as_uri()
+
+
+def _coerce_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
+def _hwp_source_key(page_model: PageModel) -> str | None:
+    metadata = page_model.metadata if isinstance(page_model.metadata, dict) else {}
+    if metadata.get("source_type") != "hwp":
+        return None
+    for key in ("source_hwp_path", "original_source_path", "source_pdf_path", "converted_pdf_path"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return page_model.source_path
+
+
+def _hwp_text_problem_signal_count(metadata: dict[str, Any]) -> int:
+    quality = metadata.get("hwp_conversion_quality")
+    if not isinstance(quality, dict):
+        return 0
+    numbered = _coerce_int(quality.get("hwp_text_numbered_problem_count"))
+    stem = _coerce_int(quality.get("hwp_text_stem_problem_count"))
+    return numbered if numbered > 0 else stem
+
+
+def _metadata_list_count(metadata: dict[str, Any], key: str) -> int:
+    value = metadata.get(key)
+    if isinstance(value, list):
+        return len(value)
+    return _coerce_int(value)
+
+
+def _collect_hwp_problem_count_mismatches(page_models: list[PageModel]) -> tuple[dict[str, list[str]], list[str]]:
+    by_source: dict[str, dict[str, Any]] = {}
+    for page_model in page_models:
+        source_key = _hwp_source_key(page_model)
+        if not source_key:
+            continue
+        bucket = by_source.setdefault(
+            source_key,
+            {
+                "page_ids": [],
+                "detected": 0,
+                "signal": 0,
+                "duplicate_skips": 0,
+                "label": Path(source_key).name,
+            },
+        )
+        bucket["page_ids"].append(page_model.page_id)
+        bucket["detected"] += _count_core_hwp_problems(page_model)
+        bucket["signal"] = max(int(bucket["signal"]), _hwp_text_problem_signal_count(page_model.metadata))
+        bucket["duplicate_skips"] += _metadata_list_count(page_model.metadata, "duplicate_problem_numbers_skipped")
+
+    flags_by_page_id: dict[str, list[str]] = {}
+    messages: list[str] = []
+    for bucket in by_source.values():
+        signal = int(bucket["signal"])
+        if signal <= 0:
+            continue
+        detected = int(bucket["detected"])
+        expected = max(0, signal - int(bucket["duplicate_skips"]))
+        if expected <= 0 or detected == expected:
+            continue
+        is_oversegmentation = _is_hwp_oversegmentation(expected, detected)
+        page_flags = ["hwp_problem_count_mismatch"]
+        if is_oversegmentation:
+            page_flags.append("hwp_oversegmentation")
+        for page_id in bucket["page_ids"]:
+            flags_by_page_id.setdefault(str(page_id), []).extend(page_flags)
+        if is_oversegmentation:
+            messages.append(
+                f"HWP 내부 텍스트 기준 문항 수는 {expected}개인데 최종 감지 문항 수는 {detected}개입니다. "
+                "과분할 가능성이 큽니다. 검수 화면에서 원본 페이지의 분리 상태를 먼저 확인해 주세요."
+            )
+        else:
+            messages.append(
+                f"HWP 내부 텍스트 기준 문항 수는 {expected}개인데 최종 감지 문항 수는 {detected}개입니다. 검수 화면에서 분리 상태를 확인해 주세요."
+            )
+    return flags_by_page_id, messages
 
 
 def _build_ai_fallback_config(
@@ -197,6 +295,28 @@ def _problem_block_ids(problem: ProblemUnit) -> list[str]:
 
 
 def _problem_bounds(page_model: PageModel, problem: ProblemUnit) -> Box:
+    metadata_box = problem.metadata.get("bbox_px")
+    if isinstance(metadata_box, dict):
+        try:
+            left = float(metadata_box.get("left", 0.0))
+            top = float(metadata_box.get("top", 0.0))
+            width = float(metadata_box.get("width", 0.0))
+            height = float(metadata_box.get("height", 0.0))
+        except (TypeError, ValueError):
+            width = 0.0
+            height = 0.0
+        if width > 1.0 and height > 1.0:
+            clamped_left = max(0.0, min(float(page_model.width_px), left))
+            clamped_top = max(0.0, min(float(page_model.height_px), top))
+            clamped_right = min(float(page_model.width_px), max(0.0, left + width))
+            clamped_bottom = min(float(page_model.height_px), max(0.0, top + height))
+            return Box(
+                left=clamped_left,
+                top=clamped_top,
+                width=max(0.0, clamped_right - clamped_left),
+                height=max(0.0, clamped_bottom - clamped_top),
+            ).expanded(24.0, max_width=page_model.width_px, max_height=page_model.height_px)
+
     block_lookup = {block.block_id: block for block in page_model.blocks}
     selected = [block_lookup[block_id] for block_id in _problem_block_ids(problem) if block_id in block_lookup]
     if not selected:
@@ -236,6 +356,20 @@ def _render_problem_crops(
         prepared_page = prepared_by_page_id.get(page_model.page_id)
         if prepared_page is None:
             continue
+        block_by_id = {block.block_id: block for block in page_model.blocks}
+        continuation_problems = _collapse_marker_document_continuation_page(
+            page_model,
+            list(page_model.problems),
+            block_by_id,
+        )
+        if continuation_problems is not None:
+            if not continuation_problems:
+                page_model.metadata["problem_crop_skip_reason"] = "marker_document_continuation"
+                continue
+            page_model.problems = continuation_problems
+        elif _is_marker_document_continuation_page(page_model, list(page_model.problems), block_by_id):
+            page_model.metadata["problem_crop_skip_reason"] = "marker_document_continuation"
+            continue
         for index, problem in enumerate(page_model.problems):
             bounds = _problem_bounds(page_model, problem)
             crop = prepared_page.image.crop(
@@ -252,6 +386,19 @@ def _render_problem_crops(
             crop_paths[problem.unit_id] = crop_path
 
     return crop_paths
+
+
+def _normalize_marker_document_continuation_problems(page_models: list[PageModel]) -> None:
+    for page_model in page_models:
+        block_by_id = {block.block_id: block for block in page_model.blocks}
+        continuation_problems = _collapse_marker_document_continuation_page(
+            page_model,
+            list(page_model.problems),
+            block_by_id,
+        )
+        if continuation_problems is None:
+            continue
+        page_model.problems = continuation_problems
 
 
 def _template_to_dict(template) -> dict[str, Any]:
@@ -371,11 +518,14 @@ def build_ui_session(
     }
 
     problems: list[dict[str, Any]] = []
+    problems_by_page_id: dict[str, list[str]] = {}
     for page_model in page_models:
         for index, problem in enumerate(page_model.problems):
             placement = placements_by_id.get(problem.unit_id)
             board_path = board_path_by_page_id.get(page_model.page_id)
             crop_path = problem_crop_paths.get(problem.unit_id)
+            risk_flags = _collect_problem_risk_flags(problem)
+            problems_by_page_id.setdefault(page_model.page_id, []).append(problem.unit_id)
             problems.append(
                 {
                     "id": problem.unit_id,
@@ -394,8 +544,31 @@ def build_ui_session(
                     "overflowAmountPages": placement.overflow_amount_pages if placement else 0.0,
                     "overflowViolation": placement.overflow_violation if placement else False,
                     "slotSpanCount": placement.slot_span_count if placement else 1,
+                    "riskFlags": risk_flags,
+                    "reviewStatus": "check_needed" if risk_flags else "normal",
                 }
             )
+
+    hwp_flags_by_page_id, hwp_warning_messages = _collect_hwp_problem_count_mismatches(page_models)
+    pages: list[dict[str, Any]] = []
+    for page_number, page_model in enumerate(page_models, start=1):
+        page_flags = list(dict.fromkeys(hwp_flags_by_page_id.get(page_model.page_id, [])))
+        problem_ids = problems_by_page_id.get(page_model.page_id, [])
+        pages.append(
+            {
+                "id": page_model.page_id,
+                "pageNumber": page_number,
+                "sourceImageUri": _to_file_uri(page_model.source_path),
+                "sourceImagePath": str(Path(page_model.source_path).resolve()),
+                "width": int(page_model.width_px),
+                "height": int(page_model.height_px),
+                "problemIds": problem_ids,
+                "riskFlags": page_flags,
+                "reviewStatus": "failed" if not problem_ids else "check_needed" if page_flags else "normal",
+            }
+        )
+
+    problem_counts = _session_problem_count_payload(problems)
 
     return {
         "session_name": output_dir.name,
@@ -414,6 +587,9 @@ def build_ui_session(
         "template": _template_to_dict(export_plan.template),
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
+        **problem_counts,
+        "warning_messages": hwp_warning_messages,
+        "pages": pages,
         "problems": problems,
     }
 
@@ -505,6 +681,9 @@ def run_export(
         build_page_model(prepared_page, subject=subject, ocr_mode=ocr, ai_config=page_ai_config)
         for prepared_page in prepared_pages
     ]
+    _remove_duplicate_marker_document_problem_numbers(page_models)
+    _remove_hwp_template_instruction_problems(page_models)
+    _normalize_marker_document_continuation_problems(page_models)
     save_pages_json(page_models, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(page_models, ai_fallback_config)
 

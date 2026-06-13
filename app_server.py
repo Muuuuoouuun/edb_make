@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from datetime import datetime
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -22,17 +23,20 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import url2pathname
 
+import preprocess
 from build_mvp_export import run_export
 from build_problem_board_edb import (
     DEFAULT_BOARD_THEME,
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     ProblemEntry,
     _normalize_processing_step,
+    _session_problem_count_payload,
     build_records,
     build_ui_session,
     recrop_problem,
     resolve_subject,
     run_problem_export,
+    write_classin_handoff_manifest,
 )
 from build_structured_page_json import resolve_recognition_worker_count
 from edb_builder import (
@@ -96,6 +100,7 @@ UI_DIR = RESOURCE_DIR / "ui_prototype"
 RUNTIME_DIR = BASE_DIR / ".app_runtime"
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
+SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
 GENERATED_SESSION_JS = UI_DIR / "generated_session.js"
 
 
@@ -209,6 +214,129 @@ def _normalize_crop_format(value: Any) -> str:
 
 def _extract_crop_format(payload: dict[str, Any]) -> str:
     return _normalize_crop_format(payload.get("cropFormat") or payload.get("crop_format"))
+
+
+def _command_info(command: list[str]) -> dict[str, Any]:
+    executable = str(command[0]) if command else ""
+    name = Path(executable).name
+    command_args = [str(part) for part in command[1:]]
+    if any("unhwp.extract_text" in part for part in command_args):
+        name = "unhwp"
+    if any("hwp_hwpx_parser" in part for part in command_args):
+        name = "hwp-hwpx-parser"
+    if any("hwpilot" in part and part.endswith("main.js") for part in command_args):
+        name = "hwpilot"
+    if any("render_hwp_with_rhwp_core.mjs" in part for part in command_args):
+        name = "rhwp-core"
+    return {
+        "name": name,
+        "path": executable,
+        "args": command_args,
+    }
+
+
+def describe_runtime_diagnostics() -> dict[str, Any]:
+    pdf_converters = [_command_info(command) for command in preprocess._iter_hwp_pdf_converter_commands()]
+    hwp_to_hwpx_converters = [_command_info(command) for command in preprocess._iter_hwp_hwpx_converter_commands()]
+    html_converters = [_command_info(command) for command in preprocess._iter_pyhwp_html_converter_commands()]
+    text_extractors = [_command_info(command) for command in preprocess._iter_hwp_text_converter_commands()]
+    chrome_pdf_converters = [_command_info(command) for command in preprocess._iter_chrome_pdf_commands()]
+    hwp_renderers = [_command_info(command) for command in preprocess._iter_rhwp_core_renderer_commands()]
+
+    pdf_ready = bool(pdf_converters)
+    html_pdf_ready = bool(html_converters and chrome_pdf_converters)
+    hwp_renderer_ready = bool(hwp_renderers)
+    hwp_ready = bool(pdf_ready or html_pdf_ready or hwp_renderer_ready)
+    hwpx_ready = bool(pdf_ready or hwp_renderer_ready)
+    warnings: list[str] = []
+    recommended_actions: list[str] = []
+
+    if not pdf_ready and not hwp_renderer_ready:
+        warnings.append("LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found.")
+        recommended_actions.append("LibreOffice/rhwp/HWP PDF 변환기, airun-hwp, 또는 rhwp-core 렌더러를 설치하거나, HWP/HWPX를 PDF로 내보낸 뒤 업로드해 주세요.")
+    if html_converters and not chrome_pdf_converters:
+        warnings.append("pyhwp HTML fallback is available, but Chrome PDF printing was not found.")
+        recommended_actions.append("Chrome을 설치하거나 EDB_CHROME 환경 변수로 Chrome 실행 파일 경로를 지정해 주세요.")
+    if not text_extractors:
+        warnings.append("hwp5txt/unhwp/rhwp/hwpilot/kordoc text extractor was not found; HWP 문항 수 사전 점검이 약해집니다.")
+        recommended_actions.append("pyhwp/hwp5txt, unhwp, rhwp, HWPilot, 또는 kordoc를 설치하면 HWP 내부 텍스트 기반 문항 수 QA가 더 정확해집니다.")
+    if not hwp_to_hwpx_converters:
+        recommended_actions.append("선택 사항: HWPilot을 설치하면 HWP→HWPX 정규화 경로를 추가로 사용할 수 있습니다.")
+
+    if hwp_ready and hwpx_ready:
+        status = "ready"
+        label = "준비됨"
+    elif hwp_ready or hwpx_ready:
+        status = "partial"
+        label = "부분 준비"
+    else:
+        status = "blocked"
+        label = "확인 필요"
+
+    tool_counts = {
+        "pdfConverters": len(pdf_converters),
+        "hwpToHwpxConverters": len(hwp_to_hwpx_converters),
+        "htmlConverters": len(html_converters),
+        "textExtractors": len(text_extractors),
+        "chromePdfConverters": len(chrome_pdf_converters),
+        "hwpRenderers": len(hwp_renderers),
+    }
+    summary_parts = [
+        f"PDF {tool_counts['pdfConverters']}",
+        f"텍스트 {tool_counts['textExtractors']}",
+        f"브리지 {tool_counts['hwpToHwpxConverters']}",
+    ]
+    if hwp_renderers:
+        summary_parts.append(f"렌더 {tool_counts['hwpRenderers']}")
+    if html_pdf_ready:
+        summary_parts.append("HTML fallback")
+    if warnings:
+        summary_parts.append(f"주의 {len(warnings)}")
+
+    return {
+        "ok": True,
+        "hangul": {
+            "status": status,
+            "label": label,
+            "summary": " · ".join(summary_parts),
+            "toolCounts": tool_counts,
+            "pdfReady": pdf_ready,
+            "hwpReady": hwp_ready,
+            "hwpxReady": hwpx_ready,
+            "hwpRendererReady": hwp_renderer_ready,
+            "htmlPdfFallbackReady": html_pdf_ready,
+            "pdfConverters": pdf_converters,
+            "hwpToHwpxConverters": hwp_to_hwpx_converters,
+            "htmlConverters": html_converters,
+            "textExtractors": text_extractors,
+            "chromePdfConverters": chrome_pdf_converters,
+            "hwpRenderers": hwp_renderers,
+            "warnings": warnings,
+            "recommendedActions": recommended_actions,
+        },
+    }
+
+
+def _export_error_payload(exc: Exception) -> dict[str, Any]:
+    message = str(exc)
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error": message,
+        "errorKind": "export_failed",
+    }
+    if (
+        "HWP/HWPX" in message
+        or "valid HWP" in message
+        or "valid HWPX" in message
+        or "한컴오피스" in message
+    ):
+        payload["errorKind"] = "hangul_conversion_failed"
+        payload["recoverySteps"] = [
+            "한컴오피스에서 원본 HWP/HWPX를 PDF로 내보낸 뒤 PDF를 다시 업로드해 주세요.",
+            "또는 HWP/HWPX를 PDF로 변환할 수 있는 로컬 변환기를 설치한 뒤 다시 실행해 주세요.",
+            "암호, 배포용, DRM, 복사 방지 문서라면 보호를 해제하거나 권한 있는 PDF 내보내기를 사용해 주세요.",
+        ]
+    return payload
 
 
 def _extract_ai_fallback_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
@@ -362,6 +490,340 @@ def path_to_api_url(path: str | Path | None) -> str | None:
     return f"/api/file?path={quote(str(resolved))}"
 
 
+def _path_exists(value: Any, *, directory: bool = False) -> bool:
+    path = decode_file_reference(str(value)) if value else None
+    if path is None:
+        return False
+    return path.is_dir() if directory else path.is_file()
+
+
+def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(summary, dict):
+        return summary
+    annotated = dict(summary)
+    edb_path = annotated.get("edbPath") or annotated.get("edb_path")
+    output_dir = annotated.get("outputDir") or annotated.get("output_dir")
+    classin_handoff_path = annotated.get("classinHandoffPath") or annotated.get("classin_handoff_path")
+    classin_handoff_markdown_path = (
+        annotated.get("classinHandoffMarkdownPath")
+        or annotated.get("classin_handoff_markdown_path")
+    )
+    edb_exists = _path_exists(edb_path)
+    output_exists = _path_exists(output_dir, directory=True)
+    annotated["edbFileExists"] = edb_exists
+    annotated["outputDirExists"] = output_exists
+    annotated["edb_file_exists"] = edb_exists
+    annotated["output_dir_exists"] = output_exists
+    annotated["classinHandoffUri"] = (
+        annotated.get("classinHandoffUri")
+        or annotated.get("classin_handoff_uri")
+        or path_to_api_url(classin_handoff_path)
+    )
+    annotated["classinHandoffMarkdownUri"] = (
+        annotated.get("classinHandoffMarkdownUri")
+        or annotated.get("classin_handoff_markdown_uri")
+        or path_to_api_url(classin_handoff_markdown_path)
+    )
+    annotated["classin_handoff_uri"] = annotated["classinHandoffUri"]
+    annotated["classin_handoff_markdown_uri"] = annotated["classinHandoffMarkdownUri"]
+    return annotated
+
+
+def _session_publish_summary(
+    *,
+    edb_path: str | Path,
+    output_dir: str | Path,
+    edb_validation: dict[str, Any],
+    record_count: int,
+    core_problem_count: int | None = None,
+    supplemental_item_count: int | None = None,
+    classin_handoff_path: str | Path | None = None,
+    classin_handoff_markdown_path: str | Path | None = None,
+    classin_preflight: dict[str, Any] | None = None,
+    published_at: str | None = None,
+) -> dict[str, Any]:
+    resolved_edb_path = Path(edb_path).resolve()
+    resolved_output_dir = Path(output_dir).resolve()
+    resolved_classin_handoff_path = Path(classin_handoff_path).resolve() if classin_handoff_path else None
+    resolved_classin_handoff_markdown_path = (
+        Path(classin_handoff_markdown_path).resolve()
+        if classin_handoff_markdown_path
+        else None
+    )
+    record_count_actual = int(edb_validation.get("recordCountActual") or record_count or 0)
+    record_count_hint = int(edb_validation.get("recordCountHint") or record_count_actual or 0)
+    page_count_hint = int(edb_validation.get("pageCountHint") or 0)
+    supplemental_count = max(0, int(supplemental_item_count or 0))
+    if core_problem_count is None:
+        core_count = max(0, int(record_count or record_count_actual) - supplemental_count)
+    else:
+        core_count = max(0, int(core_problem_count or 0))
+    record_count_label = (
+        f"{core_count}문항 + 자료 {supplemental_count}"
+        if supplemental_count
+        else f"{int(record_count or record_count_actual)}개 자료"
+    )
+    preflight = dict(classin_preflight or {})
+    preflight_status = str(preflight.get("status") or "")
+    preflight_issue_count = int(preflight.get("issueCount") or preflight.get("issue_count") or 0)
+    preflight_passed = bool(preflight.get("passed")) if preflight else False
+    published_at = published_at or datetime.now().astimezone().isoformat(timespec="seconds")
+    summary = {
+        "validated": True,
+        "statusLabel": "검증 완료",
+        "edbFileName": resolved_edb_path.name,
+        "edbPath": str(resolved_edb_path),
+        "edbFileUri": path_to_api_url(resolved_edb_path),
+        "outputDir": str(resolved_output_dir),
+        "classinHandoffPath": str(resolved_classin_handoff_path) if resolved_classin_handoff_path else None,
+        "classinHandoffUri": path_to_api_url(resolved_classin_handoff_path),
+        "classinHandoffMarkdownPath": (
+            str(resolved_classin_handoff_markdown_path)
+            if resolved_classin_handoff_markdown_path
+            else None
+        ),
+        "classinHandoffMarkdownUri": path_to_api_url(resolved_classin_handoff_markdown_path),
+        "classinPreflight": preflight,
+        "classinPreflightStatus": preflight_status,
+        "classinPreflightPassed": preflight_passed,
+        "classinPreflightIssueCount": preflight_issue_count,
+        "edbFileExists": resolved_edb_path.is_file(),
+        "outputDirExists": resolved_output_dir.is_dir(),
+        "recordCount": int(record_count or record_count_actual),
+        "recordCountActual": record_count_actual,
+        "recordCountHint": record_count_hint,
+        "coreProblemCount": core_count,
+        "supplementalItemCount": supplemental_count,
+        "recordCountLabel": record_count_label,
+        "pageCountHint": page_count_hint,
+        "outerSize": int(edb_validation.get("outerSize") or 0),
+        "innerSize": int(edb_validation.get("innerSize") or 0),
+        "publishedAt": published_at,
+        "edbValidation": dict(edb_validation),
+    }
+    summary.update({
+        "status_label": summary["statusLabel"],
+        "edb_file_name": summary["edbFileName"],
+        "edb_path": summary["edbPath"],
+        "edb_file_uri": summary["edbFileUri"],
+        "output_dir": summary["outputDir"],
+        "classin_handoff_path": summary["classinHandoffPath"],
+        "classin_handoff_uri": summary["classinHandoffUri"],
+        "classin_handoff_markdown_path": summary["classinHandoffMarkdownPath"],
+        "classin_handoff_markdown_uri": summary["classinHandoffMarkdownUri"],
+        "classin_preflight": summary["classinPreflight"],
+        "classin_preflight_status": summary["classinPreflightStatus"],
+        "classin_preflight_passed": summary["classinPreflightPassed"],
+        "classin_preflight_issue_count": summary["classinPreflightIssueCount"],
+        "edb_file_exists": summary["edbFileExists"],
+        "output_dir_exists": summary["outputDirExists"],
+        "record_count": summary["recordCount"],
+        "record_count_actual": summary["recordCountActual"],
+        "record_count_hint": summary["recordCountHint"],
+        "core_problem_count": summary["coreProblemCount"],
+        "supplemental_item_count": summary["supplementalItemCount"],
+        "record_count_label": summary["recordCountLabel"],
+        "page_count_hint": summary["pageCountHint"],
+        "outer_size": summary["outerSize"],
+        "inner_size": summary["innerSize"],
+        "published_at": summary["publishedAt"],
+        "edb_validation": summary["edbValidation"],
+    })
+    return summary
+
+
+def _session_publish_history(
+    source_session: dict[str, Any] | None,
+    current_summary: dict[str, Any],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    source_session = source_session or {}
+    existing = source_session.get("publish_history")
+    if not isinstance(existing, list):
+        existing = source_session.get("publishHistory")
+    if not isinstance(existing, list):
+        previous_summary = source_session.get("publish_summary")
+        if not isinstance(previous_summary, dict):
+            previous_summary = source_session.get("publishSummary")
+        existing = [previous_summary] if isinstance(previous_summary, dict) else []
+    history: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for raw in [current_summary, *existing]:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        key = str(item.get("edbPath") or item.get("edb_path") or item.get("edbFileName") or item.get("edb_file_name") or "")
+        if key and key in seen_paths:
+            continue
+        if key:
+            seen_paths.add(key)
+        history.append(item)
+        if len(history) >= limit:
+            break
+    return history
+
+
+def _coerce_review_bool(payload: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = payload.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "ok", "passed", "완료"}
+    return default
+
+
+def _classin_review_payload(
+    payload: dict[str, Any],
+    *,
+    reviewed_at: str | None = None,
+) -> dict[str, Any]:
+    requested_status = str(payload.get("status") or payload.get("classinReviewStatus") or "").strip().lower()
+    if requested_status not in {"passed", "needs_fix", "pending"}:
+        requested_status = "passed" if payload.get("passed", True) is not False else "needs_fix"
+    passed = requested_status == "passed"
+    status_labels = {
+        "passed": "ClassIn 확인 완료",
+        "needs_fix": "ClassIn 재검수 필요",
+        "pending": "ClassIn 검수 대기",
+    }
+    reviewed_at = reviewed_at or datetime.now().astimezone().isoformat(timespec="seconds")
+    review = {
+        "status": requested_status,
+        "statusLabel": status_labels[requested_status],
+        "status_label": status_labels[requested_status],
+        "manualReviewRequired": not passed,
+        "manual_review_required": not passed,
+        "classinOpened": _coerce_review_bool(payload, "classinOpened", default=passed),
+        "recordCountOk": _coerce_review_bool(payload, "recordCountOk", default=passed),
+        "orderOk": _coerce_review_bool(payload, "orderOk", default=passed),
+        "readabilityOk": _coerce_review_bool(payload, "readabilityOk", default=passed),
+        "supplementalItemsOk": _coerce_review_bool(payload, "supplementalItemsOk", default=passed),
+        "notes": str(payload.get("notes") or "").strip(),
+        "reviewedAt": reviewed_at,
+        "reviewed_at": reviewed_at,
+    }
+    return review
+
+
+def _attach_classin_review_to_publish_summary(summary: dict[str, Any], review: dict[str, Any]) -> None:
+    summary["classinReview"] = dict(review)
+    summary["classin_review"] = dict(review)
+    summary["classinReviewStatus"] = review["status"]
+    summary["classinReviewStatusLabel"] = review["statusLabel"]
+    summary["classinReviewPassed"] = review["status"] == "passed"
+    summary["classin_review_status"] = review["status"]
+    summary["classin_review_status_label"] = review["statusLabel"]
+    summary["classin_review_passed"] = review["status"] == "passed"
+
+
+def _apply_classin_review_result(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    reviewed_at: str | None = None,
+) -> dict[str, Any]:
+    review = _classin_review_payload(payload, reviewed_at=reviewed_at)
+    session["classinReview"] = dict(review)
+    session["classin_review"] = dict(review)
+    for key in ("publishSummary", "publish_summary"):
+        if isinstance(session.get(key), dict):
+            _attach_classin_review_to_publish_summary(session[key], review)
+    for history_key in ("publishHistory", "publish_history"):
+        history = session.get(history_key)
+        if isinstance(history, list) and history and isinstance(history[0], dict):
+            _attach_classin_review_to_publish_summary(history[0], review)
+    return review
+
+
+def _session_history_key(session: dict[str, Any]) -> str:
+    for key in ("output_dir", "outputDir", "pages_json_path", "pagesJsonPath"):
+        value = str(session.get(key) or "").strip()
+        if value:
+            return value
+    name = str(session.get("session_name") or session.get("sessionName") or "session")
+    generated_at = str(session.get("generated_at") or session.get("generatedAt") or "")
+    source_files = "|".join(str(path) for path in (session.get("input_files") or session.get("inputFiles") or []))
+    return f"{name}|{generated_at}|{source_files}"
+
+
+def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = None) -> dict[str, Any]:
+    session_snapshot = json.loads(json.dumps(session))
+    problems = [problem for problem in (session_snapshot.get("problems") or []) if isinstance(problem, dict)]
+    counts = _session_problem_count_payload(problems)
+    output_dir = str(session_snapshot.get("output_dir") or session_snapshot.get("outputDir") or "")
+    generated_at = str(session_snapshot.get("generated_at") or session_snapshot.get("generatedAt") or "")
+    session_name = str(session_snapshot.get("session_name") or session_snapshot.get("sessionName") or "새 세션")
+    history_key = _session_history_key(session_snapshot)
+    entry_id = hashlib.sha1(history_key.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    publish_summary = session_snapshot.get("publishSummary")
+    if not isinstance(publish_summary, dict):
+        publish_summary = session_snapshot.get("publish_summary")
+    review_summary = session_snapshot.get("reviewSummary")
+    if not isinstance(review_summary, dict):
+        review_summary = session_snapshot.get("review_summary")
+    updated_value = updated_at or datetime.now().astimezone().isoformat(timespec="seconds")
+    return {
+        "id": entry_id,
+        "sessionName": session_name,
+        "session_name": session_name,
+        "outputDir": output_dir,
+        "output_dir": output_dir,
+        "generatedAt": generated_at,
+        "generated_at": generated_at,
+        "updatedAt": updated_value,
+        "updated_at": updated_value,
+        "detectedProblemCount": counts["detected_problem_count"],
+        "coreProblemCount": counts["core_problem_count"],
+        "supplementalItemCount": counts["supplemental_item_count"],
+        "publishSummary": publish_summary or None,
+        "reviewSummary": review_summary or None,
+        "inputFileCount": int(session_snapshot.get("input_file_count") or len(session_snapshot.get("input_files") or [])),
+        "session": session_snapshot,
+    }
+
+
+def _session_history_with_session(
+    history: list[dict[str, Any]],
+    session: dict[str, Any],
+    *,
+    updated_at: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    entry = _session_history_entry(session, updated_at=updated_at)
+    seen = {entry["id"]}
+    merged = [entry]
+    for raw in history:
+        if not isinstance(raw, dict):
+            continue
+        entry_id = str(raw.get("id") or "")
+        if not entry_id or entry_id in seen:
+            continue
+        seen.add(entry_id)
+        merged.append(raw)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _public_session_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    public_entries: list[dict[str, Any]] = []
+    for raw in history:
+        if not isinstance(raw, dict):
+            continue
+        item = {key: value for key, value in raw.items() if key != "session"}
+        if isinstance(item.get("publishSummary"), dict):
+            item["publishSummary"] = _publish_artifact_state(item["publishSummary"])
+        if isinstance(item.get("publish_summary"), dict):
+            item["publish_summary"] = _publish_artifact_state(item["publish_summary"])
+        public_entries.append(item)
+    return public_entries
+
+
 def content_disposition_attachment(filename: str) -> str:
     fallback = "".join(
         ch if 32 <= ord(ch) < 127 and ch not in {'"', "\\", ";"} else "_"
@@ -392,6 +854,35 @@ def load_latest_session() -> dict[str, Any] | None:
     return load_generated_session()
 
 
+def load_session_history(path: Path = SESSION_HISTORY_JSON) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [entry for entry in payload if isinstance(entry, dict)]
+
+
+def save_session_history(history: list[dict[str, Any]], path: Path = SESSION_HISTORY_JSON) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def remember_session_history(
+    session: dict[str, Any],
+    *,
+    path: Path = SESSION_HISTORY_JSON,
+    updated_at: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    history = _session_history_with_session(load_session_history(path), session, updated_at=updated_at, limit=limit)
+    save_session_history(history, path)
+    return history
+
+
 def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
     paths: set[str] = set()
 
@@ -402,7 +893,13 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         if resolved and resolved.exists():
             paths.add(str(resolved))
 
-    for key in ("edb_path", "pages_json_path", "placements_json_path"):
+    for key in (
+        "edb_path",
+        "pages_json_path",
+        "placements_json_path",
+        "classin_handoff_path",
+        "classin_handoff_markdown_path",
+    ):
         add_path(session.get(key))
 
     for value in session.get("rendered_page_paths", []):
@@ -440,6 +937,45 @@ def _file_uri_to_path(value: Any) -> Path | None:
         return Path(unquote(raw)) if raw else None
     # bare filesystem path
     return Path(text)
+
+
+def _target_within_allowed_roots(target: Path) -> bool:
+    roots = [BASE_DIR.resolve(), RUNTIME_DIR.resolve()]
+    return any(str(target) == str(root) or str(target).startswith(str(root) + os.sep) for root in roots)
+
+
+def _resolve_open_target(raw_path: Any, *, kind: str) -> Path:
+    if not raw_path:
+        raise ValueError("path is required")
+    target = _file_uri_to_path(raw_path)
+    if target is None:
+        raise ValueError("path is required")
+    try:
+        target = target.resolve() if target.is_absolute() else (BASE_DIR / target).resolve()
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"invalid path: {exc}") from exc
+    if not _target_within_allowed_roots(target):
+        raise ValueError("path outside allowed roots")
+    if kind == "folder":
+        if target.is_file():
+            target = target.parent
+        if not target.exists() or not target.is_dir():
+            raise FileNotFoundError(f"folder not found: {target}")
+        return target
+    if kind == "file":
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(f"file not found: {target}")
+        return target
+    raise ValueError(f"unknown open target kind: {kind}")
+
+
+def _open_system_target(target: Path) -> None:
+    if sys.platform.startswith("win"):
+        os.startfile(str(target))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
 
 
 def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
@@ -507,6 +1043,8 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten = json.loads(json.dumps(session))
     rewritten["edb_file_uri"] = path_to_api_url(session.get("edb_path") or session.get("edb_file_uri"))
+    rewritten["classin_handoff_uri"] = path_to_api_url(session.get("classin_handoff_path"))
+    rewritten["classin_handoff_markdown_uri"] = path_to_api_url(session.get("classin_handoff_markdown_path"))
     rewritten["rendered_page_file_uris"] = [path_to_api_url(value) for value in session.get("rendered_page_paths", [])]
 
     for problem in rewritten.get("problems", []):
@@ -624,6 +1162,331 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
     return skeleton
 
 
+def _refresh_session_problem_counts(session: dict[str, Any]) -> None:
+    problems = [problem for problem in (session.get("problems") or []) if isinstance(problem, dict)]
+    counts = _session_problem_count_payload(problems)
+    session.update(counts)
+    session["detectedProblemCount"] = counts["detected_problem_count"]
+    session["coreProblemCount"] = counts["core_problem_count"]
+    session["supplementalItemCount"] = counts["supplemental_item_count"]
+    summary = _session_review_summary(session)
+    session["review_summary"] = summary
+    session["reviewSummary"] = summary
+
+
+def _metadata_from_page(page: dict[str, Any]) -> dict[str, Any]:
+    metadata = page.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata
+    return page
+
+
+def _metadata_list_count(metadata: dict[str, Any], key: str) -> int:
+    value = metadata.get(key)
+    if isinstance(value, list):
+        return len(value)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _hwp_quality_from_page(page: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = _metadata_from_page(page)
+    quality = metadata.get("hwp_conversion_quality")
+    return quality if isinstance(quality, dict) else None
+
+
+def _session_pages_json_pages(session: dict[str, Any]) -> list[dict[str, Any]]:
+    pages_json_value = session.get("pages_json_path") or session.get("pagesJsonPath")
+    pages_json_path = decode_file_reference(str(pages_json_value)) if pages_json_value else None
+    if pages_json_path is None or not pages_json_path.exists():
+        return []
+    try:
+        payload = json.loads(pages_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [page for page in payload if isinstance(page, dict)]
+
+
+def _session_hwp_quality_pages(session: dict[str, Any]) -> list[dict[str, Any]]:
+    inline_pages = [page for page in (session.get("pages") or []) if isinstance(page, dict)]
+    if any(_hwp_quality_from_page(page) for page in inline_pages):
+        return inline_pages
+    return _session_pages_json_pages(session)
+
+
+def _metadata_flag_is_truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _page_has_hwp_cache_metadata(page: dict[str, Any]) -> bool:
+    metadata = _metadata_from_page(page)
+    return "hwp_renderer_cache_hit" in metadata or "hwp_normalized_cache_hit" in metadata
+
+
+def _session_hwp_cache_pages(session: dict[str, Any]) -> list[dict[str, Any]]:
+    inline_pages = [page for page in (session.get("pages") or []) if isinstance(page, dict)]
+    if any(_page_has_hwp_cache_metadata(page) for page in inline_pages):
+        return inline_pages
+    return _session_pages_json_pages(session)
+
+
+def _session_warning_messages(session: dict[str, Any]) -> list[str]:
+    warnings = session.get("warning_messages")
+    if not isinstance(warnings, list):
+        warnings = session.get("warningMessages")
+    if not isinstance(warnings, list):
+        return []
+    return [str(message) for message in warnings if str(message or "").strip()]
+
+
+NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
+    "marker_document_continuation",
+    "ocr_disabled",
+}
+
+HWP_COUNT_MATCH_DISMISSIBLE_REVIEW_RISK_FLAGS = {
+    "fallback_grouping",
+    "large_block_dominance",
+    "no_problem_markers",
+    "problem_per_block",
+    "sparse_segmentation",
+}
+
+
+def _session_problem_is_supplemental(problem: dict[str, Any]) -> bool:
+    risk_flags = problem.get("riskFlags") or problem.get("risk_flags") or []
+    if isinstance(risk_flags, list) and "marker_document_continuation" in {str(flag) for flag in risk_flags}:
+        return True
+    metadata = problem.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("marker_document_continuation"):
+        return True
+    problem_id = str(problem.get("id") or problem.get("problem_id") or "")
+    return problem_id.endswith("-continuation")
+
+
+def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:
+    problems = [problem for problem in (session.get("problems") or []) if isinstance(problem, dict)]
+    pages = [page for page in (session.get("pages") or []) if isinstance(page, dict)]
+    counts = _session_problem_count_payload(problems)
+    review_status_counts = {"all": 0, "normal": 0, "check_needed": 0, "failed": 0}
+    supplemental_review_status_counts = {"all": 0, "normal": 0, "check_needed": 0, "failed": 0}
+    core_review_status_counts = {"all": 0, "normal": 0, "check_needed": 0, "failed": 0}
+    risk_flag_counts: dict[str, int] = {}
+    for problem in problems:
+        status = _problem_review_status(problem)
+        target_counts = (
+            supplemental_review_status_counts
+            if _session_problem_is_supplemental(problem)
+            else core_review_status_counts
+        )
+        review_status_counts["all"] += 1
+        review_status_counts[status] = review_status_counts.get(status, 0) + 1
+        target_counts["all"] += 1
+        target_counts[status] = target_counts.get(status, 0) + 1
+        for flag in problem.get("riskFlags") or problem.get("risk_flags") or []:
+            flag_text = str(flag or "").strip()
+            if flag_text:
+                risk_flag_counts[flag_text] = risk_flag_counts.get(flag_text, 0) + 1
+
+    for page in pages:
+        for flag in page.get("riskFlags") or page.get("risk_flags") or []:
+            flag_text = str(flag or "").strip()
+            if flag_text:
+                risk_flag_counts[flag_text] = risk_flag_counts.get(flag_text, 0) + 1
+
+    top_risk_flags = [
+        {"flag": flag, "count": count}
+        for flag, count in sorted(risk_flag_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
+    ]
+    hwp_problem_count_mismatch_count = int(risk_flag_counts.get("hwp_problem_count_mismatch") or 0)
+    hwp_oversegmentation_count = int(risk_flag_counts.get("hwp_oversegmentation") or 0)
+    needs_review_count = int(review_status_counts.get("check_needed", 0)) + int(review_status_counts.get("failed", 0))
+    hwp_text_extractors: dict[str, int] = {}
+    hwp_text_problem_signal_count = 0
+    hwp_layout_extractors: dict[str, int] = {}
+    hwp_layout_problem_signal_count = 0
+    hwp_layout_duplicate_skip_count = 0
+    hwp_layout_page_count = 0
+    hwp_layout_text_line_count = 0
+    hwp_renderer_cache_hit_count = 0
+    hwp_normalized_cache_hit_count = 0
+    hwp_cache_hit_page_count = 0
+
+    for page in _session_hwp_cache_pages(session):
+        metadata = _metadata_from_page(page)
+        renderer_cache_hit = _metadata_flag_is_truthy(metadata.get("hwp_renderer_cache_hit"))
+        normalized_cache_hit = _metadata_flag_is_truthy(metadata.get("hwp_normalized_cache_hit"))
+        if renderer_cache_hit:
+            hwp_renderer_cache_hit_count += 1
+        if normalized_cache_hit:
+            hwp_normalized_cache_hit_count += 1
+        if renderer_cache_hit or normalized_cache_hit:
+            hwp_cache_hit_page_count += 1
+
+    for page in _session_hwp_quality_pages(session):
+        metadata = _metadata_from_page(page)
+        quality = _hwp_quality_from_page(page)
+        if quality is None:
+            continue
+        extractor = str(quality.get("hwp_text_extractor") or "").strip()
+        if extractor:
+            hwp_text_extractors[extractor] = hwp_text_extractors.get(extractor, 0) + 1
+        try:
+            numbered = int(quality.get("hwp_text_numbered_problem_count") or 0)
+            stem = int(quality.get("hwp_text_stem_problem_count") or 0)
+        except (TypeError, ValueError):
+            numbered = 0
+            stem = 0
+        hwp_text_problem_signal_count = max(hwp_text_problem_signal_count, numbered, stem)
+        layout_extractor = str(quality.get("hwp_layout_extractor") or "").strip()
+        if layout_extractor:
+            hwp_layout_extractors[layout_extractor] = hwp_layout_extractors.get(layout_extractor, 0) + 1
+        try:
+            layout_markers = int(quality.get("hwp_layout_problem_marker_count") or 0)
+            layout_pages = int(quality.get("hwp_layout_page_count") or 0)
+            layout_lines = int(quality.get("hwp_layout_text_line_count") or 0)
+        except (TypeError, ValueError):
+            layout_markers = 0
+            layout_pages = 0
+            layout_lines = 0
+        hwp_layout_problem_signal_count = max(hwp_layout_problem_signal_count, layout_markers)
+        hwp_layout_duplicate_skip_count += _metadata_list_count(metadata, "duplicate_problem_numbers_skipped")
+        hwp_layout_page_count = max(hwp_layout_page_count, layout_pages)
+        hwp_layout_text_line_count = max(hwp_layout_text_line_count, layout_lines)
+    if hwp_layout_problem_signal_count > 0 and hwp_layout_duplicate_skip_count > 0:
+        hwp_layout_problem_signal_count = max(0, hwp_layout_problem_signal_count - hwp_layout_duplicate_skip_count)
+
+    warning_messages = _session_warning_messages(session)
+    hwp_text_problem_delta = 0
+    hwp_text_problem_count_status = "unknown"
+    hwp_text_problem_count_message = ""
+    hwp_text_problem_count_matches = False
+    hwp_layout_problem_delta = 0
+    hwp_layout_problem_count_status = "unknown"
+    hwp_layout_problem_count_message = ""
+    hwp_layout_problem_count_matches = False
+    if hwp_text_problem_signal_count > 0:
+        core_count = int(counts["core_problem_count"])
+        hwp_text_problem_delta = core_count - hwp_text_problem_signal_count
+        hwp_text_problem_count_matches = hwp_text_problem_delta == 0
+        if hwp_text_problem_count_matches:
+            hwp_text_problem_count_status = "match"
+            hwp_text_problem_count_message = "HWP 텍스트 문항 수와 검출 문항 수가 일치합니다."
+        else:
+            hwp_text_problem_count_status = "mismatch"
+            if hwp_text_problem_delta > 0:
+                hwp_text_problem_count_message = (
+                    f"검출 문항이 HWP 텍스트 기준보다 {hwp_text_problem_delta}개 많습니다. "
+                    "표지·안내문·보충 자료를 확인하세요."
+                )
+            else:
+                hwp_text_problem_count_message = (
+                    f"HWP 텍스트 기준 문항이 검출보다 {abs(hwp_text_problem_delta)}개 많습니다. "
+                    "누락 문항을 확인하세요."
+                )
+            warning_messages = [*warning_messages, hwp_text_problem_count_message]
+    if hwp_layout_problem_signal_count > 0:
+        core_count = int(counts["core_problem_count"])
+        hwp_layout_problem_delta = core_count - hwp_layout_problem_signal_count
+        hwp_layout_problem_count_matches = hwp_layout_problem_delta == 0
+        if hwp_layout_problem_count_matches:
+            hwp_layout_problem_count_status = "match"
+            hwp_layout_problem_count_message = "HWP 레이아웃 문항 수와 검출 문항 수가 일치합니다."
+        else:
+            hwp_layout_problem_count_status = "mismatch"
+            if hwp_layout_problem_delta > 0:
+                hwp_layout_problem_count_message = (
+                    f"검출 문항이 HWP 레이아웃 기준보다 {hwp_layout_problem_delta}개 많습니다. "
+                    "표지·안내문·보충 자료를 확인하세요."
+                )
+            else:
+                hwp_layout_problem_count_message = (
+                    f"HWP 레이아웃 기준 문항이 검출보다 {abs(hwp_layout_problem_delta)}개 많습니다. "
+                    "누락 문항을 확인하세요."
+                )
+            if hwp_text_problem_signal_count <= 0:
+                warning_messages = [*warning_messages, hwp_layout_problem_count_message]
+    non_actionable_risk_flags = set(NON_ACTIONABLE_REVIEW_RISK_FLAGS)
+    if hwp_text_problem_count_matches or hwp_layout_problem_count_matches:
+        non_actionable_risk_flags.update(HWP_COUNT_MATCH_DISMISSIBLE_REVIEW_RISK_FLAGS)
+    actionable_risk_flag_counts = {
+        flag: count
+        for flag, count in sorted(risk_flag_counts.items())
+        if flag not in non_actionable_risk_flags
+    }
+    top_actionable_risk_flags = [
+        {"flag": flag, "count": count}
+        for flag, count in sorted(actionable_risk_flag_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
+    ]
+    actionable_flags = set(actionable_risk_flag_counts)
+    actionable_problem_ids: set[str] = set()
+    for index, problem in enumerate(problems):
+        problem_id = str(problem.get("id") or problem.get("problem_id") or f"problem-index-{index}")
+        problem_flags = {
+            str(flag or "").strip()
+            for flag in (problem.get("riskFlags") or problem.get("risk_flags") or [])
+            if str(flag or "").strip()
+        }
+        if _problem_review_status(problem) == "failed" or problem_flags.intersection(actionable_flags):
+            actionable_problem_ids.add(problem_id)
+    actionable_page_count = 0
+    for page in pages:
+        page_flags = {
+            str(flag or "").strip()
+            for flag in (page.get("riskFlags") or page.get("risk_flags") or [])
+            if str(flag or "").strip()
+        }
+        if not page_flags.intersection(actionable_flags):
+            continue
+        page_problem_ids = [str(pid) for pid in (page.get("problemIds") or page.get("problem_ids") or []) if pid]
+        if page_problem_ids:
+            actionable_problem_ids.update(page_problem_ids)
+        else:
+            actionable_page_count += 1
+    actionable_needs_review_count = len(actionable_problem_ids) + actionable_page_count
+    return {
+        "detectedProblemCount": counts["detected_problem_count"],
+        "coreProblemCount": counts["core_problem_count"],
+        "supplementalItemCount": counts["supplemental_item_count"],
+        "reviewStatusCounts": review_status_counts,
+        "coreReviewStatusCounts": core_review_status_counts,
+        "supplementalReviewStatusCounts": supplemental_review_status_counts,
+        "needsReviewCount": needs_review_count,
+        "actionableNeedsReviewCount": actionable_needs_review_count,
+        "riskFlagCounts": risk_flag_counts,
+        "topRiskFlags": top_risk_flags,
+        "hwpProblemCountMismatchCount": hwp_problem_count_mismatch_count,
+        "hwpOversegmentationCount": hwp_oversegmentation_count,
+        "actionableRiskFlagCounts": actionable_risk_flag_counts,
+        "topActionableRiskFlags": top_actionable_risk_flags,
+        "warningCount": len(warning_messages),
+        "warningMessages": warning_messages,
+        "hwpTextExtractors": hwp_text_extractors,
+        "hwpTextProblemSignalCount": hwp_text_problem_signal_count,
+        "hwpTextProblemCountStatus": hwp_text_problem_count_status,
+        "hwpTextProblemCountMatches": hwp_text_problem_count_matches,
+        "hwpTextProblemDelta": hwp_text_problem_delta,
+        "hwpTextProblemCountMessage": hwp_text_problem_count_message,
+        "hwpLayoutExtractors": hwp_layout_extractors,
+        "hwpLayoutProblemSignalCount": hwp_layout_problem_signal_count,
+        "hwpLayoutPageCount": hwp_layout_page_count,
+        "hwpLayoutTextLineCount": hwp_layout_text_line_count,
+        "hwpLayoutProblemCountStatus": hwp_layout_problem_count_status,
+        "hwpLayoutProblemCountMatches": hwp_layout_problem_count_matches,
+        "hwpLayoutProblemDelta": hwp_layout_problem_delta,
+        "hwpLayoutProblemCountMessage": hwp_layout_problem_count_message,
+        "hwpCacheHitPageCount": hwp_cache_hit_page_count,
+        "hwpRendererCacheHitCount": hwp_renderer_cache_hit_count,
+        "hwpNormalizedCacheHitCount": hwp_normalized_cache_hit_count,
+    }
+
+
 def _replace_problem(session: dict[str, Any], original_index: int, replacements: list[dict[str, Any]]) -> None:
     """Replace the problem at original_index with one or more replacements,
     keeping the rest of the list intact. Also updates the page's problemIds
@@ -649,7 +1512,7 @@ def _replace_problem(session: dict[str, Any], original_index: int, replacements:
             ids.extend(new_ids)
         page["problemIds"] = ids
         break
-    session["detected_problem_count"] = len(problems)
+    _refresh_session_problem_counts(session)
 
 
 def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dict[str, Any]]:
@@ -667,7 +1530,7 @@ def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dic
         if not isinstance(page, dict):
             continue
         page["problemIds"] = [pid for pid in (page.get("problemIds") or []) if pid not in problem_ids]
-    session["detected_problem_count"] = len(kept)
+    _refresh_session_problem_counts(session)
     return removed
 
 
@@ -790,7 +1653,7 @@ def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, 
     insert_at = min(first_index, len(problems))
     problems.insert(insert_at, merged_entry)
     session["problems"] = problems
-    session["detected_problem_count"] = len(problems)
+    _refresh_session_problem_counts(session)
     # also slot the new id into the page's problemIds
     for p in session.get("pages", []):
         if not isinstance(p, dict):
@@ -814,12 +1677,34 @@ def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, 
     return session
 
 
-def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
-    if not problem_id:
-        raise ValueError("problemId is required")
-    _find_problem(session, problem_id)  # raises if missing
-    _remove_problems(session, {problem_id})
+def _coerce_problem_ids(problem_ids: Any) -> list[str]:
+    if isinstance(problem_ids, str):
+        raw_ids = [problem_ids]
+    else:
+        raw_ids = list(problem_ids or [])
+    ids: list[str] = []
+    seen: set[str] = set()
+    for raw_id in raw_ids:
+        problem_id = str(raw_id or "").strip()
+        if not problem_id or problem_id in seen:
+            continue
+        ids.append(problem_id)
+        seen.add(problem_id)
+    return ids
+
+
+def _mutate_exclude_many(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]:
+    ids = _coerce_problem_ids(problem_ids)
+    if not ids:
+        raise ValueError("problemIds is required")
+    for problem_id in ids:
+        _find_problem(session, problem_id)  # raises if missing
+    _remove_problems(session, set(ids))
     return session
+
+
+def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
+    return _mutate_exclude_many(session, [problem_id])
 
 
 def _problem_review_status(problem: dict[str, Any]) -> str:
@@ -934,7 +1819,7 @@ def _replace_page_problems(session: dict[str, Any], page_id: str, replacements: 
 
     session["problems"] = next_problems
     page["problemIds"] = [str(problem.get("id")) for problem in replacements if problem.get("id")]
-    session["detected_problem_count"] = len(next_problems)
+    _refresh_session_problem_counts(session)
 
 
 def _image_reconstruction_dir(session: dict[str, Any]) -> Path:
@@ -1274,7 +2159,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
         summaries.append({"pageId": page_id, "status": "applied", "replacedProblemCount": len(replacements)})
 
     session["ai_retry_summary"] = summaries
-    session["detected_problem_count"] = len(session.get("problems") or [])
+    _refresh_session_problem_counts(session)
     return session
 
 
@@ -1320,6 +2205,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         self.latest_session = session
         self.allowed_files = collect_session_file_paths(session)
         LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
+        remember_session_history(session)
 
 
 class AppRequestHandler(SimpleHTTPRequestHandler):
@@ -1333,13 +2219,24 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[app-server] {self.address_string()} - {format % args}")
 
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        super().end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             self._send_json({"ok": True, "app": APP_NAME})
             return
+        if parsed.path == "/api/runtime-diagnostics":
+            self._send_json(describe_runtime_diagnostics())
+            return
         if parsed.path == "/api/session/latest":
             self._handle_latest_session()
+            return
+        if parsed.path == "/api/session/history":
+            self._handle_session_history()
             return
         if parsed.path == "/api/file":
             self._handle_file(parsed)
@@ -1364,8 +2261,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/publish":
             self._handle_session_publish()
             return
+        if parsed.path == "/api/session/classin-review":
+            self._handle_session_classin_review()
+            return
         if parsed.path == "/api/system/open-folder":
             self._handle_open_folder()
+            return
+        if parsed.path == "/api/system/open-file":
+            self._handle_open_file()
             return
         if parsed.path == "/api/session/mutate":
             self._handle_session_mutate()
@@ -1378,6 +2281,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/session/restore":
             self._handle_session_restore()
+            return
+        if parsed.path == "/api/session/history/restore":
+            self._handle_session_history_restore()
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
@@ -1504,6 +2410,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                             status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
+        core_problem_count = sum(1 for problem in sequence if not _session_problem_is_supplemental(problem))
+        supplemental_item_count = sum(1 for problem in sequence if _session_problem_is_supplemental(problem))
+
         new_session = build_ui_session(
             prepared_pages=[],
             placements=placements,
@@ -1563,12 +2472,74 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 scale_ratio = _coerce_placement_scale_ratio(prior)
                 if scale_ratio is not None:
                     problem["placementScaleRatio"] = scale_ratio
+        _refresh_session_problem_counts(new_session)
+
+        source_paths_for_handoff = [
+            path
+            for path in (_file_uri_to_path(value) for value in (session.get("input_files") or session.get("inputFiles") or []))
+            if path is not None
+        ]
+        try:
+            classin_handoff_path, classin_handoff_markdown_path = write_classin_handoff_manifest(
+                output_dir,
+                source_paths=source_paths_for_handoff,
+                edb_path=edb_path,
+                ui_session=new_session,
+                summary={
+                    "record_count": len(records),
+                    "record_mode": "image-only",
+                    "crop_format": crop_format,
+                    "board_theme": session.get("board_theme") or DEFAULT_BOARD_THEME,
+                    "placements": placements,
+                },
+                template=template,
+            )
+        except Exception as exc:  # noqa: BLE001 — keep publish failures explicit for the UI.
+            self._send_json({"ok": False, "error": f"failed to write ClassIn handoff: {exc}"},
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        classin_preflight: dict[str, Any] = {}
+        try:
+            handoff_payload = json.loads(classin_handoff_path.read_text(encoding="utf-8"))
+            if isinstance(handoff_payload.get("classinPreflight"), dict):
+                classin_preflight = dict(handoff_payload["classinPreflight"])
+        except (OSError, json.JSONDecodeError):
+            classin_preflight = {}
+
+        new_session["classin_handoff_path"] = str(classin_handoff_path)
+        new_session["classinHandoffPath"] = str(classin_handoff_path)
+        new_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
+        new_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
+        new_session["classin_preflight"] = classin_preflight
+        new_session["classinPreflight"] = classin_preflight
+
+        publish_summary = _session_publish_summary(
+            edb_path=edb_path,
+            output_dir=output_dir,
+            edb_validation=edb_validation,
+            record_count=len(records),
+            core_problem_count=core_problem_count,
+            supplemental_item_count=supplemental_item_count,
+            classin_handoff_path=classin_handoff_path,
+            classin_handoff_markdown_path=classin_handoff_markdown_path,
+            classin_preflight=classin_preflight,
+        )
+        publish_history = _session_publish_history(session, publish_summary)
+        new_session["publish_summary"] = publish_summary
+        new_session["publishSummary"] = publish_summary
+        new_session["publish_history"] = publish_history
+        new_session["publishHistory"] = publish_history
         self.app_server.remember_session(new_session)
         self._send_json({
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "edbValidation": edb_validation,
             "edb_validation": edb_validation,
+            "publishSummary": publish_summary,
+            "publish_summary": publish_summary,
+            "publishHistory": publish_history,
+            "publish_history": publish_history,
         })
 
     # ── /api/session/mutate ──────────────────────────────────────────────
@@ -1601,8 +2572,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 problem_ids = [str(pid) for pid in ids_raw if pid]
                 new_session = _mutate_merge(session, problem_ids)
             elif action == "exclude":
-                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
-                new_session = _mutate_exclude(session, problem_id)
+                ids_raw = payload.get("problemIds", payload.get("problem_ids"))
+                if ids_raw is not None:
+                    new_session = _mutate_exclude_many(session, ids_raw)
+                else:
+                    problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                    new_session = _mutate_exclude(session, problem_id)
             elif action in {"retry-ai", "retry_ai"}:
                 new_session = _mutate_retry_ai(session, payload)
             elif action in {"enhance-image", "enhance_image"}:
@@ -1661,6 +2636,27 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "preview": preview_only,
         })
 
+    def _handle_session_classin_review(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        review = _apply_classin_review_result(session, payload)
+        self.app_server.remember_session(session)
+        self._send_json({
+            "ok": True,
+            "session": rewrite_session_for_http(session),
+            "review": review,
+            "classinReview": review,
+            "classin_review": review,
+            "history": _public_session_history(load_session_history()),
+        })
+
     def _handle_session_enhance_image(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
         if session is None:
@@ -1708,8 +2704,38 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # the way out. Snapshots that round-trip through rewrite_session_for_http
         # would otherwise drift over time.
         restored = _denormalize_session_paths(snapshot)
+        _refresh_session_problem_counts(restored)
         self.app_server.remember_session(restored)
         self._send_json({"ok": True, "session": rewrite_session_for_http(restored)})
+
+    def _handle_session_history(self) -> None:
+        self._send_json({
+            "ok": True,
+            "history": _public_session_history(load_session_history()),
+        })
+
+    def _handle_session_history_restore(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        session_id = str(payload.get("id") or payload.get("sessionId") or payload.get("session_id") or "").strip()
+        if not session_id:
+            self._send_json({"ok": False, "error": "session history id is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        entry = next((item for item in load_session_history() if str(item.get("id")) == session_id), None)
+        if not isinstance(entry, dict) or not isinstance(entry.get("session"), dict):
+            self._send_json({"ok": False, "error": "session history entry not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        restored = _denormalize_session_paths(entry["session"])
+        _refresh_session_problem_counts(restored)
+        self.app_server.remember_session(restored)
+        self._send_json({
+            "ok": True,
+            "session": rewrite_session_for_http(restored),
+            "history": _public_session_history(load_session_history()),
+        })
 
     def _handle_session_clear(self) -> None:
         self.app_server.latest_session = None
@@ -1734,32 +2760,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
         raw_path = payload.get("path") or payload.get("folder") or ""
-        if not raw_path:
-            self._send_json({"ok": False, "error": "path is required"}, status=HTTPStatus.BAD_REQUEST)
+        try:
+            target = _resolve_open_target(raw_path, kind="folder")
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            status = HTTPStatus.FORBIDDEN if "outside allowed roots" in str(exc) else HTTPStatus.BAD_REQUEST
+            self._send_json({"ok": False, "error": str(exc)}, status=status)
             return
         try:
-            target = Path(str(raw_path)).resolve()
-        except (OSError, ValueError) as exc:
-            self._send_json({"ok": False, "error": f"invalid path: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            _open_system_target(target)
+        except OSError as exc:
+            self._send_json({"ok": False, "error": f"failed to open: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        # confine the open to paths under BASE_DIR / RUNTIME_DIR so the API
-        # can't be abused to reveal arbitrary locations on the user's machine.
-        roots = [BASE_DIR.resolve(), RUNTIME_DIR.resolve()]
-        if not any(str(target) == str(root) or str(target).startswith(str(root) + os.sep) for root in roots):
-            self._send_json({"ok": False, "error": "path outside allowed roots"}, status=HTTPStatus.FORBIDDEN)
+        self._send_json({"ok": True, "path": str(target)})
+
+    def _handle_open_file(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if target.is_file():
-            target = target.parent
-        if not target.exists() or not target.is_dir():
-            self._send_json({"ok": False, "error": f"folder not found: {target}"}, status=HTTPStatus.NOT_FOUND)
+        raw_path = payload.get("path") or payload.get("file") or ""
+        try:
+            target = _resolve_open_target(raw_path, kind="file")
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            status = HTTPStatus.FORBIDDEN if "outside allowed roots" in str(exc) else HTTPStatus.BAD_REQUEST
+            self._send_json({"ok": False, "error": str(exc)}, status=status)
             return
         try:
-            if sys.platform.startswith("win"):
-                os.startfile(str(target))  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(target)])
-            else:
-                subprocess.Popen(["xdg-open", str(target)])
+            _open_system_target(target)
         except OSError as exc:
             self._send_json({"ok": False, "error": f"failed to open: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -1812,10 +2846,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        _refresh_session_problem_counts(session)
         self.app_server.latest_session = session
         self.app_server.allowed_files |= collect_session_file_paths(session)
         if not LATEST_SESSION_JSON.exists():
             LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
+        remember_session_history(session)
         self._send_json(
             {
                 "ok": True,
@@ -1855,15 +2891,36 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not file_data_base64:
             raise ValueError("fileDataBase64 is required when sourcePath is not provided")
         safe_name = sanitize_upload_file_name(file_name)
-        stamped_name = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}_{safe_name}"
-        target_path = UPLOAD_DIR / stamped_name
-        target_path.write_bytes(base64.b64decode(file_data_base64))
+        file_bytes = base64.b64decode(file_data_base64)
+        content_digest = hashlib.sha1(file_bytes).hexdigest()
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        suffix = Path(safe_name).suffix
+        for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{suffix}")):
+            try:
+                if candidate.read_bytes() == file_bytes:
+                    return candidate
+            except OSError:
+                continue
+        target_path = UPLOAD_DIR / f"{content_digest}_{safe_name}"
+        if not target_path.exists() or target_path.read_bytes() != file_bytes:
+            target_path.write_bytes(file_bytes)
         return target_path
 
     def _resolve_source_paths(self, payload: dict[str, Any]) -> list[Path]:
         file_payloads = payload.get("files")
         if isinstance(file_payloads, list) and file_payloads:
-            return [self._save_uploaded_file(file_payload).resolve() for file_payload in file_payloads]
+            resolved_paths: list[Path] = []
+            for file_payload in file_payloads:
+                if isinstance(file_payload, dict):
+                    resolved_paths.append(self._save_uploaded_file(file_payload).resolve())
+                    continue
+                path = decode_file_reference(str(file_payload))
+                if path is None:
+                    raise FileNotFoundError(f"sourcePath does not exist: {file_payload}")
+                if not path.exists():
+                    raise FileNotFoundError(f"sourcePath does not exist: {path}")
+                resolved_paths.append(path.resolve())
+            return resolved_paths
 
         source_paths = payload.get("sources") or payload.get("sourcePaths")
         if isinstance(source_paths, list) and source_paths:
@@ -1948,13 +3005,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     **common_kwargs,
                 )
         except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            self._send_json(_export_error_payload(exc), status=HTTPStatus.BAD_REQUEST)
             return
 
         session = result["ui_session"]
         session.setdefault("input_intent", input_intent)
         if input_notes:
             session["input_notes"] = input_notes
+        _refresh_session_problem_counts(session)
         edb_validation = None
         edb_path = result.get("edb_path")
         if edb_path:

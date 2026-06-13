@@ -156,6 +156,8 @@ const Icon = {
   aiBatch:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="4" width="7" height="5.5" rx="1.2"/><rect x="3.5" y="14.5" width="7" height="5.5" rx="1.2"/><path d="M13 12h5.7M16.4 8.8L19.6 12l-3.2 3.2"/><path d="M15.2 4.2l.7 1.5 1.6.7-1.6.7-.7 1.5-.7-1.5-1.6-.7 1.6-.7.7-1.5z" fill="currentColor" stroke="none"/><text x="14.2" y="20.3" fill="currentColor" stroke="none" fontSize="5.2" fontWeight="800" fontFamily="JetBrains Mono, monospace">AI</text></svg>,
   check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
+  download:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>,
+  folder: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 8.5V6a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v.5"/></svg>,
   zoomIn: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>,
   zoomOut:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/></svg>,
   undo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3"/></svg>,
@@ -234,7 +236,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
-function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable, aiBusy }){
+function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable, aiBusy, onConfirm }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
     const map = new Map();
@@ -257,6 +259,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [reviewFilter, setReviewFilter] = useState('all');
+  const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
   const splitDraggingRef = useRef(false);
   const splitBoxRef = useRef(null);
 
@@ -264,6 +267,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   useEffect(() => {
     setSplitTarget(null);
     setSelectedIds(new Set());
+    setReviewRiskFilter(null);
   }, [session]);
 
   const onBoxClick = (probId, evt) => {
@@ -286,19 +290,28 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
   const statusCounts = useMemo(() => {
+    const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(session?.problems || []);
+    if (helperCounts) return helperCounts;
     const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
     (session?.problems || []).forEach(problem => {
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
     });
+    counts.supplemental = (session?.problems || []).filter(isSupplementalProblem).length;
     return counts;
   }, [session]);
+  const sessionCounts = useMemo(() => sessionProblemCounts(session), [session]);
+  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
+  const riskFilterHasProblemMatches = useMemo(() => {
+    if (!reviewRiskFilter) return false;
+    return (session?.problems || []).some(problem => hasRiskFlag(problem, reviewRiskFilter));
+  }, [session, reviewRiskFilter]);
   const pageRetryIds = useMemo(() => {
     const ids = [];
     const byId = problemsById;
     pages.forEach(page => {
-      const pageFlags = page.riskFlags || page.risk_flags || [];
+      const pageFlags = riskFlagsFor(page);
       const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
       const hasProblemRisk = (page.problemIds || [])
         .map(pid => byId.get(pid))
@@ -310,6 +323,38 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     });
     return listUnique(ids.filter(Boolean));
   }, [pages, problemsById]);
+  const activeReviewFilter = reviewFilter !== 'all' || Boolean(reviewRiskFilter);
+  const visibleReviewScope = useMemo(() => {
+    const retryPageIdSet = new Set();
+    const problemIdSet = new Set();
+    let problemCount = 0;
+    pages.forEach(page => {
+      const allPageProblems = (page.problemIds || [])
+        .map(pid => problemsById.get(pid))
+        .filter(Boolean);
+      const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
+        ? hasRiskFlag(page, reviewRiskFilter)
+        : false;
+      const pageProblems = allPageProblems
+        .filter(problem => problemMatchesReviewFilter(problem, reviewFilter))
+        .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
+      problemCount += pageProblems.length;
+      pageProblems.forEach(problem => {
+        if (problem?.id) problemIdSet.add(problem.id);
+      });
+      if (pageProblems.length && pageRetryIds.includes(page.id)) {
+        retryPageIdSet.add(page.id);
+      }
+    });
+    return {
+      problemCount,
+      problemIds: Array.from(problemIdSet),
+      retryPageIds: Array.from(retryPageIdSet),
+    };
+  }, [pages, problemsById, pageRetryIds, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches]);
+  const actionableProblemIds = useMemo(() => (session?.problems || [])
+    .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
+    .map(problem => problem.id), [session]);
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
 
@@ -330,14 +375,27 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   };
   const doExclude = async () => {
     if (selectedList.length === 0) return;
-    // sequential calls — exclude is a single-id operation
-    for (const id of selectedList) {
-      await mutateSession?.('exclude', { problemId: id });
+    if (selectedList.length === 1) {
+      await mutateSession?.('exclude', { problemId: selectedList[0] });
+      return;
     }
+    await mutateSession?.('exclude', { problemIds: selectedList });
   };
   const doRetryAi = async (pageIds) => {
     if (!pageIds?.length) return;
     await retryAiSession?.({ pageIds });
+  };
+  const toggleRiskFilter = (flag) => {
+    const nextFlag = String(flag || '').trim();
+    if (!nextFlag) return;
+    setReviewRiskFilter(prev => (prev === nextFlag ? null : nextFlag));
+    setReviewFilter('all');
+    setSelectedIds(new Set());
+  };
+  const selectVisibleProblems = () => {
+    if (!visibleReviewScope.problemIds.length) return;
+    setSelectedIds(new Set(visibleReviewScope.problemIds));
+    if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
 
   // Drag handler for the split guideline. Tracks against the splitting bbox
@@ -376,13 +434,17 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     );
   }
 
-  const riskyCount = statusCounts.check_needed + statusCounts.failed;
+  const actionableStatusCount = Math.max(0, Number(reviewSummary.actionableNeedsReviewCount) || 0);
+  const riskyCount = actionableStatusCount || statusCounts.failed;
   const filterOptions = [
     ['all', '전체', statusCounts.all],
     ['normal', '정상', statusCounts.normal],
-    ['check_needed', '확인 필요', statusCounts.check_needed],
+    ['check_needed', '확인 필요', actionableStatusCount],
     ['failed', '실패', statusCounts.failed],
   ];
+  if (sessionCounts.supplemental > 0) {
+    filterOptions.push(['supplemental', '자료', sessionCounts.supplemental]);
+  }
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
     : aiBusy
@@ -390,6 +452,9 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       : mutating
         ? '처리 중입니다'
       : '';
+  const bulkRetryPageIds = activeReviewFilter ? visibleReviewScope.retryPageIds : pageRetryIds;
+  const bulkRetryProblemCount = activeReviewFilter ? visibleReviewScope.problemCount : riskyCount;
+  const showBulkRetry = reviewFilter !== 'normal' && reviewFilter !== 'supplemental' && bulkRetryProblemCount > 0 && bulkRetryPageIds.length > 0;
 
   const actionBar = splitTarget ? (
     <div className="review-actionbar">
@@ -415,17 +480,53 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           </button>
         ))}
       </div>
+      {reviewRiskFilter && (
+        <span className="review-risk-filter-active">
+          원인 필터 · {riskFlagLabel(reviewRiskFilter)}
+          <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
+        </span>
+      )}
       <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
       <div className="spacer" />
-      {riskyCount > 0 && (
+      {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
+        <>
+          <button
+            className="btn"
+            type="button"
+            onClick={selectVisibleProblems}
+            disabled={mutating}
+          >
+            표시 항목 선택 {visibleReviewScope.problemIds.length}
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
+            disabled={mutating}
+          >
+            표시 항목 확인 완료 {visibleReviewScope.problemIds.length}
+          </button>
+        </>
+      )}
+      {!activeReviewFilter && actionableProblemIds.length > 0 && (
+        <button
+          className="btn"
+          type="button"
+          onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
+          disabled={mutating}
+        >
+          확인 필요 전체 확인 {actionableProblemIds.length}
+        </button>
+      )}
+      {showBulkRetry && (
         <button
           className="btn primary"
           type="button"
-          title={retryDisabledReason || `${pageRetryIds.length}개 페이지 재인식`}
-          onClick={() => doRetryAi(pageRetryIds)}
-          disabled={!aiAvailable || aiBusy || mutating || !pageRetryIds.length}
+          title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
+          onClick={() => doRetryAi(bulkRetryPageIds)}
+          disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
         >
-          AI 재인식 {riskyCount}
+          AI 재인식 {bulkRetryProblemCount}
         </button>
       )}
     </div>
@@ -441,13 +542,21 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       </span>
       <div className="spacer" />
       <button
+        className="btn"
+        type="button"
+        onClick={() => onConfirm?.(null, { problemIds: selectedList, bulk: true })}
+        disabled={mutating}
+      >
+        확인 완료 {selectedList.length}
+      </button>
+      <button
         className="btn primary"
         type="button"
         title={retryDisabledReason || `${selectedRetryPageIds.length}개 페이지 재인식`}
         onClick={() => doRetryAi(selectedRetryPageIds)}
         disabled={!aiAvailable || aiBusy || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
       >
-        AI 재인식
+        AI 재인식 {selectedList.length}
       </button>
       {selectedList.length === 1 && (
         <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 가르기</button>
@@ -458,7 +567,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
         </button>
       )}
       <button className="btn danger" onClick={doExclude} disabled={mutating}>
-        {Icon.trash} 제외
+        {Icon.trash} 제외 {selectedList.length}
       </button>
       <button className="btn" onClick={() => setSelectedIds(new Set())} disabled={mutating}>선택 해제</button>
     </div>
@@ -469,7 +578,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       <div className="stage">
         <div className="stage-toolbar">
           <span className="name">검수 — 검출된 문제 박스</span>
-          <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {session?.problems?.length || 0} 문제</span>
+          <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {formatProblemCount(sessionCounts)}</span>
           <div className="spacer" />
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
             빨간 박스는 인식이 의심됩니다. 클릭 후 가르기·합치기·제외하세요.
@@ -477,13 +586,106 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
         </div>
         <div className="review-wrap">
           {actionBar}
+          <div className="review-summary-strip">
+            <span className="review-summary-title">검수 요약</span>
+            <span className="review-summary-chip">{formatProblemCount(reviewSummary.counts)}</span>
+            <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
+              주의 {reviewSummary.warningCount}
+            </span>
+            {reviewSummary.actionableNeedsReviewCount > 0 && (
+              <span className="review-summary-chip warn">
+                확인 {reviewSummary.actionableNeedsReviewCount}
+                {reviewSummary.reviewStatusCounts.failed ? ` · 실패 ${reviewSummary.reviewStatusCounts.failed}` : ''}
+              </span>
+            )}
+            {reviewSummary.hwpOversegmentationCount > 0 && (
+              <span className="review-summary-chip warn" title="HWP 내부 문항 수보다 최종 분할 수가 크게 많습니다.">
+                HWP 과분할 {reviewSummary.hwpOversegmentationCount}
+              </span>
+            )}
+            {reviewSummary.hwpProblemCountMismatchCount > 0 && reviewSummary.hwpOversegmentationCount <= 0 && (
+              <span className="review-summary-chip warn" title="HWP 내부 문항 수와 최종 분할 수가 다릅니다.">
+                HWP 문항 차이 {reviewSummary.hwpProblemCountMismatchCount}
+              </span>
+            )}
+            {reviewSummary.duplicateProblemNumberGroups.length > 0 && (
+              <span
+                className="review-summary-chip"
+                title="같은 문항 번호가 여러 구간에 보존되어 있습니다."
+              >
+                중복 번호 {reviewSummary.duplicateProblemNumberLabel}
+              </span>
+            )}
+            {reviewSummary.topRiskFlags.map(item => (
+              <button
+                key={item.flag}
+                type="button"
+                className={`review-summary-chip risk-filter-chip ${reviewRiskFilter === item.flag ? 'on' : ''}`}
+                title={`${riskFlagLabel(item.flag)} 항목만 보기`}
+                aria-pressed={reviewRiskFilter === item.flag}
+                data-risk-flag={item.flag}
+                onClick={() => toggleRiskFilter(item.flag)}
+              >
+                {riskFlagLabel(item.flag)} {item.count}
+              </button>
+            ))}
+            {reviewSummary.hwpTextProblemSignalCount > 0 && (
+              <span className="review-summary-chip">
+                HWP 텍스트 {reviewSummary.hwpTextProblemSignalCount}
+                {reviewSummary.hwpTextExtractorLabel ? ` · ${reviewSummary.hwpTextExtractorLabel}` : ''}
+              </span>
+            )}
+            {reviewSummary.hwpTextProblemSignalCount > 0 && reviewSummary.hwpTextProblemCountStatus !== 'unknown' && (
+              <span
+                className={`review-summary-chip ${reviewSummary.hwpTextProblemCountStatus === 'match' ? 'ok' : 'warn'}`}
+                title={reviewSummary.hwpTextProblemCountMessage}
+              >
+                {reviewSummary.hwpTextProblemCountStatus === 'match'
+                  ? '문항 수 일치'
+                  : `문항 수 차이 ${reviewSummary.hwpTextProblemDelta > 0 ? '+' : ''}${reviewSummary.hwpTextProblemDelta}`}
+              </span>
+            )}
+            {reviewSummary.hwpLayoutProblemSignalCount > 0 && (
+              <span className="review-summary-chip">
+                HWP 레이아웃 {reviewSummary.hwpLayoutProblemSignalCount}
+                {reviewSummary.hwpLayoutExtractorLabel ? ` · ${reviewSummary.hwpLayoutExtractorLabel}` : ''}
+              </span>
+            )}
+            {reviewSummary.hwpLayoutProblemSignalCount > 0 && reviewSummary.hwpLayoutProblemCountStatus !== 'unknown' && (
+              <span
+                className={`review-summary-chip ${reviewSummary.hwpLayoutProblemCountStatus === 'match' ? 'ok' : 'warn'}`}
+                title={reviewSummary.hwpLayoutProblemCountMessage}
+              >
+                {reviewSummary.hwpLayoutProblemCountStatus === 'match'
+                  ? '레이아웃 일치'
+                  : `레이아웃 차이 ${reviewSummary.hwpLayoutProblemDelta > 0 ? '+' : ''}${reviewSummary.hwpLayoutProblemDelta}`}
+              </span>
+            )}
+            {reviewSummary.hwpCacheHitPageCount > 0 && (
+              <span
+                className="review-summary-chip ok"
+                title={`렌더 캐시 ${reviewSummary.hwpRendererCacheHitCount} · 정규화 캐시 ${reviewSummary.hwpNormalizedCacheHitCount}`}
+              >
+                HWP 캐시 {reviewSummary.hwpCacheHitPageCount}
+              </span>
+            )}
+            {reviewSummary.warningPreview && (
+              <span className="review-summary-note">{reviewSummary.warningPreview}</span>
+            )}
+          </div>
           {pages.map(page => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
               .filter(Boolean);
+            const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
+              ? hasRiskFlag(page, reviewRiskFilter)
+              : false;
             const pageProblems = allPageProblems
-              .filter(problem => reviewFilter === 'all' || deriveProblemStatus(problem) === reviewFilter);
-            const pageRiskFlags = page.riskFlags || [];
+              .filter(problem => problemMatchesReviewFilter(problem, reviewFilter))
+              .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
+            if ((reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
+            const pageCounts = countSessionProblems(allPageProblems);
+            const pageRiskFlags = riskFlagsFor(page);
             const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status)
               || (!(page.problemIds || []).length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
             const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
@@ -493,8 +695,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                 <div className="review-page-hd">
                   <span className="pg-num">{page.id}</span>
                   <span className="pg-count">
-                    {reviewFilter === 'all'
-                      ? `${allPageProblems.length}개 검출`
+                    {reviewFilter === 'all' && !reviewRiskFilter
+                      ? formatProblemCount(pageCounts)
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
                   </span>
                   <span className={`status-badge ${reviewStatusClass(pageStatus)}`}>
@@ -546,7 +748,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                     const isSplitting = splitTarget === prob.id;
                     const order = orderMap.get(prob.id);
                     const tooltipParts = [prob.title || ''];
-                    if (isRisky) tooltipParts.push(`${statusMeta.label}: ${(prob.riskFlags || []).join(', ') || '경계 확인 필요'}`);
+                    const problemRiskFlags = riskFlagsFor(prob);
+                    if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
                     const classes = [
                       'review-bbox',
                       isSelected ? 'selected' : '',
@@ -600,7 +803,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
 function ItemsRail({
   items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
-  addMockSample, canAddDummy,
+  addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
 }){
   const dragId = useRef(null);
   const [draggingId, setDraggingId] = useState(null);
@@ -804,6 +1007,87 @@ function ItemsRail({
           <small>파일별로 그대로 등록하거나 AI 인식합니다</small>
         </div>
 
+        {!!recentSessions?.length && (
+          <div className="session-history-card">
+            <div className="source-queue-head">
+              <strong>최근 작업</strong>
+              <span>{recentSessions.length}개</span>
+            </div>
+            <div className="session-history-list">
+              {recentSessions.slice(0, 5).map(entry => {
+                const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
+                return (
+                  <div className="session-history-row" key={entry.id}>
+                    <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
+                      <div className="name">{entry.sessionName || '이름 없는 작업'}</div>
+                      <div className="meta">
+                        {formatProblemCount({
+                          core: entry.coreProblemCount,
+                          supplemental: entry.supplementalItemCount,
+                        })}
+                        {entry.updatedAt ? ` · ${formatPublishTime(entry.updatedAt)}` : ''}
+                        {publish?.recordCountLabel ? ` · ${publish.recordCountLabel}` : ''}
+                        {publish?.classinReviewStatusLabel ? ` · ${publish.classinReviewStatusLabel}` : ''}
+                      </div>
+                    </div>
+                    <div className="session-history-actions">
+                      {publish && (
+                        <>
+                          <button
+                            className="icon-btn"
+                            type="button"
+                            disabled={!publish.canDownload}
+                            onClick={() => downloadPublishSummary(publish)}
+                            title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : '최근 제작본 다운로드'}
+                          >
+                            {Icon.download}
+                          </button>
+                          <button
+                            className="icon-btn"
+                            type="button"
+                            disabled={!publish.canOpenEdbFile}
+                            onClick={() => openPublishedEdb(publish)}
+                            title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
+                          >
+                            {Icon.board}
+                          </button>
+                          <button
+                            className="icon-btn"
+                            type="button"
+                            disabled={!publish.canOpenOutputDir}
+                            onClick={() => openOutputFolder(publish.outputDir)}
+                            title={publish.outputDirExists === false ? '최근 작업 출력 폴더가 없습니다' : '최근 작업 출력 폴더 열기'}
+                          >
+                            {Icon.folder}
+                          </button>
+                          <button
+                            className="icon-btn"
+                            type="button"
+                            disabled={!publish.canOpenClassinHandoff}
+                            onClick={() => openClassinHandoff(publish)}
+                            title={publish.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
+                          >
+                            {Icon.check}
+                          </button>
+                        </>
+                      )}
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={restoringSessionId === entry.id}
+                        onClick={() => onRestoreRecentSession?.(entry.id)}
+                        title="이 작업을 다시 엽니다"
+                      >
+                        {Icon.refresh}<span>{restoringSessionId === entry.id ? '여는 중' : '열기'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {!!pendingFiles?.length && (
           <div className="source-queue-card">
             <div className="source-queue-head">
@@ -852,11 +1136,26 @@ function ItemsRail({
               );})}
             </div>
             <div className="source-queue-actions">
-              <div className="btn full" style={{cursor:'default', justifyContent:'center', color:'var(--muted)'}}>
-                각 파일 행에서 처리 방식을 선택하세요
-              </div>
+              <button
+                className="btn"
+                type="button"
+                title="대기열 전체를 한 문제 또는 한 자료로 그대로 등록"
+                onClick={() => processQueuedFiles('register')}
+                disabled={queueBusy}
+              >
+                {Icon.check}<span>전체 그대로 등록</span>
+              </button>
+              <button
+                className="btn primary"
+                type="button"
+                title="대기열 전체를 문제별로 AI 인식"
+                onClick={() => processQueuedFiles('recognize')}
+                disabled={queueBusy}
+              >
+                {Icon.aiBatch}<span>전체 AI 인식</span>
+              </button>
               {!aiAvailable && (
-                <div className="btn full" style={{cursor:'default', justifyContent:'center', color:'var(--muted)'}}>
+                <div className="source-queue-note full">
                   Gemini 키 없음 · 기본 인식으로 실행
                 </div>
               )}
@@ -1272,6 +1571,150 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   );
 }
 
+function downloadPublishSummary(target){
+  if (!target?.canDownload) return;
+  const a = document.createElement('a');
+  a.href = target.edbFileUri;
+  a.download = target.edbFileName || 'classin.edb';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function openPublishedEdb(target){
+  if (!target?.canOpenEdbFile || !target.edbPath) return;
+  try {
+    const resp = await fetch('/api/system/open-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: target.edbPath }),
+    });
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json.ok) {
+      console.warn('[board] open-file failed:', json.error || resp.status);
+    }
+  } catch (e) {
+    console.warn('[board] open-file error:', e.message);
+  }
+}
+
+function openClassinHandoff(target){
+  const url = target?.classinHandoffMarkdownUri || target?.classinHandoffUri;
+  if (!url) return;
+  window.open(url, '_blank', 'noopener');
+}
+
+function PublishResultPanel({ session, visible, onClassinReviewComplete }){
+  const summary = useMemo(() => visible ? sessionPublishSummary(session) : null, [session, visible]);
+  const history = useMemo(() => visible ? sessionPublishHistory(session) : [], [session, visible]);
+  if (!summary) return null;
+  return (
+    <div className="publish-result-panel">
+      <div className="publish-result-head">
+        <div className="publish-result-title">
+          <strong>제작 결과</strong>
+          <span>{summary.statusLabel} · {summary.recordCountLabel || `${summary.recordCount || summary.recordCountActual}개 자료`}</span>
+        </div>
+        <span className={`publish-result-status ${summary.validated ? 'ok' : 'warn'}`}>
+          {summary.validated ? '검증 완료' : '확인 필요'}
+        </span>
+      </div>
+      <div className="publish-result-file" title={summary.edbPath || summary.edbFileName}>
+        {summary.edbFileName}
+      </div>
+      <div className="publish-result-metrics">
+        <span>{summary.recordCountActual || summary.recordCount} records</span>
+        {summary.pageCountHint > 0 && <span>{summary.pageCountHint}p hint</span>}
+        {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
+        {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
+        {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
+      </div>
+      <div className="publish-result-actions">
+        <button
+          className="btn"
+          type="button"
+          onClick={() => downloadPublishSummary(summary)}
+          disabled={!summary.canDownload}
+          title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'EDB 다시 다운로드'}
+        >
+          {Icon.download}<span>{summary.edbFileExists === false ? '파일 없음' : '다운로드'}</span>
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => openPublishedEdb(summary)}
+          disabled={!summary.canOpenEdbFile}
+          title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
+        >
+          {Icon.board}<span>ClassIn 열기</span>
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => summary.outputDir && openOutputFolder(summary.outputDir)}
+          disabled={!summary.canOpenOutputDir}
+          title={summary.outputDirExists === false ? '출력 폴더가 없습니다' : '출력 폴더 열기'}
+        >
+          {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더'}</span>
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => openClassinHandoff(summary)}
+          disabled={!summary.canOpenClassinHandoff}
+          title={summary.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
+        >
+          {Icon.check}<span>ClassIn 검수</span>
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => onClassinReviewComplete?.()}
+          disabled={!summary.canMarkClassinReviewComplete || !onClassinReviewComplete}
+          title={summary.classinReviewPassed ? '이미 ClassIn 검수를 완료했습니다' : 'ClassIn에서 확인한 결과를 완료로 저장'}
+        >
+          {Icon.check}<span>{summary.classinReviewPassed ? '검수 완료됨' : '검수 완료'}</span>
+        </button>
+      </div>
+      {history.length > 1 && (
+        <div className="publish-history">
+          <div className="publish-history-title">최근 제작</div>
+          {history.slice(0, 5).map((item, index) => (
+            <div className="publish-history-row" key={`${item.edbPath || item.edbFileName}-${index}`}>
+              <div className="publish-history-main" title={item.edbPath || item.edbFileName}>
+                <strong>{index === 0 ? '최신' : `${index + 1}`}</strong>
+                <span>{item.edbFileName}</span>
+              </div>
+              <small>{formatPublishHistoryMeta(item)}{item.classinReviewStatusLabel ? ` · ${item.classinReviewStatusLabel}` : ''}</small>
+              <button
+                className="icon-btn"
+                type="button"
+                title="이 제작본 다운로드"
+                disabled={!item.canDownload}
+                onClick={() => downloadPublishSummary(item)}
+              >{Icon.download}</button>
+              <button
+                className="icon-btn"
+                type="button"
+                title="ClassIn 또는 기본 앱으로 열기"
+                disabled={!item.canOpenEdbFile}
+                onClick={() => openPublishedEdb(item)}
+              >{Icon.board}</button>
+              <button
+                className="icon-btn"
+                type="button"
+                title="ClassIn 검수 파일 열기"
+                disabled={!item.canOpenClassinHandoff}
+                onClick={() => openClassinHandoff(item)}
+              >{Icon.check}</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
 function SidePanel({
   item, items, activeIndex,
@@ -1281,11 +1724,13 @@ function SidePanel({
   boardColor, setBoardColor,
   accent, setAccent,
   onConfirm,
-  userSettings, onSaveGeminiKey,
+  userSettings, runtimeDiagnostics, onSaveGeminiKey,
   onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
   aiEnabled, setAiEnabled,
   inputIntent, setInputIntent,
   onRecognizeSession, canRecognizeSession,
+  session, published,
+  onClassinReviewComplete,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -1294,8 +1739,13 @@ function SidePanel({
   const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [showOpenAiKey, setShowOpenAiKey] = useState(false);
+  const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);
   const dragging = useRef(false);
   const wrapRef = useRef(null);
+  const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
+  const hangulStatusMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
+  const hangulToolRows = hangulRuntimeToolRows(hangulDiagnostics);
+  const hangulDetailsOpen = !!hangulDiagnostics && hangulDiagnostics.status !== 'ready';
 
   useEffect(() => {
     const onMove = e => {
@@ -1312,6 +1762,10 @@ function SidePanel({
       window.removeEventListener('mouseup', onUp);
     };
   }, []);
+
+  useEffect(() => {
+    if (hangulDiagnostics) setHangulDetailsExpanded(hangulDetailsOpen);
+  }, [hangulDiagnostics?.status]);
 
   const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
   const maxScale = maxPlacementScaleRatio(item);
@@ -1357,6 +1811,12 @@ function SidePanel({
           칠판 설정
         </button>
       </div>
+
+      <PublishResultPanel
+        session={session}
+        visible={published}
+        onClassinReviewComplete={onClassinReviewComplete}
+      />
 
       {tab === 'item' && (
         <>
@@ -1682,6 +2142,60 @@ function SidePanel({
 
             <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
 
+            <div className="row-control">
+              <div className="lbl">
+                HWP/HWPX
+                <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
+              </div>
+              <span
+                className="pos-tag"
+                style={{
+                  background: hangulStatusMeta.tone,
+                  minWidth: 58,
+                  textAlign: 'center',
+                }}
+                title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
+              >
+                {hangulStatusMeta.label}
+              </span>
+            </div>
+
+            {hangulDiagnostics && (
+              <div className={`runtime-details ${hangulDetailsExpanded ? 'open' : ''}`}>
+                <button
+                  className="runtime-details-summary"
+                  type="button"
+                  aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}
+                  onClick={() => setHangulDetailsExpanded(open => !open)}
+                >
+                  변환 환경
+                </button>
+                {hangulDetailsExpanded && (
+                  <>
+                    <div className="runtime-tool-grid">
+                      {hangulToolRows.map(row => (
+                        <div key={row.label} className="runtime-tool-row">
+                          <span>{row.label}</span>
+                          <strong>{row.count}</strong>
+                          <small>{row.names || '없음'}</small>
+                        </div>
+                      ))}
+                    </div>
+                    {Array.isArray(hangulDiagnostics?.warnings) && hangulDiagnostics.warnings.length > 0 && (
+                      <div className="runtime-note warn">
+                        {hangulDiagnostics.warnings[0]}
+                      </div>
+                    )}
+                    {Array.isArray(hangulDiagnostics?.recommendedActions) && hangulDiagnostics.recommendedActions.length > 0 && (
+                      <div className="runtime-note">
+                        {hangulDiagnostics.recommendedActions[0]}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="intent-control">
               {INPUT_INTENT_OPTIONS.map(option => (
                 <button
@@ -1917,7 +2431,14 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
 
   if (!review) return null;
   const title = review.title || 'AI 인식 결과 확인';
-  const subtitle = review.subtitle || `${summary.problems}개 문제로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`;
+  const movesToReview = review?.kind === 'queue-recognition';
+  const subtitle = review.subtitle || (
+    movesToReview
+      ? `${summary.problemLabel}로 분할했습니다. 맞으면 검수 화면에서 경계를 확인합니다.`
+      : `${summary.problemLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
+  );
+  const confirmLabel = movesToReview ? '맞아요, 검수로 이동' : '맞아요, 칠판에 붙이기';
+  const confirmingLabel = movesToReview ? '검수로 이동 중...' : '붙이는 중...';
 
   return (
     <div className="recognition-modal-shell" role="dialog" aria-modal="true" aria-labelledby="recognition-review-title">
@@ -1934,7 +2455,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
 
         <div className="recognition-summary">
           <span>{summary.pages} 페이지</span>
-          <span>{summary.problems} 문제</span>
+          <span>{summary.problemLabel}</span>
           <span className={summary.riskCount ? 'warn' : ''}>
             {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
           </span>
@@ -1949,7 +2470,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
               <div key={page.id} className="recognition-page">
                 <div className="recognition-page-hd">
                   <strong>{page.id}</strong>
-                  <span>{pageProblems.length}개 문제</span>
+                  <span>{formatProblemCount(countSessionProblems(pageProblems))}</span>
                   <span>{page.width}×{page.height}</span>
                 </div>
                 <div className="recognition-page-canvas">
@@ -1991,7 +2512,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
         <div className="recognition-modal-foot">
           <button className="btn" type="button" onClick={onCancel} disabled={confirming}>취소</button>
           <button className="btn primary" type="button" onClick={onConfirm} disabled={confirming || !summary.problems}>
-            {confirming ? '붙이는 중...' : '맞아요, 칠판에 붙이기'}
+            {confirming ? confirmingLabel : confirmLabel}
           </button>
         </div>
       </div>
@@ -2165,8 +2686,7 @@ function materializeSessionForItems(rawSession, items, fileName){
     .map(item => applyItemStateToProblem(byId.get(item.id), item));
   const activeIds = new Set(orderedProblems.map(problem => problem.id));
   snapshot.problems = orderedProblems;
-  snapshot.detected_problem_count = orderedProblems.length;
-  snapshot.detectedProblemCount = orderedProblems.length;
+  applyProblemCounts(snapshot, orderedProblems);
   snapshot.session_name = fileName || snapshot.session_name || '새 세션';
   snapshot.edb_path = null;
   snapshot.edb_file_uri = null;
@@ -2221,7 +2741,7 @@ function mergeSessions(baseSession, incomingSession, fileName){
   const mergedProblems = [...(base.problems || []), ...incomingProblems];
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
-  return {
+  const merged = {
     ...base,
     session_name: fileName || base.session_name || incoming.session_name || '새 세션',
     data_source: 'question_export',
@@ -2229,7 +2749,6 @@ function mergeSessions(baseSession, incomingSession, fileName){
     input_file_count: concatUnique(base.input_files || base.inputFiles || [], incoming.input_files || incoming.inputFiles || []).length,
     input_files: concatUnique(base.input_files || base.inputFiles || [], incoming.input_files || incoming.inputFiles || []),
     source_page_count: mergedPages.length,
-    detected_problem_count: mergedProblems.length,
     rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
     rendered_page_file_uris: concatUnique(base.rendered_page_file_uris || [], incoming.rendered_page_file_uris || []),
     warning_messages: [...(base.warning_messages || base.warningMessages || []), ...(incoming.warning_messages || incoming.warningMessages || [])],
@@ -2240,6 +2759,8 @@ function mergeSessions(baseSession, incomingSession, fileName){
     edbPath: null,
     edbFileUri: null,
   };
+  applyProblemCounts(merged, mergedProblems);
+  return merged;
 }
 
 const KIND_BY_SUBJECT = {
@@ -2300,6 +2821,24 @@ async function fetchLatestSession(){
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `세션 로드 실패 (${resp.status})`);
   return json.session;
+}
+
+async function fetchSessionHistory(){
+  const resp = await fetch('/api/session/history');
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `작업 이력 로드 실패 (${resp.status})`);
+  return Array.isArray(json.history) ? json.history : [];
+}
+
+async function postRestoreSessionHistory(id){
+  const resp = await fetch('/api/session/history/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `작업 열기 실패 (${resp.status})`);
+  return json;
 }
 
 const AI_FALLBACK_OFF = { enabled: false, mode: 'off' };
@@ -2364,6 +2903,36 @@ const REVIEW_STATUS_META = {
   failed: { label: '인식 실패', shortLabel: '실패', tone: 'failed' },
 };
 
+const RISK_FLAG_META = {
+  ai_image_missing_source: '이미지 원본 없음',
+  ai_image_reconstructed_check_text: 'AI 보정 확인',
+  ai_image_reconstruction_failed: 'AI 보정 실패',
+  ai_retry_missing_source: '재인식 원본 없음',
+  fallback_grouping: '문항 경계 추정',
+  hwp_oversegmentation: 'HWP 과분할',
+  hwp_problem_count_mismatch: 'HWP 문항 수 차이',
+  large_block_dominance: '큰 블록 우세',
+  marker_document_continuation: '지문·자료 분리',
+  needs_review: '검토 필요',
+  no_problem_markers: '문항 번호 부족',
+  ocr_disabled: 'OCR 미사용',
+  problem_per_block: '블록 단위 분리',
+  sparse_segmentation: '성긴 분할',
+};
+
+const NON_ACTIONABLE_RISK_FLAGS = new Set([
+  'marker_document_continuation',
+  'ocr_disabled',
+]);
+
+const HWP_COUNT_MATCH_DISMISSIBLE_RISK_FLAGS = new Set([
+  'fallback_grouping',
+  'large_block_dominance',
+  'no_problem_markers',
+  'problem_per_block',
+  'sparse_segmentation',
+]);
+
 function normalizeReviewStatus(value){
   const normalized = String(value || '').trim().toLowerCase().replace(/-/g, '_');
   return REVIEW_STATUS_META[normalized] ? normalized : null;
@@ -2387,8 +2956,528 @@ function reviewStatusClass(status){
   return `status-${String(status || 'normal').replace(/_/g, '-')}`;
 }
 
+function riskFlagLabel(flag){
+  const key = String(flag || '').trim();
+  if (!key) return '검토 사유';
+  if (RISK_FLAG_META[key]) return RISK_FLAG_META[key];
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map(part => part.length > 8 ? part.slice(0, 8) : part)
+    .join(' ');
+}
+
+function hangulRuntimeStatusMeta(hangul){
+  const status = String(hangul?.status || '').toLowerCase();
+  if (!hangul) return { label: '점검 중', tone: 'var(--muted)' };
+  if (status === 'ready') return { label: hangul.label || '준비됨', tone: 'var(--ok)' };
+  if (status === 'partial') return { label: hangul.label || '부분 준비', tone: '#aa6516' };
+  return { label: hangul.label || '확인 필요', tone: 'var(--danger)' };
+}
+
+function hangulRuntimeSummary(hangul){
+  if (!hangul) return 'HWP/HWPX 변환 환경 확인 중';
+  if (hangul.summary) return String(hangul.summary);
+  const pdfCount = (hangul.pdfConverters || []).length;
+  const textCount = (hangul.textExtractors || []).length;
+  const bridgeCount = (hangul.hwpToHwpxConverters || []).length;
+  const rendererCount = (hangul.hwpRenderers || []).length;
+  const parts = [`PDF ${pdfCount}`, `텍스트 ${textCount}`, `브리지 ${bridgeCount}`];
+  if (rendererCount) parts.push(`렌더 ${rendererCount}`);
+  if (hangul.htmlPdfFallbackReady) parts.push('HTML fallback');
+  if (Array.isArray(hangul.warnings) && hangul.warnings.length) parts.push(`주의 ${hangul.warnings.length}`);
+  return parts.join(' · ');
+}
+
+function hangulRuntimeToolRows(hangul){
+  if (!hangul) return [];
+  return [
+    ['PDF 변환', hangul.pdfConverters || []],
+    ['HWP 렌더', hangul.hwpRenderers || []],
+    ['HWP→HWPX', hangul.hwpToHwpxConverters || []],
+    ['텍스트', hangul.textExtractors || []],
+    ['HTML', hangul.htmlConverters || []],
+    ['Chrome PDF', hangul.chromePdfConverters || []],
+  ].map(([label, tools]) => ({
+    label,
+    count: Array.isArray(tools) ? tools.length : 0,
+    names: Array.isArray(tools) ? tools.map(tool => tool?.name).filter(Boolean).join(', ') : '',
+  }));
+}
+
 function listUnique(values){
   return Array.from(new Set(values));
+}
+
+function riskFlagsFor(entity){
+  const flags = entity?.riskFlags || entity?.risk_flags || [];
+  if (!Array.isArray(flags)) return [];
+  return flags.map(flag => String(flag || '').trim()).filter(Boolean);
+}
+
+function hasRiskFlag(entity, flag){
+  const key = String(flag || '').trim();
+  return key ? riskFlagsFor(entity).includes(key) : false;
+}
+
+function isSupplementalProblem(problem){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.isSupplementalProblem;
+  if (typeof helper === 'function') return helper(problem);
+  if (hasRiskFlag(problem, 'marker_document_continuation')) return true;
+  if (problem?.metadata?.marker_document_continuation) return true;
+  const id = String(problem?.id || problem?.problem_id || '');
+  return id.endsWith('-continuation');
+}
+
+function problemMatchesReviewFilter(problem, filter){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.problemMatchesReviewFilter;
+  if (typeof helper === 'function') return helper(problem, filter);
+  const normalizedFilter = String(filter || 'all').trim() || 'all';
+  if (normalizedFilter === 'all') return true;
+  if (normalizedFilter === 'supplemental') return isSupplementalProblem(problem);
+  return deriveProblemStatus(problem) === normalizedFilter;
+}
+
+function countSessionProblems(problems){
+  const list = Array.isArray(problems) ? problems : [];
+  const supplemental = list.filter(isSupplementalProblem).length;
+  return {
+    total: list.length,
+    core: Math.max(0, list.length - supplemental),
+    supplemental,
+  };
+}
+
+function sessionProblemCounts(session, problemOverride = null){
+  if (Array.isArray(problemOverride)) return countSessionProblems(problemOverride);
+  const fallback = countSessionProblems(session?.problems || []);
+  const total = Number(session?.detected_problem_count ?? session?.detectedProblemCount);
+  const supplemental = Number(session?.supplemental_item_count ?? session?.supplementalItemCount);
+  const core = Number(session?.core_problem_count ?? session?.coreProblemCount);
+  if (Number.isFinite(total) && Number.isFinite(core) && Number.isFinite(supplemental)) {
+    return {
+      total: Math.max(0, total),
+      core: Math.max(0, core),
+      supplemental: Math.max(0, supplemental),
+    };
+  }
+  return fallback;
+}
+
+function sessionWarningMessages(session){
+  const warnings = Array.isArray(session?.warning_messages)
+    ? session.warning_messages
+    : Array.isArray(session?.warningMessages)
+      ? session.warningMessages
+      : [];
+  return warnings.map(message => String(message || '').trim()).filter(Boolean);
+}
+
+function collectReviewStatusCounts(session){
+  const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
+  (session?.problems || []).forEach(problem => {
+    const status = deriveProblemStatus(problem);
+    counts.all += 1;
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  return counts;
+}
+
+function collectRiskFlagCounts(session){
+  const counts = {};
+  const addFlags = (flags) => {
+    if (!Array.isArray(flags)) return;
+    flags.forEach(flag => {
+      const key = String(flag || '').trim();
+      if (key) counts[key] = (counts[key] || 0) + 1;
+    });
+  };
+  (session?.problems || []).forEach(problem => addFlags(riskFlagsFor(problem)));
+  (session?.pages || []).forEach(page => addFlags(riskFlagsFor(page)));
+  return counts;
+}
+
+function normalizeRiskFlagItems(rawItems, fallbackCounts){
+  const sourceItems = Array.isArray(rawItems)
+    ? rawItems
+    : Object.entries(fallbackCounts || {}).map(([flag, count]) => ({ flag, count }));
+  return sourceItems
+    .map(item => ({
+      flag: String(item?.flag || '').trim(),
+      count: Number(item?.count || 0),
+    }))
+    .filter(item => item.flag && Number.isFinite(item.count) && item.count > 0)
+    .sort((a, b) => b.count - a.count || a.flag.localeCompare(b.flag))
+    .slice(0, 3);
+}
+
+function countRiskFilterMatches(session, flag){
+  const key = String(flag || '').trim();
+  if (!key) return 0;
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  const problemMatchCount = problems.filter(problem => hasRiskFlag(problem, key)).length;
+  if (problemMatchCount > 0) return problemMatchCount;
+  const pageById = new Map((session?.pages || []).map(page => [String(page?.id || ''), page]));
+  return problems.filter(problem => hasRiskFlag(pageById.get(String(problem?.sourcePageId || '')), key)).length;
+}
+
+function normalizeFilterableRiskFlagItems(session, fallbackCounts){
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  const total = problems.length;
+  const items = Object.keys(fallbackCounts || {})
+    .map(flag => ({
+      flag,
+      count: countRiskFilterMatches(session, flag),
+      diagnosticCount: Number(fallbackCounts[flag] || 0),
+    }))
+    .filter(item => item.flag && item.count > 0 && (!total || item.count < total))
+    .sort((a, b) => b.count - a.count || b.diagnosticCount - a.diagnosticCount || a.flag.localeCompare(b.flag))
+    .slice(0, 3);
+  return items.length ? items : normalizeRiskFlagItems(null, fallbackCounts);
+}
+
+function hasHwpCountMatch(summary){
+  return Boolean(
+    summary?.hwpTextProblemCountMatches
+    || summary?.hwpLayoutProblemCountMatches
+    || summary?.hwp_text_problem_count_matches
+    || summary?.hwp_layout_problem_count_matches
+    || summary?.hwpTextProblemCountStatus === 'match'
+    || summary?.hwpLayoutProblemCountStatus === 'match'
+    || summary?.hwp_text_problem_count_status === 'match'
+    || summary?.hwp_layout_problem_count_status === 'match'
+  );
+}
+
+function filterActionableRiskFlagCounts(counts, options = {}){
+  const dismissed = new Set(NON_ACTIONABLE_RISK_FLAGS);
+  if (options.hwpCountsMatch) {
+    HWP_COUNT_MATCH_DISMISSIBLE_RISK_FLAGS.forEach(flag => dismissed.add(flag));
+  }
+  return Object.fromEntries(
+    Object.entries(counts || {})
+      .filter(([flag, count]) => !dismissed.has(flag) && Number(count) > 0)
+  );
+}
+
+function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
+  const actionableFlags = new Set(
+    Object.entries(actionableRiskFlagCounts || {})
+      .filter(([, count]) => Number(count) > 0)
+      .map(([flag]) => String(flag || '').trim())
+      .filter(Boolean)
+  );
+  const matched = new Set();
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  problems.forEach((problem, index) => {
+    const id = String(problem?.id || problem?.problem_id || `problem-index-${index}`);
+    if (deriveProblemStatus(problem) === 'failed') matched.add(id);
+    const flags = riskFlagsFor(problem);
+    if (flags.some(flag => actionableFlags.has(flag))) matched.add(id);
+  });
+  (session?.pages || []).forEach(page => {
+    const flags = riskFlagsFor(page);
+    if (!flags.some(flag => actionableFlags.has(flag))) return;
+    const ids = Array.isArray(page?.problemIds || page?.problem_ids)
+      ? (page.problemIds || page.problem_ids).map(id => String(id || '')).filter(Boolean)
+      : [];
+    if (ids.length) {
+      ids.forEach(id => matched.add(id));
+    } else {
+      matched.add(`page:${String(page?.id || matched.size)}`);
+    }
+  });
+  return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
+}
+
+function sessionReviewSummary(session){
+  const raw = session?.review_summary || session?.reviewSummary || {};
+  const counts = sessionProblemCounts(session);
+  const fallbackStatusCounts = collectReviewStatusCounts(session);
+  const rawStatusCounts = raw.reviewStatusCounts && typeof raw.reviewStatusCounts === 'object'
+    ? raw.reviewStatusCounts
+    : {};
+  const reviewStatusCounts = {
+    all: Number(rawStatusCounts.all ?? fallbackStatusCounts.all) || 0,
+    normal: Number(rawStatusCounts.normal ?? fallbackStatusCounts.normal) || 0,
+    check_needed: Number(rawStatusCounts.check_needed ?? fallbackStatusCounts.check_needed) || 0,
+    failed: Number(rawStatusCounts.failed ?? fallbackStatusCounts.failed) || 0,
+  };
+  const rawSupplementalStatusCounts = raw.supplementalReviewStatusCounts && typeof raw.supplementalReviewStatusCounts === 'object'
+    ? raw.supplementalReviewStatusCounts
+    : {};
+  const rawCoreStatusCounts = raw.coreReviewStatusCounts && typeof raw.coreReviewStatusCounts === 'object'
+    ? raw.coreReviewStatusCounts
+    : {};
+  const fallbackRiskFlagCounts = collectRiskFlagCounts(session);
+  const riskFlagCounts = raw.riskFlagCounts && typeof raw.riskFlagCounts === 'object'
+    ? raw.riskFlagCounts
+    : fallbackRiskFlagCounts;
+  const actionableRiskFlagCounts = raw.actionableRiskFlagCounts && typeof raw.actionableRiskFlagCounts === 'object'
+    ? raw.actionableRiskFlagCounts
+    : filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
+  const rawActionableNeedsReviewCount = Number(raw.actionableNeedsReviewCount ?? raw.actionable_needs_review_count);
+  const actionableNeedsReviewCount = Number.isFinite(rawActionableNeedsReviewCount)
+    ? Math.max(0, rawActionableNeedsReviewCount)
+    : countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
+  const topRiskFlags = normalizeFilterableRiskFlagItems(session, actionableRiskFlagCounts);
+  const warningMessages = Array.isArray(raw.warningMessages)
+    ? raw.warningMessages.map(message => String(message || '').trim()).filter(Boolean)
+    : sessionWarningMessages(session);
+  const extractorMap = raw.hwpTextExtractors && typeof raw.hwpTextExtractors === 'object'
+    ? raw.hwpTextExtractors
+    : {};
+  const layoutExtractorMap = raw.hwpLayoutExtractors && typeof raw.hwpLayoutExtractors === 'object'
+    ? raw.hwpLayoutExtractors
+    : {};
+  const extractorNames = Object.entries(extractorMap)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    .map(([name, count]) => `${name} ${count}`);
+  const layoutExtractorNames = Object.entries(layoutExtractorMap)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    .map(([name, count]) => `${name} ${count}`);
+  const hwpTextProblemSignalCount = Number(raw.hwpTextProblemSignalCount || 0);
+  const hwpTextProblemDelta = Number(raw.hwpTextProblemDelta || 0);
+  const hwpTextProblemCountStatus = String(raw.hwpTextProblemCountStatus || 'unknown');
+  const hwpLayoutProblemSignalCount = Number(raw.hwpLayoutProblemSignalCount || 0);
+  const hwpLayoutProblemDelta = Number(raw.hwpLayoutProblemDelta || 0);
+  const hwpLayoutProblemCountStatus = String(raw.hwpLayoutProblemCountStatus || 'unknown');
+  const hwpCacheHitPageCount = Number(raw.hwpCacheHitPageCount ?? raw.hwp_cache_hit_page_count ?? 0);
+  const hwpRendererCacheHitCount = Number(raw.hwpRendererCacheHitCount ?? raw.hwp_renderer_cache_hit_count ?? 0);
+  const hwpNormalizedCacheHitCount = Number(raw.hwpNormalizedCacheHitCount ?? raw.hwp_normalized_cache_hit_count ?? 0);
+  const hwpProblemCountMismatchCount = Number(
+    raw.hwpProblemCountMismatchCount
+    ?? raw.hwp_problem_count_mismatch_count
+    ?? riskFlagCounts.hwp_problem_count_mismatch
+    ?? 0
+  );
+  const hwpOversegmentationCount = Number(
+    raw.hwpOversegmentationCount
+    ?? raw.hwp_oversegmentation_count
+    ?? riskFlagCounts.hwp_oversegmentation
+    ?? 0
+  );
+  const duplicateProblemNumberGroups = Array.isArray(session?.duplicateProblemNumberGroups)
+    ? session.duplicateProblemNumberGroups
+    : Array.isArray(session?.duplicate_problem_number_groups)
+      ? session.duplicate_problem_number_groups
+      : [];
+  const duplicateProblemNumberLabel = duplicateProblemNumberGroups
+    .map(group => {
+      const label = String(group?.numberLabel || group?.number_label || '').trim();
+      const occurrences = Number(group?.occurrencesPerNumber ?? group?.occurrences_per_number ?? 0);
+      return label && Number.isFinite(occurrences) && occurrences > 1 ? `${label} x${occurrences}` : '';
+    })
+    .filter(Boolean)
+    .join(', ');
+  return {
+    counts,
+    reviewStatusCounts,
+    coreReviewStatusCounts: rawCoreStatusCounts,
+    supplementalReviewStatusCounts: rawSupplementalStatusCounts,
+    needsReviewCount: Number.isFinite(Number(raw.needsReviewCount))
+      ? Math.max(0, Number(raw.needsReviewCount))
+      : Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
+    actionableNeedsReviewCount,
+    riskFlagCounts,
+    actionableRiskFlagCounts,
+    topRiskFlags,
+    warningCount: Number.isFinite(Number(raw.warningCount)) ? Number(raw.warningCount) : warningMessages.length,
+    warningPreview: warningMessages[0] || '',
+    hwpTextExtractorLabel: extractorNames.join(', '),
+    hwpTextProblemSignalCount: Number.isFinite(hwpTextProblemSignalCount) ? Math.max(0, hwpTextProblemSignalCount) : 0,
+    hwpTextProblemCountStatus,
+    hwpTextProblemCountMessage: String(raw.hwpTextProblemCountMessage || ''),
+    hwpTextProblemDelta: Number.isFinite(hwpTextProblemDelta) ? hwpTextProblemDelta : 0,
+    hwpLayoutExtractorLabel: layoutExtractorNames.join(', '),
+    hwpLayoutProblemSignalCount: Number.isFinite(hwpLayoutProblemSignalCount) ? Math.max(0, hwpLayoutProblemSignalCount) : 0,
+    hwpLayoutProblemCountStatus,
+    hwpLayoutProblemCountMessage: String(raw.hwpLayoutProblemCountMessage || ''),
+    hwpLayoutProblemDelta: Number.isFinite(hwpLayoutProblemDelta) ? hwpLayoutProblemDelta : 0,
+    hwpCacheHitPageCount: Number.isFinite(hwpCacheHitPageCount) ? Math.max(0, hwpCacheHitPageCount) : 0,
+    hwpRendererCacheHitCount: Number.isFinite(hwpRendererCacheHitCount) ? Math.max(0, hwpRendererCacheHitCount) : 0,
+    hwpNormalizedCacheHitCount: Number.isFinite(hwpNormalizedCacheHitCount) ? Math.max(0, hwpNormalizedCacheHitCount) : 0,
+    hwpProblemCountMismatchCount: Number.isFinite(hwpProblemCountMismatchCount) ? Math.max(0, hwpProblemCountMismatchCount) : 0,
+    hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
+    duplicateProblemNumberGroups,
+    duplicateProblemNumberLabel,
+  };
+}
+
+function normalizePublishSummary(raw, session = null){
+  const helper = globalThis.EDB_PUBLISH_SUMMARY?.normalizePublishSummary;
+  if (typeof helper === 'function') return helper(raw, session);
+  if (!raw || typeof raw !== 'object') return null;
+  const recordCount = Number(raw.recordCount ?? raw.record_count ?? raw.recordCountActual ?? raw.record_count_actual ?? 0);
+  const recordCountActual = Number(raw.recordCountActual ?? raw.record_count_actual ?? recordCount);
+  const coreProblemCount = Number(raw.coreProblemCount ?? raw.core_problem_count ?? 0);
+  const supplementalItemCount = Number(raw.supplementalItemCount ?? raw.supplemental_item_count ?? 0);
+  const pageCountHint = Number(raw.pageCountHint ?? raw.page_count_hint ?? 0);
+  const outerSize = Number(raw.outerSize ?? raw.outer_size ?? 0);
+  const edbFileName = String(raw.edbFileName || raw.edb_file_name || '').trim();
+  const edbPath = String(raw.edbPath || raw.edb_path || '').trim();
+  const outputDir = String(raw.outputDir || raw.output_dir || session?.output_dir || session?.outputDir || '').trim();
+  const edbFileUri = String(raw.edbFileUri || raw.edb_file_uri || session?.edb_file_uri || session?.edbFileUri || '').trim();
+  const classinReview = raw.classinReview || raw.classin_review || session?.classinReview || session?.classin_review || {};
+  const classinReviewStatus = String(
+    raw.classinReviewStatus
+    || raw.classin_review_status
+    || classinReview.status
+    || ''
+  ).trim();
+  const classinReviewStatusLabel = String(
+    raw.classinReviewStatusLabel
+    || raw.classin_review_status_label
+    || classinReview.statusLabel
+    || classinReview.status_label
+    || (classinReviewStatus === 'passed' ? 'ClassIn 확인 완료' : '')
+  ).trim();
+  const classinHandoffUri = String(
+    raw.classinHandoffUri
+    || raw.classin_handoff_uri
+    || session?.classin_handoff_uri
+    || session?.classinHandoffUri
+    || ''
+  ).trim();
+  const classinHandoffMarkdownUri = String(
+    raw.classinHandoffMarkdownUri
+    || raw.classin_handoff_markdown_uri
+    || session?.classin_handoff_markdown_uri
+    || session?.classinHandoffMarkdownUri
+    || ''
+  ).trim();
+  const classinPreflight = raw.classinPreflight || raw.classin_preflight || session?.classinPreflight || session?.classin_preflight || {};
+  const classinPreflightStatus = String(
+    raw.classinPreflightStatus
+    || raw.classin_preflight_status
+    || classinPreflight.status
+    || ''
+  ).trim();
+  const classinPreflightIssueCount = Number(
+    raw.classinPreflightIssueCount
+    ?? raw.classin_preflight_issue_count
+    ?? classinPreflight.issueCount
+    ?? classinPreflight.issue_count
+    ?? 0
+  );
+  const rawClassinPreflightPassed = raw.classinPreflightPassed ?? raw.classin_preflight_passed ?? classinPreflight.passed;
+  const classinPreflightPassed = rawClassinPreflightPassed === undefined
+    ? classinPreflightStatus === 'passed'
+    : rawClassinPreflightPassed !== false;
+  const classinPreflightStatusLabel = String(
+    raw.classinPreflightStatusLabel
+    || raw.classin_preflight_status_label
+    || (classinPreflightStatus
+      ? (classinPreflightPassed ? 'ClassIn 사전점검 OK' : `ClassIn 사전점검 주의 ${Number.isFinite(classinPreflightIssueCount) ? Math.max(0, classinPreflightIssueCount) : 0}`)
+      : '')
+  ).trim();
+  const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
+  const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
+  if (!edbFileName && !edbPath && !edbFileUri) return null;
+  const normalizedCore = Number.isFinite(coreProblemCount) ? Math.max(0, coreProblemCount) : 0;
+  const normalizedSupplemental = Number.isFinite(supplementalItemCount) ? Math.max(0, supplementalItemCount) : 0;
+  const fallbackRecordCount = Number.isFinite(recordCount) ? Math.max(0, recordCount) : 0;
+  const explicitRecordCountLabel = String(raw.recordCountLabel || raw.record_count_label || '').trim();
+  const summary = {
+    validated: raw.validated !== false,
+    statusLabel: String(raw.statusLabel || raw.status_label || '제작 완료'),
+    edbFileName: edbFileName || (edbPath ? edbPath.split('/').pop() : 'classin.edb'),
+    edbPath,
+    edbFileUri,
+    outputDir,
+    classinReview,
+    classinReviewStatus,
+    classinReviewStatusLabel,
+    classinReviewPassed: (raw.classinReviewPassed ?? raw.classin_review_passed) === undefined
+      ? classinReviewStatus === 'passed'
+      : (raw.classinReviewPassed ?? raw.classin_review_passed) !== false,
+    classinHandoffUri,
+    classinHandoffMarkdownUri,
+    classinPreflight,
+    classinPreflightStatus,
+    classinPreflightStatusLabel,
+    classinPreflightPassed,
+    classinPreflightIssueCount: Number.isFinite(classinPreflightIssueCount) ? Math.max(0, classinPreflightIssueCount) : 0,
+    edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
+    outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
+    recordCount: fallbackRecordCount,
+    recordCountActual: Number.isFinite(recordCountActual) ? Math.max(0, recordCountActual) : 0,
+    coreProblemCount: normalizedCore,
+    supplementalItemCount: normalizedSupplemental,
+    recordCountLabel: explicitRecordCountLabel || (normalizedSupplemental > 0 ? `${normalizedCore}문항 + 자료 ${normalizedSupplemental}` : `${fallbackRecordCount}개 자료`),
+    pageCountHint: Number.isFinite(pageCountHint) ? Math.max(0, pageCountHint) : 0,
+    outerSize: Number.isFinite(outerSize) ? Math.max(0, outerSize) : 0,
+    publishedAt: String(raw.publishedAt || raw.published_at || '').trim(),
+  };
+  summary.canDownload = Boolean(summary.edbFileUri) && summary.edbFileExists !== false;
+  summary.canOpenEdbFile = Boolean(summary.edbPath) && summary.edbFileExists !== false;
+  summary.canOpenOutputDir = Boolean(summary.outputDir) && summary.outputDirExists !== false;
+  summary.canOpenClassinHandoff = Boolean(summary.classinHandoffMarkdownUri || summary.classinHandoffUri);
+  summary.canMarkClassinReviewComplete = summary.canOpenEdbFile && !summary.classinReviewPassed;
+  return summary;
+}
+
+function sessionPublishSummary(session){
+  return normalizePublishSummary(session?.publish_summary || session?.publishSummary, session);
+}
+
+function sessionPublishHistory(session){
+  const rawHistory = Array.isArray(session?.publish_history)
+    ? session.publish_history
+    : Array.isArray(session?.publishHistory)
+      ? session.publishHistory
+      : [];
+  const history = rawHistory
+    .map(item => normalizePublishSummary(item, session))
+    .filter(Boolean);
+  const latest = sessionPublishSummary(session);
+  const latestKey = latest ? (latest.edbPath || latest.edbFileName) : '';
+  if (latest && !history.some(item => (item.edbPath || item.edbFileName) === latestKey)) {
+    history.unshift(latest);
+  }
+  return history.slice(0, 5);
+}
+
+function formatPublishTime(value){
+  const helper = globalThis.EDB_PUBLISH_SUMMARY?.formatPublishTime;
+  if (typeof helper === 'function') return helper(value);
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ko-KR', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatPublishHistoryMeta(summary){
+  const helper = globalThis.EDB_PUBLISH_SUMMARY?.formatPublishHistoryMeta;
+  if (typeof helper === 'function') return helper(summary);
+  const label = summary?.recordCountLabel || `${summary?.recordCountActual || summary?.recordCount || 0}개 자료`;
+  const time = formatPublishTime(summary?.publishedAt);
+  return [time, label].filter(Boolean).join(' · ') || label;
+}
+
+function applyProblemCounts(session, problems = null){
+  const counts = sessionProblemCounts({ problems: problems || session?.problems || [] }, problems || session?.problems || []);
+  session.detected_problem_count = counts.total;
+  session.detectedProblemCount = counts.total;
+  session.core_problem_count = counts.core;
+  session.coreProblemCount = counts.core;
+  session.supplemental_item_count = counts.supplemental;
+  session.supplementalItemCount = counts.supplemental;
+  return counts;
+}
+
+function formatProblemCount(counts){
+  const core = Number(counts?.core ?? counts?.problems ?? counts?.total ?? 0);
+  const supplemental = Number(counts?.supplemental ?? counts?.supplementalItems ?? 0);
+  if (supplemental > 0) return `${core}문항 + 자료 ${supplemental}`;
+  return `${core}문항`;
 }
 
 function hasReviewPages(session){
@@ -2427,9 +3516,13 @@ function summarizeRecognitionSession(session, pageIds){
     return visiblePageIds.has(problem?.sourcePageId);
   });
   const riskCount = problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length;
+  const counts = countSessionProblems(problems);
   return {
     pages: visiblePages.length,
-    problems: problems.length,
+    problems: counts.total,
+    coreProblems: counts.core,
+    supplementalItems: counts.supplemental,
+    problemLabel: formatProblemCount(counts),
     riskCount,
   };
 }
@@ -2510,8 +3603,7 @@ function mergeRetryCandidateIntoCurrent(currentSession, candidateSession, pageId
       problemIds: (candidatePage.problemIds || candidatePage.problem_ids || []).filter(Boolean),
     };
   });
-  base.detected_problem_count = nextProblems.length;
-  base.detectedProblemCount = nextProblems.length;
+  applyProblemCounts(base, nextProblems);
   base.ai_retry_summary = candidate.ai_retry_summary || candidate.aiRetrySummary || [];
   base.edb_path = null;
   base.edb_file_uri = null;
@@ -2556,8 +3648,17 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
     }),
   });
   const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `파싱 실행 실패 (${resp.status})`);
+  if (!resp.ok || !json.ok) throw new Error(formatApiError(json, `파싱 실행 실패 (${resp.status})`));
   return json.session;
+}
+
+function formatApiError(payload, fallbackMessage){
+  const baseMessage = String(payload?.error || fallbackMessage || '요청에 실패했습니다').trim();
+  const steps = Array.isArray(payload?.recoverySteps)
+    ? payload.recoverySteps.map(step => String(step || '').trim()).filter(Boolean)
+    : [];
+  if (!steps.length) return baseMessage;
+  return `${baseMessage}\n\n다음 조치:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`;
 }
 
 async function fetchUserSettings(){
@@ -2565,6 +3666,13 @@ async function fetchUserSettings(){
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `설정 로드 실패 (${resp.status})`);
   return json.settings;
+}
+
+async function fetchRuntimeDiagnostics(){
+  const resp = await fetch('/api/runtime-diagnostics');
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `진단 로드 실패 (${resp.status})`);
+  return json;
 }
 
 async function clearSession(){
@@ -2617,6 +3725,17 @@ async function postRestore(snapshot){
   });
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `이전 상태 복원 실패 (${resp.status})`);
+  return json.session;
+}
+
+async function postClassinReviewResult(payload){
+  const resp = await fetch('/api/session/classin-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await resp.json();
+  if (!resp.ok || !json.ok) throw new Error(json.error || `ClassIn 검수 저장 실패 (${resp.status})`);
   return json.session;
 }
 
@@ -2673,9 +3792,12 @@ function App(){
   const [confirmingRecognition, setConfirmingRecognition] = useState(false);
   const [usingMock, setUsingMock] = useState(false);
   const [userSettings, setUserSettings] = useState(null);
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
+  const [recentSessions, setRecentSessions] = useState([]);
+  const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
@@ -2706,6 +3828,17 @@ function App(){
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
+
+  const refreshSessionHistory = useCallback(async () => {
+    try {
+      const history = await fetchSessionHistory();
+      setRecentSessions(history);
+      return history;
+    } catch (e) {
+      console.warn('[board] session history skipped:', e.message);
+      return [];
+    }
+  }, []);
 
   const dismissBackgroundJob = useCallback((id) => {
     setBackgroundJobs(prev => prev.filter(job => job.id !== id));
@@ -2793,7 +3926,7 @@ function App(){
     setActiveId(mapped[0].id);
     setSession(rawSession);
     setUsingMock(false);
-    setPublished(false);
+    setPublished(!!sessionPublishSummary(rawSession));
     if (rawSession.session_name) setFileName(rawSession.session_name);
     const wantsReview = (!initialViewConsumedRef.current && initialViewRef.current === 'review') || shouldOpenReview(rawSession);
     if (hasReviewPages(rawSession) && wantsReview) {
@@ -2859,6 +3992,7 @@ function App(){
       const next = await postMutate(action, args);
       setHistoryStack(prev => [...prev, snapshotBefore]);
       adoptMutatedSession(next, snapshotBefore);
+      refreshSessionHistory();
       showToast(
         action === 'split' ? '문제를 두 개로 갈랐어요'
         : action === 'merge' ? '문제를 합쳤어요'
@@ -2870,7 +4004,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [session, adoptMutatedSession]);
+  }, [session, adoptMutatedSession, refreshSessionHistory]);
 
   const retryAiSession = useCallback(async (args) => {
     if (!session) {
@@ -2950,6 +4084,7 @@ function App(){
       const restored = await postRestore(snapshot);
       setHistoryStack(prev => prev.slice(0, -1));
       adoptMutatedSession(restored, session);
+      refreshSessionHistory();
       showToast('이전 상태로 되돌렸어요');
     } catch (e) {
       showToast(`되돌리기 실패: ${e.message}`);
@@ -2957,7 +4092,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, session, adoptMutatedSession]);
+  }, [historyStack, session, adoptMutatedSession, refreshSessionHistory]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -2993,6 +4128,10 @@ function App(){
     return () => { cancelled = true; };
   }, [applySession]);
 
+  useEffect(() => {
+    refreshSessionHistory();
+  }, [refreshSessionHistory]);
+
   // load user settings (Gemini key status) on mount
   useEffect(() => {
     let cancelled = false;
@@ -3005,6 +4144,19 @@ function App(){
         setAiEnabled(!!s?.hasGeminiApiKey);
       } catch (e) {
         if (!cancelled) console.warn('[board] user-settings load skipped:', e.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const diagnostics = await fetchRuntimeDiagnostics();
+        if (!cancelled) setRuntimeDiagnostics(diagnostics);
+      } catch (e) {
+        if (!cancelled) console.warn('[board] runtime diagnostics skipped:', e.message);
       }
     })();
     return () => { cancelled = true; };
@@ -3108,7 +4260,8 @@ function App(){
       const s = await fetchLatestSession();
       if (s && Array.isArray(s.problems) && s.problems.length) {
         applySession(s);
-        showToast(`새로고침 완료 · ${s.problems.length}개 문항`);
+        refreshSessionHistory();
+        showToast(`새로고침 완료 · ${formatProblemCount(sessionProblemCounts(s))}`);
       } else {
         if (!usingMock) {
           setSession(null);
@@ -3124,7 +4277,25 @@ function App(){
     } finally {
       setRefreshing(false);
     }
-  }, [applySession, usingMock]);
+  }, [applySession, usingMock, refreshSessionHistory]);
+
+  const restoreRecentSession = useCallback(async (id) => {
+    if (!id || restoringSessionId) return;
+    setRestoringSessionId(id);
+    setLoading({ label: '최근 작업을 여는 중…', startedAt: Date.now() });
+    try {
+      const result = await postRestoreSessionHistory(id);
+      if (Array.isArray(result.history)) setRecentSessions(result.history);
+      applySession(result.session);
+      setHistoryStack([]);
+      showToast('최근 작업을 열었어요');
+    } catch (e) {
+      showToast('작업 열기 실패: ' + e.message);
+    } finally {
+      setRestoringSessionId(null);
+      setLoading(null);
+    }
+  }, [applySession, restoringSessionId]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -3190,15 +4361,15 @@ function App(){
         settleBackgroundJob(job.id, {
           status: 'done',
           label: '문제 인식 완료',
-          hint: `${summary.problems}개 문제를 찾았습니다.`,
+          hint: `${summary.problemLabel}을 찾았습니다.`,
         });
         setRecognitionReview({
           id: `review-${job.id}`,
           kind: 'queue-recognition',
           title: files.length === 1
-            ? `${files[0].name || '파일'} · ${summary.problems}개 문제로 인식했어요`
-            : `${summary.problems}개 문제로 인식했어요`,
-          subtitle: '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
+            ? `${files[0].name || '파일'} · ${summary.problemLabel}로 인식했어요`
+            : `${summary.problemLabel}로 인식했어요`,
+          subtitle: '문제 경계가 맞으면 검수 화면에서 원본 위 박스를 확인합니다.',
           session: incomingSession,
           incomingSession,
           fileKeys,
@@ -3245,10 +4416,11 @@ function App(){
         sessionToApply = await postRestore(merged);
       }
       applySession(sessionToApply);
+      refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
       setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
       const intentLabel = isRecognition ? '문제 인식' : '순서 등록';
-      showToast(`${intentLabel} 완료 · ${(sessionToApply.problems || []).length}개 문항`);
+      showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
       const folder = sessionToApply?.output_dir || sessionToApply?.outputDir || s?.output_dir || s?.outputDir;
       if (folder) openOutputFolder(folder);
     } catch (e) {
@@ -3257,7 +4429,7 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession, startBackgroundJob, settleBackgroundJob]);
+  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory]);
 
   const cancelRecognitionReview = useCallback(() => {
     if (confirmingRecognition) return;
@@ -3280,11 +4452,12 @@ function App(){
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
         applySession(restored);
-        setView('board');
+        refreshSessionHistory();
+        setView('review');
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
-        showToast(`칠판에 ${summary.problems}개 문제를 붙였어요`);
+        showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
         if (review.outputFolder) openOutputFolder(review.outputFolder);
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
@@ -3298,9 +4471,10 @@ function App(){
         } else {
           applySession(restored);
         }
+        refreshSessionHistory();
         setView('board');
         const summary = summarizeRecognitionSession(restored, review.pageIds);
-        showToast(`AI 인식 적용 · ${summary.problems}개 문제`);
+        showToast(`AI 인식 적용 · ${summary.problemLabel}`);
       }
       setRecognitionReview(null);
     } catch (e) {
@@ -3317,6 +4491,7 @@ function App(){
     fileName,
     applySession,
     adoptMutatedSession,
+    refreshSessionHistory,
   ]);
 
   const setStep = (id, step) => {
@@ -3413,7 +4588,10 @@ function App(){
   };
 
   const onConfirm = (id, options = {}) => {
-    const targetIds = options.bulk ? items.map(item => item.id) : [id];
+    const explicitProblemIds = Array.isArray(options.problemIds) ? options.problemIds : null;
+    const targetIds = explicitProblemIds?.length
+      ? explicitProblemIds
+      : options.bulk ? items.map(item => item.id) : [id];
     const confirmedIds = new Set(targetIds.filter(Boolean));
     if (!confirmedIds.size) return;
     const nextItemsForSnapshot = items.map(item => (
@@ -3438,10 +4616,41 @@ function App(){
     showToast(`"${items.find(i=>i.id===id)?.name}" 확인 완료`);
   };
 
+  const markClassinReviewComplete = useCallback(async () => {
+    if (!session) {
+      showToast('저장할 제작 세션이 없습니다');
+      return;
+    }
+    try {
+      const updated = await postClassinReviewResult({
+        status: 'passed',
+        notes: '',
+      });
+      setSession(updated);
+      refreshSessionHistory();
+      setPublished(true);
+      showToast('ClassIn 검수 완료로 저장했어요');
+    } catch (e) {
+      showToast('ClassIn 검수 저장 실패: ' + e.message);
+    }
+  }, [session, refreshSessionHistory]);
+
   const onPublish = async () => {
     if (!session || !Array.isArray(session.problems)) {
       showToast('내보낼 자료가 없습니다. 먼저 파싱해 주세요.');
       return;
+    }
+    const publishReviewSummary = sessionReviewSummary(session);
+    const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary.actionableNeedsReviewCount) || 0);
+    if (actionableNeedsReviewCount > 0) {
+      const confirmedPublish = window.confirm(
+        `검수 화면에 확인 필요 ${actionableNeedsReviewCount}개가 남아 있습니다.\n그래도 EDB를 제작할까요?`
+      );
+      if (!confirmedPublish) {
+        setView('review');
+        showToast('제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.');
+        return;
+      }
     }
     const sessionIds = new Set(session.problems.map(p => p.id));
     const currentIds = items.map(i => i.id);
@@ -3479,17 +4688,20 @@ function App(){
       const json = await resp.json();
       if (!resp.ok || !json.ok) throw new Error(json.error || `publish 실패 (${resp.status})`);
       setSession(json.session);
-      const url = json.session?.edb_file_uri;
+      refreshSessionHistory();
+      const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
+      const url = publishSummary?.edbFileUri || publishSummary?.edb_file_uri || json.session?.edb_file_uri;
       if (url) {
         const a = document.createElement('a');
         a.href = url;
-        a.download = (json.session.session_name || 'classin') + '.edb';
+        a.download = publishSummary?.edbFileName || publishSummary?.edb_file_name || (json.session.session_name || 'classin') + '.edb';
         document.body.appendChild(a);
         a.click();
         a.remove();
       }
       setPublished(true);
-      showToast(`${order.length}개 자료로 EDB 제작 완료 · 다운로드 시작`);
+      const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
+      showToast(`${publishLabel}로 EDB 제작 완료 · 다운로드 시작`);
     } catch (e) {
       showToast('제작 실패: ' + e.message);
     } finally {
@@ -3535,6 +4747,9 @@ function App(){
           aiAvailable={!!userSettings?.hasGeminiApiKey}
           addMockSample={addMockSample}
           canAddDummy={!session && !loading && pendingFiles.length === 0}
+          recentSessions={recentSessions}
+          restoringSessionId={restoringSessionId}
+          onRestoreRecentSession={restoreRecentSession}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -3547,6 +4762,7 @@ function App(){
             mutating={mutating}
             aiAvailable={!!userSettings?.hasGeminiApiKey}
             aiBusy={hasRunningSessionRecognition}
+            onConfirm={onConfirm}
           />
         ) : (
           <BoardStage
@@ -3577,6 +4793,7 @@ function App(){
           setAccent={v => setTweak('accent', v)}
           onConfirm={onConfirm}
           userSettings={userSettings}
+          runtimeDiagnostics={runtimeDiagnostics}
           onSaveGeminiKey={onSaveGeminiKey}
           onSaveOpenAiKey={onSaveOpenAiKey}
           onEnhanceImage={enhanceImageSession}
@@ -3587,6 +4804,9 @@ function App(){
           setInputIntent={setInputIntent}
           onRecognizeSession={recognizeCurrentSession}
           canRecognizeSession={!!session && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
+          session={session}
+          published={published}
+          onClassinReviewComplete={markClassinReviewComplete}
         />
       </div>
 

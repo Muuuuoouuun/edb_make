@@ -185,6 +185,25 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertGreater(output.getpixel((30, 10))[3], 200)
             self.assertEqual(output.getpixel((50, 10))[3], 255)
 
+    def test_clean_transparency_uses_numpy_alpha_backend_for_flat_light_pages(self):
+        image = Image.new("RGBA", (160, 120), (255, 255, 255, 255))
+        pixels = image.load()
+        pixels[10, 10] = (246, 246, 246, 255)
+        pixels[42, 30] = (36, 36, 36, 255)
+        pixels[80, 60] = (245, 245, 245, 255)
+
+        cleaned, stats = clean_problem_image_transparency(
+            image,
+            remove_corner_page_artifacts=False,
+        )
+
+        self.assertEqual("numpy", stats["alpha_backend"])
+        self.assertEqual(stats["background_kind"], "light")
+        self.assertEqual(cleaned.getpixel((0, 0))[3], 0)
+        self.assertEqual(cleaned.getpixel((10, 10))[3], 0)
+        self.assertEqual(cleaned.getpixel((42, 30))[3], 255)
+        self.assertLess(cleaned.getpixel((80, 60))[3], 255)
+
     def test_clean_transparency_removes_lower_right_pdf_page_badge(self):
         image = Image.new("RGBA", (120, 90), (18, 22, 26, 255))
         pixels = image.load()

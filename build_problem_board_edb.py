@@ -10,7 +10,9 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 from PIL import Image, ImageFilter, ImageOps, ImageStat
 
@@ -81,6 +83,12 @@ PROCESSING_STEPS = {
     PROCESSING_STEP_CHALK,
     PROCESSING_STEP_RECONSTRUCT,
 }
+CLASSIN_PREFLIGHT_MIN_IMAGE_WIDTH_PX = 240
+CLASSIN_PREFLIGHT_MIN_IMAGE_HEIGHT_PX = 120
+CLASSIN_PREFLIGHT_INK_THRESHOLD = 245
+CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO = 0.002
+CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES = 0.01
+CLASSIN_PREFLIGHT_MAX_ISSUES = 50
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
 # Brightness above this value (0-255) is treated as a light background that
@@ -602,6 +610,67 @@ class ProblemEntry:
     processing_step: str = PROCESSING_STEP_RAW
 
 
+@dataclass(slots=True)
+class _ProblemAssetTask:
+    source_image: Image.Image
+    bounds: Box
+    crop_path: Path
+    board_render_path: Path
+    chalk_color: tuple[int, int, int]
+
+
+@dataclass(slots=True)
+class _ProblemEntryDraft:
+    problem_id: str
+    title: str
+    problem_number: int | None
+    subject: Subject
+    source_page_id: str
+    source_path: str
+    prepared_page: PreparedPage
+    bounds: Box
+    crop_path: Path
+    board_render_path: Path
+    blocks: list[ContentBlock]
+    overflow_allowed: bool
+    reading_heavy: bool
+    risk_flags: list[str]
+    asset_task: _ProblemAssetTask
+
+
+def _resolve_problem_asset_worker_count(task_count: int) -> int:
+    if task_count <= 1:
+        return 1
+    return min(4, task_count)
+
+
+def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
+    crop = task.source_image.crop(
+        (
+            int(task.bounds.left),
+            int(task.bounds.top),
+            int(task.bounds.right),
+            int(task.bounds.bottom),
+        )
+    )
+    crop = _trim_edge_vertical_guides(crop)
+    crop = _pad_problem_crop_bottom(crop)
+    task.crop_path.parent.mkdir(parents=True, exist_ok=True)
+    crop.save(task.crop_path)
+    enhanced_crop = _enhance_problem_crop(crop)
+    cutout_image = _extract_problem_cutout(enhanced_crop, chalk_color=task.chalk_color)
+    _write_render_image(cutout_image, task.board_render_path)
+    return crop.size
+
+
+def _render_problem_assets(tasks: list[_ProblemAssetTask]) -> list[tuple[int, int]]:
+    worker_count = _resolve_problem_asset_worker_count(len(tasks))
+    if worker_count <= 1:
+        return [_render_problem_asset(task) for task in tasks]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(_render_problem_asset, tasks))
+
+
 def resolve_subject(name: str | None) -> Subject:
     if not name:
         return Subject.UNKNOWN
@@ -763,6 +832,13 @@ def _problem_top_y(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -
 def _coerce_int(value: object) -> int | None:
     try:
         return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
 
@@ -984,6 +1060,285 @@ def _drop_pre_first_problem_headers(
     return problems[first_numbered_index:]
 
 
+def _problem_metadata_number(problem: ProblemUnit) -> int | None:
+    raw = problem.metadata.get("problem_number")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int) and raw >= 1:
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        number = int(raw)
+        return number if number >= 1 else None
+    return None
+
+
+def _page_has_own_pdf_problem_markers(metadata: dict[str, Any]) -> bool:
+    if str(metadata.get("segmenter") or "") == "pdf-text-markers":
+        return True
+    marker_count = _coerce_int(metadata.get("pdf_text_marker_count"))
+    if marker_count is not None and marker_count > 0:
+        return True
+    markers = metadata.get("pdf_problem_markers")
+    return isinstance(markers, list) and len(markers) > 0
+
+
+def _hwp_conversion_has_pdf_problem_markers(metadata: dict[str, Any]) -> bool:
+    quality = metadata.get("hwp_conversion_quality")
+    if not isinstance(quality, dict):
+        return False
+    if "pdf_text_markers_reliable" in quality:
+        return bool(quality.get("pdf_text_markers_reliable"))
+    if bool(quality.get("has_pdf_text_markers")):
+        return True
+    marker_count = _coerce_int(quality.get("pdf_text_marker_count"))
+    if marker_count is not None and marker_count > 0:
+        return True
+    hwp_layout_marker_count = _coerce_int(quality.get("hwp_layout_problem_marker_count"))
+    return hwp_layout_marker_count is not None and hwp_layout_marker_count > 0
+
+
+def _is_document_band_problem(
+    problem: ProblemUnit,
+    block_by_id: dict[str, ContentBlock],
+) -> bool:
+    block_ids = _iter_problem_block_ids_raw(problem)
+    if not block_ids:
+        return False
+    blocks = [block_by_id[block_id] for block_id in block_ids if block_id in block_by_id]
+    if not blocks:
+        return False
+    return all(
+        block.metadata.get("segmenter") == "document-bands"
+        or "question_band_index" in block.metadata
+        for block in blocks
+    )
+
+
+def _is_marker_document_continuation_page(
+    page: PageModel,
+    problems: list[ProblemUnit],
+    block_by_id: dict[str, ContentBlock],
+) -> bool:
+    if not problems:
+        return False
+    if not _hwp_conversion_has_pdf_problem_markers(page.metadata):
+        return False
+    if _page_has_own_pdf_problem_markers(page.metadata):
+        return False
+    if any(_problem_metadata_number(problem) is not None for problem in problems):
+        return False
+    return all(_is_document_band_problem(problem, block_by_id) for problem in problems)
+
+
+def _problem_has_fallback_grouping(problem: ProblemUnit) -> bool:
+    return bool(problem.metadata.get("fallback_grouping"))
+
+
+def _continuation_block_ids_by_role(page: PageModel) -> tuple[list[str], list[str], list[str], list[str]]:
+    stem_ids: list[str] = []
+    choice_ids: list[str] = []
+    explanation_ids: list[str] = []
+    figure_ids: list[str] = []
+
+    for block in page.sorted_blocks():
+        if block.block_type == BlockType.CHOICE:
+            choice_ids.append(block.block_id)
+        elif block.block_type == BlockType.EXPLANATION:
+            explanation_ids.append(block.block_id)
+        elif block.block_type in IMAGE_ONLY_BLOCK_TYPES:
+            figure_ids.append(block.block_id)
+        else:
+            stem_ids.append(block.block_id)
+
+    return stem_ids, choice_ids, explanation_ids, figure_ids
+
+
+def _collapse_marker_document_continuation_page(
+    page: PageModel,
+    problems: list[ProblemUnit],
+    block_by_id: dict[str, ContentBlock],
+) -> list[ProblemUnit] | None:
+    if not _is_marker_document_continuation_page(page, problems, block_by_id):
+        return None
+
+    page.metadata["marker_document_continuation_detected"] = True
+    if not any(_problem_has_fallback_grouping(problem) for problem in problems):
+        page.metadata["problem_entry_skip_reason"] = "marker_document_continuation"
+        return []
+
+    stem_ids, choice_ids, explanation_ids, figure_ids = _continuation_block_ids_by_role(page)
+    if not any((stem_ids, choice_ids, explanation_ids, figure_ids)):
+        page.metadata["problem_entry_skip_reason"] = "marker_document_continuation"
+        return []
+
+    page.metadata["marker_document_continuation_preserved"] = True
+    page.metadata.pop("problem_entry_skip_reason", None)
+    page.metadata.pop("problem_crop_skip_reason", None)
+    return [
+        ProblemUnit(
+            unit_id=f"{page.page_id}-continuation",
+            subject=page.subject,
+            title="이어지는 자료",
+            stem_block_ids=stem_ids,
+            choice_block_ids=choice_ids,
+            explanation_block_ids=explanation_ids,
+            figure_block_ids=figure_ids,
+            metadata={
+                "fallback_grouping": True,
+                "grouping_mode": "fallback",
+                "grouping_source": "marker_document_continuation",
+                "marker_document_continuation": True,
+                "source_problem_ids": [problem.unit_id for problem in problems],
+                "force_full_page_bounds": True,
+                "bbox_px": {
+                    "left": 0.0,
+                    "top": 0.0,
+                    "width": float(page.width_px),
+                    "height": float(page.height_px),
+                },
+                "risk_flags": ["marker_document_continuation"],
+            },
+        )
+    ]
+
+
+def _marker_document_dedupe_scope(page: PageModel) -> str:
+    for key in ("source_hwp_path", "original_source_path", "source_pdf_path", "converted_pdf_path"):
+        value = page.metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(page.source_path or "__unknown_source__")
+
+
+def _hwp_text_signal_count_for_dedupe(page: PageModel) -> int:
+    quality = page.metadata.get("hwp_conversion_quality")
+    if not isinstance(quality, dict):
+        return 0
+    numbered = _coerce_int(quality.get("hwp_text_numbered_problem_count")) or 0
+    stem = _coerce_int(quality.get("hwp_text_stem_problem_count")) or 0
+    return max(numbered, stem)
+
+
+def _marker_document_duplicate_number_scopes_to_preserve(pages: list[PageModel]) -> set[str]:
+    by_scope: dict[str, dict[str, Any]] = {}
+    for page in pages:
+        if not _hwp_conversion_has_pdf_problem_markers(page.metadata):
+            continue
+        scope = _marker_document_dedupe_scope(page)
+        bucket = by_scope.setdefault(scope, {"numbers": [], "signal": 0})
+        bucket["signal"] = max(int(bucket["signal"]), _hwp_text_signal_count_for_dedupe(page))
+        for problem in page.problems:
+            number = _problem_metadata_number(problem)
+            if number is not None:
+                bucket["numbers"].append(number)
+
+    preserve: set[str] = set()
+    for scope, bucket in by_scope.items():
+        numbers = list(bucket["numbers"])
+        signal = int(bucket["signal"])
+        if signal > len(set(numbers)):
+            preserve.add(scope)
+    return preserve
+
+
+def _remove_duplicate_marker_document_problem_numbers(pages: list[PageModel]) -> None:
+    preserve_duplicate_scopes = _marker_document_duplicate_number_scopes_to_preserve(pages)
+    seen_by_scope: dict[str, set[int]] = {}
+    for page in pages:
+        if not _hwp_conversion_has_pdf_problem_markers(page.metadata):
+            continue
+        scope = _marker_document_dedupe_scope(page)
+        if scope in preserve_duplicate_scopes:
+            page.metadata["duplicate_problem_numbers_preserved"] = True
+            continue
+        seen = seen_by_scope.setdefault(scope, set())
+        retained: list[ProblemUnit] = []
+        skipped: list[int] = []
+        for problem in page.problems:
+            number = _problem_metadata_number(problem)
+            if number is not None and number in seen:
+                skipped.append(number)
+                continue
+            if number is not None:
+                seen.add(number)
+            retained.append(problem)
+        if skipped:
+            page.problems = retained
+            page.metadata["duplicate_problem_numbers_skipped"] = skipped
+
+
+def _has_hwp_template_instruction_text(page: PageModel) -> bool:
+    if page.metadata.get("source_type") != "hwp":
+        return False
+    text = str(page.metadata.get("hwp_preview_text") or "")
+    if not text:
+        return False
+    markers = (
+        "개요 번호 모양",
+        "Ctrl+3",
+        "Ctrl+4",
+        "복사 붙여넣",
+        "위 네모칸",
+    )
+    return sum(1 for marker in markers if marker in text) >= 2
+
+
+def _remove_hwp_template_instruction_problems(pages: list[PageModel]) -> None:
+    for page in pages:
+        if not _has_hwp_template_instruction_text(page):
+            continue
+        if _hwp_conversion_has_pdf_problem_markers(page.metadata):
+            continue
+        if len(page.problems) < 2:
+            continue
+
+        block_by_id = {block.block_id: block for block in page.blocks}
+        ordered = sorted(page.problems, key=lambda problem: _problem_order_key(problem, block_by_id))
+        retained: list[ProblemUnit] = []
+        skipped_ids: list[str] = []
+        skipped_tops: list[float] = []
+        for index, problem in enumerate(ordered):
+            if index == 0:
+                retained.append(problem)
+                continue
+            if _problem_metadata_number(problem) is not None:
+                retained.append(problem)
+                continue
+            if not _is_document_band_problem(problem, block_by_id):
+                retained.append(problem)
+                continue
+            for block_id in _iter_problem_block_ids_raw(problem):
+                block = block_by_id.get(block_id)
+                if block is not None:
+                    skipped_tops.append(block.bbox.top)
+            skipped_ids.append(problem.unit_id)
+
+        if skipped_ids:
+            if retained and skipped_tops:
+                first_problem = retained[0]
+                first_blocks = [
+                    block_by_id[block_id]
+                    for block_id in _iter_problem_block_ids_raw(first_problem)
+                    if block_id in block_by_id
+                ]
+                if first_blocks:
+                    crop_bottom = max(block.bbox.bottom for block in first_blocks)
+                    first_skipped_top = min(skipped_tops)
+                    if first_skipped_top > crop_bottom + 8.0:
+                        left = min(block.bbox.left for block in first_blocks)
+                        top = min(block.bbox.top for block in first_blocks)
+                        right = max(block.bbox.right for block in first_blocks)
+                        first_problem.metadata["bbox_px"] = {
+                            "left": round(max(0.0, left), 2),
+                            "top": round(max(0.0, top), 2),
+                            "width": round(min(float(page.width_px), right) - max(0.0, left), 2),
+                            "height": round(min(float(page.height_px), first_skipped_top) - max(0.0, top), 2),
+                        }
+                        first_problem.metadata["bbox_source"] = "hwp_template_instruction_boundary"
+            page.problems = retained
+            page.metadata["template_instruction_problem_ids_skipped"] = skipped_ids
+
+
 def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
     """Patch in problem_number for entries whose marker OCR failed.
 
@@ -1065,12 +1420,15 @@ def build_problem_entries(
     cutout_dir.mkdir(parents=True, exist_ok=True)
     chalk_color = _resolve_chalk_color(board_theme)
     prepared_by_page_id = {page.page_id: page for page in prepared_pages}
-    entries: list[ProblemEntry] = []
+    drafts: list[_ProblemEntryDraft] = []
+    _remove_duplicate_marker_document_problem_numbers(pages)
+    _remove_hwp_template_instruction_problems(pages)
 
     for page in pages:
         prepared_page = prepared_by_page_id.get(page.page_id)
         if prepared_page is None:
             continue
+        prepared_page.image.load()
         block_by_id = {block.block_id: block for block in page.blocks}
 
         # Reorder problems by their first block's top y so the "next problem"
@@ -1088,6 +1446,14 @@ def build_problem_entries(
         # treated as page chrome — it would otherwise get bundled into the
         # first problem's crop (or worse, surface as its own pseudo-problem).
         ordered_problems = _drop_pre_first_problem_headers(ordered_problems, block_by_id)
+
+        continuation_problems = _collapse_marker_document_continuation_page(page, ordered_problems, block_by_id)
+        if continuation_problems is not None:
+            if not continuation_problems:
+                page.problems = []
+                continue
+            page.problems = continuation_problems
+            ordered_problems = continuation_problems
 
         _fill_missing_problem_numbers(ordered_problems)
         next_problem_for_crop = _build_crop_next_problem_map(ordered_problems, block_by_id)
@@ -1159,30 +1525,14 @@ def build_problem_entries(
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())
 
-            crop = prepared_page.image.crop(
-                (
-                    int(merged_box.left),
-                    int(merged_box.top),
-                    int(merged_box.right),
-                    int(merged_box.bottom),
-                )
-            )
-            crop = _trim_edge_vertical_guides(crop)
-            crop = _pad_problem_crop_bottom(crop)
-            crop_name = f"problem_{len(entries) + 1:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
+            entry_index = len(drafts) + 1
+            crop_name = f"problem_{entry_index:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
             crop_path = crop_dir / crop_name
-            crop.save(crop_path)
-            # The cutout becomes the chalk render — upscale + sharpen first so
-            # small or low-DPI crops produce a legible alpha mask on the dark
-            # board.
-            enhanced_crop = _enhance_problem_crop(crop)
-            cutout_image = _extract_problem_cutout(enhanced_crop, chalk_color=chalk_color)
             board_render_path = cutout_dir / crop_name
-            _write_render_image(cutout_image, board_render_path)
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
-            problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {len(entries) + 1}")
-            entries.append(
-                ProblemEntry(
+            problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {entry_index}")
+            drafts.append(
+                _ProblemEntryDraft(
                     problem_id=problem.unit_id,
                     title=problem_title,
                     problem_number=problem_number,
@@ -1194,13 +1544,41 @@ def build_problem_entries(
                     crop_path=crop_path,
                     board_render_path=board_render_path,
                     blocks=sorted(blocks, key=lambda block: (block.reading_order, block.bbox.top, block.bbox.left)),
-                    actual_height_pages=estimate_height_pages(crop.size, template),
                     overflow_allowed=reading_heavy,
                     reading_heavy=reading_heavy,
                     risk_flags=_collect_problem_risk_flags(problem),
+                    asset_task=_ProblemAssetTask(
+                        source_image=prepared_page.image,
+                        bounds=merged_box,
+                        crop_path=crop_path,
+                        board_render_path=board_render_path,
+                        chalk_color=chalk_color,
+                    ),
                 )
             )
 
+    crop_sizes = _render_problem_assets([draft.asset_task for draft in drafts])
+    entries: list[ProblemEntry] = []
+    for draft, crop_size in zip(drafts, crop_sizes):
+        entries.append(
+            ProblemEntry(
+                problem_id=draft.problem_id,
+                title=draft.title,
+                problem_number=draft.problem_number,
+                subject=draft.subject,
+                source_page_id=draft.source_page_id,
+                source_path=draft.source_path,
+                prepared_page=draft.prepared_page,
+                bounds=draft.bounds,
+                crop_path=draft.crop_path,
+                board_render_path=draft.board_render_path,
+                blocks=draft.blocks,
+                actual_height_pages=estimate_height_pages(crop_size, template),
+                overflow_allowed=draft.overflow_allowed,
+                reading_heavy=draft.reading_heavy,
+                risk_flags=draft.risk_flags,
+            )
+        )
     return entries
 
 
@@ -1440,6 +1818,538 @@ def _collect_page_risk_flags(page_metadata: dict[str, Any]) -> list[str]:
     return [str(reason) for reason in reasons if isinstance(reason, str)]
 
 
+def _hwp_source_key(page: PageModel) -> str | None:
+    if page.metadata.get("source_type") != "hwp":
+        return None
+    for key in ("source_hwp_path", "original_source_path", "source_pdf_path", "converted_pdf_path"):
+        value = page.metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return page.source_path
+
+
+def _hwp_text_problem_signal_count(metadata: dict[str, Any]) -> int:
+    quality = metadata.get("hwp_conversion_quality")
+    if not isinstance(quality, dict):
+        return 0
+    numbered = _coerce_int(quality.get("hwp_text_numbered_problem_count")) or 0
+    stem = _coerce_int(quality.get("hwp_text_stem_problem_count")) or 0
+    return numbered if numbered > 0 else stem
+
+
+def _metadata_list_count(metadata: dict[str, Any], key: str) -> int:
+    value = metadata.get(key)
+    if isinstance(value, list):
+        return len(value)
+    return _coerce_int(value) or 0
+
+
+def _is_marker_document_continuation_problem(problem: ProblemUnit) -> bool:
+    if bool(problem.metadata.get("marker_document_continuation")):
+        return True
+    for key in ("review_flags", "risk_flags"):
+        values = problem.metadata.get(key)
+        if isinstance(values, list) and "marker_document_continuation" in {str(value) for value in values}:
+            return True
+    return False
+
+
+def _count_core_hwp_problems(page: PageModel, final_problem_ids: list[str] | None = None) -> int:
+    continuation_ids = {
+        problem.unit_id
+        for problem in page.problems
+        if _is_marker_document_continuation_problem(problem)
+    }
+    if final_problem_ids is not None:
+        return sum(1 for problem_id in final_problem_ids if problem_id not in continuation_ids)
+    return sum(1 for problem in page.problems if not _is_marker_document_continuation_problem(problem))
+
+
+HWP_OVERSEGMENTATION_MIN_EXTRA = 10
+HWP_OVERSEGMENTATION_RATIO = 2.0
+
+
+def _is_hwp_oversegmentation(expected: int, detected: int) -> bool:
+    if expected <= 0 or detected <= expected:
+        return False
+    return detected - expected >= HWP_OVERSEGMENTATION_MIN_EXTRA and detected >= expected * HWP_OVERSEGMENTATION_RATIO
+
+
+def _hwp_problem_counts_match(
+    pages: list[PageModel],
+    final_problem_ids_by_page_id: dict[str, list[str]] | None = None,
+) -> bool:
+    by_source: dict[str, dict[str, int]] = {}
+    for page in pages:
+        source_key = _hwp_source_key(page)
+        if not source_key:
+            continue
+        bucket = by_source.setdefault(source_key, {"detected": 0, "signal": 0})
+        if final_problem_ids_by_page_id is None:
+            bucket["detected"] += _count_core_hwp_problems(page)
+        else:
+            bucket["detected"] += _count_core_hwp_problems(
+                page,
+                final_problem_ids_by_page_id.get(page.page_id, []),
+            )
+        bucket["signal"] = max(int(bucket["signal"]), _hwp_text_problem_signal_count(page.metadata))
+    for bucket in by_source.values():
+        signal = int(bucket["signal"])
+        if signal <= 0:
+            continue
+        expected = max(0, signal)
+        if expected > 0 and int(bucket["detected"]) == expected:
+            return True
+    return False
+
+
+def _session_problem_is_supplemental(problem: dict[str, Any]) -> bool:
+    risk_flags = problem.get("riskFlags") or problem.get("risk_flags") or []
+    if isinstance(risk_flags, list) and "marker_document_continuation" in {str(flag) for flag in risk_flags}:
+        return True
+    metadata = problem.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("marker_document_continuation"):
+        return True
+    problem_id = str(problem.get("id") or problem.get("problem_id") or "")
+    return problem_id.endswith("-continuation")
+
+
+def _session_problem_count_payload(problems: list[dict[str, Any]]) -> dict[str, int]:
+    detected_count = len(problems)
+    supplemental_count = sum(1 for problem in problems if _session_problem_is_supplemental(problem))
+    return {
+        "detected_problem_count": detected_count,
+        "core_problem_count": max(0, detected_count - supplemental_count),
+        "supplemental_item_count": supplemental_count,
+    }
+
+
+def _problem_passage_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+    payload: dict[str, Any] = {}
+
+    group_id = str(metadata.get("passage_group_id") or "").strip()
+    if group_id:
+        payload["passageGroupId"] = group_id
+        payload["passage_group_id"] = group_id
+
+    passage_range = metadata.get("passage_range")
+    if isinstance(passage_range, dict):
+        normalized_range = dict(passage_range)
+        payload["passageRange"] = normalized_range
+        payload["passage_range"] = normalized_range
+
+    role = str(metadata.get("passage_role") or "").strip()
+    if role:
+        payload["passageRole"] = role
+        payload["passage_role"] = role
+
+    shared_block_ids = metadata.get("shared_passage_block_ids")
+    if isinstance(shared_block_ids, list):
+        normalized_shared_block_ids = [str(block_id) for block_id in shared_block_ids if str(block_id)]
+        if normalized_shared_block_ids:
+            payload["sharedPassageBlockIds"] = normalized_shared_block_ids
+            payload["shared_passage_block_ids"] = normalized_shared_block_ids
+
+    child_numbers = metadata.get("passage_child_problem_numbers")
+    if isinstance(child_numbers, list):
+        normalized_child_numbers: list[int] = []
+        for raw in child_numbers:
+            try:
+                normalized_child_numbers.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if normalized_child_numbers:
+            payload["passageChildProblemNumbers"] = normalized_child_numbers
+            payload["passage_child_problem_numbers"] = normalized_child_numbers
+
+    return payload
+
+
+def _coerce_problem_number(value: Any) -> int | None:
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        return int(value)
+    return None
+
+
+def _ordered_unique_strings(values: Iterable[Any]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
+
+
+def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    numbered: list[dict[str, Any]] = []
+    for index, problem in enumerate(problems):
+        number = _coerce_problem_number(problem.get("problemNumber") or problem.get("problem_number"))
+        if number is None:
+            continue
+        numbered.append(
+            {
+                "index": index,
+                "number": number,
+                "problemId": str(problem.get("id") or problem.get("problem_id") or ""),
+                "sourcePageId": str(problem.get("sourcePageId") or problem.get("source_page_id") or ""),
+            }
+        )
+    if not numbered:
+        return []
+
+    counts: dict[int, int] = {}
+    for item in numbered:
+        counts[item["number"]] = counts.get(item["number"], 0) + 1
+    duplicate_numbers = sorted(number for number, count in counts.items() if count > 1)
+    if not duplicate_numbers:
+        return []
+
+    ranges: list[tuple[int, int]] = []
+    start = previous = duplicate_numbers[0]
+    for number in duplicate_numbers[1:]:
+        if number == previous + 1:
+            previous = number
+            continue
+        ranges.append((start, previous))
+        start = previous = number
+    ranges.append((start, previous))
+
+    groups: list[dict[str, Any]] = []
+    for start, end in ranges:
+        numbers = [number for number in range(start, end + 1) if counts.get(number, 0) > 1]
+        if not numbers:
+            continue
+        group_items = [item for item in numbered if item["number"] in set(numbers)]
+        occurrence_counts = [counts[number] for number in numbers]
+        min_occurrences = min(occurrence_counts)
+        max_occurrences = max(occurrence_counts)
+        label = str(start) if start == end else f"{start}-{end}"
+        if min_occurrences == max_occurrences:
+            message = f"문항 번호 {label}가 각 {min_occurrences}회 등장합니다."
+        else:
+            message = f"문항 번호 {label} 범위에서 중복 번호가 {sum(counts[number] - 1 for number in numbers)}개 있습니다."
+        groups.append(
+            {
+                "numberStart": start,
+                "numberEnd": end,
+                "numberLabel": label,
+                "problemNumbers": numbers,
+                "occurrencesPerNumber": max_occurrences,
+                "duplicateRecordCount": sum(counts[number] - 1 for number in numbers),
+                "totalRecordCount": sum(counts[number] for number in numbers),
+                "sourcePageIds": _ordered_unique_strings(item["sourcePageId"] for item in group_items),
+                "problemIds": _ordered_unique_strings(item["problemId"] for item in group_items),
+                "message": message,
+            }
+        )
+    return groups
+
+
+def _duplicate_problem_number_note(groups: Sequence[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for group in groups:
+        label = str(group.get("numberLabel") or "").strip()
+        occurrences = int(group.get("occurrencesPerNumber") or 0)
+        if label and occurrences > 1:
+            parts.append(f"{label} x{occurrences}")
+    return f"Duplicate problem numbers: {', '.join(parts)}" if parts else ""
+
+
+def _session_asset_path(value: Any) -> Path | None:
+    if not value:
+        return None
+    raw = str(value)
+    parsed = urlparse(raw)
+    if parsed.scheme == "file":
+        return Path(url2pathname(unquote(parsed.path))).resolve()
+    if parsed.scheme:
+        return None
+    return Path(raw).resolve()
+
+
+def _dark_pixel_ratio(image: Image.Image, *, threshold: int = CLASSIN_PREFLIGHT_INK_THRESHOLD) -> float:
+    grayscale = image.convert("L")
+    histogram = grayscale.histogram()
+    total = max(1, sum(histogram))
+    dark_pixels = sum(histogram[: max(0, min(256, threshold))])
+    return float(dark_pixels) / float(total)
+
+
+def _classin_preflight_issue(
+    issue_type: str,
+    *,
+    severity: str,
+    message: str,
+    problem: dict[str, Any] | None = None,
+    path: Path | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    issue: dict[str, Any] = {
+        "type": issue_type,
+        "severity": severity,
+        "message": message,
+    }
+    if problem is not None:
+        issue["problemId"] = str(problem.get("id") or "")
+        issue["problemTitle"] = str(problem.get("title") or problem.get("problemNumber") or "")
+    if path is not None:
+        issue["path"] = str(path)
+    if details:
+        issue.update(details)
+    return issue
+
+
+def _problem_float(problem: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _coerce_float(problem.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    placements: list[tuple[float, float, dict[str, Any]]] = []
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        start_y_pages = _problem_float(problem, "startYPages", "start_y_pages")
+        height_pages = _problem_float(
+            problem,
+            "actualHeightPages",
+            "actual_height_pages",
+            "actualContentHeightPages",
+            "actual_content_height_pages",
+        )
+        if start_y_pages is None or height_pages is None:
+            continue
+        scale_ratio = _problem_float(problem, "placementScaleRatio", "placement_scale_ratio")
+        if scale_ratio is None:
+            scale_ratio = 1.0
+        rendered_bottom_y_pages = start_y_pages + max(0.0, height_pages) * max(0.0, scale_ratio)
+        placements.append((start_y_pages, rendered_bottom_y_pages, problem))
+
+    placements.sort(key=lambda item: (item[0], str(item[2].get("id") or "")))
+
+    issues: list[dict[str, Any]] = []
+    tolerance = CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES
+    for current, next_item in zip(placements, placements[1:]):
+        current_start_y_pages, current_bottom_y_pages, problem = current
+        next_start_y_pages, _next_bottom_y_pages, next_problem = next_item
+        overlap_pages = current_bottom_y_pages - next_start_y_pages
+        if overlap_pages <= tolerance:
+            continue
+        issues.append(
+            _classin_preflight_issue(
+                "board_placement_overlap",
+                severity="warning",
+                message=(
+                    "문항 배치가 다음 문항 시작 위치를 침범할 수 있습니다. "
+                    "긴 지문/확대 배율을 줄이거나 자동 재배치를 확인해 주세요."
+                ),
+                problem=problem,
+                details={
+                    "nextProblemId": str(next_problem.get("id") or ""),
+                    "nextProblemTitle": str(
+                        next_problem.get("title") or next_problem.get("problemNumber") or ""
+                    ),
+                    "startYPages": round(current_start_y_pages, 6),
+                    "renderedBottomYPages": round(current_bottom_y_pages, 6),
+                    "nextStartYPages": round(next_start_y_pages, 6),
+                    "overlapPages": round(overlap_pages, 6),
+                    "placementOverlapTolerancePages": tolerance,
+                },
+            )
+        )
+    return issues
+
+
+def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
+    raw_problems = ui_session.get("problems")
+    problems = raw_problems if isinstance(raw_problems, list) else []
+    issues: list[dict[str, Any]] = []
+    min_width = CLASSIN_PREFLIGHT_MIN_IMAGE_WIDTH_PX
+    min_height = CLASSIN_PREFLIGHT_MIN_IMAGE_HEIGHT_PX
+
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+            break
+
+        risk_flags = [str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)]
+        review_status = str(problem.get("reviewStatus") or "").strip()
+        if risk_flags or review_status in {"check_needed", "failed"}:
+            issues.append(
+                _classin_preflight_issue(
+                    "review_flags_remaining",
+                    severity="warning",
+                    message="검수 플래그가 남아 있어 ClassIn에서 열기 전 원본 박스를 확인해야 합니다.",
+                    problem=problem,
+                    details={
+                        "riskFlags": risk_flags,
+                        "reviewStatus": review_status,
+                    },
+                )
+            )
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+
+        image_path = _session_asset_path(problem.get("imagePath"))
+        if image_path is None or not image_path.is_file():
+            issues.append(
+                _classin_preflight_issue(
+                    "missing_problem_image",
+                    severity="error",
+                    message="문항 이미지 파일을 찾을 수 없습니다.",
+                    problem=problem,
+                    path=image_path,
+                )
+            )
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+            continue
+
+        try:
+            with Image.open(image_path) as image:
+                width, height = image.size
+                dark_pixel_ratio = _dark_pixel_ratio(image)
+        except OSError as exc:
+            issues.append(
+                _classin_preflight_issue(
+                    "unreadable_problem_image",
+                    severity="error",
+                    message=f"문항 이미지 파일을 열 수 없습니다: {exc}",
+                    problem=problem,
+                    path=image_path,
+                )
+            )
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+            continue
+
+        if width < min_width or height < min_height:
+            issues.append(
+                _classin_preflight_issue(
+                    "small_problem_image",
+                    severity="warning",
+                    message=f"문항 이미지가 작습니다 ({width}x{height}px). ClassIn에서 확대 시 가독성을 확인해 주세요.",
+                    problem=problem,
+                    path=image_path,
+                    details={
+                        "width": width,
+                        "height": height,
+                        "minWidth": min_width,
+                        "minHeight": min_height,
+                    },
+                )
+            )
+
+        if dark_pixel_ratio < CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO:
+            issues.append(
+                _classin_preflight_issue(
+                    "low_ink_problem_image",
+                    severity="warning",
+                    message=(
+                        "문항 이미지에 실제 글자/선 픽셀이 거의 없습니다. "
+                        "HWP 렌더 누락이나 잘못 잘린 박스인지 확인해 주세요."
+                    ),
+                    problem=problem,
+                    path=image_path,
+                    details={
+                        "darkPixelRatio": round(dark_pixel_ratio, 6),
+                        "minDarkPixelRatio": CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO,
+                        "darkPixelThreshold": CLASSIN_PREFLIGHT_INK_THRESHOLD,
+                    },
+                )
+            )
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+
+    if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
+        for issue in _classin_board_placement_overlap_issues(problems):
+            issues.append(issue)
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+
+    status = "passed" if not issues else "needs_attention"
+    return {
+        "status": status,
+        "passed": not issues,
+        "checkedProblemCount": len(problems),
+        "issueCount": len(issues),
+        "issues": issues,
+        "thresholds": {
+            "minProblemImageWidth": min_width,
+            "minProblemImageHeight": min_height,
+            "minDarkPixelRatio": CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO,
+            "darkPixelThreshold": CLASSIN_PREFLIGHT_INK_THRESHOLD,
+            "placementOverlapTolerancePages": CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES,
+        },
+    }
+
+
+def _collect_hwp_problem_count_mismatches(
+    pages: list[PageModel],
+    final_problem_ids_by_page_id: dict[str, list[str]] | None = None,
+) -> tuple[dict[str, list[str]], list[str]]:
+    by_source: dict[str, dict[str, Any]] = {}
+    for page in pages:
+        source_key = _hwp_source_key(page)
+        if not source_key:
+            continue
+        bucket = by_source.setdefault(
+            source_key,
+            {
+                "page_ids": [],
+                "detected": 0,
+                "signal": 0,
+            },
+        )
+        bucket["page_ids"].append(page.page_id)
+        if final_problem_ids_by_page_id is None:
+            bucket["detected"] += _count_core_hwp_problems(page)
+        else:
+            bucket["detected"] += _count_core_hwp_problems(
+                page,
+                final_problem_ids_by_page_id.get(page.page_id, []),
+            )
+        bucket["signal"] = max(int(bucket["signal"]), _hwp_text_problem_signal_count(page.metadata))
+
+    flags_by_page_id: dict[str, list[str]] = {}
+    messages: list[str] = []
+    for bucket in by_source.values():
+        signal = int(bucket["signal"])
+        if signal <= 0:
+            continue
+        detected = int(bucket["detected"])
+        expected = max(0, signal)
+        if expected <= 0 or detected == expected:
+            continue
+        is_oversegmentation = _is_hwp_oversegmentation(expected, detected)
+        page_flags = ["hwp_problem_count_mismatch"]
+        if is_oversegmentation:
+            page_flags.append("hwp_oversegmentation")
+        for page_id in bucket["page_ids"]:
+            flags_by_page_id.setdefault(str(page_id), []).extend(page_flags)
+        if is_oversegmentation:
+            messages.append(
+                f"HWP 내부 텍스트 기준 문항 수는 {expected}개인데 최종 감지 문항 수는 {detected}개입니다. "
+                "과분할 가능성이 큽니다. 검수 화면에서 원본 페이지의 분리 상태를 먼저 확인해 주세요."
+            )
+        else:
+            messages.append(
+                f"HWP 내부 텍스트 기준 문항 수는 {expected}개인데 최종 감지 문항 수는 {detected}개입니다. 검수 화면에서 분리 상태를 확인해 주세요."
+            )
+    return flags_by_page_id, messages
+
+
 def _page_quality_payload(page: PageModel | None) -> dict[str, Any]:
     metadata = page.metadata if page is not None else {}
     route_decision = metadata.get("route_decision") if isinstance(metadata, dict) else {}
@@ -1489,8 +2399,20 @@ def build_ui_session(
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
     resolved_input_intent = _normalize_input_intent(input_intent)
+    placement_problem_ids_by_page: dict[str, list[str]] = {}
+    for placement in placements:
+        source_page_id = str(placement.get("source_page_id") or "")
+        problem_id = str(placement.get("problem_id") or "")
+        if source_page_id and problem_id:
+            placement_problem_ids_by_page.setdefault(source_page_id, []).append(problem_id)
+    hwp_counts_match = _hwp_problem_counts_match(pages or [], placement_problem_ids_by_page)
     warning_messages: list[str] = []
-    if placements and len(placements) <= len(prepared_pages) and resolved_input_intent not in {"single-problem", "page-as-is"}:
+    if (
+        placements
+        and len(placements) <= len(prepared_pages)
+        and resolved_input_intent not in {"single-problem", "page-as-is"}
+        and not hwp_counts_match
+    ):
         warning_messages.append(
             "감지된 문항 수가 원본 페이지 수와 비슷합니다. 여러 문제가 있는 페이지라면 검수 화면에서 분리 상태를 확인해 주세요."
         )
@@ -1507,7 +2429,11 @@ def build_ui_session(
     if pages:
         for page in pages:
             pages_by_id[page.page_id] = page
-    page_risk_flags: dict[str, list[str]] = {
+    problem_metadata_by_id: dict[str, dict[str, Any]] = {}
+    for page in pages_by_id.values():
+        for problem in page.problems:
+            problem_metadata_by_id[problem.unit_id] = dict(problem.metadata)
+    base_page_risk_flags: dict[str, list[str]] = {
         page_id: _collect_page_risk_flags(page.metadata)
         for page_id, page in pages_by_id.items()
     }
@@ -1520,13 +2446,14 @@ def build_ui_session(
         source_page_id = str(placement["source_page_id"])
         bbox = placement.get("bbox") or {}
         page_quality = _page_quality_payload(pages_by_id.get(source_page_id))
-        page_flags = page_risk_flags.get(source_page_id, [])
+        page_flags = base_page_risk_flags.get(source_page_id, [])
         # Only propagate "this specific problem may be merged / auto-grouped"
         # reasons to per-problem flags; page-wide signals stay on the page.
         problem_flags = list(placement.get("risk_flags") or [])
         problem_flags.extend(reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS)
         problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
         problem_id = str(placement["problem_id"])
+        passage_payload = _problem_passage_payload(problem_metadata_by_id.get(problem_id))
         processing_step = _normalize_processing_step(
             placement.get("processing_step") or placement.get("step")
         )
@@ -1573,9 +2500,27 @@ def build_ui_session(
                 "parseConfidence": page_quality["parseConfidence"],
                 "confidence": page_quality["confidence"],
                 "aiStatus": page_quality["aiStatus"],
+                **passage_payload,
             }
         )
         problems_by_page.setdefault(source_page_id, []).append(problem_id)
+
+    hwp_flags_by_page_id, hwp_warning_messages = _collect_hwp_problem_count_mismatches(
+        list(pages_by_id.values()),
+        problems_by_page,
+    )
+    warning_messages.extend(hwp_warning_messages)
+    page_risk_flags: dict[str, list[str]] = {
+        page_id: list(
+            dict.fromkeys(
+                [
+                    *base_page_risk_flags.get(page_id, []),
+                    *hwp_flags_by_page_id.get(page_id, []),
+                ]
+            )
+        )
+        for page_id in pages_by_id
+    }
 
     pages_payload: list[dict[str, Any]] = []
     for prepared_page in prepared_pages:
@@ -1600,6 +2545,9 @@ def build_ui_session(
             }
         )
 
+    problem_counts = _session_problem_count_payload(problems)
+    duplicate_problem_number_groups = _session_duplicate_problem_number_groups(problems)
+
     return {
         "session_name": output_dir.name,
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
@@ -1611,7 +2559,11 @@ def build_ui_session(
         "input_file_count": len(source_paths),
         "input_files": [str(Path(path).resolve()) for path in source_paths],
         "source_page_count": len(prepared_pages),
-        "detected_problem_count": len(placements),
+        **problem_counts,
+        "duplicate_problem_number_groups": duplicate_problem_number_groups,
+        "duplicateProblemNumberGroups": duplicate_problem_number_groups,
+        "duplicate_problem_number_group_count": len(duplicate_problem_number_groups),
+        "duplicateProblemNumberGroupCount": len(duplicate_problem_number_groups),
         "export_mode": "question",
         "record_mode": record_mode,
         "board_theme": _resolve_board_theme(board_theme),
@@ -1648,6 +2600,113 @@ def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, syn
             encoding="utf-8",
         )
     return session_path, synced_path
+
+
+def write_classin_handoff_manifest(
+    output_dir: Path,
+    *,
+    source_paths: Sequence[Path],
+    edb_path: Path,
+    ui_session: dict[str, Any],
+    summary: dict[str, Any],
+    template: LayoutTemplate,
+) -> tuple[Path, Path]:
+    expected_record_count = int(summary.get("record_count") or len(summary.get("placements") or []))
+    review_summary = ui_session.get("reviewSummary") or ui_session.get("review_summary") or {}
+    duplicate_problem_number_groups = (
+        ui_session.get("duplicateProblemNumberGroups")
+        or ui_session.get("duplicate_problem_number_groups")
+        or []
+    )
+    if not isinstance(duplicate_problem_number_groups, list):
+        duplicate_problem_number_groups = []
+    duplicate_problem_number_note = _duplicate_problem_number_note(duplicate_problem_number_groups)
+    classin_preflight = _classin_handoff_preflight(ui_session)
+    payload = {
+        "status": "ready_for_classin_review",
+        "manualReviewRequired": True,
+        "generatedAt": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "sourcePaths": [str(path.resolve()) for path in source_paths],
+        "outputDir": str(output_dir.resolve()),
+        "edbPath": str(edb_path.resolve()),
+        "edbFileName": edb_path.name,
+        "expectedRecordCount": expected_record_count,
+        "expectedCoreProblemCount": int(ui_session.get("core_problem_count") or 0),
+        "expectedSupplementalItemCount": int(ui_session.get("supplemental_item_count") or 0),
+        "detectedProblemCount": int(ui_session.get("detected_problem_count") or expected_record_count),
+        "sourcePageCount": int(ui_session.get("source_page_count") or 0),
+        "classinPageCountHint": int(template.board_page_count),
+        "recordMode": str(summary.get("record_mode") or ui_session.get("record_mode") or ""),
+        "cropFormat": str(summary.get("crop_format") or ui_session.get("crop_format") or ""),
+        "boardTheme": str(summary.get("board_theme") or ui_session.get("board_theme") or ""),
+        "duplicateProblemNumberGroups": duplicate_problem_number_groups,
+        "duplicateProblemNumberNote": duplicate_problem_number_note,
+        "classinPreflight": classin_preflight,
+        "classin_preflight": classin_preflight,
+        "reviewRiskCounts": review_summary.get("riskFlagCounts", {}) if isinstance(review_summary, dict) else {},
+        "classinReviewChecklist": [
+            "ClassIn에서 EDB 파일 열기",
+            "문항 수와 순서가 기대값과 일치하는지 확인",
+            "각 문항 이미지가 잘리지 않고 읽히는지 확인",
+            "보충 자료/이어지는 자료가 문항 뒤에 자연스럽게 배치됐는지 확인",
+            "확대/축소와 페이지 이동 시 썸네일/보드가 깨지지 않는지 확인",
+        ],
+        "manualReviewResult": {
+            "classinOpened": None,
+            "recordCountOk": None,
+            "orderOk": None,
+            "readabilityOk": None,
+            "supplementalItemsOk": None,
+            "notes": "",
+        },
+    }
+    json_path = output_dir / "classin_handoff.json"
+    markdown_path = output_dir / "classin_handoff.md"
+    payload["classinHandoffMarkdownPath"] = str(markdown_path.resolve())
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    checklist = "\n".join(f"- [ ] {item}" for item in payload["classinReviewChecklist"])
+    duplicate_problem_number_lines = (
+        ["", f"- {duplicate_problem_number_note}"]
+        if duplicate_problem_number_note
+        else []
+    )
+    if classin_preflight["passed"]:
+        preflight_lines = ["- OK: no automatic asset issues found."]
+    else:
+        preflight_lines = [
+            f"- `{issue['type']}` ({issue['severity']}): {issue['message']}"
+            + (f" [{issue.get('problemId')}]" if issue.get("problemId") else "")
+            for issue in classin_preflight["issues"]
+        ]
+    markdown_path.write_text(
+        "\n".join(
+            [
+                "# ClassIn EDB Handoff",
+                "",
+                f"- EDB: `{payload['edbPath']}`",
+                f"- Expected records: {payload['expectedRecordCount']}",
+                f"- Core problems: {payload['expectedCoreProblemCount']}",
+                f"- Supplemental items: {payload['expectedSupplementalItemCount']}",
+                f"- ClassIn page hint: {payload['classinPageCountHint']}",
+                *duplicate_problem_number_lines,
+                "",
+                "## Manual Checklist",
+                checklist,
+                "",
+                "## ClassIn Preflight",
+                f"- Status: {classin_preflight['status']}",
+                f"- Checked problems: {classin_preflight['checkedProblemCount']}",
+                f"- Issues: {classin_preflight['issueCount']}",
+                *preflight_lines,
+                "",
+                "## Notes",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return json_path.resolve(), markdown_path.resolve()
 
 
 def normalize_text_payload(text: str | None) -> str:
@@ -2293,6 +3352,7 @@ def run_problem_export(
         template,
         board_theme=resolved_board_theme,
     )
+    save_pages_json(pages, out_dir / "pages.json")
     # Match ClassIn's observed publish behaviour: page_count_hint scales with the
     # number of problems on the board so the logical canvas always covers the
     # actual content height. Real published EDBs use ~2x the record count
@@ -2367,6 +3427,24 @@ def run_problem_export(
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
     )
+    classin_handoff_path: Path | None = None
+    classin_handoff_markdown_path: Path | None = None
+    if edb_path is not None and edb_path.exists():
+        classin_handoff_path, classin_handoff_markdown_path = write_classin_handoff_manifest(
+            out_dir,
+            source_paths=source_paths,
+            edb_path=edb_path,
+            ui_session=ui_session,
+            summary=summary,
+            template=template,
+        )
+        summary["classin_handoff_path"] = str(classin_handoff_path)
+        summary["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
+        placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        ui_session["classin_handoff_path"] = str(classin_handoff_path)
+        ui_session["classinHandoffPath"] = str(classin_handoff_path)
+        ui_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
+        ui_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
     return {
@@ -2374,6 +3452,8 @@ def run_problem_export(
         "edb_path": edb_path.resolve() if edb_path and edb_path.exists() else None,
         "pages_json_path": (out_dir / "pages.json").resolve(),
         "placements_json_path": placements_path.resolve(),
+        "classin_handoff_path": classin_handoff_path,
+        "classin_handoff_markdown_path": classin_handoff_markdown_path,
         "ui_session": ui_session,
         "ui_session_path": ui_session_path.resolve(),
         "synced_ui_path": synced_ui_path.resolve() if synced_ui_path else None,
@@ -2487,6 +3567,7 @@ def main() -> int:
         template,
         board_theme=resolved_board_theme,
     )
+    save_pages_json(pages, output_dir / "pages.json")
     resolved_crop_format = args.crop_format if args.crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
     records, placements, header_flag = build_records(
         problem_entries,

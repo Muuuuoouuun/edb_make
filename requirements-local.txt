@@ -2,6 +2,12 @@ Pillow
 PyMuPDF
 numpy
 opencv-python-headless
+olefile
+pyhwp==0.1b15
+hwp-hwpx-parser==1.0.0
+unhwp==0.5.1
+rhwp-python==0.7.0
+six
 
 # Optional OCR package only. Requires separate Tesseract installation on Windows.
 # pytesseract
