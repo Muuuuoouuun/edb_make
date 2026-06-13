@@ -749,6 +749,30 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertIn("problem_per_block:39, ocr_disabled:23", table)
         self.assertIn("| sample.hwp | OK | 46 | 23 | 20/23 · r5/n15 | check_needed:24, normal:45 | problem_per_block:39, ocr_disabled:23 | OK 46/46 | 41.29 |", table)
 
+    def test_format_markdown_report_lists_artifact_paths(self):
+        rows = [
+            {
+                "file": "sample.hwp",
+                "ok": True,
+                "problem_count": 45,
+                "pages": 12,
+                "edb_expected": True,
+                "edb_validated": True,
+                "edb_path": "/tmp/hwp out/sample/mvp_board.edb",
+                "edb_record_count_actual": 45,
+                "edb_record_count_hint": 45,
+                "output_dir": "/tmp/hwp out/sample",
+                "elapsed_s": 3.2,
+            }
+        ]
+
+        report = verify_hwp_samples.format_markdown_report(rows)
+
+        self.assertIn("## Artifacts", report)
+        self.assertIn("sample.hwp", report)
+        self.assertIn("Output: `/tmp/hwp out/sample`", report)
+        self.assertIn("EDB: `/tmp/hwp out/sample/mvp_board.edb`", report)
+
 
 if __name__ == "__main__":
     unittest.main()

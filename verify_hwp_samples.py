@@ -647,16 +647,35 @@ def format_markdown_table(rows: list[dict[str, Any]]) -> str:
 
 def format_markdown_report(rows: list[dict[str, Any]], summary: dict[str, Any] | None = None) -> str:
     resolved_summary = summary if summary is not None else summarize_batch(rows)
-    return "\n".join(
-        [
-            "# HWP Batch Verification",
-            "",
-            format_batch_summary(resolved_summary),
-            "",
-            format_markdown_table(rows),
-            "",
-        ]
-    )
+    sections = [
+        "# HWP Batch Verification",
+        "",
+        format_batch_summary(resolved_summary),
+        "",
+        format_markdown_table(rows),
+        "",
+    ]
+    artifact_lines = format_artifact_lines(rows)
+    if artifact_lines:
+        sections.extend(["## Artifacts", "", *artifact_lines, ""])
+    return "\n".join(sections)
+
+
+def format_artifact_lines(rows: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for row in rows:
+        output_dir = str(row.get("output_dir") or "").strip()
+        edb_path = str(row.get("edb_path") or "").strip()
+        if not output_dir and not edb_path:
+            continue
+        file_name = str(row.get("file") or row.get("path") or "sample").strip()
+        parts = []
+        if output_dir:
+            parts.append(f"Output: `{output_dir}`")
+        if edb_path:
+            parts.append(f"EDB: `{edb_path}`")
+        lines.append(f"- **{file_name}** - " + " · ".join(parts))
+    return lines
 
 
 def format_batch_summary(summary: dict[str, Any]) -> str:
