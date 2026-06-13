@@ -2916,6 +2916,10 @@ def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> l
             if area <= 0:
                 continue
             for next_bbox, next_problem in candidates[index + 1:]:
+                group_id = _session_problem_passage_group_id(problem)
+                next_group_id = _session_problem_passage_group_id(next_problem)
+                if group_id and group_id == next_group_id:
+                    continue
                 next_left, next_top, next_right, next_bottom = next_bbox
                 next_area = (next_right - next_left) * (next_bottom - next_top)
                 if next_area <= 0:

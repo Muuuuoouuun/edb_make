@@ -1893,9 +1893,13 @@ class TestEdbPublishFlow(unittest.TestCase):
             reuse_issues = [
                 issue for issue in preflight["issues"] if issue["type"] == "passage_group_source_reuse"
             ]
+            source_overlap_issues = [
+                issue for issue in preflight["issues"] if issue["type"] == "source_problem_bbox_overlap"
+            ]
             self.assertEqual("needs_attention_before_classin", handoff["status"])
             self.assertFalse(handoff["readyForClassIn"])
             self.assertEqual(1, len(reuse_issues))
+            self.assertEqual([], source_overlap_issues)
             self.assertEqual("p22", reuse_issues[0]["problemId"])
             self.assertEqual("p23", reuse_issues[0]["nextProblemId"])
             self.assertEqual("hwp-continuation-passage-22-26", reuse_issues[0]["passageGroupId"])
