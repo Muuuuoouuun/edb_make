@@ -86,6 +86,72 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("source_problem_bbox_overlap", risk_meta)
         self.assertIn("원본 영역 겹침", risk_meta)
 
+    def test_review_summary_surfaces_passage_group_source_reuse_groups(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]
+        review_stage = review_stage.split("{reviewSummary.warningPreview &&", 1)[0]
+        summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
+        summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
+
+        self.assertIn("지문 원본 중복", review_stage)
+        self.assertIn("passageGroupSourceReuseGroups", review_stage)
+        self.assertIn("passage_group_source_reuse", review_stage)
+        self.assertIn("passageGroupSourceReuseGroups", summary_helper)
+        self.assertIn("passage_group_source_reuse_groups", summary_helper)
+        self.assertIn("passageGroupSourceReuseLabel", summary_helper)
+
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('function normalizePublishSummary');
+            if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+            const summary = sandbox.sessionReviewSummary({
+              passageGroupSourceReuseGroups: [
+                {
+                  passageGroupId: 'hwp-text-passage-31-34',
+                  sourcePageId: 'page-004',
+                  problemIds: ['p31', 'p32'],
+                  overlapAreaRatio: 0.92,
+                },
+              ],
+              passageGroupSourceReuseGroupCount: 1,
+              problems: [
+                {
+                  id: 'p31',
+                  reviewStatus: 'check_needed',
+                  riskFlags: ['passage_group_source_reuse'],
+                  bbox: { width: 10, height: 10 },
+                },
+                {
+                  id: 'p32',
+                  reviewStatus: 'check_needed',
+                  riskFlags: ['passage_group_source_reuse'],
+                  bbox: { width: 10, height: 10 },
+                },
+              ],
+              pages: [{ id: 'page-004', problemIds: ['p31', 'p32'], riskFlags: [] }],
+            });
+            if (summary.passageGroupSourceReuseGroups.length !== 1) {
+              throw new Error(`expected one source reuse group, got ${summary.passageGroupSourceReuseGroups.length}`);
+            }
+            if (summary.passageGroupSourceReuseGroupCount !== 1) {
+              throw new Error(`expected source reuse count 1, got ${summary.passageGroupSourceReuseGroupCount}`);
+            }
+            if (!summary.passageGroupSourceReuseLabel.includes('hwp-text-passage-31-34')) {
+              throw new Error(`expected passage group label, got ${summary.passageGroupSourceReuseLabel}`);
+            }
+            if (!summary.passageGroupSourceReuseLabel.includes('92%')) {
+              throw new Error(`expected overlap percent label, got ${summary.passageGroupSourceReuseLabel}`);
+            }
+            """
+        )
+
     def test_review_summary_surfaces_passage_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")

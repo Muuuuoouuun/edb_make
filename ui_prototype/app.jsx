@@ -653,6 +653,18 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                 원본 겹침 {reviewSummary.sourceProblemOverlapLabel}
               </span>
             )}
+            {reviewSummary.passageGroupSourceReuseGroups.length > 0 && (
+              <button
+                type="button"
+                className={`review-summary-chip warn risk-filter-chip ${reviewRiskFilter === 'passage_group_source_reuse' ? 'on' : ''}`}
+                title="같은 긴 지문 그룹의 하위 문항 원본 영역이 크게 겹칩니다."
+                aria-pressed={reviewRiskFilter === 'passage_group_source_reuse'}
+                data-risk-flag="passage_group_source_reuse"
+                onClick={() => toggleRiskFilter('passage_group_source_reuse')}
+              >
+                지문 원본 중복 {reviewSummary.passageGroupSourceReuseLabel}
+              </button>
+            )}
             {reviewSummary.passageGroupCount > 0 && (
               <button
                 type="button"
@@ -3695,6 +3707,28 @@ function sessionReviewSummary(session){
     })
     .filter(Boolean)
     .join(', ') || `${sourceProblemOverlapGroups.length}`;
+  const passageGroupSourceReuseGroups = Array.isArray(session?.passageGroupSourceReuseGroups)
+    ? session.passageGroupSourceReuseGroups
+    : Array.isArray(session?.passage_group_source_reuse_groups)
+      ? session.passage_group_source_reuse_groups
+      : [];
+  const explicitPassageGroupSourceReuseCount = Number(
+    session?.passageGroupSourceReuseGroupCount
+    ?? session?.passage_group_source_reuse_group_count
+    ?? passageGroupSourceReuseGroups.length
+  );
+  const passageGroupSourceReuseGroupCount = Number.isFinite(explicitPassageGroupSourceReuseCount)
+    ? Math.max(0, explicitPassageGroupSourceReuseCount)
+    : passageGroupSourceReuseGroups.length;
+  const passageGroupSourceReuseLabel = passageGroupSourceReuseGroups
+    .map(group => {
+      const groupId = String(group?.passageGroupId || group?.passage_group_id || '').trim();
+      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : '';
+      return [groupId, percent].filter(Boolean).join(' ');
+    })
+    .filter(Boolean)
+    .join(', ') || `${passageGroupSourceReuseGroupCount}`;
   return {
     counts,
     reviewStatusCounts,
@@ -3727,6 +3761,9 @@ function sessionReviewSummary(session){
     duplicateProblemNumberLabel,
     sourceProblemOverlapGroups,
     sourceProblemOverlapLabel,
+    passageGroupSourceReuseGroups,
+    passageGroupSourceReuseGroupCount,
+    passageGroupSourceReuseLabel,
     passageGroups: passageSummary.passageGroups,
     passageGroupCount: passageSummary.passageGroupCount,
     passageProblemCount: passageSummary.passageProblemCount,
