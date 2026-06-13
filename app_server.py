@@ -1596,7 +1596,18 @@ def _normalize_session_passage_review_queue(
     if not isinstance(raw_items, list):
         raw_items = session.get("passage_review_items")
     if not isinstance(raw_items, list):
-        return
+        has_count_only_metadata = any(
+            key in session
+            for key in (
+                "passageReviewItemCount",
+                "passage_review_item_count",
+                "crossPagePassageReviewItemCount",
+                "cross_page_passage_review_item_count",
+            )
+        )
+        if not has_count_only_metadata:
+            return
+        raw_items = []
 
     unresolved_items = []
     for item in raw_items:

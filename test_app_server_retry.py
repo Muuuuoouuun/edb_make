@@ -1773,6 +1773,38 @@ class TestReviewSummary(unittest.TestCase):
         self.assertEqual(0, session["crossPagePassageReviewItemCount"])
         self.assertEqual(0, session["cross_page_passage_review_item_count"])
 
+    def test_refresh_session_counts_removes_count_only_passage_review_queue(self):
+        session = {
+            "passageReviewItemCount": 1,
+            "passage_review_item_count": 1,
+            "crossPagePassageReviewItemCount": 1,
+            "cross_page_passage_review_item_count": 1,
+            "problems": [
+                {
+                    "id": "p31",
+                    "bbox": {"width": 120, "height": 80},
+                    "reviewStatus": "normal",
+                    "riskFlags": [],
+                },
+            ],
+            "pages": [
+                {
+                    "id": "page-5",
+                    "problemIds": ["p31"],
+                    "riskFlags": [],
+                },
+            ],
+        }
+
+        app_server._refresh_session_problem_counts(session)
+
+        self.assertEqual([], session["passageReviewItems"])
+        self.assertEqual([], session["passage_review_items"])
+        self.assertEqual(0, session["passageReviewItemCount"])
+        self.assertEqual(0, session["passage_review_item_count"])
+        self.assertEqual(0, session["crossPagePassageReviewItemCount"])
+        self.assertEqual(0, session["cross_page_passage_review_item_count"])
+
     def test_session_review_summary_reads_hwp_text_qa_from_pages_json_path(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
