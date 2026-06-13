@@ -12,22 +12,28 @@ class TestUiPublishGuard(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         on_publish = source.split("const onPublish = async () => {", 1)[1]
         on_publish = on_publish.split("  return (", 1)[0]
+        warning_helper = source.split("function publishReviewWarningMessage", 1)[1]
+        warning_helper = warning_helper.split("function normalizePublishSummary", 1)[0]
 
         self.assertIn("sessionReviewSummary(sessionForPublish)", on_publish)
-        self.assertIn("actionableNeedsReviewCount", on_publish)
+        self.assertIn("publishReviewWarningMessage(sessionForPublish, publishReviewSummary)", on_publish)
+        self.assertIn("actionableNeedsReviewCount", warning_helper)
         self.assertIn("window.confirm", on_publish)
         self.assertIn("setView('review')", on_publish)
-        self.assertIn("검수 화면", on_publish)
+        self.assertIn("검수 화면", warning_helper)
 
     def test_publish_warning_mentions_remaining_passage_review_queue(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         on_publish = source.split("const onPublish = async () => {", 1)[1]
         on_publish = on_publish.split("  return (", 1)[0]
+        warning_helper = source.split("function publishReviewWarningMessage", 1)[1]
+        warning_helper = warning_helper.split("function normalizePublishSummary", 1)[0]
 
-        self.assertIn("passageReviewItemCount", on_publish)
-        self.assertIn("passageReviewLabel", on_publish)
-        self.assertIn("passageReviewPreview", on_publish)
-        self.assertIn("긴 지문 검수", on_publish)
+        self.assertIn("publishReviewWarningMessage(sessionForPublish, publishReviewSummary)", on_publish)
+        self.assertIn("passageReviewItemCount", warning_helper)
+        self.assertIn("passageReviewLabel", warning_helper)
+        self.assertIn("passageReviewPreview", warning_helper)
+        self.assertIn("긴 지문 검수", warning_helper)
 
     def test_publish_blocks_board_placement_overlap_before_request(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

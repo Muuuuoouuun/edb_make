@@ -3368,6 +3368,28 @@ function collectActionableReviewProblemIds(session, actionableRiskFlagCounts){
   return matched;
 }
 
+function collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts){
+  const matched = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  problems.forEach((problem, index) => {
+    const id = String(problem?.id || problem?.problem_id || `problem-index-${index}`);
+    if (deriveProblemStatus(problem) !== 'normal') matched.add(id);
+  });
+  (session?.pages || []).forEach(page => {
+    const status = normalizeReviewStatus(page?.reviewStatus || page?.review_status);
+    if (!status || status === 'normal') return;
+    const ids = Array.isArray(page?.problemIds || page?.problem_ids)
+      ? (page.problemIds || page.problem_ids).map(id => String(id || '')).filter(Boolean)
+      : [];
+    if (ids.length) {
+      ids.forEach(id => matched.add(id));
+    } else {
+      matched.add(`page:${String(page?.id || matched.size)}`);
+    }
+  });
+  return matched;
+}
+
 function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
   const matched = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
   return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
@@ -3549,8 +3571,9 @@ function sessionReviewSummary(session){
   const riskFlagCounts = fallbackRiskFlagCounts;
   const actionableRiskFlagCounts = filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
   const actionableReviewProblemIds = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
+  const unresolvedReviewProblemIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
   const actionableNeedsReviewCount = countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
-  const passageReviewSummary = collectPassageReviewSummary(session, { actionableProblemIds: actionableReviewProblemIds });
+  const passageReviewSummary = collectPassageReviewSummary(session, { actionableProblemIds: unresolvedReviewProblemIds });
   const topRiskFlags = normalizeFilterableRiskFlagItems(session, actionableRiskFlagCounts);
   const warningMessages = Array.isArray(raw.warningMessages)
     ? raw.warningMessages.map(message => String(message || '').trim()).filter(Boolean)
@@ -3665,6 +3688,45 @@ function sessionReviewSummary(session){
     crossPagePassageReviewItemCount: passageReviewSummary.crossPagePassageReviewItemCount,
     passageReviewLabel: passageReviewSummary.passageReviewLabel,
     passageReviewPreview: passageReviewSummary.passageReviewPreview,
+  };
+}
+
+function publishReviewWarningMessage(session, publishReviewSummary){
+  const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary?.actionableNeedsReviewCount) || 0);
+  const passageReviewItemCount = Math.max(0, Number(publishReviewSummary?.passageReviewItemCount) || 0);
+  const passageReviewProblemIds = new Set(
+    Array.isArray(publishReviewSummary?.passageReviewProblemIds)
+      ? publishReviewSummary.passageReviewProblemIds.map(id => String(id || '').trim()).filter(Boolean)
+      : []
+  );
+  const unresolvedReviewProblemIds = collectUnresolvedReviewProblemIds(
+    session,
+    publishReviewSummary?.actionableRiskFlagCounts
+  );
+  const hasUnresolvedPassageReview = passageReviewItemCount > 0
+    && (
+      passageReviewProblemIds.size === 0
+      || Array.from(passageReviewProblemIds).some(id => unresolvedReviewProblemIds.has(id))
+    );
+  if (actionableNeedsReviewCount <= 0 && !hasUnresolvedPassageReview) return null;
+  const passageReviewLine = hasUnresolvedPassageReview
+    ? [
+      publishReviewSummary?.passageReviewLabel || `긴 지문 검수 ${passageReviewItemCount}`,
+      publishReviewSummary?.passageReviewPreview ? `대상 ${publishReviewSummary.passageReviewPreview}` : '',
+    ].filter(Boolean).join(' · ')
+    : '';
+  const reviewCountLine = actionableNeedsReviewCount > 0
+    ? `검수 화면에 확인 필요 ${actionableNeedsReviewCount}개가 남아 있습니다.`
+    : '검수 화면에 긴 지문 확인 항목이 남아 있습니다.';
+  return {
+    message: [
+      passageReviewLine,
+      reviewCountLine,
+      '그래도 EDB를 제작할까요?',
+    ].filter(Boolean).join('\n'),
+    cancelToast: passageReviewLine
+      ? '제작을 멈췄어요. 긴 지문 검수 큐를 먼저 확인하세요.'
+      : '제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.',
   };
 }
 
@@ -5172,38 +5234,12 @@ function App(){
       );
       return;
     }
-    const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary.actionableNeedsReviewCount) || 0);
-    if (actionableNeedsReviewCount > 0) {
-      const actionableProblemIds = collectActionableReviewProblemIds(
-        sessionForPublish,
-        publishReviewSummary.actionableRiskFlagCounts
-      );
-      const passageReviewProblemIds = new Set(
-        Array.isArray(publishReviewSummary.passageReviewProblemIds)
-          ? publishReviewSummary.passageReviewProblemIds.map(id => String(id || '').trim()).filter(Boolean)
-          : []
-      );
-      const passageReviewItemCount = Math.max(0, Number(publishReviewSummary.passageReviewItemCount) || 0);
-      const hasActionablePassageReview = passageReviewItemCount > 0
-        && Array.from(passageReviewProblemIds).some(id => actionableProblemIds.has(id));
-      const passageReviewLine = hasActionablePassageReview
-        ? [
-          publishReviewSummary.passageReviewLabel || `긴 지문 검수 ${passageReviewItemCount}`,
-          publishReviewSummary.passageReviewPreview ? `대상 ${publishReviewSummary.passageReviewPreview}` : '',
-        ].filter(Boolean).join(' · ')
-        : '';
-      const confirmedPublish = window.confirm(
-        [
-          passageReviewLine,
-          `검수 화면에 확인 필요 ${actionableNeedsReviewCount}개가 남아 있습니다.`,
-          '그래도 EDB를 제작할까요?',
-        ].filter(Boolean).join('\n')
-      );
+    const publishReviewWarning = publishReviewWarningMessage(sessionForPublish, publishReviewSummary);
+    if (publishReviewWarning) {
+      const confirmedPublish = window.confirm(publishReviewWarning.message);
       if (!confirmedPublish) {
         setView('review');
-        showToast(passageReviewLine
-          ? '제작을 멈췄어요. 긴 지문 검수 큐를 먼저 확인하세요.'
-          : '제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.');
+        showToast(publishReviewWarning.cancelToast);
         return;
       }
     }

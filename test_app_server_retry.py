@@ -1773,6 +1773,55 @@ class TestReviewSummary(unittest.TestCase):
         self.assertEqual(0, session["crossPagePassageReviewItemCount"])
         self.assertEqual(0, session["cross_page_passage_review_item_count"])
 
+    def test_refresh_session_counts_keeps_check_needed_passage_review_queue_without_flags(self):
+        session = {
+            "passageReviewItems": [
+                {
+                    "groupId": "hwp-text-passage-31-32",
+                    "numberLabel": "31-32",
+                    "problemIds": ["p31", "p32"],
+                    "sourcePageIds": ["page-5", "page-6"],
+                    "problemCount": 2,
+                    "continuesAcrossPages": True,
+                }
+            ],
+            "passageReviewItemCount": 1,
+            "crossPagePassageReviewItemCount": 1,
+            "problems": [
+                {
+                    "id": "p31",
+                    "bbox": {"width": 120, "height": 80},
+                    "reviewStatus": "check_needed",
+                    "riskFlags": [],
+                },
+                {
+                    "id": "p32",
+                    "bbox": {"width": 120, "height": 80},
+                    "reviewStatus": "normal",
+                    "riskFlags": [],
+                },
+            ],
+            "pages": [
+                {
+                    "id": "page-5",
+                    "problemIds": ["p31"],
+                    "riskFlags": [],
+                },
+                {
+                    "id": "page-6",
+                    "problemIds": ["p32"],
+                    "riskFlags": [],
+                },
+            ],
+        }
+
+        app_server._refresh_session_problem_counts(session)
+
+        self.assertEqual(1, len(session["passageReviewItems"]))
+        self.assertEqual("31-32", session["passageReviewItems"][0]["numberLabel"])
+        self.assertEqual(1, session["passageReviewItemCount"])
+        self.assertEqual(1, session["crossPagePassageReviewItemCount"])
+
     def test_refresh_session_counts_removes_count_only_passage_review_queue(self):
         session = {
             "passageReviewItemCount": 1,

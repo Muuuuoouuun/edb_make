@@ -1376,7 +1376,7 @@ def _refresh_session_problem_counts(session: dict[str, Any]) -> None:
     session["reviewSummary"] = summary
     _normalize_session_passage_review_queue(
         session,
-        actionable_problem_ids=_session_actionable_problem_ids(
+        unresolved_problem_ids=_session_unresolved_review_problem_ids(
             problems=problems,
             pages=pages,
             actionable_flags=set(summary.get("actionableRiskFlagCounts") or {}),
@@ -1578,6 +1578,35 @@ def _session_actionable_problem_ids(
     return actionable_problem_ids
 
 
+def _session_unresolved_review_problem_ids(
+    *,
+    problems: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+    actionable_flags: set[str],
+) -> set[str]:
+    unresolved_problem_ids = _session_actionable_problem_ids(
+        problems=problems,
+        pages=pages,
+        actionable_flags=actionable_flags,
+    )
+    for index, problem in enumerate(problems):
+        problem_id = str(problem.get("id") or problem.get("problem_id") or f"problem-index-{index}")
+        if _problem_review_status(problem) != "normal":
+            unresolved_problem_ids.add(problem_id)
+    for page in pages:
+        page_status = str(page.get("reviewStatus") or page.get("review_status") or "").strip().lower()
+        page_flags = {
+            str(flag or "").strip()
+            for flag in (page.get("riskFlags") or page.get("risk_flags") or [])
+            if str(flag or "").strip()
+        }
+        if page_status not in {"check_needed", "failed"} and not page_flags.intersection(actionable_flags):
+            continue
+        page_problem_ids = [str(pid) for pid in (page.get("problemIds") or page.get("problem_ids") or []) if pid]
+        unresolved_problem_ids.update(page_problem_ids)
+    return unresolved_problem_ids
+
+
 def _passage_review_item_problem_ids(item: dict[str, Any]) -> list[str]:
     ids: list[str] = []
     for key in ("problemIds", "problem_ids", "fragmentProblemIds", "fragment_problem_ids"):
@@ -1590,7 +1619,7 @@ def _passage_review_item_problem_ids(item: dict[str, Any]) -> list[str]:
 def _normalize_session_passage_review_queue(
     session: dict[str, Any],
     *,
-    actionable_problem_ids: set[str],
+    unresolved_problem_ids: set[str],
 ) -> None:
     raw_items = session.get("passageReviewItems")
     if not isinstance(raw_items, list):
@@ -1614,7 +1643,7 @@ def _normalize_session_passage_review_queue(
         if not isinstance(item, dict):
             continue
         problem_ids = _passage_review_item_problem_ids(item)
-        if not problem_ids or any(problem_id in actionable_problem_ids for problem_id in problem_ids):
+        if not problem_ids or any(problem_id in unresolved_problem_ids for problem_id in problem_ids):
             unresolved_items.append(dict(item))
 
     cross_page_count = sum(
@@ -2909,19 +2938,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 )
             )
             new_session["cross_page_passage_review_item_count"] = new_session["crossPagePassageReviewItemCount"]
+            publish_problems = [
+                problem
+                for problem in (new_session.get("problems") or [])
+                if isinstance(problem, dict)
+            ]
+            publish_pages = [
+                page
+                for page in (new_session.get("pages") or [])
+                if isinstance(page, dict)
+            ]
             _normalize_session_passage_review_queue(
                 new_session,
-                actionable_problem_ids=_session_actionable_problem_ids(
-                    problems=[
-                        problem
-                        for problem in (new_session.get("problems") or [])
-                        if isinstance(problem, dict)
-                    ],
-                    pages=[
-                        page
-                        for page in (new_session.get("pages") or [])
-                        if isinstance(page, dict)
-                    ],
+                unresolved_problem_ids=_session_unresolved_review_problem_ids(
+                    problems=publish_problems,
+                    pages=publish_pages,
                     actionable_flags=set((new_session.get("reviewSummary") or {}).get("actionableRiskFlagCounts") or {}),
                 ),
             )

@@ -225,6 +225,124 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             """
         )
 
+    def test_review_summary_keeps_check_needed_passage_review_queue_without_flags(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('function normalizePublishSummary');
+            if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+            const session = {
+              review_summary: {
+                actionableNeedsReviewCount: 0,
+                reviewStatusCounts: { all: 2, normal: 1, check_needed: 1, failed: 0 },
+                needsReviewCount: 1,
+                riskFlagCounts: {},
+              },
+              passageReviewItemCount: 1,
+              crossPagePassageReviewItemCount: 1,
+              passageReviewItems: [
+                {
+                  numberLabel: '31-32',
+                  problemIds: ['p31', 'p32'],
+                  continuesAcrossPages: true,
+                },
+              ],
+              problems: [
+                {
+                  id: 'p31',
+                  reviewStatus: 'check_needed',
+                  riskFlags: [],
+                  bbox: { width: 10, height: 10 },
+                },
+                {
+                  id: 'p32',
+                  reviewStatus: 'normal',
+                  riskFlags: [],
+                  bbox: { width: 10, height: 10 },
+                },
+              ],
+              pages: [{ id: 'page-1', problemIds: ['p31', 'p32'], riskFlags: [] }],
+            };
+            const summary = sandbox.sessionReviewSummary(session);
+            if (summary.passageReviewItemCount !== 1) {
+              throw new Error(`expected unresolved passage review count 1, got ${summary.passageReviewItemCount}`);
+            }
+            if (summary.crossPagePassageReviewItemCount !== 1) {
+              throw new Error(`expected unresolved cross-page count 1, got ${summary.crossPagePassageReviewItemCount}`);
+            }
+            if (summary.passageReviewProblemIds.join(',') !== 'p31,p32') {
+              throw new Error(`expected passage ids p31,p32, got ${summary.passageReviewProblemIds.join(',')}`);
+            }
+            if (!summary.passageReviewLabel.includes('긴 지문 검수 1')) {
+              throw new Error(`expected passage review label, got ${summary.passageReviewLabel}`);
+            }
+            """
+        )
+
+    def test_publish_guard_warns_for_unresolved_passage_review_queue_without_flags(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        publish_flow = source.split("const onPublish = async () =>", 1)[1]
+        publish_flow = publish_flow.split("const placements = Object.fromEntries", 1)[0]
+        self.assertIn("publishReviewWarningMessage(sessionForPublish, publishReviewSummary)", publish_flow)
+
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('function normalizePublishSummary');
+            if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+            if (typeof sandbox.publishReviewWarningMessage !== 'function') {
+              throw new Error('publishReviewWarningMessage missing');
+            }
+            const session = {
+              passageReviewItemCount: 1,
+              crossPagePassageReviewItemCount: 1,
+              passageReviewItems: [
+                {
+                  numberLabel: '31-32',
+                  problemIds: ['p31', 'p32'],
+                  continuesAcrossPages: true,
+                },
+              ],
+              problems: [
+                {
+                  id: 'p31',
+                  reviewStatus: 'check_needed',
+                  riskFlags: [],
+                  bbox: { width: 10, height: 10 },
+                },
+                {
+                  id: 'p32',
+                  reviewStatus: 'normal',
+                  riskFlags: [],
+                  bbox: { width: 10, height: 10 },
+                },
+              ],
+              pages: [{ id: 'page-1', problemIds: ['p31', 'p32'], riskFlags: [] }],
+            };
+            const summary = sandbox.sessionReviewSummary(session);
+            const warning = sandbox.publishReviewWarningMessage(session, summary);
+            if (!warning) throw new Error('expected unresolved passage review warning');
+            if (!warning.message.includes('긴 지문 검수 1')) {
+              throw new Error(`expected passage warning line, got ${warning.message}`);
+            }
+            if (!warning.cancelToast.includes('긴 지문 검수 큐')) {
+              throw new Error(`expected passage cancel toast, got ${warning.cancelToast}`);
+            }
+            """
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
