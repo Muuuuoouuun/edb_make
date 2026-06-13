@@ -332,6 +332,82 @@ def _passage_metrics(payload: dict[str, Any], session: dict[str, Any], review_su
     }
 
 
+def _passage_review_metrics(
+    payload: dict[str, Any],
+    session: dict[str, Any],
+    review_summary: dict[str, Any],
+) -> dict[str, Any]:
+    sources = [
+        session,
+        payload,
+        review_summary,
+        session.get("publishSummary") if isinstance(session.get("publishSummary"), dict) else None,
+        session.get("publish_summary") if isinstance(session.get("publish_summary"), dict) else None,
+        payload.get("publishSummary") if isinstance(payload.get("publishSummary"), dict) else None,
+        payload.get("publish_summary") if isinstance(payload.get("publish_summary"), dict) else None,
+    ]
+    items: list[dict[str, Any]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        raw_items = source.get("passageReviewItems") or source.get("passage_review_items")
+        if isinstance(raw_items, list):
+            items = [item for item in raw_items if isinstance(item, dict)]
+            if items:
+                break
+
+    def first_count(*keys: str) -> int:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                count = _coerce_non_negative_int(source.get(key))
+                if count:
+                    return count
+        return 0
+
+    item_count = first_count("passageReviewItemCount", "passage_review_item_count") or len(items)
+    cross_page_count = first_count(
+        "crossPagePassageReviewItemCount",
+        "cross_page_passage_review_item_count",
+    )
+    if not cross_page_count:
+        cross_page_count = sum(
+            1
+            for item in items
+            if item.get("continuesAcrossPages") or item.get("continues_across_pages")
+        )
+
+    reason_counts: Counter[str] = Counter()
+    labels: list[str] = []
+    seen_labels: set[str] = set()
+    for item in items:
+        label = str(
+            item.get("numberLabel")
+            or item.get("number_label")
+            or item.get("groupId")
+            or item.get("group_id")
+            or ""
+        ).strip()
+        if label and label not in seen_labels:
+            seen_labels.add(label)
+            labels.append(label)
+        reasons = item.get("reviewReasonCodes") or item.get("review_reason_codes") or []
+        if not isinstance(reasons, list):
+            continue
+        for reason in reasons:
+            reason_text = str(reason or "").strip()
+            if reason_text:
+                reason_counts[reason_text] += 1
+
+    return {
+        "passage_review_item_count": item_count,
+        "cross_page_passage_review_item_count": cross_page_count,
+        "passage_review_labels": labels,
+        "passage_review_reason_counts": dict(sorted(reason_counts.items())),
+    }
+
+
 def _classin_preflight(payload: dict[str, Any], session: dict[str, Any] | None = None) -> dict[str, Any]:
     for source in (payload, session or {}):
         for key in ("classinPreflight", "classin_preflight"):
@@ -450,6 +526,31 @@ def format_classin_preflight_label(row: dict[str, Any]) -> str:
     if issue_types:
         parts.append(", ".join(issue_types[:4]))
     return " · ".join(parts)
+
+
+def format_passage_label(row: dict[str, Any]) -> str:
+    parts: list[str] = []
+    passage_group_count = _coerce_non_negative_int(row.get("passage_group_count"))
+    if passage_group_count:
+        parts.append(
+            "g{groups}/q{questions}/x{cross_page}".format(
+                groups=passage_group_count,
+                questions=_coerce_non_negative_int(row.get("passage_problem_count")),
+                cross_page=_coerce_non_negative_int(row.get("cross_page_passage_group_count")),
+            )
+        )
+    passage_review_count = _coerce_non_negative_int(row.get("passage_review_item_count"))
+    if passage_review_count:
+        parts.append(
+            "review {count}/x{cross_page}".format(
+                count=passage_review_count,
+                cross_page=_coerce_non_negative_int(row.get("cross_page_passage_review_item_count")),
+            )
+        )
+    passage_reuse_count = _coerce_non_negative_int(row.get("passage_group_source_reuse_count"))
+    if passage_reuse_count:
+        parts.append(f"reuse {passage_reuse_count}")
+    return " · ".join(parts) if parts else "-"
 
 
 def _review_summary(session: dict[str, Any]) -> dict[str, Any]:
@@ -645,6 +746,7 @@ def summarize_export_response(
         _risk_count(risk_flag_counts, SOURCE_PROBLEM_BBOX_OVERLAP_FLAG),
     )
     passage_metrics = _passage_metrics(payload, session, summary)
+    passage_review_metrics = _passage_review_metrics(payload, session, summary)
     edb_validation = payload.get("edbValidation")
     if not isinstance(edb_validation, dict):
         edb_validation = payload.get("edb_validation")
@@ -689,6 +791,7 @@ def summarize_export_response(
         or hwp_overseg_count
         or source_overlap_group_count
         or source_overlap_problem_count
+        or passage_review_metrics["passage_review_item_count"]
         or actionable_counts
         or (edb_expected and not edb_validated)
         or (classin_preflight_expected and not classin_preflight_passed)
@@ -712,6 +815,7 @@ def summarize_export_response(
         "source_problem_bbox_overlap_count": source_overlap_problem_count,
         "source_problem_overlap_group_count": source_overlap_group_count,
         **passage_metrics,
+        **passage_review_metrics,
         "risk_flags": risk_flags,
         "risk_flag_counts": risk_flag_counts,
         "actionable_risk_flag_counts": actionable_counts,
@@ -754,6 +858,9 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
     passage_problem_count = 0
     passage_fragment_count = 0
     cross_page_passage_group_count = 0
+    passage_review_item_count = 0
+    cross_page_passage_review_item_count = 0
+    passage_review_reason_counts: Counter[str] = Counter()
     passage_group_source_reuse_count = 0
     classin_preflight_issue_types: Counter[str] = Counter()
     for row in rows:
@@ -778,6 +885,11 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         passage_problem_count += _coerce_non_negative_int(row.get("passage_problem_count"))
         passage_fragment_count += _coerce_non_negative_int(row.get("passage_fragment_count"))
         cross_page_passage_group_count += _coerce_non_negative_int(row.get("cross_page_passage_group_count"))
+        passage_review_item_count += _coerce_non_negative_int(row.get("passage_review_item_count"))
+        cross_page_passage_review_item_count += _coerce_non_negative_int(
+            row.get("cross_page_passage_review_item_count")
+        )
+        passage_review_reason_counts.update(_coerce_count_map(row.get("passage_review_reason_counts")))
         passage_group_source_reuse_count += _coerce_non_negative_int(row.get("passage_group_source_reuse_count"))
         for issue_type in row.get("classin_preflight_issue_types") or []:
             issue_type_text = str(issue_type or "").strip()
@@ -807,6 +919,8 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "passage_problem_count": passage_problem_count,
         "passage_fragment_count": passage_fragment_count,
         "cross_page_passage_group_count": cross_page_passage_group_count,
+        "passage_review_item_count": passage_review_item_count,
+        "cross_page_passage_review_item_count": cross_page_passage_review_item_count,
         "passage_group_source_reuse_count": passage_group_source_reuse_count,
         "edb_expected_count": sum(1 for row in rows if row.get("edb_expected")),
         "edb_validated_count": sum(1 for row in rows if row.get("edb_expected") and row.get("edb_validated")),
@@ -830,6 +944,10 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "top_classin_preflight_issue_types": [
             {"type": issue_type, "count": count}
             for issue_type, count in sorted(classin_preflight_issue_types.items(), key=lambda item: (-item[1], item[0]))[:8]
+        ],
+        "top_passage_review_reasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(passage_review_reason_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
         ],
     }
 
@@ -935,8 +1053,8 @@ def run_batch(
 
 def format_markdown_table(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| file | ok | problems | pages | cache | review | risk | preflight | edb | elapsed |",
-        "| --- | --- | ---: | ---: | --- | --- | --- | --- | --- | ---: |",
+        "| file | ok | problems | pages | cache | review | passage | risk | preflight | edb | elapsed |",
+        "| --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for row in rows:
         review = ", ".join(f"{k}:{v}" for k, v in (row.get("review_status_counts") or {}).items()) or "-"
@@ -971,14 +1089,16 @@ def format_markdown_table(rows: list[dict[str, Any]]) -> str:
         else:
             edb_label = "-"
         preflight_label = format_classin_preflight_label(row)
+        passage_label = format_passage_label(row)
         lines.append(
-            "| {file} | {ok} | {problems} | {pages} | {cache} | {review} | {risk} | {preflight} | {edb} | {elapsed} |".format(
+            "| {file} | {ok} | {problems} | {pages} | {cache} | {review} | {passage} | {risk} | {preflight} | {edb} | {elapsed} |".format(
                 file=str(row.get("file") or "").replace("|", "\\|"),
                 ok="OK" if row.get("ok") else "FAIL",
                 problems=problem_label,
                 pages=row.get("pages", "-"),
                 cache=cache_label,
                 review=review.replace("|", "\\|"),
+                passage=passage_label.replace("|", "\\|"),
                 risk=risk.replace("|", "\\|"),
                 preflight=preflight_label.replace("|", "\\|"),
                 edb=edb_label,
@@ -1060,13 +1180,16 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     source_overlap_group_count = _coerce_non_negative_int(summary.get("source_problem_overlap_group_count"))
     passage_group_source_reuse_count = _coerce_non_negative_int(summary.get("passage_group_source_reuse_count"))
     passage_group_count = _coerce_non_negative_int(summary.get("passage_group_count"))
+    passage_review_item_count = _coerce_non_negative_int(summary.get("passage_review_item_count"))
     passage_part = ""
-    if passage_group_count or passage_group_source_reuse_count:
+    if passage_group_count or passage_group_source_reuse_count or passage_review_item_count:
         passage_part = (
             f"passage groups {passage_group_count} · "
             f"passage questions {_coerce_non_negative_int(summary.get('passage_problem_count'))} · "
             f"fragments {_coerce_non_negative_int(summary.get('passage_fragment_count'))} · "
             f"cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_group_count'))} · "
+            f"review {passage_review_item_count} · "
+            f"review cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_review_item_count'))} · "
             f"passage reuse {passage_group_source_reuse_count} · "
         )
     return (

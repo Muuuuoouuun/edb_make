@@ -27,6 +27,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("summary.classinPreflightStatusLabel", panel)
         self.assertIn("summary.classinPreflightIssueSummaryLabel", panel)
         self.assertIn("summary.passageGroupLabel", panel)
+        self.assertIn("summary.passageReviewLabel", panel)
         self.assertIn("사전점검", panel)
         self.assertIn("긴 지문", panel)
         self.assertIn("summary.canMarkClassinReviewComplete", panel)
@@ -68,6 +69,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("classinPreflightStatusLabel", helper)
         self.assertIn("passageGroupCount", helper)
         self.assertIn("passageGroupLabel", helper)
+        self.assertIn("passageReviewItems", helper)
+        self.assertIn("passageReviewLabel", helper)
         self.assertIn("canMarkClassinReviewComplete", helper)
 
     def test_app_posts_classin_review_completion(self) -> None:

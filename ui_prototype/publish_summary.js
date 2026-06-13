@@ -137,6 +137,28 @@
     return groups.filter(group => Boolean(group.continuesAcrossPages || group.continues_across_pages)).length;
   }
 
+  function normalizePassageReviewItems(raw, session = null) {
+    const items = raw?.passageReviewItems
+      || raw?.passage_review_items
+      || session?.passageReviewItems
+      || session?.passage_review_items
+      || [];
+    return Array.isArray(items)
+      ? items.filter(item => item && typeof item === "object")
+      : [];
+  }
+
+  function countCrossPagePassageReviewItems(items) {
+    return items.filter(item => Boolean(item.continuesAcrossPages || item.continues_across_pages)).length;
+  }
+
+  function formatPassageReviewLabel({ itemCount, crossPageCount }) {
+    if (itemCount <= 0) return "";
+    const parts = [`긴 지문 검수 ${itemCount}`];
+    if (crossPageCount > 0) parts.push(`페이지 넘김 ${crossPageCount}`);
+    return parts.join(" · ");
+  }
+
   function formatPassageGroupLabel({ groupCount, problemCount, crossPageCount }) {
     if (groupCount <= 0) return "";
     const parts = [`긴 지문 그룹 ${groupCount}`, `${problemCount}문항`];
@@ -265,6 +287,29 @@
         crossPageCount: normalizedCrossPagePassageGroupCount,
       })
     ).trim();
+    const passageReviewItems = normalizePassageReviewItems(raw, session);
+    const passageReviewItemCount = positiveNumber(
+      raw.passageReviewItemCount
+      ?? raw.passage_review_item_count
+      ?? session?.passageReviewItemCount
+      ?? session?.passage_review_item_count
+      ?? passageReviewItems.length
+    );
+    const crossPagePassageReviewItemCount = positiveNumber(
+      raw.crossPagePassageReviewItemCount
+      ?? raw.cross_page_passage_review_item_count
+      ?? session?.crossPagePassageReviewItemCount
+      ?? session?.cross_page_passage_review_item_count
+      ?? countCrossPagePassageReviewItems(passageReviewItems)
+    );
+    const passageReviewLabel = String(
+      raw.passageReviewLabel
+      || raw.passage_review_label
+      || formatPassageReviewLabel({
+        itemCount: passageReviewItemCount,
+        crossPageCount: crossPagePassageReviewItemCount,
+      })
+    ).trim();
     const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
     const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
     if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -298,6 +343,10 @@
       passageProblemCount: normalizedPassageProblemCount,
       crossPagePassageGroupCount: normalizedCrossPagePassageGroupCount,
       passageGroupLabel,
+      passageReviewItems,
+      passageReviewItemCount,
+      crossPagePassageReviewItemCount,
+      passageReviewLabel,
       edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
       outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
       recordCount,

@@ -510,6 +510,55 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(1, summary["cross_page_passage_group_count"])
         self.assertFalse(summary["needs_review"])
 
+    def test_summarize_export_response_counts_passage_review_queue(self):
+        payload = {
+            "ok": True,
+            "session": {
+                "pages": [],
+                "problems": [],
+                "passageReviewItems": [
+                    {
+                        "groupId": "hwp-text-passage-31-34",
+                        "numberLabel": "31-34",
+                        "continuesAcrossPages": True,
+                        "reviewReasonCodes": [
+                            "cross_page_passage_group",
+                            "passage_fragment",
+                        ],
+                    },
+                    {
+                        "groupId": "hwp-text-passage-41-42",
+                        "numberLabel": "41-42",
+                        "reviewReasonCodes": ["source_problem_bbox_overlap"],
+                    },
+                ],
+                "passageReviewItemCount": 2,
+                "crossPagePassageReviewItemCount": 1,
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("passage-review.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+        )
+
+        self.assertEqual(2, summary["passage_review_item_count"])
+        self.assertEqual(1, summary["cross_page_passage_review_item_count"])
+        self.assertEqual(["31-34", "41-42"], summary["passage_review_labels"])
+        self.assertEqual(
+            {
+                "cross_page_passage_group": 1,
+                "passage_fragment": 1,
+                "source_problem_bbox_overlap": 1,
+            },
+            summary["passage_review_reason_counts"],
+        )
+        self.assertTrue(summary["needs_review"])
+
     def test_summarize_export_response_infers_passage_groups_from_problem_metadata(self):
         payload = {
             "ok": True,
@@ -693,8 +742,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
 
         self.assertIn("# HWP Batch Verification", markdown)
         self.assertIn("Batch summary: samples 1/1 OK", markdown)
-        self.assertIn("| file | ok | problems | pages | cache | review | risk | preflight | edb | elapsed |", markdown)
-        self.assertIn("| 평가원 영어 양식.hwp | OK | 0 | 0 | - | - | - | - | OK 45/45 |", markdown)
+        self.assertIn("| file | ok | problems | pages | cache | review | passage | risk | preflight | edb | elapsed |", markdown)
+        self.assertIn("| 평가원 영어 양식.hwp | OK | 0 | 0 | - | - | - | - | - | OK 45/45 |", markdown)
 
     def test_post_export_sends_export_edb_flag(self):
         requests = []
@@ -756,6 +805,11 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "classin_preflight_issue_count": 0,
                 "classin_preflight_blocking_issue_count": 0,
                 "classin_preflight_issue_types": [],
+                "passage_review_item_count": 1,
+                "cross_page_passage_review_item_count": 1,
+                "passage_review_reason_counts": {
+                    "cross_page_passage_group": 1,
+                },
             },
             {
                 "ok": True,
@@ -782,6 +836,9 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "classin_preflight_issue_count": 1,
                 "classin_preflight_blocking_issue_count": 1,
                 "classin_preflight_issue_types": ["board_placement_overlap"],
+                "passage_review_item_count": 0,
+                "cross_page_passage_review_item_count": 0,
+                "passage_review_reason_counts": {},
             },
             {
                 "ok": False,
@@ -801,6 +858,11 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "classin_preflight_issue_count": 2,
                 "classin_preflight_blocking_issue_count": 2,
                 "classin_preflight_issue_types": ["board_placement_overlap", "source_problem_bbox_overlap"],
+                "passage_review_item_count": 2,
+                "cross_page_passage_review_item_count": 1,
+                "passage_review_reason_counts": {
+                    "passage_fragment": 2,
+                },
             },
         ]
 
@@ -824,6 +886,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(1, summary["hwp_oversegmentation_count"])
         self.assertEqual(4, summary["source_problem_bbox_overlap_count"])
         self.assertEqual(2, summary["source_problem_overlap_group_count"])
+        self.assertEqual(3, summary["passage_review_item_count"])
+        self.assertEqual(2, summary["cross_page_passage_review_item_count"])
         self.assertEqual(2, summary["edb_expected_count"])
         self.assertEqual(1, summary["edb_validated_count"])
         self.assertEqual(1, summary["edb_missing_count"])
@@ -856,6 +920,13 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 {"type": "source_problem_bbox_overlap", "count": 1},
             ],
             summary["top_classin_preflight_issue_types"],
+        )
+        self.assertEqual(
+            [
+                {"reason": "passage_fragment", "count": 2},
+                {"reason": "cross_page_passage_group", "count": 1},
+            ],
+            summary["top_passage_review_reasons"],
         )
 
     def test_main_fails_when_export_edb_is_missing_even_without_fail_on_review(self):
@@ -1168,9 +1239,9 @@ class TestVerifyHwpSamples(unittest.TestCase):
 
         table = verify_hwp_samples.format_markdown_table(rows)
 
-        self.assertIn("| file | ok | problems | pages | cache | review | risk | preflight | edb | elapsed |", table)
+        self.assertIn("| file | ok | problems | pages | cache | review | passage | risk | preflight | edb | elapsed |", table)
         self.assertIn("problem_per_block:39, ocr_disabled:23", table)
-        self.assertIn("| sample.hwp | OK | 46 | 23 | 20/23 · r5/n15 | check_needed:24, normal:45 | problem_per_block:39, ocr_disabled:23 | - | OK 46/46 | 41.29 |", table)
+        self.assertIn("| sample.hwp | OK | 46 | 23 | 20/23 · r5/n15 | check_needed:24, normal:45 | - | problem_per_block:39, ocr_disabled:23 | - | OK 46/46 | 41.29 |", table)
 
     def test_format_markdown_table_exposes_classin_preflight_issue_types(self):
         rows = [
@@ -1202,7 +1273,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
         table = verify_hwp_samples.format_markdown_table(rows)
 
         self.assertIn(
-            "| passage.hwp | OK | 2 | 1 | 0/1 | - | - | BLOCK 1/2 · passage reuse 1 · passage_group_source_reuse, review_flags_remaining | OK 2/2 | 0.5 |",
+            "| passage.hwp | OK | 2 | 1 | 0/1 | - | reuse 1 | - | BLOCK 1/2 · passage reuse 1 · passage_group_source_reuse, review_flags_remaining | OK 2/2 | 0.5 |",
             table,
         )
 

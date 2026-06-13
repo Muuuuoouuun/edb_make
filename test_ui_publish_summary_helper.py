@@ -281,6 +281,41 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_passage_review_queue(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const passageReviewItems = [
+              {
+                groupId: 'hwp-text-passage-31-34',
+                numberLabel: '31-34',
+                problemIds: ['p31', 'p32'],
+                sourcePageIds: ['page-5', 'page-6'],
+                problemCount: 2,
+                continuesAcrossPages: true,
+                reviewReasonCodes: ['cross_page_passage_group'],
+              },
+            ];
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              passageReviewItems,
+            });
+            if (summary.passageReviewItemCount !== 1) {
+              throw new Error(`passage review item count not normalized: ${summary.passageReviewItemCount}`);
+            }
+            if (summary.crossPagePassageReviewItemCount !== 1) {
+              throw new Error(`cross-page passage review count not normalized: ${summary.crossPagePassageReviewItemCount}`);
+            }
+            if (summary.passageReviewItems[0].groupId !== 'hwp-text-passage-31-34') {
+              throw new Error(`passage review items not preserved`);
+            }
+            if (summary.passageReviewLabel !== '긴 지문 검수 1 · 페이지 넘김 1') {
+              throw new Error(`unexpected passage review label: ${summary.passageReviewLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_counts_passage_children_without_fragments(self) -> None:
         run_node(
             """

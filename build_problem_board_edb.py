@@ -2917,6 +2917,104 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
     return items
 
 
+PASSAGE_REVIEW_RISK_FLAGS = {
+    HWP_TEXT_FALLBACK_RISK_FLAG,
+    PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG,
+    "marker_document_continuation",
+    "passage_group_source_reuse",
+    "source_problem_bbox_overlap",
+}
+
+
+def _session_problem_risk_flags(problem: dict[str, Any]) -> list[str]:
+    values: list[Any] = []
+    raw = problem.get("riskFlags") or problem.get("risk_flags")
+    if isinstance(raw, list):
+        values.extend(raw)
+    metadata = problem.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("riskFlags", "risk_flags", "review_flags"):
+            nested = metadata.get(key)
+            if isinstance(nested, list):
+                values.extend(nested)
+    return _ordered_unique_strings(values)
+
+
+def _session_passage_review_items(
+    problems: Sequence[dict[str, Any]],
+    passage_groups: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    problems_by_id = {
+        str(problem.get("id") or problem.get("problem_id") or "").strip(): problem
+        for problem in problems
+        if isinstance(problem, dict)
+    }
+    items: list[dict[str, Any]] = []
+    for group in passage_groups:
+        if not isinstance(group, dict):
+            continue
+        group_id = str(group.get("groupId") or group.get("group_id") or "").strip()
+        if not group_id:
+            continue
+        core_problem_ids = _ordered_unique_strings(group.get("coreProblemIds") or group.get("core_problem_ids") or [])
+        fragment_problem_ids = _ordered_unique_strings(
+            group.get("fragmentProblemIds") or group.get("fragment_problem_ids") or []
+        )
+        risk_flags: set[str] = set()
+        for problem_id in [*core_problem_ids, *fragment_problem_ids]:
+            problem = problems_by_id.get(problem_id)
+            if not problem:
+                continue
+            risk_flags.update(_session_problem_risk_flags(problem))
+
+        reason_codes: list[str] = []
+        if bool(group.get("continuesAcrossPages") or group.get("continues_across_pages")):
+            reason_codes.append("cross_page_passage_group")
+        if fragment_problem_ids or int(group.get("fragmentProblemCount") or group.get("fragment_problem_count") or 0) > 0:
+            reason_codes.append("passage_fragment")
+        for flag in sorted(risk_flags):
+            if flag in PASSAGE_REVIEW_RISK_FLAGS and flag not in reason_codes:
+                if flag == "marker_document_continuation" and "passage_fragment" in reason_codes:
+                    continue
+                reason_codes.append(flag)
+        if not reason_codes:
+            continue
+
+        source_page_ids = _ordered_unique_strings(group.get("sourcePageIds") or group.get("source_page_ids") or [])
+        problem_count = int(group.get("problemCount") or group.get("problem_count") or len(core_problem_ids))
+        fragment_count = int(
+            group.get("fragmentProblemCount")
+            or group.get("fragment_problem_count")
+            or len(fragment_problem_ids)
+        )
+        label = str(group.get("numberLabel") or group.get("number_label") or group_id).strip()
+        page_count = len(source_page_ids)
+        message = f"{label} 긴 지문 그룹은 {page_count}개 페이지와 {problem_count}개 하위 문항"
+        if fragment_count:
+            message += f", 이어짐 자료 {fragment_count}개"
+        message += "를 확인해야 합니다."
+        items.append(
+            {
+                "groupId": group_id,
+                "numberLabel": label,
+                "problemIds": core_problem_ids,
+                "fragmentProblemIds": fragment_problem_ids,
+                "sourcePageIds": source_page_ids,
+                "problemCount": problem_count,
+                "fragmentProblemCount": fragment_count,
+                "continuesAcrossPages": bool(
+                    group.get("continuesAcrossPages")
+                    or group.get("continues_across_pages")
+                    or len(source_page_ids) > 1
+                ),
+                "reviewReasonCodes": reason_codes,
+                "riskFlags": sorted(flag for flag in risk_flags if flag in PASSAGE_REVIEW_RISK_FLAGS),
+                "message": message,
+            }
+        )
+    return items
+
+
 def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> list[dict[str, Any]]:
     numbered: list[dict[str, Any]] = []
     for index, problem in enumerate(problems):
@@ -3837,6 +3935,10 @@ def build_ui_session(
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
     )
+    passage_review_items = _session_passage_review_items(problems, passage_groups)
+    cross_page_passage_review_item_count = sum(
+        1 for item in passage_review_items if item.get("continuesAcrossPages")
+    )
 
     return {
         "session_name": output_dir.name,
@@ -3870,6 +3972,12 @@ def build_ui_session(
         "passageProblemCount": sum(int(group.get("problemCount") or 0) for group in passage_groups),
         "cross_page_passage_group_count": cross_page_passage_group_count,
         "crossPagePassageGroupCount": cross_page_passage_group_count,
+        "passage_review_items": passage_review_items,
+        "passageReviewItems": passage_review_items,
+        "passage_review_item_count": len(passage_review_items),
+        "passageReviewItemCount": len(passage_review_items),
+        "cross_page_passage_review_item_count": cross_page_passage_review_item_count,
+        "crossPagePassageReviewItemCount": cross_page_passage_review_item_count,
         "export_mode": "question",
         "record_mode": record_mode,
         "board_theme": _resolve_board_theme(board_theme),
@@ -3945,6 +4053,16 @@ def write_classin_handoff_manifest(
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
     )
+    passage_review_items = (
+        ui_session.get("passageReviewItems")
+        or ui_session.get("passage_review_items")
+        or _session_passage_review_items(problems, passage_groups)
+    )
+    if not isinstance(passage_review_items, list):
+        passage_review_items = []
+    cross_page_passage_review_item_count = sum(
+        1 for item in passage_review_items if isinstance(item, dict) and item.get("continuesAcrossPages")
+    )
     ready_for_classin = bool(classin_preflight.get("passed")) and not blocking_duplicate_problem_number_groups
     handoff_status = "ready_for_classin_review" if ready_for_classin else "needs_attention_before_classin"
     payload = {
@@ -3972,6 +4090,9 @@ def write_classin_handoff_manifest(
         "passageGroupCount": len(passage_groups),
         "passageProblemCount": sum(int(group.get("problemCount") or 0) for group in passage_groups),
         "crossPagePassageGroupCount": cross_page_passage_group_count,
+        "passageReviewItems": passage_review_items,
+        "passageReviewItemCount": len(passage_review_items),
+        "crossPagePassageReviewItemCount": cross_page_passage_review_item_count,
         "classinPreflight": classin_preflight,
         "classin_preflight": classin_preflight,
         "reviewRiskCounts": review_summary.get("riskFlagCounts", {}) if isinstance(review_summary, dict) else {},
@@ -4019,6 +4140,19 @@ def write_classin_handoff_manifest(
                 f"- `{group.get('groupId')}` {label}"
                 + (f" · {status}" if status else "")
             )
+    passage_review_lines: list[str] = []
+    if passage_review_items:
+        passage_review_lines = ["", "## Passage Review Queue"]
+        for item in passage_review_items:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("numberLabel") or item.get("groupId") or "").strip()
+            reasons = ", ".join(str(reason) for reason in item.get("reviewReasonCodes") or [])
+            passage_review_lines.append(
+                f"- `{item.get('groupId')}` {label}"
+                + (f" · {item.get('message')}" if item.get("message") else "")
+                + (f" · reasons: {reasons}" if reasons else "")
+            )
     if classin_preflight["passed"]:
         preflight_lines = ["- OK: no automatic asset issues found."]
     else:
@@ -4041,6 +4175,7 @@ def write_classin_handoff_manifest(
                 f"- ClassIn page hint: {payload['classinPageCountHint']}",
                 *duplicate_problem_number_lines,
                 *passage_group_lines,
+                *passage_review_lines,
                 "",
                 "## Manual Checklist",
                 checklist,

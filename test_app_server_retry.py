@@ -875,6 +875,45 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual("page-1-passage-13-16", remembered_problem["passageGroupId"])
             self.assertTrue(remembered_problem["passageContinuesAcrossPages"])
 
+    def test_session_publish_summary_exposes_passage_review_items(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            edb_path = root / "lesson.edb"
+            edb_path.write_bytes(b"placeholder")
+            review_items = [
+                {
+                    "groupId": "hwp-text-passage-31-34",
+                    "numberLabel": "31-34",
+                    "problemIds": ["p31", "p32"],
+                    "sourcePageIds": ["page-5", "page-6"],
+                    "problemCount": 2,
+                    "continuesAcrossPages": True,
+                    "reviewReasonCodes": ["cross_page_passage_group"],
+                }
+            ]
+
+            summary = app_server._session_publish_summary(
+                edb_path=edb_path,
+                output_dir=root,
+                edb_validation={
+                    "outerSize": 1234,
+                    "innerSize": 987,
+                    "pageCountHint": 50,
+                    "recordCountHint": 2,
+                    "recordCountActual": 2,
+                },
+                record_count=2,
+                passage_review_items=review_items,
+                published_at="2026-06-13T12:00:00+09:00",
+            )
+
+            self.assertEqual(review_items, summary["passageReviewItems"])
+            self.assertEqual(review_items, summary["passage_review_items"])
+            self.assertEqual(1, summary["passageReviewItemCount"])
+            self.assertEqual(1, summary["passage_review_item_count"])
+            self.assertEqual(1, summary["crossPagePassageReviewItemCount"])
+            self.assertEqual(1, summary["cross_page_passage_review_item_count"])
+
 
 class TestRuntimeDiagnostics(unittest.TestCase):
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):

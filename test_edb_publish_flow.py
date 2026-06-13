@@ -1874,6 +1874,110 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("13-16", markdown)
             self.assertIn("cross-page", markdown)
 
+    def test_classin_handoff_manifest_summarizes_passage_review_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 3,
+                    "supplemental_item_count": 1,
+                    "detected_problem_count": 4,
+                    "source_page_count": 2,
+                    "reviewSummary": {},
+                    "problems": [
+                        {
+                            "id": "p31",
+                            "title": "31.",
+                            "problemNumber": 31,
+                            "sourcePageId": "page-5",
+                            "passageGroupId": "hwp-text-passage-31-34",
+                            "passageRange": {"start": 31, "end": 34},
+                            "passageRole": "child_question",
+                            "passageChildProblemNumbers": [31, 32, 33, 34],
+                            "passageSourcePageIds": ["page-5", "page-6"],
+                            "passageContinuesAcrossPages": True,
+                            "riskFlags": ["passage_cross_page_merge_check"],
+                            "reviewStatus": "check_needed",
+                        },
+                        {
+                            "id": "p32",
+                            "title": "32.",
+                            "problemNumber": 32,
+                            "sourcePageId": "page-5",
+                            "passageGroupId": "hwp-text-passage-31-34",
+                            "passageRange": {"start": 31, "end": 34},
+                            "passageRole": "child_question",
+                            "passageChildProblemNumbers": [31, 32, 33, 34],
+                            "passageSourcePageIds": ["page-5", "page-6"],
+                            "passageContinuesAcrossPages": True,
+                            "riskFlags": ["passage_cross_page_merge_check"],
+                            "reviewStatus": "check_needed",
+                        },
+                        {
+                            "id": "p34",
+                            "title": "34.",
+                            "problemNumber": 34,
+                            "sourcePageId": "page-6",
+                            "passageGroupId": "hwp-text-passage-31-34",
+                            "passageRange": {"start": 31, "end": 34},
+                            "passageRole": "child_question",
+                            "passageChildProblemNumbers": [31, 32, 33, 34],
+                            "passageSourcePageIds": ["page-5", "page-6"],
+                            "passageContinuesAcrossPages": True,
+                            "riskFlags": ["passage_cross_page_merge_check"],
+                            "reviewStatus": "check_needed",
+                        },
+                        {
+                            "id": "p31-fragment",
+                            "title": "이어지는 지문",
+                            "sourcePageId": "page-5",
+                            "passageGroupId": "hwp-text-passage-31-34",
+                            "passageRange": {"start": 31, "end": 34},
+                            "passageRole": "passage_fragment",
+                            "passageChildProblemNumbers": [31, 32, 33, 34],
+                            "passageSourcePageIds": ["page-5", "page-6"],
+                            "passageContinuesAcrossPages": True,
+                            "riskFlags": ["marker_document_continuation"],
+                            "reviewStatus": "check_needed",
+                        },
+                    ],
+                },
+                summary={"record_count": 4, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=8),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            self.assertEqual(1, handoff["passageReviewItemCount"])
+            self.assertEqual(1, handoff["crossPagePassageReviewItemCount"])
+            self.assertEqual(
+                {
+                    "groupId": "hwp-text-passage-31-34",
+                    "numberLabel": "31-34",
+                    "problemIds": ["p31", "p32", "p34"],
+                    "fragmentProblemIds": ["p31-fragment"],
+                    "sourcePageIds": ["page-5", "page-6"],
+                    "problemCount": 3,
+                    "fragmentProblemCount": 1,
+                    "continuesAcrossPages": True,
+                    "reviewReasonCodes": ["cross_page_passage_group", "passage_fragment", "passage_cross_page_merge_check"],
+                    "riskFlags": ["marker_document_continuation", "passage_cross_page_merge_check"],
+                    "message": "31-34 긴 지문 그룹은 2개 페이지와 3개 하위 문항, 이어짐 자료 1개를 확인해야 합니다.",
+                },
+                handoff["passageReviewItems"][0],
+            )
+            self.assertIn("## Passage Review Queue", markdown)
+            self.assertIn("hwp-text-passage-31-34", markdown)
+            self.assertIn("cross_page_passage_group", markdown)
+
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

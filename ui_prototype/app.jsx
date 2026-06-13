@@ -1673,6 +1673,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
         {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
         {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
         {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
+        {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
         {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
       </div>
       <div className="publish-result-actions">
@@ -3712,6 +3713,43 @@ function normalizePublishSummary(raw, session = null){
       ].filter(Boolean).join(' · ')
       : '')
   ).trim();
+  const passageReviewItemsRaw = raw.passageReviewItems || raw.passage_review_items || session?.passageReviewItems || session?.passage_review_items || [];
+  const passageReviewItems = Array.isArray(passageReviewItemsRaw)
+    ? passageReviewItemsRaw.filter(item => item && typeof item === 'object')
+    : [];
+  const passageReviewItemCount = Number(
+    raw.passageReviewItemCount
+    ?? raw.passage_review_item_count
+    ?? session?.passageReviewItemCount
+    ?? session?.passage_review_item_count
+    ?? passageReviewItems.length
+  );
+  const crossPagePassageReviewItemCountFallback = passageReviewItems.filter(item => (
+    item.continuesAcrossPages || item.continues_across_pages
+  )).length;
+  const crossPagePassageReviewItemCount = Number(
+    raw.crossPagePassageReviewItemCount
+    ?? raw.cross_page_passage_review_item_count
+    ?? session?.crossPagePassageReviewItemCount
+    ?? session?.cross_page_passage_review_item_count
+    ?? crossPagePassageReviewItemCountFallback
+  );
+  const normalizedPassageReviewItemCount = Number.isFinite(passageReviewItemCount)
+    ? Math.max(0, passageReviewItemCount)
+    : 0;
+  const normalizedCrossPagePassageReviewItemCount = Number.isFinite(crossPagePassageReviewItemCount)
+    ? Math.max(0, crossPagePassageReviewItemCount)
+    : 0;
+  const passageReviewLabel = String(
+    raw.passageReviewLabel
+    || raw.passage_review_label
+    || (normalizedPassageReviewItemCount > 0
+      ? [
+        `긴 지문 검수 ${normalizedPassageReviewItemCount}`,
+        normalizedCrossPagePassageReviewItemCount > 0 ? `페이지 넘김 ${normalizedCrossPagePassageReviewItemCount}` : '',
+      ].filter(Boolean).join(' · ')
+      : '')
+  ).trim();
   const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
   const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
   if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -3749,6 +3787,10 @@ function normalizePublishSummary(raw, session = null){
     passageProblemCount: normalizedPassageProblemCount,
     crossPagePassageGroupCount: normalizedCrossPagePassageGroupCount,
     passageGroupLabel,
+    passageReviewItems,
+    passageReviewItemCount: normalizedPassageReviewItemCount,
+    crossPagePassageReviewItemCount: normalizedCrossPagePassageReviewItemCount,
+    passageReviewLabel,
     edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
     outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
     recordCount: fallbackRecordCount,

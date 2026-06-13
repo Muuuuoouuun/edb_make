@@ -687,6 +687,9 @@ def _session_publish_summary(
     passage_group_count: int | None = None,
     passage_problem_count: int | None = None,
     cross_page_passage_group_count: int | None = None,
+    passage_review_items: list[dict[str, Any]] | None = None,
+    passage_review_item_count: int | None = None,
+    cross_page_passage_review_item_count: int | None = None,
     published_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_edb_path = Path(edb_path).resolve()
@@ -729,6 +732,19 @@ def _session_publish_summary(
             for group in normalized_passage_groups
             if group.get("continuesAcrossPages") or group.get("continues_across_pages")
         )
+    normalized_passage_review_items = [
+        dict(item)
+        for item in (passage_review_items or [])
+        if isinstance(item, dict)
+    ]
+    if passage_review_item_count is None:
+        passage_review_item_count = len(normalized_passage_review_items)
+    if cross_page_passage_review_item_count is None:
+        cross_page_passage_review_item_count = sum(
+            1
+            for item in normalized_passage_review_items
+            if item.get("continuesAcrossPages") or item.get("continues_across_pages")
+        )
     handoff_status, ready_for_classin = _classin_handoff_readiness(resolved_classin_handoff_path)
     if ready_for_classin is None and handoff_status:
         ready_for_classin = handoff_status == "ready_for_classin_review"
@@ -758,6 +774,9 @@ def _session_publish_summary(
         "passageGroupCount": max(0, int(passage_group_count or 0)),
         "passageProblemCount": max(0, int(passage_problem_count or 0)),
         "crossPagePassageGroupCount": max(0, int(cross_page_passage_group_count or 0)),
+        "passageReviewItems": normalized_passage_review_items,
+        "passageReviewItemCount": max(0, int(passage_review_item_count or 0)),
+        "crossPagePassageReviewItemCount": max(0, int(cross_page_passage_review_item_count or 0)),
         "edbFileExists": resolved_edb_path.is_file(),
         "outputDirExists": resolved_output_dir.is_dir(),
         "recordCount": int(record_count or record_count_actual),
@@ -792,6 +811,9 @@ def _session_publish_summary(
         "passage_group_count": summary["passageGroupCount"],
         "passage_problem_count": summary["passageProblemCount"],
         "cross_page_passage_group_count": summary["crossPagePassageGroupCount"],
+        "passage_review_items": summary["passageReviewItems"],
+        "passage_review_item_count": summary["passageReviewItemCount"],
+        "cross_page_passage_review_item_count": summary["crossPagePassageReviewItemCount"],
         "edb_file_exists": summary["edbFileExists"],
         "output_dir_exists": summary["outputDirExists"],
         "record_count": summary["recordCount"],
@@ -2804,6 +2826,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 int(handoff_payload.get("crossPagePassageGroupCount"))
                 if isinstance(handoff_payload.get("crossPagePassageGroupCount"), (int, float, str))
                 and str(handoff_payload.get("crossPagePassageGroupCount")).isdigit()
+                else None
+            ),
+            passage_review_items=(
+                handoff_payload.get("passageReviewItems")
+                if isinstance(handoff_payload.get("passageReviewItems"), list)
+                else None
+            ),
+            passage_review_item_count=(
+                int(handoff_payload.get("passageReviewItemCount"))
+                if isinstance(handoff_payload.get("passageReviewItemCount"), (int, float, str))
+                and str(handoff_payload.get("passageReviewItemCount")).isdigit()
+                else None
+            ),
+            cross_page_passage_review_item_count=(
+                int(handoff_payload.get("crossPagePassageReviewItemCount"))
+                if isinstance(handoff_payload.get("crossPagePassageReviewItemCount"), (int, float, str))
+                and str(handoff_payload.get("crossPagePassageReviewItemCount")).isdigit()
                 else None
             ),
         )
