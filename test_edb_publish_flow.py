@@ -221,6 +221,11 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertTrue(handoff["manualReviewRequired"])
             self.assertIn("ClassIn에서 EDB 파일 열기", handoff["classinReviewChecklist"])
             self.assertTrue((root / "out" / "classin_handoff.md").is_file())
+            self.assertEqual("ready_for_classin_review", result["ui_session"]["classinHandoffStatus"])
+            self.assertTrue(result["ui_session"]["readyForClassIn"])
+            self.assertEqual("passed", result["ui_session"]["classinPreflight"]["status"])
+            self.assertEqual("ready_for_classin_review", result["summary"]["classin_handoff_status"])
+            self.assertTrue(result["summary"]["ready_for_classin"])
 
     def test_problem_ui_session_summarizes_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -3107,6 +3107,38 @@ def write_classin_handoff_manifest(
     return json_path.resolve(), markdown_path.resolve()
 
 
+def _classin_handoff_session_fields(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    status = str(payload.get("status") or "").strip()
+    ready = (
+        bool(payload.get("readyForClassIn"))
+        if "readyForClassIn" in payload
+        else status == "ready_for_classin_review"
+    )
+    preflight = payload.get("classinPreflight") if isinstance(payload.get("classinPreflight"), dict) else {}
+    issue_count = int(preflight.get("issueCount") or preflight.get("issue_count") or 0)
+    return {
+        "classinHandoffStatus": status,
+        "classin_handoff_status": status,
+        "readyForClassIn": ready,
+        "ready_for_classin": ready,
+        "classinPreflight": preflight,
+        "classin_preflight": preflight,
+        "classinPreflightStatus": str(preflight.get("status") or ""),
+        "classin_preflight_status": str(preflight.get("status") or ""),
+        "classinPreflightIssueCount": issue_count,
+        "classin_preflight_issue_count": issue_count,
+    }
+
+
 def normalize_text_payload(text: str | None) -> str:
     if not text:
         return ""
@@ -3838,11 +3870,14 @@ def run_problem_export(
         )
         summary["classin_handoff_path"] = str(classin_handoff_path)
         summary["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
+        handoff_session_fields = _classin_handoff_session_fields(classin_handoff_path)
+        summary.update(handoff_session_fields)
         placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         ui_session["classin_handoff_path"] = str(classin_handoff_path)
         ui_session["classinHandoffPath"] = str(classin_handoff_path)
         ui_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
         ui_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
+        ui_session.update(handoff_session_fields)
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
     return {
