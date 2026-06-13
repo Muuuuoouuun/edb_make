@@ -28,6 +28,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("summary.classinPreflightIssueSummaryLabel", panel)
         self.assertIn("summary.passageGroupLabel", panel)
         self.assertIn("summary.passageReviewLabel", panel)
+        self.assertIn("summary.passageGroupSourceReuseLabel", panel)
+        self.assertIn("지문 원본 중복", panel)
         self.assertIn("사전점검", panel)
         self.assertIn("긴 지문", panel)
         self.assertIn("summary.canMarkClassinReviewComplete", panel)
@@ -71,6 +73,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("passageGroupLabel", helper)
         self.assertIn("passageReviewItems", helper)
         self.assertIn("passageReviewLabel", helper)
+        self.assertIn("passageGroupSourceReuseGroups", helper)
+        self.assertIn("passageGroupSourceReuseLabel", helper)
         self.assertIn("canMarkClassinReviewComplete", helper)
 
     def test_app_posts_classin_review_completion(self) -> None:
@@ -84,8 +88,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
     def test_board_uses_publish_artifact_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("publish_summary.js?v=passage-reuse-20260614", html)
-        self.assertIn("app.jsx?v=passage-reuse-20260614", html)
+        self.assertIn("publish_summary.js?v=passage-reuse-summary-20260614", html)
+        self.assertIn("app.jsx?v=passage-reuse-summary-20260614", html)
 
 
 if __name__ == "__main__":

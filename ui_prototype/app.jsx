@@ -1716,6 +1716,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
         {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
         {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
         {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
+        {summary.passageGroupSourceReuseLabel && <span title="지문 원본 중복">{summary.passageGroupSourceReuseLabel}</span>}
         {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
       </div>
       <div className="publish-result-actions">
@@ -3996,6 +3997,42 @@ function normalizePublishSummary(raw, session = null){
       ].filter(Boolean).join(' · ')
       : '')
   ).trim();
+  const passageGroupSourceReuseGroupsRaw = raw.passageGroupSourceReuseGroups
+    || raw.passage_group_source_reuse_groups
+    || session?.passageGroupSourceReuseGroups
+    || session?.passage_group_source_reuse_groups
+    || [];
+  const passageGroupSourceReuseGroups = Array.isArray(passageGroupSourceReuseGroupsRaw)
+    ? passageGroupSourceReuseGroupsRaw.filter(group => group && typeof group === 'object')
+    : [];
+  const passageGroupSourceReuseGroupCount = Number(
+    raw.passageGroupSourceReuseGroupCount
+    ?? raw.passage_group_source_reuse_group_count
+    ?? session?.passageGroupSourceReuseGroupCount
+    ?? session?.passage_group_source_reuse_group_count
+    ?? passageGroupSourceReuseGroups.length
+  );
+  const normalizedPassageGroupSourceReuseGroupCount = Number.isFinite(passageGroupSourceReuseGroupCount)
+    ? Math.max(0, passageGroupSourceReuseGroupCount)
+    : 0;
+  const passageGroupSourceReuseDetails = passageGroupSourceReuseGroups
+    .map(group => {
+      const groupId = String(group?.passageGroupId || group?.passage_group_id || '').trim();
+      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : '';
+      return [groupId, percent].filter(Boolean).join(' ');
+    })
+    .filter(Boolean)
+    .join(', ');
+  const passageGroupSourceReuseLabel = String(
+    raw.passageGroupSourceReuseLabel
+    || raw.passage_group_source_reuse_label
+    || (normalizedPassageGroupSourceReuseGroupCount > 0
+      ? [`지문 원본 중복 ${normalizedPassageGroupSourceReuseGroupCount}`, passageGroupSourceReuseDetails]
+        .filter(Boolean)
+        .join(' · ')
+      : '')
+  ).trim();
   const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
   const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
   if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -4037,6 +4074,9 @@ function normalizePublishSummary(raw, session = null){
     passageReviewItemCount: normalizedPassageReviewItemCount,
     crossPagePassageReviewItemCount: normalizedCrossPagePassageReviewItemCount,
     passageReviewLabel,
+    passageGroupSourceReuseGroups,
+    passageGroupSourceReuseGroupCount: normalizedPassageGroupSourceReuseGroupCount,
+    passageGroupSourceReuseLabel,
     edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
     outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
     recordCount: fallbackRecordCount,

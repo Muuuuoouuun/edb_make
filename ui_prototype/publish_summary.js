@@ -159,6 +159,28 @@
     return parts.join(" · ");
   }
 
+  function normalizePassageGroupSourceReuseGroups(raw, session = null) {
+    const groups = raw?.passageGroupSourceReuseGroups
+      || raw?.passage_group_source_reuse_groups
+      || session?.passageGroupSourceReuseGroups
+      || session?.passage_group_source_reuse_groups
+      || [];
+    return Array.isArray(groups)
+      ? groups.filter(group => group && typeof group === "object")
+      : [];
+  }
+
+  function formatPassageGroupSourceReuseLabel({ groupCount, groups }) {
+    if (groupCount <= 0) return "";
+    const details = groups.map(group => {
+      const groupId = String(group?.passageGroupId || group?.passage_group_id || "").trim();
+      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : "";
+      return [groupId, percent].filter(Boolean).join(" ");
+    }).filter(Boolean);
+    return [`지문 원본 중복 ${groupCount}`, details.join(", ")].filter(Boolean).join(" · ");
+  }
+
   function formatPassageGroupLabel({ groupCount, problemCount, crossPageCount }) {
     if (groupCount <= 0) return "";
     const parts = [`긴 지문 그룹 ${groupCount}`, `${problemCount}문항`];
@@ -310,6 +332,22 @@
         crossPageCount: crossPagePassageReviewItemCount,
       })
     ).trim();
+    const passageGroupSourceReuseGroups = normalizePassageGroupSourceReuseGroups(raw, session);
+    const passageGroupSourceReuseGroupCount = positiveNumber(
+      raw.passageGroupSourceReuseGroupCount
+      ?? raw.passage_group_source_reuse_group_count
+      ?? session?.passageGroupSourceReuseGroupCount
+      ?? session?.passage_group_source_reuse_group_count
+      ?? passageGroupSourceReuseGroups.length
+    );
+    const passageGroupSourceReuseLabel = String(
+      raw.passageGroupSourceReuseLabel
+      || raw.passage_group_source_reuse_label
+      || formatPassageGroupSourceReuseLabel({
+        groupCount: passageGroupSourceReuseGroupCount,
+        groups: passageGroupSourceReuseGroups,
+      })
+    ).trim();
     const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
     const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
     if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -347,6 +385,9 @@
       passageReviewItemCount,
       crossPagePassageReviewItemCount,
       passageReviewLabel,
+      passageGroupSourceReuseGroups,
+      passageGroupSourceReuseGroupCount,
+      passageGroupSourceReuseLabel,
       edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
       outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
       recordCount,
@@ -392,6 +433,7 @@
     formatRecordCountLabel,
     formatPublishTime,
     formatPassageGroupLabel,
+    formatPassageGroupSourceReuseLabel,
     normalizePublishSummary,
   };
 });

@@ -316,6 +316,35 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_passage_group_source_reuse(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              passageGroupSourceReuseGroups: [
+                {
+                  passageGroupId: 'hwp-text-passage-31-34',
+                  sourcePageId: 'page-004',
+                  problemIds: ['p31', 'p32'],
+                  overlapAreaRatio: 0.92,
+                },
+              ],
+              passageGroupSourceReuseGroupCount: 1,
+            });
+            if (summary.passageGroupSourceReuseGroupCount !== 1) {
+              throw new Error(`source reuse count not normalized: ${summary.passageGroupSourceReuseGroupCount}`);
+            }
+            if (summary.passageGroupSourceReuseGroups[0].passageGroupId !== 'hwp-text-passage-31-34') {
+              throw new Error('source reuse groups not preserved');
+            }
+            if (summary.passageGroupSourceReuseLabel !== '지문 원본 중복 1 · hwp-text-passage-31-34 92%') {
+              throw new Error(`unexpected source reuse label: ${summary.passageGroupSourceReuseLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_counts_passage_children_without_fragments(self) -> None:
         run_node(
             """
