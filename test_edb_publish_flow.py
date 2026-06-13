@@ -579,6 +579,112 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertNotIn("source_problem_bbox_overlap", safe_problem["riskFlags"])
             self.assertEqual("normal", safe_problem["reviewStatus"])
 
+    def test_problem_ui_session_flags_passage_group_source_reuse_for_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            crop = root / "crop.png"
+            Image.new("RGB", (640, 320), "white").save(crop)
+
+            page = PageModel(
+                page_id="page-004",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.ENGLISH,
+                source_path=str(source),
+                problems=[
+                    ProblemUnit(
+                        unit_id="p31",
+                        subject=Subject.ENGLISH,
+                        title="31.",
+                        metadata={
+                            "problem_number": 31,
+                            "passage_group_id": "hwp-text-passage-31-34",
+                            "passage_range": {"start": 31, "end": 34},
+                            "passage_role": "child_question",
+                            "passage_child_problem_numbers": [31, 32, 33, 34],
+                        },
+                    ),
+                    ProblemUnit(
+                        unit_id="p32",
+                        subject=Subject.ENGLISH,
+                        title="32.",
+                        metadata={
+                            "problem_number": 32,
+                            "passage_group_id": "hwp-text-passage-31-34",
+                            "passage_range": {"start": 31, "end": 34},
+                            "passage_role": "child_question",
+                            "passage_child_problem_numbers": [31, 32, 33, 34],
+                        },
+                    ),
+                ],
+            )
+            placements = []
+            for problem_id, number, bbox in (
+                ("p31", 31, {"left": 42, "top": 120, "width": 520, "height": 430}),
+                ("p32", 32, {"left": 48, "top": 132, "width": 510, "height": 410}),
+            ):
+                placements.append(
+                    {
+                        "problem_id": problem_id,
+                        "title": f"{number}.",
+                        "problem_number": number,
+                        "subject": Subject.ENGLISH,
+                        "source_page_id": "page-004",
+                        "source_path": str(source),
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "bbox": bbox,
+                        "actual_content_height_pages": 0.8,
+                        "overflow_allowed": True,
+                        "start_y_pages": float(number - 31),
+                        "snapped_next_start_y_pages": float(number - 30),
+                        "overflow_amount_pages": 0.0,
+                        "overflow_violation": False,
+                        "slot_span_count": 1,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.0,
+                        "record_mode": "image-only",
+                        "text_record_count": 0,
+                        "image_record_count": 1,
+                        "risk_flags": [],
+                    }
+                )
+
+            ui_session = build_problem_ui_session(
+                [],
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+                pages=[page],
+            )
+
+            groups = ui_session["passageGroupSourceReuseGroups"]
+            self.assertEqual(groups, ui_session["passage_group_source_reuse_groups"])
+            self.assertEqual(1, ui_session["passageGroupSourceReuseGroupCount"])
+            self.assertEqual("hwp-text-passage-31-34", groups[0]["passageGroupId"])
+            self.assertEqual(["p31", "p32"], groups[0]["problemIds"])
+            self.assertGreaterEqual(groups[0]["overlapAreaRatio"], 0.8)
+
+            flagged = {
+                problem["id"]: problem
+                for problem in ui_session["problems"]
+                if "passage_group_source_reuse" in problem["riskFlags"]
+            }
+            self.assertEqual({"p31", "p32"}, set(flagged))
+            for problem in flagged.values():
+                self.assertEqual("check_needed", problem["reviewStatus"])
+
+            self.assertEqual(1, ui_session["passageReviewItemCount"])
+            self.assertEqual(
+                ["passage_group_source_reuse"],
+                ui_session["passageReviewItems"][0]["reviewReasonCodes"],
+            )
+
     def test_ui_session_exposes_shared_passage_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

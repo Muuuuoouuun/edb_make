@@ -3107,6 +3107,7 @@ def _duplicate_number_group_looks_like_alternate_section(
 
 
 DUPLICATE_PROBLEM_NUMBER_RISK_FLAG = "duplicate_problem_number"
+PASSAGE_GROUP_SOURCE_REUSE_RISK_FLAG = "passage_group_source_reuse"
 SOURCE_PROBLEM_BBOX_OVERLAP_RISK_FLAG = "source_problem_bbox_overlap"
 
 
@@ -3131,6 +3132,65 @@ def _mark_duplicate_problem_number_review_flags(
             continue
         flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
         flags.append(DUPLICATE_PROBLEM_NUMBER_RISK_FLAG)
+        problem["riskFlags"] = list(dict.fromkeys(flags))
+        if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
+            problem["reviewStatus"] = "check_needed"
+
+
+def _session_passage_group_source_reuse_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for issue in _classin_passage_group_source_reuse_issues(problems):
+        problem_id = str(issue.get("problemId") or "").strip()
+        next_problem_id = str(issue.get("nextProblemId") or "").strip()
+        passage_group_id = str(issue.get("passageGroupId") or "").strip()
+        if not problem_id or not next_problem_id or not passage_group_id:
+            continue
+        source_page_id = str(issue.get("sourcePageId") or "").strip()
+        overlap_area_ratio = _coerce_float(issue.get("overlapAreaRatio")) or 0.0
+        groups.append(
+            {
+                "passageGroupId": passage_group_id,
+                "passage_group_id": passage_group_id,
+                "sourcePageId": source_page_id,
+                "source_page_id": source_page_id,
+                "problemIds": [problem_id, next_problem_id],
+                "problem_ids": [problem_id, next_problem_id],
+                "problemTitles": [
+                    str(issue.get("problemTitle") or problem_id),
+                    str(issue.get("nextProblemTitle") or next_problem_id),
+                ],
+                "overlapAreaRatio": round(overlap_area_ratio, 6),
+                "overlap_area_ratio": round(overlap_area_ratio, 6),
+                "intersectionOverUnion": issue.get("intersectionOverUnion", 0.0),
+                "intersection_over_union": issue.get("intersectionOverUnion", 0.0),
+                "bbox": issue.get("bbox") or {},
+                "nextBbox": issue.get("nextBbox") or {},
+                "next_bbox": issue.get("nextBbox") or {},
+                "message": str(issue.get("message") or ""),
+            }
+        )
+    return groups
+
+
+def _mark_passage_group_source_reuse_review_flags(
+    problems: list[dict[str, Any]],
+    groups: Sequence[dict[str, Any]],
+) -> None:
+    reuse_problem_ids: set[str] = set()
+    for group in groups:
+        for problem_id in group.get("problemIds") or group.get("problem_ids") or []:
+            problem_id_text = str(problem_id or "").strip()
+            if problem_id_text:
+                reuse_problem_ids.add(problem_id_text)
+    if not reuse_problem_ids:
+        return
+
+    for problem in problems:
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
+        if problem_id not in reuse_problem_ids:
+            continue
+        flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
+        flags.append(PASSAGE_GROUP_SOURCE_REUSE_RISK_FLAG)
         problem["riskFlags"] = list(dict.fromkeys(flags))
         if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
             problem["reviewStatus"] = "check_needed"
@@ -3931,6 +3991,8 @@ def build_ui_session(
     ]
     source_problem_overlap_groups = _session_source_problem_overlap_groups(problems)
     _mark_source_problem_overlap_review_flags(problems, source_problem_overlap_groups)
+    passage_group_source_reuse_groups = _session_passage_group_source_reuse_groups(problems)
+    _mark_passage_group_source_reuse_review_flags(problems, passage_group_source_reuse_groups)
     passage_groups = _session_passage_groups(problems)
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
@@ -3964,6 +4026,10 @@ def build_ui_session(
         "sourceProblemOverlapGroups": source_problem_overlap_groups,
         "source_problem_overlap_group_count": len(source_problem_overlap_groups),
         "sourceProblemOverlapGroupCount": len(source_problem_overlap_groups),
+        "passage_group_source_reuse_groups": passage_group_source_reuse_groups,
+        "passageGroupSourceReuseGroups": passage_group_source_reuse_groups,
+        "passage_group_source_reuse_group_count": len(passage_group_source_reuse_groups),
+        "passageGroupSourceReuseGroupCount": len(passage_group_source_reuse_groups),
         "passage_groups": passage_groups,
         "passageGroups": passage_groups,
         "passage_group_count": len(passage_groups),
