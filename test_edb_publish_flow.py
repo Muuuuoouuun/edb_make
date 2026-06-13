@@ -627,6 +627,8 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             handoff = json.loads(json_path.read_text(encoding="utf-8"))
             markdown = md_path.read_text(encoding="utf-8")
+            self.assertEqual("needs_attention_before_classin", handoff["status"])
+            self.assertFalse(handoff["readyForClassIn"])
             self.assertEqual(duplicate_groups, handoff["duplicateProblemNumberGroups"])
             self.assertIn("35-45 x2", handoff["duplicateProblemNumberNote"])
             self.assertIn("Duplicate problem numbers: 35-45 x2", markdown)
@@ -855,10 +857,13 @@ class TestEdbPublishFlow(unittest.TestCase):
             overlap_issues = [
                 issue for issue in preflight["issues"] if issue["type"] == "board_placement_overlap"
             ]
+            self.assertEqual("needs_attention_before_classin", handoff["status"])
+            self.assertFalse(handoff["readyForClassIn"])
             self.assertEqual(1, len(overlap_issues))
             self.assertEqual("p13", overlap_issues[0]["problemId"])
             self.assertEqual("p14", overlap_issues[0]["nextProblemId"])
             self.assertGreater(overlap_issues[0]["renderedBottomYPages"], overlap_issues[0]["nextStartYPages"])
+            self.assertIn("Handoff status: `needs_attention_before_classin`", markdown)
             self.assertIn("board_placement_overlap", markdown)
 
     def test_korean_edb_filename_download_header_is_http_safe(self):

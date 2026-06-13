@@ -2993,8 +2993,11 @@ def write_classin_handoff_manifest(
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
     )
+    ready_for_classin = bool(classin_preflight.get("passed")) and not duplicate_problem_number_groups
+    handoff_status = "ready_for_classin_review" if ready_for_classin else "needs_attention_before_classin"
     payload = {
-        "status": "ready_for_classin_review",
+        "status": handoff_status,
+        "readyForClassIn": ready_for_classin,
         "manualReviewRequired": True,
         "generatedAt": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "sourcePaths": [str(path.resolve()) for path in source_paths],
@@ -3076,6 +3079,8 @@ def write_classin_handoff_manifest(
             [
                 "# ClassIn EDB Handoff",
                 "",
+                f"- Handoff status: `{payload['status']}`",
+                f"- Ready for ClassIn: {'yes' if payload['readyForClassIn'] else 'no'}",
                 f"- EDB: `{payload['edbPath']}`",
                 f"- Expected records: {payload['expectedRecordCount']}",
                 f"- Core problems: {payload['expectedCoreProblemCount']}",
