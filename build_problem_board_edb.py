@@ -1222,6 +1222,16 @@ def _collapse_marker_document_continuation_page(
         return None
 
     page.metadata["marker_document_continuation_detected"] = True
+    if (
+        len(problems) == 1
+        and problems[0].unit_id == f"{page.page_id}-continuation"
+        and _is_marker_document_continuation_problem(problems[0])
+    ):
+        page.metadata["marker_document_continuation_preserved"] = True
+        page.metadata.pop("problem_entry_skip_reason", None)
+        page.metadata.pop("problem_crop_skip_reason", None)
+        return problems
+
     if not any(_problem_has_fallback_grouping(problem) for problem in problems):
         page.metadata["problem_entry_skip_reason"] = "marker_document_continuation"
         return []
@@ -1605,8 +1615,103 @@ def _annotate_hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> None:
                     break
 
 
+def _following_numbered_problem_run(
+    page: PageModel,
+) -> list[ProblemUnit]:
+    numbered = [
+        (number, problem)
+        for problem in page.problems
+        if (number := _problem_metadata_number(problem)) is not None
+    ]
+    if len(numbered) < 2:
+        return []
+    numbered.sort(key=lambda item: (item[0], item[1].unit_id))
+    run: list[tuple[int, ProblemUnit]] = [numbered[0]]
+    previous = numbered[0][0]
+    for number, problem in numbered[1:]:
+        if number != previous + 1:
+            break
+        run.append((number, problem))
+        previous = number
+    if len(run) < 2:
+        return []
+    return [problem for _, problem in run]
+
+
+def _next_numbered_problem_run(
+    pages: Sequence[PageModel],
+    start_index: int,
+) -> list[ProblemUnit]:
+    reading_subjects = {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}
+    for next_page in pages[start_index + 1:]:
+        if next_page.subject not in reading_subjects:
+            return []
+        next_run = _following_numbered_problem_run(next_page)
+        if next_run:
+            return next_run
+        if any(_problem_metadata_number(problem) is not None for problem in next_page.problems):
+            return []
+    return []
+
+
+def _annotate_marker_continuation_pages_to_following_groups(pages: Sequence[PageModel]) -> None:
+    for index, page in enumerate(pages):
+        if page.subject not in {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}:
+            continue
+        if len(page.problems) != 1:
+            continue
+        continuation = page.problems[0]
+        if not _is_marker_document_continuation_problem(continuation):
+            continue
+        if continuation.metadata.get("passage_group_id"):
+            continue
+
+        following_run = _next_numbered_problem_run(pages, index)
+        if len(following_run) < 2:
+            continue
+
+        first_problem = following_run[0]
+        first_number = _problem_metadata_number(first_problem)
+        last_number = _problem_metadata_number(following_run[-1])
+        if first_number is None or last_number is None:
+            continue
+        existing_range = _passage_range_tuple(first_problem.metadata)
+        start, end = existing_range or (first_number, last_number)
+        child_numbers = _passage_child_numbers(first_problem.metadata, start, end)
+        group_id = str(first_problem.metadata.get("passage_group_id") or "").strip()
+        if not group_id:
+            group_id = f"hwp-continuation-passage-{start}-{end}"
+
+        common_metadata = {
+            "passage_group_id": group_id,
+            "passage_range": {"start": start, "end": end},
+            "passage_child_problem_numbers": child_numbers,
+            "passage_grouping_source": "marker_document_continuation",
+        }
+        child_number_set = set(child_numbers)
+        continuation.metadata.update(
+            {
+                **common_metadata,
+                "passage_role": "passage_fragment",
+                "passage_fragment_source": "marker_document_continuation",
+            }
+        )
+        for problem in following_run:
+            problem_number = _problem_metadata_number(problem)
+            if problem_number not in child_number_set:
+                continue
+            if not problem.metadata.get("passage_group_id"):
+                problem.metadata.update(
+                    {
+                        **common_metadata,
+                        "passage_role": "child_question",
+                    }
+                )
+
+
 def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
     _annotate_hwp_preview_passage_ranges(pages)
+    _annotate_marker_continuation_pages_to_following_groups(pages)
     active_groups: dict[str, dict[str, Any]] = {}
     for page in pages:
         ordered_problems = sorted(
