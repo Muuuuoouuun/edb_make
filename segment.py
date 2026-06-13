@@ -61,6 +61,8 @@ class SegmentOptions:
 SEGMENTATION_MODE_BOARD = "board"
 SEGMENTATION_MODE_DOCUMENT = "document"
 LARGE_BLOCK_AREA_RATIO = 0.18
+PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX = 3.0
+PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO = 0.001
 
 
 def _pil_to_gray_array(image: Image.Image):
@@ -629,6 +631,20 @@ def _marker_bbox(marker: dict[str, Any]) -> Box | None:
     return Box.from_points(left, top, right, bottom)
 
 
+def _is_tiny_hwp_layout_marker(marker: dict[str, Any], marker_box: Box, image_height: int) -> bool:
+    if str(marker.get("marker_kind") or "") != "hwp_layout_number":
+        return False
+    min_height = max(
+        PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX,
+        float(image_height) * PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO,
+    )
+    visible_top = max(0.0, marker_box.top)
+    visible_bottom = min(float(image_height), marker_box.bottom)
+    if visible_bottom <= visible_top:
+        return True
+    return visible_bottom - visible_top < min_height
+
+
 def _cluster_pdf_marker_columns(markers: list[dict[str, Any]], page_width: int) -> list[list[dict[str, Any]]]:
     marker_pairs: list[tuple[float, dict[str, Any]]] = []
     for marker in markers:
@@ -753,20 +769,29 @@ def _segment_pdf_problem_markers(
     page_id: str,
     markers: list[dict[str, Any]],
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
-    cleaned_markers = [
-        marker
-        for marker in markers
-        if isinstance(marker, dict)
-        and (
+    cleaned_markers: list[dict[str, Any]] = []
+    ignored_tiny_markers: list[dict[str, Any]] = []
+    for marker in markers:
+        if not isinstance(marker, dict):
+            continue
+        if not (
             isinstance(marker.get("number"), int)
             or marker.get("marker_kind") == "text_stem"
-        )
-        and _marker_bbox(marker) is not None
-    ]
+        ):
+            continue
+        marker_box = _marker_bbox(marker)
+        if marker_box is None:
+            continue
+        if _is_tiny_hwp_layout_marker(marker, marker_box, image.height):
+            ignored_tiny_markers.append(marker)
+            continue
+        cleaned_markers.append(marker)
     if not cleaned_markers:
         return None
 
-    columns = _cluster_pdf_marker_columns(cleaned_markers, image.width)
+    ignored_tiny_marker_ids = {id(marker) for marker in ignored_tiny_markers}
+    column_reference_markers = cleaned_markers + ignored_tiny_markers
+    columns = _cluster_pdf_marker_columns(column_reference_markers, image.width)
     if not columns:
         return None
     column_bounds = _column_bounds_from_marker_columns(columns, image.width)
@@ -774,8 +799,15 @@ def _segment_pdf_problem_markers(
     blocks: list[ContentBlock] = []
 
     for column_index, column_markers in enumerate(columns, start=1):
+        usable_column_markers = [
+            marker
+            for marker in column_markers
+            if id(marker) not in ignored_tiny_marker_ids
+        ]
+        if not usable_column_markers:
+            continue
         sorted_markers = sorted(
-            column_markers,
+            usable_column_markers,
             key=lambda marker: (_marker_bbox(marker).top if _marker_bbox(marker) else 0.0),
         )
         left_bound, right_bound = column_bounds[column_index - 1]
@@ -862,7 +894,7 @@ def _segment_pdf_problem_markers(
     for index, block in enumerate(blocks):
         block.reading_order = index
 
-    return blocks, {
+    metadata: dict[str, Any] = {
         "segmenter": "pdf-text-markers",
         "pdf_text_marker_count": len(cleaned_markers),
         "column_count": len(columns),
@@ -870,6 +902,17 @@ def _segment_pdf_problem_markers(
         "document_split_applied": True,
         "content_box_area_ratio": 1.0,
     }
+    if ignored_tiny_markers:
+        ignored_numbers = [
+            int(marker["number"])
+            for marker in ignored_tiny_markers
+            if isinstance(marker.get("number"), int)
+        ]
+        metadata["ignored_tiny_pdf_marker_count"] = len(ignored_tiny_markers)
+        if ignored_numbers:
+            metadata["ignored_tiny_pdf_marker_numbers"] = ignored_numbers
+
+    return blocks, metadata
 
 
 def _row_dark_projection(mask: Image.Image) -> list[int]:

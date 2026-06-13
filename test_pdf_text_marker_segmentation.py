@@ -200,6 +200,106 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             [block.metadata.get("problem_number_source") for block in segmented.blocks],
         )
 
+    def test_hwp_layout_markers_ignore_near_zero_height_problem_numbers(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((330, 96), "33. real problem stem", fill=(20, 20, 20))
+        draw.rectangle((365, 160, 500, 250), outline=(20, 20, 20), width=2)
+        draw.text((330, 320), "34. real problem stem", fill=(20, 20, 20))
+        draw.rectangle((365, 380, 500, 480), outline=(20, 20, 20), width=2)
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "hwp",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 32,
+                            "text": "32. hidden problem marker from split passage",
+                            "marker_kind": "hwp_layout_number",
+                            "bbox": {
+                                "left": 60,
+                                "top": 791.5,
+                                "right": 150,
+                                "bottom": 792.0,
+                            },
+                        },
+                        {
+                            "number": 33,
+                            "text": "33. real problem stem",
+                            "marker_kind": "hwp_layout_number",
+                            "bbox": {"left": 330, "top": 92, "right": 450, "bottom": 112},
+                        },
+                        {
+                            "number": 34,
+                            "text": "34. real problem stem",
+                            "marker_kind": "hwp_layout_number",
+                            "bbox": {"left": 330, "top": 316, "right": 450, "bottom": 336},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-hwp-layout.pdf"
+
+        segmented = segment_page(Source(image), page_id="hwp-layout-page", subject=Subject.KOREAN)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual([33, 34], [block.metadata.get("problem_number") for block in segmented.blocks])
+        self.assertEqual(1, segmented.metadata.get("ignored_tiny_pdf_marker_count"))
+        self.assertEqual([2, 2], [block.metadata.get("column_index") for block in segmented.blocks])
+        self.assertGreaterEqual(min(block.bbox.left for block in segmented.blocks), 300.0)
+        self.assertGreaterEqual(min(block.bbox.height for block in segmented.blocks), 40.0)
+
+    def test_hwp_layout_markers_ignore_off_page_problem_numbers(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((330, 96), "33. real problem stem", fill=(20, 20, 20))
+        draw.rectangle((365, 160, 500, 250), outline=(20, 20, 20), width=2)
+        draw.text((330, 320), "34. real problem stem", fill=(20, 20, 20))
+        draw.rectangle((365, 380, 500, 480), outline=(20, 20, 20), width=2)
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "hwp",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 32,
+                            "text": "32. off-page problem marker from split passage",
+                            "marker_kind": "hwp_layout_number",
+                            "bbox": {
+                                "left": 60,
+                                "top": 812.0,
+                                "right": 150,
+                                "bottom": 850.0,
+                            },
+                        },
+                        {
+                            "number": 33,
+                            "text": "33. real problem stem",
+                            "marker_kind": "hwp_layout_number",
+                            "bbox": {"left": 330, "top": 92, "right": 450, "bottom": 112},
+                        },
+                        {
+                            "number": 34,
+                            "text": "34. real problem stem",
+                            "marker_kind": "hwp_layout_number",
+                            "bbox": {"left": 330, "top": 316, "right": 450, "bottom": 336},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-hwp-layout.pdf"
+
+        segmented = segment_page(Source(image), page_id="hwp-off-page-layout", subject=Subject.KOREAN)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual([33, 34], [block.metadata.get("problem_number") for block in segmented.blocks])
+        self.assertEqual(1, segmented.metadata.get("ignored_tiny_pdf_marker_count"))
+        self.assertEqual([32], segmented.metadata.get("ignored_tiny_pdf_marker_numbers"))
+        self.assertEqual([2, 2], [block.metadata.get("column_index") for block in segmented.blocks])
+        self.assertGreaterEqual(min(block.bbox.left for block in segmented.blocks), 300.0)
+
 
 if __name__ == "__main__":
     unittest.main()
