@@ -12,6 +12,7 @@
 
   const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     board_placement_overlap: "판서 배치 겹침",
+    duplicate_problem_number: "중복 번호",
     low_ink_problem_image: "이미지 내용 부족",
     missing_problem_image: "문항 이미지 없음",
     review_flags_remaining: "검수 플래그 남음",
@@ -34,6 +35,65 @@
       counts.set(key, (counts.get(key) || 0) + 1);
     });
     return Array.from(counts.entries()).map(([type, count]) => `${classinPreflightIssueLabel(type)} ${count}`);
+  }
+
+  function classinPreflightIssueTypes(preflight) {
+    const issues = Array.isArray(preflight?.issues) ? preflight.issues : [];
+    const types = issues.map(issue => String(issue?.type || issue?.issueType || issue?.issue_type || "").trim())
+      .filter(Boolean);
+    return Array.from(new Set(types));
+  }
+
+  function normalizePublishPreflightBlock(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const errorKind = String(raw.errorKind || raw.error_kind || "").trim();
+    const classinPreflight = raw.classinPreflight || raw.classin_preflight || {};
+    const preflightStatus = String(
+      raw.classinPreflightStatus
+      || raw.classin_preflight_status
+      || classinPreflight.status
+      || ""
+    ).trim();
+    if (errorKind !== "publish_preflight_blocked" && preflightStatus !== "blocked") {
+      return null;
+    }
+    const issueLabels = classinPreflightIssueLabels(classinPreflight);
+    const issueSummaryLabel = String(
+      raw.classinPreflightIssueSummaryLabel
+      || raw.classin_preflight_issue_summary_label
+      || issueLabels.join(" · ")
+    ).trim();
+    const issueCount = positiveNumber(
+      raw.classinPreflightIssueCount
+      ?? raw.classin_preflight_issue_count
+      ?? classinPreflight.issueCount
+      ?? classinPreflight.issue_count
+    );
+    const blockingIssueTypes = Array.isArray(raw.blockingIssueTypes)
+      ? raw.blockingIssueTypes
+      : Array.isArray(raw.blocking_issue_types)
+        ? raw.blocking_issue_types
+        : [];
+    const issueTypes = Array.from(new Set([
+      ...classinPreflightIssueTypes(classinPreflight),
+      ...blockingIssueTypes.map(type => String(type || "").trim()).filter(Boolean),
+    ]));
+    const message = String(
+      raw.error
+      || "ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB 제작을 중단했습니다."
+    ).trim();
+    const toastLabel = [message, issueSummaryLabel].filter(Boolean).join(" ");
+    return {
+      blocked: true,
+      errorKind: errorKind || "publish_preflight_blocked",
+      message,
+      classinPreflight,
+      issueCount,
+      issueTypes,
+      issueLabels,
+      issueSummaryLabel,
+      toastLabel,
+    };
   }
 
   function formatRecordCountLabel(summary) {
@@ -271,6 +331,7 @@
   return {
     classinPreflightIssueLabel,
     classinPreflightIssueLabels,
+    normalizePublishPreflightBlock,
     formatPublishHistoryMeta,
     formatRecordCountLabel,
     formatPublishTime,

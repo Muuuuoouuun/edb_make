@@ -214,6 +214,40 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_preflight_block_labels_server_rejection(self) -> None:
+        run_node(
+            """
+            const { normalizePublishPreflightBlock } = require('./ui_prototype/publish_summary.js');
+            const block = normalizePublishPreflightBlock({
+              ok: false,
+              errorKind: 'publish_preflight_blocked',
+              error: 'ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB publish를 중단했습니다.',
+              classinPreflight: {
+                status: 'blocked',
+                passed: false,
+                issueCount: 3,
+                issues: [
+                  { type: 'source_problem_bbox_overlap', problemTitle: '21.', nextProblemTitle: '22.' },
+                  { type: 'source_problem_bbox_overlap', problemTitle: '31.', nextProblemTitle: '32.' },
+                  { type: 'duplicate_problem_number', problemTitle: '7.' },
+                ],
+              },
+            });
+            if (!block || !block.blocked) {
+              throw new Error('server rejection should normalize to a blocked payload');
+            }
+            if (block.issueCount !== 3) {
+              throw new Error(`issue count not preserved: ${block.issueCount}`);
+            }
+            if (block.issueSummaryLabel !== '원본 영역 겹침 2 · 중복 번호 1') {
+              throw new Error(`unexpected issue summary: ${block.issueSummaryLabel}`);
+            }
+            if (!block.toastLabel.includes('원본 영역 겹침 2')) {
+              throw new Error(`toast label missing issue summary: ${block.toastLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_passage_group_metrics(self) -> None:
         run_node(
             """
