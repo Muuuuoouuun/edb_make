@@ -2927,6 +2927,7 @@ PASSAGE_REVIEW_RISK_FLAGS = {
     HWP_TEXT_FALLBACK_RISK_FLAG,
     PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG,
     "marker_document_continuation",
+    "passage_missing_child_questions",
     "passage_group_source_reuse",
     "source_problem_bbox_overlap",
 }
@@ -3125,6 +3126,7 @@ def _duplicate_number_group_looks_like_alternate_section(
 
 
 DUPLICATE_PROBLEM_NUMBER_RISK_FLAG = "duplicate_problem_number"
+PASSAGE_MISSING_CHILD_QUESTIONS_RISK_FLAG = "passage_missing_child_questions"
 PASSAGE_GROUP_SOURCE_REUSE_RISK_FLAG = "passage_group_source_reuse"
 SOURCE_PROBLEM_BBOX_OVERLAP_RISK_FLAG = "source_problem_bbox_overlap"
 
@@ -3217,6 +3219,35 @@ def _mark_passage_group_source_reuse_review_flags(
             continue
         flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
         flags.append(PASSAGE_GROUP_SOURCE_REUSE_RISK_FLAG)
+        problem["riskFlags"] = list(dict.fromkeys(flags))
+        if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
+            problem["reviewStatus"] = "check_needed"
+
+
+def _mark_missing_passage_child_question_review_flags(
+    problems: list[dict[str, Any]],
+    passage_groups: Sequence[dict[str, Any]],
+) -> None:
+    problem_ids_to_flag: set[str] = set()
+    for group in passage_groups:
+        missing_numbers = _ordered_unique_ints(
+            group.get("missingChildProblemNumbers") or group.get("missing_child_problem_numbers") or []
+        )
+        if not missing_numbers:
+            continue
+        for problem_id in group.get("coreProblemIds") or group.get("core_problem_ids") or []:
+            problem_id_text = str(problem_id or "").strip()
+            if problem_id_text:
+                problem_ids_to_flag.add(problem_id_text)
+    if not problem_ids_to_flag:
+        return
+
+    for problem in problems:
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
+        if problem_id not in problem_ids_to_flag:
+            continue
+        flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
+        flags.append(PASSAGE_MISSING_CHILD_QUESTIONS_RISK_FLAG)
         problem["riskFlags"] = list(dict.fromkeys(flags))
         if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
             problem["reviewStatus"] = "check_needed"
@@ -4102,6 +4133,7 @@ def build_ui_session(
     passage_group_source_reuse_groups = _session_passage_group_source_reuse_groups(problems)
     _mark_passage_group_source_reuse_review_flags(problems, passage_group_source_reuse_groups)
     passage_groups = _session_passage_groups(problems)
+    _mark_missing_passage_child_question_review_flags(problems, passage_groups)
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
     )
