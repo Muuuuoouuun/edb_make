@@ -2886,6 +2886,10 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
         fragment_problem_ids = _ordered_unique_strings(group["fragmentProblemIds"])
         detected_problem_count = len(group["problemIds"])
         problem_numbers = _ordered_unique_ints(group["problemNumbers"])
+        problem_number_set = set(problem_numbers)
+        missing_child_problem_numbers = [
+            number for number in child_numbers if number not in problem_number_set
+        ]
         problem_count = len(problem_numbers) if problem_numbers else len(core_problem_ids)
         fragment_problem_count = len(fragment_problem_ids)
         message_label = label or str(group["groupId"])
@@ -2899,6 +2903,8 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
                 "numberLabel": label,
                 "problemNumbers": problem_numbers,
                 "childProblemNumbers": child_numbers,
+                "missingChildProblemNumbers": missing_child_problem_numbers,
+                "missingChildProblemCount": len(missing_child_problem_numbers),
                 "coreProblemIds": core_problem_ids,
                 "fragmentProblemIds": fragment_problem_ids,
                 "sourcePageIds": source_page_ids,
@@ -2972,6 +2978,13 @@ def _session_passage_review_items(
             reason_codes.append("cross_page_passage_group")
         if fragment_problem_ids or int(group.get("fragmentProblemCount") or group.get("fragment_problem_count") or 0) > 0:
             reason_codes.append("passage_fragment")
+        missing_child_problem_numbers = _ordered_unique_ints(
+            group.get("missingChildProblemNumbers")
+            or group.get("missing_child_problem_numbers")
+            or []
+        )
+        if missing_child_problem_numbers:
+            reason_codes.append("passage_missing_child_questions")
         for flag in sorted(risk_flags):
             if flag in PASSAGE_REVIEW_RISK_FLAGS and flag not in reason_codes:
                 if flag == "marker_document_continuation" and "passage_fragment" in reason_codes:
@@ -2992,7 +3005,10 @@ def _session_passage_review_items(
         message = f"{label} 긴 지문 그룹은 {page_count}개 페이지와 {problem_count}개 하위 문항"
         if fragment_count:
             message += f", 이어짐 자료 {fragment_count}개"
-        message += "를 확인해야 합니다."
+        if missing_child_problem_numbers:
+            missing_label = ", ".join(f"{number}번" for number in missing_child_problem_numbers)
+            message += f", 누락 문항 {missing_label}"
+        message += "을 확인해야 합니다." if missing_child_problem_numbers else "를 확인해야 합니다."
         items.append(
             {
                 "groupId": group_id,
@@ -3001,6 +3017,8 @@ def _session_passage_review_items(
                 "fragmentProblemIds": fragment_problem_ids,
                 "sourcePageIds": source_page_ids,
                 "problemCount": problem_count,
+                "missingChildProblemNumbers": missing_child_problem_numbers,
+                "missingChildProblemCount": len(missing_child_problem_numbers),
                 "fragmentProblemCount": fragment_count,
                 "continuesAcrossPages": bool(
                     group.get("continuesAcrossPages")
@@ -4270,12 +4288,19 @@ def write_classin_handoff_manifest(
                 _ordered_unique_strings(item.get("fragmentProblemIds") or item.get("fragment_problem_ids") or [])
             )
             page_ids = ", ".join(_ordered_unique_strings(item.get("sourcePageIds") or item.get("source_page_ids") or []))
+            missing_numbers = ", ".join(
+                str(number)
+                for number in _ordered_unique_ints(
+                    item.get("missingChildProblemNumbers") or item.get("missing_child_problem_numbers") or []
+                )
+            )
             passage_review_lines.append(
                 f"- `{item.get('groupId')}` {label}"
                 + (f" · {item.get('message')}" if item.get("message") else "")
                 + (f" · problems: {problem_ids}" if problem_ids else "")
                 + (f" · fragments: {fragment_ids}" if fragment_ids else "")
                 + (f" · pages: {page_ids}" if page_ids else "")
+                + (f" · missing: {missing_numbers}" if missing_numbers else "")
                 + (f" · reasons: {reasons}" if reasons else "")
             )
     if classin_preflight["passed"]:

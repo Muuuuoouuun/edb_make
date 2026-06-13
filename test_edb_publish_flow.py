@@ -680,8 +680,10 @@ class TestEdbPublishFlow(unittest.TestCase):
                 self.assertEqual("check_needed", problem["reviewStatus"])
 
             self.assertEqual(1, ui_session["passageReviewItemCount"])
+            self.assertEqual([33, 34], ui_session["passageReviewItems"][0]["missingChildProblemNumbers"])
+            self.assertEqual(2, ui_session["passageReviewItems"][0]["missingChildProblemCount"])
             self.assertEqual(
-                ["passage_group_source_reuse"],
+                ["passage_missing_child_questions", "passage_group_source_reuse"],
                 ui_session["passageReviewItems"][0]["reviewReasonCodes"],
             )
 
@@ -1960,6 +1962,8 @@ class TestEdbPublishFlow(unittest.TestCase):
                         "numberLabel": "13-16",
                         "problemNumbers": [13, 15, 16],
                         "childProblemNumbers": [13, 14, 15, 16],
+                        "missingChildProblemNumbers": [14],
+                        "missingChildProblemCount": 1,
                         "problemIds": ["p13", "p15", "p16", "p13-fragment"],
                         "coreProblemIds": ["p13", "p15", "p16"],
                         "fragmentProblemIds": ["p13-fragment"],
@@ -2072,11 +2076,18 @@ class TestEdbPublishFlow(unittest.TestCase):
                     "fragmentProblemIds": ["p31-fragment"],
                     "sourcePageIds": ["page-5", "page-6"],
                     "problemCount": 3,
+                    "missingChildProblemNumbers": [33],
+                    "missingChildProblemCount": 1,
                     "fragmentProblemCount": 1,
                     "continuesAcrossPages": True,
-                    "reviewReasonCodes": ["cross_page_passage_group", "passage_fragment", "passage_cross_page_merge_check"],
+                    "reviewReasonCodes": [
+                        "cross_page_passage_group",
+                        "passage_fragment",
+                        "passage_missing_child_questions",
+                        "passage_cross_page_merge_check",
+                    ],
                     "riskFlags": ["marker_document_continuation", "passage_cross_page_merge_check"],
-                    "message": "31-34 긴 지문 그룹은 2개 페이지와 3개 하위 문항, 이어짐 자료 1개를 확인해야 합니다.",
+                    "message": "31-34 긴 지문 그룹은 2개 페이지와 3개 하위 문항, 이어짐 자료 1개, 누락 문항 33번을 확인해야 합니다.",
                 },
                 handoff["passageReviewItems"][0],
             )
@@ -2085,6 +2096,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("problems: p31, p32, p34", markdown)
             self.assertIn("fragments: p31-fragment", markdown)
             self.assertIn("pages: page-5, page-6", markdown)
+            self.assertIn("missing: 33", markdown)
             self.assertIn("cross_page_passage_group", markdown)
 
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
