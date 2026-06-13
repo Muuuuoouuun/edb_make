@@ -90,6 +90,10 @@ CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO = 0.002
 CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES = 0.01
 CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO = 0.65
 CLASSIN_PREFLIGHT_MAX_ISSUES = 50
+CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
+    "fallback_grouping",
+    "marker_document_continuation",
+}
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
@@ -2818,6 +2822,18 @@ def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) 
     return issues
 
 
+def _classin_preflight_has_actionable_review_state(risk_flags: Sequence[str], review_status: str) -> bool:
+    status = str(review_status or "").strip()
+    if status == "failed":
+        return True
+    normalized_flags = {str(flag or "").strip() for flag in risk_flags if str(flag or "").strip()}
+    if normalized_flags and normalized_flags.issubset(CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS):
+        return "marker_document_continuation" not in normalized_flags
+    if normalized_flags:
+        return True
+    return status == "check_needed" and not risk_flags
+
+
 def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
     raw_problems = ui_session.get("problems")
     problems = raw_problems if isinstance(raw_problems, list) else []
@@ -2833,7 +2849,7 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
 
         risk_flags = [str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)]
         review_status = str(problem.get("reviewStatus") or "").strip()
-        if risk_flags or review_status in {"check_needed", "failed"}:
+        if _classin_preflight_has_actionable_review_state(risk_flags, review_status):
             issues.append(
                 _classin_preflight_issue(
                     "review_flags_remaining",

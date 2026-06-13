@@ -1045,6 +1045,88 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("missing_problem_image", markdown)
             self.assertIn("low_ink_problem_image", markdown)
 
+    def test_classin_preflight_ignores_nonactionable_continuation_review_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            crop = root / "continuation.png"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+            image = Image.new("RGB", (800, 300), "white")
+            ImageDraw.Draw(image).rectangle((40, 40, 220, 90), fill=(20, 20, 20))
+            image.save(crop)
+
+            json_path, _md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 45,
+                    "supplemental_item_count": 1,
+                    "detected_problem_count": 46,
+                    "source_page_count": 16,
+                    "reviewSummary": {"riskFlagCounts": {"marker_document_continuation": 1}},
+                    "problems": [
+                        {
+                            "id": "page-008-continuation",
+                            "title": "이어지는 자료",
+                            "imagePath": crop.resolve().as_uri(),
+                            "riskFlags": ["fallback_grouping", "marker_document_continuation"],
+                            "reviewStatus": "check_needed",
+                        }
+                    ],
+                },
+                summary={"record_count": 46, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=92),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+
+            self.assertEqual("passed", handoff["classinPreflight"]["status"])
+            self.assertTrue(handoff["classinPreflight"]["passed"])
+            self.assertEqual([], handoff["classinPreflight"]["issues"])
+
+    def test_classin_preflight_keeps_fallback_review_flags_without_continuation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            crop = root / "fallback.png"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+            image = Image.new("RGB", (800, 300), "white")
+            ImageDraw.Draw(image).rectangle((40, 40, 220, 90), fill=(20, 20, 20))
+            image.save(crop)
+
+            json_path, _md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 1,
+                    "detected_problem_count": 1,
+                    "source_page_count": 1,
+                    "problems": [
+                        {
+                            "id": "page-001-fallback",
+                            "title": "1.",
+                            "imagePath": crop.resolve().as_uri(),
+                            "riskFlags": ["fallback_grouping"],
+                            "reviewStatus": "check_needed",
+                        }
+                    ],
+                },
+                summary={"record_count": 1, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=50),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+
+            self.assertEqual("needs_attention", handoff["classinPreflight"]["status"])
+            self.assertFalse(handoff["classinPreflight"]["passed"])
+            self.assertEqual(["review_flags_remaining"], [issue["type"] for issue in handoff["classinPreflight"]["issues"]])
+
     def test_classin_preflight_flags_board_placement_overlap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
