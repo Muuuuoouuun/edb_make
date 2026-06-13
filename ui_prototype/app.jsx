@@ -3460,45 +3460,66 @@ function collectPassageGroupSummary(session){
   };
 }
 
-function collectPassageReviewSummary(session){
+function passageReviewItemProblemIds(item){
+  return [
+    ...(Array.isArray(item?.problemIds || item?.problem_ids) ? (item.problemIds || item.problem_ids) : []),
+    ...(Array.isArray(item?.fragmentProblemIds || item?.fragment_problem_ids) ? (item.fragmentProblemIds || item.fragment_problem_ids) : []),
+  ]
+    .map(id => String(id || '').trim())
+    .filter(Boolean);
+}
+
+function collectPassageReviewSummary(session, options = {}){
   const rawItems = Array.isArray(session?.passageReviewItems)
     ? session.passageReviewItems
     : Array.isArray(session?.passage_review_items)
       ? session.passage_review_items
       : [];
   const passageReviewItems = rawItems.filter(item => item && typeof item === 'object');
+  const actionableProblemIds = options.actionableProblemIds instanceof Set
+    ? options.actionableProblemIds
+    : null;
+  const unresolvedPassageReviewItems = actionableProblemIds
+    ? passageReviewItems.filter(item => {
+      const ids = passageReviewItemProblemIds(item);
+      return ids.length === 0 || ids.some(id => actionableProblemIds.has(id));
+    })
+    : passageReviewItems;
   const explicitCount = Number(session?.passageReviewItemCount ?? session?.passage_review_item_count);
-  const passageReviewItemCount = Number.isFinite(explicitCount)
-    ? Math.max(0, explicitCount)
-    : passageReviewItems.length;
+  const passageReviewItemCount = actionableProblemIds
+    ? unresolvedPassageReviewItems.length
+    : (
+      Number.isFinite(explicitCount)
+        ? Math.max(0, explicitCount)
+        : unresolvedPassageReviewItems.length
+    );
   const explicitCrossPageCount = Number(
     session?.crossPagePassageReviewItemCount
     ?? session?.cross_page_passage_review_item_count
   );
-  const crossPagePassageReviewItemCount = Number.isFinite(explicitCrossPageCount)
-    ? Math.max(0, explicitCrossPageCount)
-    : passageReviewItems.filter(item => item.continuesAcrossPages || item.continues_across_pages).length;
+  const crossPagePassageReviewItemCount = actionableProblemIds
+    ? unresolvedPassageReviewItems.filter(item => item.continuesAcrossPages || item.continues_across_pages).length
+    : (
+      Number.isFinite(explicitCrossPageCount)
+        ? Math.max(0, explicitCrossPageCount)
+        : unresolvedPassageReviewItems.filter(item => item.continuesAcrossPages || item.continues_across_pages).length
+    );
   const passageReviewLabel = passageReviewItemCount > 0
     ? [
       `긴 지문 검수 ${passageReviewItemCount}`,
       crossPagePassageReviewItemCount > 0 ? `페이지 넘김 ${crossPagePassageReviewItemCount}` : '',
     ].filter(Boolean).join(' · ')
     : '';
-  const passageReviewPreview = passageReviewItems
+  const passageReviewPreview = unresolvedPassageReviewItems
     .map(item => String(item.numberLabel || item.number_label || item.groupId || item.group_id || '').trim())
     .filter(Boolean)
     .slice(0, 5)
     .join(', ');
   const passageReviewProblemIds = Array.from(new Set(
-    passageReviewItems.flatMap(item => [
-      ...(Array.isArray(item.problemIds || item.problem_ids) ? (item.problemIds || item.problem_ids) : []),
-      ...(Array.isArray(item.fragmentProblemIds || item.fragment_problem_ids) ? (item.fragmentProblemIds || item.fragment_problem_ids) : []),
-    ])
-      .map(id => String(id || '').trim())
-      .filter(Boolean)
+    unresolvedPassageReviewItems.flatMap(item => passageReviewItemProblemIds(item))
   ));
   return {
-    passageReviewItems,
+    passageReviewItems: unresolvedPassageReviewItems,
     passageReviewProblemIds,
     passageReviewItemCount,
     crossPagePassageReviewItemCount,
@@ -3511,16 +3532,12 @@ function sessionReviewSummary(session){
   const raw = session?.review_summary || session?.reviewSummary || {};
   const counts = sessionProblemCounts(session);
   const passageSummary = collectPassageGroupSummary(session);
-  const passageReviewSummary = collectPassageReviewSummary(session);
   const fallbackStatusCounts = collectReviewStatusCounts(session);
-  const rawStatusCounts = raw.reviewStatusCounts && typeof raw.reviewStatusCounts === 'object'
-    ? raw.reviewStatusCounts
-    : {};
   const reviewStatusCounts = {
-    all: Number(rawStatusCounts.all ?? fallbackStatusCounts.all) || 0,
-    normal: Number(rawStatusCounts.normal ?? fallbackStatusCounts.normal) || 0,
-    check_needed: Number(rawStatusCounts.check_needed ?? fallbackStatusCounts.check_needed) || 0,
-    failed: Number(rawStatusCounts.failed ?? fallbackStatusCounts.failed) || 0,
+    all: Number(fallbackStatusCounts.all) || 0,
+    normal: Number(fallbackStatusCounts.normal) || 0,
+    check_needed: Number(fallbackStatusCounts.check_needed) || 0,
+    failed: Number(fallbackStatusCounts.failed) || 0,
   };
   const rawSupplementalStatusCounts = raw.supplementalReviewStatusCounts && typeof raw.supplementalReviewStatusCounts === 'object'
     ? raw.supplementalReviewStatusCounts
@@ -3529,16 +3546,11 @@ function sessionReviewSummary(session){
     ? raw.coreReviewStatusCounts
     : {};
   const fallbackRiskFlagCounts = collectRiskFlagCounts(session);
-  const riskFlagCounts = raw.riskFlagCounts && typeof raw.riskFlagCounts === 'object'
-    ? raw.riskFlagCounts
-    : fallbackRiskFlagCounts;
-  const actionableRiskFlagCounts = raw.actionableRiskFlagCounts && typeof raw.actionableRiskFlagCounts === 'object'
-    ? raw.actionableRiskFlagCounts
-    : filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
-  const rawActionableNeedsReviewCount = Number(raw.actionableNeedsReviewCount ?? raw.actionable_needs_review_count);
-  const actionableNeedsReviewCount = Number.isFinite(rawActionableNeedsReviewCount)
-    ? Math.max(0, rawActionableNeedsReviewCount)
-    : countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
+  const riskFlagCounts = fallbackRiskFlagCounts;
+  const actionableRiskFlagCounts = filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
+  const actionableReviewProblemIds = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
+  const actionableNeedsReviewCount = countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
+  const passageReviewSummary = collectPassageReviewSummary(session, { actionableProblemIds: actionableReviewProblemIds });
   const topRiskFlags = normalizeFilterableRiskFlagItems(session, actionableRiskFlagCounts);
   const warningMessages = Array.isArray(raw.warningMessages)
     ? raw.warningMessages.map(message => String(message || '').trim()).filter(Boolean)
@@ -3615,9 +3627,7 @@ function sessionReviewSummary(session){
     reviewStatusCounts,
     coreReviewStatusCounts: rawCoreStatusCounts,
     supplementalReviewStatusCounts: rawSupplementalStatusCounts,
-    needsReviewCount: Number.isFinite(Number(raw.needsReviewCount))
-      ? Math.max(0, Number(raw.needsReviewCount))
-      : Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
+    needsReviewCount: Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
     actionableNeedsReviewCount,
     riskFlagCounts,
     actionableRiskFlagCounts,
