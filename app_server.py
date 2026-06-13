@@ -733,6 +733,21 @@ def _session_publish_preflight_blocked_payload(
             if isinstance(issue, dict) and str(issue.get("type") or "")
         }
     )
+    blocking_problem_ids: list[str] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        raw_ids = issue.get("problemIds") or issue.get("problem_ids") or []
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        for value in [
+            *raw_ids,
+            issue.get("problemId") or issue.get("problem_id"),
+            issue.get("nextProblemId") or issue.get("next_problem_id"),
+        ]:
+            problem_id = str(value or "").strip()
+            if problem_id and problem_id not in blocking_problem_ids:
+                blocking_problem_ids.append(problem_id)
     return {
         "ok": False,
         "error": "ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB publish를 중단했습니다.",
@@ -750,6 +765,8 @@ def _session_publish_preflight_blocked_payload(
         "blocking_duplicate_problem_number_groups": duplicate_groups,
         "blockingIssueTypes": issue_types,
         "blocking_issue_types": issue_types,
+        "blockingProblemIds": blocking_problem_ids,
+        "blocking_problem_ids": blocking_problem_ids,
     }
 
 

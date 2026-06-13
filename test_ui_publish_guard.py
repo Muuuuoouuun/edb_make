@@ -107,6 +107,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("source_problem_bbox_overlap", target_helper)
         self.assertIn("duplicate_problem_number", target_helper)
         self.assertIn("passage_group_source_reuse", target_helper)
+        self.assertIn("blockedPublish?.blockingProblemIds", target_helper)
         self.assertIn("problemIds: focusedProblemIds", target_helper)
         self.assertIn("서버 사전점검", on_publish)
         self.assertIn("setView('review')", on_publish)
@@ -114,7 +115,7 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.jsx?v=preflight-focus-20260614", html)
+        self.assertIn("app.jsx?v=preflight-block-focus-20260614", html)
         self.assertIn("publish_guard.js?v=preflight-focus-20260614", html)
 
 

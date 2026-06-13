@@ -45,6 +45,15 @@
     return Array.from(new Set(types));
   }
 
+  function normalizeBlockingProblemIds(raw) {
+    const ids = Array.isArray(raw?.blockingProblemIds)
+      ? raw.blockingProblemIds
+      : Array.isArray(raw?.blocking_problem_ids)
+        ? raw.blocking_problem_ids
+        : [];
+    return Array.from(new Set(ids.map(id => String(id || "").trim()).filter(Boolean)));
+  }
+
   function normalizePublishPreflightBlock(raw) {
     if (!raw || typeof raw !== "object") return null;
     const errorKind = String(raw.errorKind || raw.error_kind || "").trim();
@@ -84,6 +93,7 @@
       || "ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB 제작을 중단했습니다."
     ).trim();
     const toastLabel = [message, issueSummaryLabel].filter(Boolean).join(" ");
+    const blockingProblemIds = normalizeBlockingProblemIds(raw);
     return {
       blocked: true,
       errorKind: errorKind || "publish_preflight_blocked",
@@ -91,6 +101,8 @@
       classinPreflight,
       issueCount,
       issueTypes,
+      blockingProblemIds,
+      blocking_problem_ids: blockingProblemIds,
       issueLabels,
       issueSummaryLabel,
       toastLabel,

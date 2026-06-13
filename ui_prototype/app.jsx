@@ -3079,6 +3079,14 @@ function normalizePublishPreflightBlock(raw){
     ...issues.map(issue => String(issue?.type || issue?.issueType || issue?.issue_type || '').trim()).filter(Boolean),
     ...blockingIssueTypes.map(type => String(type || '').trim()).filter(Boolean),
   ]));
+  const blockingProblemIds = Array.from(new Set(
+    (Array.isArray(raw.blockingProblemIds)
+      ? raw.blockingProblemIds
+      : Array.isArray(raw.blocking_problem_ids)
+        ? raw.blocking_problem_ids
+        : []
+    ).map(id => String(id || '').trim()).filter(Boolean)
+  ));
   const message = String(
     raw.error
     || 'ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB 제작을 중단했습니다.'
@@ -3090,6 +3098,8 @@ function normalizePublishPreflightBlock(raw){
     classinPreflight,
     issueCount: Number.isFinite(issueCount) ? Math.max(0, issueCount) : 0,
     issueTypes,
+    blockingProblemIds,
+    blocking_problem_ids: blockingProblemIds,
     issueLabels,
     issueSummaryLabel,
     toastLabel: [message, issueSummaryLabel].filter(Boolean).join(' '),
@@ -3108,14 +3118,22 @@ function publishBlockedTarget(blockedPublish){
     'duplicate_problem_number',
     'passage_group_source_reuse',
   ];
+  const topLevelProblemIds = Array.isArray(blockedPublish?.blockingProblemIds)
+    ? blockedPublish.blockingProblemIds
+    : Array.isArray(blockedPublish?.blocking_problem_ids)
+      ? blockedPublish.blocking_problem_ids
+      : [];
   const focusedProblemIds = Array.from(new Set(
-    issues
-      .filter(issue => focusIssueTypes.includes(String(issue?.type || issue?.issueType || issue?.issue_type || '').trim()))
-      .flatMap(issue => [
-        ...(Array.isArray(issue.problemIds || issue.problem_ids) ? (issue.problemIds || issue.problem_ids) : []),
-        issue.problemId || issue.problem_id,
-        issue.nextProblemId || issue.next_problem_id,
-      ])
+    (topLevelProblemIds.length
+      ? topLevelProblemIds
+      : issues
+        .filter(issue => focusIssueTypes.includes(String(issue?.type || issue?.issueType || issue?.issue_type || '').trim()))
+        .flatMap(issue => [
+          ...(Array.isArray(issue.problemIds || issue.problem_ids) ? (issue.problemIds || issue.problem_ids) : []),
+          issue.problemId || issue.problem_id,
+          issue.nextProblemId || issue.next_problem_id,
+        ])
+    )
       .map(id => String(id || '').trim())
       .filter(Boolean)
   ));

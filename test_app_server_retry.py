@@ -421,6 +421,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
             issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
             self.assertIn("source_problem_bbox_overlap", issue_types)
+            self.assertEqual(["p21", "p22"], body["blockingProblemIds"])
+            self.assertEqual(["p21", "p22"], body["blocking_problem_ids"])
             entries.assert_not_called()
 
     def test_session_publish_blocks_passage_group_source_reuse_before_build(self):
@@ -462,6 +464,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
             issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
             self.assertIn("passage_group_source_reuse", issue_types)
+            self.assertEqual(["p22", "p23"], body["blockingProblemIds"])
+            self.assertEqual(["p22", "p23"], body["blocking_problem_ids"])
             entries.assert_not_called()
 
     def test_session_publish_blocks_duplicate_problem_numbers_before_build(self):
@@ -502,6 +506,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
             self.assertIn("duplicate_problem_number", issue_types)
             self.assertEqual("7", body["blockingDuplicateProblemNumberGroups"][0]["numberLabel"])
+            self.assertEqual(["p7-a", "p7-b"], body["blockingProblemIds"])
+            self.assertEqual(["p7-a", "p7-b"], body["blocking_problem_ids"])
             entries.assert_not_called()
 
     def test_session_publish_blocks_board_placement_overlap_before_build(self):

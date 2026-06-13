@@ -232,6 +232,7 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
                   { type: 'duplicate_problem_number', problemTitle: '7.' },
                 ],
               },
+              blockingProblemIds: ['p21', 'p22', 'p7-a'],
             });
             if (!block || !block.blocked) {
               throw new Error('server rejection should normalize to a blocked payload');
@@ -244,6 +245,9 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             }
             if (!block.toastLabel.includes('원본 영역 겹침 2')) {
               throw new Error(`toast label missing issue summary: ${block.toastLabel}`);
+            }
+            if (JSON.stringify(block.blockingProblemIds) !== JSON.stringify(['p21', 'p22', 'p7-a'])) {
+              throw new Error(`blocking problem ids not preserved: ${JSON.stringify(block.blockingProblemIds)}`);
             }
             """
         )

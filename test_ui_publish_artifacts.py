@@ -88,8 +88,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
     def test_board_uses_publish_artifact_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("publish_summary.js?v=passage-reuse-summary-20260614", html)
-        self.assertIn("app.jsx?v=preflight-focus-20260614", html)
+        self.assertIn("publish_summary.js?v=preflight-block-focus-20260614", html)
+        self.assertIn("app.jsx?v=preflight-block-focus-20260614", html)
 
 
 if __name__ == "__main__":
