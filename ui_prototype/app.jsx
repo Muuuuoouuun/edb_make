@@ -2946,6 +2946,7 @@ const RISK_FLAG_META = {
   needs_review: '검토 필요',
   no_problem_markers: '문항 번호 부족',
   ocr_disabled: 'OCR 미사용',
+  passage_cross_page_merge_check: '긴 지문 병합 확인',
   problem_per_block: '블록 단위 분리',
   sparse_segmentation: '성긴 분할',
 };

@@ -592,6 +592,8 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([13, 14, 15, 16], linked_problem["passageChildProblemNumbers"])
             self.assertEqual(["page-1", "page-2"], linked_problem["passageSourcePageIds"])
             self.assertTrue(linked_problem["passageContinuesAcrossPages"])
+            self.assertIn("passage_cross_page_merge_check", linked_problem["riskFlags"])
+            self.assertEqual("check_needed", linked_problem["reviewStatus"])
 
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:

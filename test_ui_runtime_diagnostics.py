@@ -87,6 +87,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("passageGroupIdFor(problem)", passage_helper)
         self.assertIn("passageGroupId", passage_id_helper)
         self.assertIn("passage_group_id", passage_id_helper)
+        risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
+        risk_meta = risk_meta.split("};", 1)[0]
+        self.assertIn("passage_cross_page_merge_check", risk_meta)
+        self.assertIn("긴 지문 병합 확인", risk_meta)
 
 
 if __name__ == "__main__":

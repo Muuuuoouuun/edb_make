@@ -961,6 +961,28 @@ class TestReviewSummary(unittest.TestCase):
             summary["actionableRiskFlagCounts"],
         )
 
+    def test_session_review_summary_keeps_cross_page_passage_checks_actionable(self):
+        session = {
+            "problems": [
+                {
+                    "id": "p15",
+                    "bbox": {"width": 120, "height": 80},
+                    "riskFlags": ["passage_cross_page_merge_check"],
+                    "passageGroupId": "page-1-passage-13-16",
+                    "passageContinuesAcrossPages": True,
+                },
+            ],
+            "pages": [],
+        }
+
+        summary = app_server._session_review_summary(session)
+
+        self.assertEqual(
+            {"passage_cross_page_merge_check": 1},
+            summary["actionableRiskFlagCounts"],
+        )
+        self.assertEqual(1, summary["actionableNeedsReviewCount"])
+
     def test_session_review_summary_reads_hwp_text_qa_from_pages_json_path(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

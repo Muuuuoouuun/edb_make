@@ -89,6 +89,7 @@ CLASSIN_PREFLIGHT_INK_THRESHOLD = 245
 CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO = 0.002
 CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES = 0.01
 CLASSIN_PREFLIGHT_MAX_ISSUES = 50
+PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
 # Brightness above this value (0-255) is treated as a light background that
@@ -1520,6 +1521,8 @@ def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
 
 def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
     flags: list[str] = []
+    if _problem_passage_continues_across_pages(problem.metadata):
+        flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
     if problem.metadata.get("fallback_grouping"):
         flags.append("fallback_grouping")
     if problem.metadata.get("merged_problem_block"):
@@ -1539,6 +1542,17 @@ def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
             flags.extend(str(value) for value in values if value)
 
     return list(dict.fromkeys(flags))
+
+
+def _problem_passage_continues_across_pages(metadata: dict[str, Any] | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if bool(metadata.get("passage_continues_across_pages")):
+        return True
+    source_page_ids = metadata.get("passage_source_page_ids")
+    if not isinstance(source_page_ids, list):
+        return False
+    return len({str(page_id) for page_id in source_page_ids if str(page_id)}) > 1
 
 
 def build_problem_entries(
@@ -2815,9 +2829,12 @@ def build_ui_session(
         # reasons to per-problem flags; page-wide signals stay on the page.
         problem_flags = list(placement.get("risk_flags") or [])
         problem_flags.extend(reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS)
-        problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
         problem_id = str(placement["problem_id"])
-        passage_payload = _problem_passage_payload(problem_metadata_by_id.get(problem_id))
+        problem_metadata = problem_metadata_by_id.get(problem_id)
+        if _problem_passage_continues_across_pages(problem_metadata):
+            problem_flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
+        problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
+        passage_payload = _problem_passage_payload(problem_metadata)
         processing_step = _normalize_processing_step(
             placement.get("processing_step") or placement.get("step")
         )
