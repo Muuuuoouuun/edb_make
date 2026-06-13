@@ -185,6 +185,81 @@ def source_problem_overlap_group_count(row: dict[str, Any]) -> int:
     return len(groups) if isinstance(groups, list) else 0
 
 
+def _passage_group_child_count(group: dict[str, Any]) -> int:
+    for key in ("problemNumbers", "problem_numbers", "childProblemNumbers", "child_problem_numbers"):
+        values = group.get(key)
+        if isinstance(values, list) and values:
+            return len({str(value).strip() for value in values if str(value).strip()})
+    raw_count = _coerce_non_negative_int(group.get("problemCount") or group.get("problem_count"))
+    fragment_count = _coerce_non_negative_int(group.get("fragmentProblemCount") or group.get("fragment_problem_count"))
+    return max(0, raw_count - fragment_count)
+
+
+def _passage_metrics(payload: dict[str, Any], session: dict[str, Any], review_summary: dict[str, Any]) -> dict[str, int]:
+    sources = [
+        session,
+        payload,
+        review_summary,
+        session.get("publishSummary") if isinstance(session.get("publishSummary"), dict) else None,
+        session.get("publish_summary") if isinstance(session.get("publish_summary"), dict) else None,
+        payload.get("publishSummary") if isinstance(payload.get("publishSummary"), dict) else None,
+        payload.get("publish_summary") if isinstance(payload.get("publish_summary"), dict) else None,
+    ]
+    groups: list[dict[str, Any]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        raw_groups = source.get("passageGroups") or source.get("passage_groups")
+        if isinstance(raw_groups, list):
+            groups = [group for group in raw_groups if isinstance(group, dict)]
+            if groups:
+                break
+
+    def first_count(*keys: str) -> int:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                count = _coerce_non_negative_int(source.get(key))
+                if count:
+                    return count
+        return 0
+
+    group_count = first_count("passageGroupCount", "passage_group_count") or len(groups)
+    problem_count = first_count("passageProblemCount", "passage_problem_count")
+    cross_page_count = first_count("crossPagePassageGroupCount", "cross_page_passage_group_count")
+    fragment_count = first_count("passageFragmentCount", "passage_fragment_count", "fragmentProblemCount", "fragment_problem_count")
+    if groups:
+        if not problem_count:
+            problem_count = sum(_passage_group_child_count(group) for group in groups)
+        if not cross_page_count:
+            cross_page_count = sum(
+                1
+                for group in groups
+                if group.get("continuesAcrossPages") or group.get("continues_across_pages")
+            )
+        if not fragment_count:
+            fragment_count = sum(
+                _coerce_non_negative_int(group.get("fragmentProblemCount") or group.get("fragment_problem_count"))
+                for group in groups
+            )
+    if not fragment_count:
+        problems = session.get("problems")
+        if isinstance(problems, list):
+            fragment_count = sum(
+                1
+                for problem in problems
+                if isinstance(problem, dict)
+                and str(problem.get("passageRole") or problem.get("passage_role") or "").strip() == "passage_fragment"
+            )
+    return {
+        "passage_group_count": group_count,
+        "passage_problem_count": problem_count,
+        "passage_fragment_count": fragment_count,
+        "cross_page_passage_group_count": cross_page_count,
+    }
+
+
 def _classin_preflight(payload: dict[str, Any], session: dict[str, Any] | None = None) -> dict[str, Any]:
     for source in (payload, session or {}):
         for key in ("classinPreflight", "classin_preflight"):
@@ -448,6 +523,7 @@ def summarize_export_response(
         ),
         _risk_count(risk_flag_counts, SOURCE_PROBLEM_BBOX_OVERLAP_FLAG),
     )
+    passage_metrics = _passage_metrics(payload, session, summary)
     edb_validation = payload.get("edbValidation")
     if not isinstance(edb_validation, dict):
         edb_validation = payload.get("edb_validation")
@@ -510,6 +586,7 @@ def summarize_export_response(
         "hwp_oversegmentation_count": hwp_overseg_count,
         "source_problem_bbox_overlap_count": source_overlap_problem_count,
         "source_problem_overlap_group_count": source_overlap_group_count,
+        **passage_metrics,
         "risk_flags": risk_flags,
         "risk_flag_counts": risk_flag_counts,
         "actionable_risk_flag_counts": actionable_counts,
@@ -547,6 +624,10 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
     hwp_cache_hit_page_count = 0
     hwp_renderer_cache_hit_count = 0
     hwp_normalized_cache_hit_count = 0
+    passage_group_count = 0
+    passage_problem_count = 0
+    passage_fragment_count = 0
+    cross_page_passage_group_count = 0
     classin_preflight_issue_types: Counter[str] = Counter()
     for row in rows:
         row_risk_counts = _coerce_count_map(row.get("risk_flag_counts"))
@@ -566,6 +647,10 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         hwp_cache_hit_page_count += _coerce_non_negative_int(row.get("hwp_cache_hit_page_count"))
         hwp_renderer_cache_hit_count += _coerce_non_negative_int(row.get("hwp_renderer_cache_hit_count"))
         hwp_normalized_cache_hit_count += _coerce_non_negative_int(row.get("hwp_normalized_cache_hit_count"))
+        passage_group_count += _coerce_non_negative_int(row.get("passage_group_count"))
+        passage_problem_count += _coerce_non_negative_int(row.get("passage_problem_count"))
+        passage_fragment_count += _coerce_non_negative_int(row.get("passage_fragment_count"))
+        cross_page_passage_group_count += _coerce_non_negative_int(row.get("cross_page_passage_group_count"))
         for issue_type in row.get("classin_preflight_issue_types") or []:
             issue_type_text = str(issue_type or "").strip()
             if issue_type_text:
@@ -590,6 +675,10 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "hwp_oversegmentation_count": oversegmentation_count,
         "source_problem_bbox_overlap_count": source_overlap_problem_count,
         "source_problem_overlap_group_count": source_overlap_group_count,
+        "passage_group_count": passage_group_count,
+        "passage_problem_count": passage_problem_count,
+        "passage_fragment_count": passage_fragment_count,
+        "cross_page_passage_group_count": cross_page_passage_group_count,
         "edb_expected_count": sum(1 for row in rows if row.get("edb_expected")),
         "edb_validated_count": sum(1 for row in rows if row.get("edb_expected") and row.get("edb_validated")),
         "edb_missing_count": sum(1 for row in rows if row.get("edb_expected") and not row.get("edb_validated")),
@@ -838,6 +927,15 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     hwp_cache_hit_page_count = _coerce_non_negative_int(summary.get("hwp_cache_hit_page_count"))
     source_overlap_problem_count = _coerce_non_negative_int(summary.get("source_problem_bbox_overlap_count"))
     source_overlap_group_count = _coerce_non_negative_int(summary.get("source_problem_overlap_group_count"))
+    passage_group_count = _coerce_non_negative_int(summary.get("passage_group_count"))
+    passage_part = ""
+    if passage_group_count:
+        passage_part = (
+            f"passage groups {passage_group_count} · "
+            f"passage questions {_coerce_non_negative_int(summary.get('passage_problem_count'))} · "
+            f"fragments {_coerce_non_negative_int(summary.get('passage_fragment_count'))} · "
+            f"cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_group_count'))} · "
+        )
     return (
         "Batch summary: "
         f"samples {summary.get('ok_count', 0)}/{summary.get('sample_count', 0)} OK · "
@@ -850,6 +948,7 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
         f"mismatch {summary.get('hwp_problem_count_mismatch_count', 0)} · "
         f"overseg {summary.get('hwp_oversegmentation_count', 0)} · "
         f"source overlap {source_overlap_problem_count}/{source_overlap_group_count} · "
+        f"{passage_part}"
         f"{edb_part}"
         f"{classin_preflight_part}"
         f"elapsed {summary.get('elapsed_s', 0)}s · "

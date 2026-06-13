@@ -362,6 +362,52 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertTrue(summary["needs_review"])
 
+    def test_summarize_export_response_counts_passage_groups_and_fragments(self):
+        payload = {
+            "ok": True,
+            "session": {
+                "pages": [],
+                "problems": [
+                    {"id": "p22", "problemNumber": 22, "passageGroupId": "hwp-continuation-passage-22-26"},
+                    {"id": "p23", "problemNumber": 23, "passageGroupId": "hwp-continuation-passage-22-26"},
+                    {
+                        "id": "page-008-continuation",
+                        "passageGroupId": "hwp-continuation-passage-22-26",
+                        "passageRole": "passage_fragment",
+                        "riskFlags": ["marker_document_continuation"],
+                    },
+                ],
+                "passageGroups": [
+                    {
+                        "groupId": "hwp-continuation-passage-22-26",
+                        "problemCount": 5,
+                        "detectedProblemCount": 6,
+                        "fragmentProblemCount": 1,
+                        "problemNumbers": [22, 23, 24, 25, 26],
+                        "continuesAcrossPages": True,
+                    }
+                ],
+                "passageGroupCount": 1,
+                "passageProblemCount": 5,
+                "crossPagePassageGroupCount": 1,
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("passage.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+        )
+
+        self.assertEqual(1, summary["passage_group_count"])
+        self.assertEqual(5, summary["passage_problem_count"])
+        self.assertEqual(1, summary["passage_fragment_count"])
+        self.assertEqual(1, summary["cross_page_passage_group_count"])
+        self.assertFalse(summary["needs_review"])
+
     def test_summarize_export_response_prefers_review_summary_hwp_segmentation_counts(self):
         payload = {
             "ok": True,
@@ -825,6 +871,44 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertEqual(0, summary["needs_review_count"])
         self.assertEqual([], summary["top_actionable_risk_flags"])
+
+    def test_summarize_batch_rolls_up_passage_metrics(self):
+        rows = [
+            {
+                "ok": True,
+                "needs_review": False,
+                "passage_group_count": 3,
+                "passage_problem_count": 14,
+                "passage_fragment_count": 1,
+                "cross_page_passage_group_count": 2,
+                "risk_flags": [],
+                "risk_flag_counts": {},
+                "actionable_risk_flag_counts": {},
+            },
+            {
+                "ok": True,
+                "needs_review": False,
+                "passage_group_count": 2,
+                "passage_problem_count": 11,
+                "passage_fragment_count": 1,
+                "cross_page_passage_group_count": 2,
+                "risk_flags": [],
+                "risk_flag_counts": {},
+                "actionable_risk_flag_counts": {},
+            },
+        ]
+
+        summary = verify_hwp_samples.summarize_batch(rows)
+        text = verify_hwp_samples.format_batch_summary(summary)
+
+        self.assertEqual(5, summary["passage_group_count"])
+        self.assertEqual(25, summary["passage_problem_count"])
+        self.assertEqual(2, summary["passage_fragment_count"])
+        self.assertEqual(4, summary["cross_page_passage_group_count"])
+        self.assertIn("passage groups 5", text)
+        self.assertIn("passage questions 25", text)
+        self.assertIn("fragments 2", text)
+        self.assertIn("cross-page 4", text)
 
     def test_format_batch_summary_mentions_review_and_top_risk(self):
         summary = {
