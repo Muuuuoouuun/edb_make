@@ -16,6 +16,196 @@ import preprocess
 
 
 class TestPreprocessHwp(unittest.TestCase):
+    def test_extract_hwp_numbered_problem_snippets_keeps_question_and_choices(self) -> None:
+        text = (
+            "[32 ~ 34] 다음 글을 읽고 물음에 답하시오.\n"
+            "(가) 긴 지문입니다.\n"
+            "32.(가), (나)의 표현상 특징에 대한 설명으로 가장 적절한 것은?\n"
+            "① 첫 번째 선택지\n"
+            "② 두 번째 선택지\n"
+            "⑤ 다섯 번째 선택지\n"
+            "33. [A]～[C]에 대한 이해로 적절하지 않은 것은?\n"
+            "① 다음 문제 선택지\n"
+        )
+
+        snippets = preprocess._extract_hwp_numbered_problem_snippets(text)
+
+        by_number = {item["number"]: item["text"] for item in snippets}
+        self.assertIn(32, by_number)
+        self.assertIn("(가), (나)의 표현상 특징", by_number[32])
+        self.assertIn("⑤ 다섯 번째 선택지", by_number[32])
+        self.assertNotIn("33.", by_number[32])
+
+    def test_extract_hwp_passage_ranges_finds_ranges_beyond_preview_limit(self) -> None:
+        text = (
+            ("머리말\n" * 900)
+            + "[35～37] 다음 자료를 보고 물음에 답하시오.\n"
+            + "35. 첫 번째 문항\n"
+            + "40번부터 41번까지는 다음 글을 읽고 물음에 답하시오.\n"
+            + "40. 두 번째 묶음\n"
+            + "[42~45] 선택 과목 안내\n"
+        )
+
+        ranges = preprocess._extract_hwp_passage_ranges(text)
+
+        self.assertEqual(
+            [
+                {"start": 35, "end": 37, "text": "[35~37] 다음 자료를 보고 물음에 답하시오."},
+                {"start": 40, "end": 41, "text": "40번부터 41번까지는 다음 글을 읽고 물음에 답하시오."},
+            ],
+            ranges,
+        )
+
+    def test_hwp_normalized_cache_rejects_pre_snippet_cache_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "worksheet.hwp"
+            source.write_bytes(b"hwp")
+            normalized = root / "worksheet-page-001.png"
+            Image.new("RGB", (120, 160), "white").save(normalized)
+            source_sha1 = preprocess._file_sha1(source)
+            cache_path = preprocess._hwp_normalized_pages_cache_path(root, source, source_sha1)
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "source_name": source.name,
+                        "source_suffix": ".hwp",
+                        "source_sha1": source_sha1,
+                        "options": preprocess._hwp_normalized_cache_options(
+                            dpi=200,
+                            enable_deskew=True,
+                            enable_margin_crop=True,
+                            max_dimension=None,
+                        ),
+                        "pages": [
+                            {
+                                "page_id": "worksheet-page-001",
+                                "normalized_name": normalized.name,
+                                "page_index": 0,
+                                "width_px": 120,
+                                "height_px": 160,
+                                "metadata": {"source_type": "hwp"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                [],
+                preprocess._load_cached_hwp_normalized_pages(
+                    source,
+                    root,
+                    dpi=200,
+                    enable_deskew=True,
+                    enable_margin_crop=True,
+                    max_dimension=None,
+                ),
+            )
+
+    def test_hwp_normalized_cache_rejects_pre_core_priority_cache_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "worksheet.hwp"
+            source.write_bytes(b"hwp")
+            normalized = root / "worksheet-page-001.png"
+            Image.new("RGB", (120, 160), "white").save(normalized)
+            source_sha1 = preprocess._file_sha1(source)
+            cache_path = preprocess._hwp_normalized_pages_cache_path(root, source, source_sha1)
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 3,
+                        "source_name": source.name,
+                        "source_suffix": ".hwp",
+                        "source_sha1": source_sha1,
+                        "options": preprocess._hwp_normalized_cache_options(
+                            dpi=200,
+                            enable_deskew=True,
+                            enable_margin_crop=True,
+                            max_dimension=None,
+                        ),
+                        "pages": [
+                            {
+                                "page_id": "worksheet-page-001",
+                                "normalized_name": normalized.name,
+                                "page_index": 0,
+                                "width_px": 120,
+                                "height_px": 160,
+                                "metadata": {"source_type": "hwp", "hwp_renderer": "rhwp-python"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                [],
+                preprocess._load_cached_hwp_normalized_pages(
+                    source,
+                    root,
+                    dpi=200,
+                    enable_deskew=True,
+                    enable_margin_crop=True,
+                    max_dimension=None,
+                ),
+            )
+
+    def test_hwp_normalized_cache_rejects_pre_passage_range_cache_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "worksheet.hwp"
+            source.write_bytes(b"hwp")
+            normalized = root / "worksheet-page-001.png"
+            Image.new("RGB", (120, 160), "white").save(normalized)
+            source_sha1 = preprocess._file_sha1(source)
+            cache_path = preprocess._hwp_normalized_pages_cache_path(root, source, source_sha1)
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 4,
+                        "source_name": source.name,
+                        "source_suffix": ".hwp",
+                        "source_sha1": source_sha1,
+                        "options": preprocess._hwp_normalized_cache_options(
+                            dpi=200,
+                            enable_deskew=True,
+                            enable_margin_crop=True,
+                            max_dimension=None,
+                        ),
+                        "pages": [
+                            {
+                                "page_id": "worksheet-page-001",
+                                "normalized_name": normalized.name,
+                                "page_index": 0,
+                                "width_px": 120,
+                                "height_px": 160,
+                                "metadata": {"source_type": "hwp", "hwp_renderer": "rhwp-core"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                [],
+                preprocess._load_cached_hwp_normalized_pages(
+                    source,
+                    root,
+                    dpi=200,
+                    enable_deskew=True,
+                    enable_margin_crop=True,
+                    max_dimension=None,
+                ),
+            )
+
     def test_hwp_layout_markers_convert_to_rendered_page_marker_coordinates(self) -> None:
         quality = {
             "hwp_layout_problem_markers": [
@@ -783,18 +973,35 @@ class TestPreprocessHwp(unittest.TestCase):
             self.assertEqual(str(source), pages[0].metadata["source_hwp_path"])
             self.assertEqual(str(converted), pages[0].metadata["converted_pdf_path"])
 
-    def test_hwp_uses_rhwp_python_renderer_before_core_and_pdf_when_available(self) -> None:
+    def test_hwp_uses_rhwp_core_renderer_before_python_and_pdf_when_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             tmp_path = Path(temp_dir)
             source = tmp_path / "exam.hwp"
             source.write_bytes(b"hwp")
-            rendered = tmp_path / "rhwp-python-page.png"
-            Image.new("RGB", (40, 50), "white").save(rendered)
-            rhwp_pages = [
+            core_rendered = tmp_path / "rhwp-core-page.png"
+            python_rendered = tmp_path / "rhwp-python-page.png"
+            Image.new("RGB", (40, 50), "white").save(core_rendered)
+            Image.new("RGB", (40, 50), "white").save(python_rendered)
+            core_pages = [
+                preprocess.NormalizedPageImage(
+                    page_id="rhwp-core-page-001",
+                    source_path=str(source),
+                    normalized_path=str(core_rendered),
+                    page_index=0,
+                    width_px=40,
+                    height_px=50,
+                    metadata={
+                        "source_type": "hwp",
+                        "hwp_renderer": "rhwp-core",
+                        "hwp_renderer_page_count": 1,
+                    },
+                )
+            ]
+            python_pages = [
                 preprocess.NormalizedPageImage(
                     page_id="rhwp-python-page-001",
                     source_path=str(source),
-                    normalized_path=str(rendered),
+                    normalized_path=str(python_rendered),
                     page_index=0,
                     width_px=40,
                     height_px=50,
@@ -808,8 +1015,8 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "inspect_hangul_document", return_value={"hwp_signature": "HWP Document File"}),
-                mock.patch.object(preprocess, "_render_hwp_pages_with_rhwp_python", return_value=rhwp_pages),
-                mock.patch.object(preprocess, "_render_hwp_pages_with_rhwp_core", side_effect=AssertionError("core renderer should not run")),
+                mock.patch.object(preprocess, "_render_hwp_pages_with_rhwp_core", return_value=core_pages),
+                mock.patch.object(preprocess, "_render_hwp_pages_with_rhwp_python", return_value=python_pages),
                 mock.patch.object(preprocess, "convert_hwp_to_pdf", side_effect=AssertionError("PDF conversion should not run")),
                 mock.patch.object(preprocess, "render_pdf_pages", side_effect=AssertionError("PDF rendering should not run")),
             ):
@@ -817,7 +1024,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             self.assertEqual(1, len(pages))
             self.assertEqual("hwp", pages[0].metadata["source_type"])
-            self.assertEqual("rhwp-python", pages[0].metadata["hwp_renderer"])
+            self.assertEqual("rhwp-core", pages[0].metadata["hwp_renderer"])
             self.assertEqual(str(source), pages[0].metadata["source_hwp_path"])
             self.assertNotIn("converted_pdf_path", pages[0].metadata)
 

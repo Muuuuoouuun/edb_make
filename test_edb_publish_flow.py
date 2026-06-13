@@ -141,6 +141,104 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertTrue(all(entry.crop_path.exists() for entry in entries))
             self.assertTrue(all(entry.board_render_path.exists() for entry in entries))
 
+    def test_build_problem_entries_restores_ignored_hwp_marker_from_text_snippet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            source_image = root / "page-012.png"
+            Image.new("RGB", (900, 1200), "white").save(source_image)
+            prepared = PreparedPage(
+                page_id="page-012",
+                source_path=str(source_image),
+                page_number=12,
+                image=Image.open(source_image).convert("RGB"),
+                original_size=(900, 1200),
+                metadata={
+                    "source_type": "hwp",
+                    "source_hwp_path": str(source),
+                    "document_like": True,
+                },
+            )
+            quality = {
+                "hwp_text_numbered_problem_count": 3,
+                "hwp_text_problem_snippets": [
+                    {
+                        "number": 32,
+                        "text": (
+                            "32. (가), (나)의 표현상 특징에 대한 설명으로 가장 적절한 것은?\n"
+                            "① 첫 번째 선택지\n"
+                            "② 두 번째 선택지\n"
+                            "⑤ 다섯 번째 선택지"
+                        ),
+                    }
+                ],
+            }
+            page = PageModel(
+                page_id="page-012",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(source_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q33",
+                        block_type=BlockType.TITLE,
+                        bbox=Box(480, 80, 340, 280),
+                        reading_order=0,
+                        text="33.",
+                        metadata={"column_index": 2, "question_band_index": 1, "problem_number": 33},
+                    ),
+                    ContentBlock(
+                        block_id="q34",
+                        block_type=BlockType.TITLE,
+                        bbox=Box(480, 420, 340, 460),
+                        reading_order=1,
+                        text="34.",
+                        metadata={"column_index": 2, "question_band_index": 2, "problem_number": 34},
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-012-problem-1",
+                        subject=Subject.KOREAN,
+                        title="33.",
+                        stem_block_ids=["q33"],
+                        metadata={"problem_number": 33, "problem_number_source": "pdf_text_marker"},
+                    ),
+                    ProblemUnit(
+                        unit_id="page-012-problem-2",
+                        subject=Subject.KOREAN,
+                        title="34.",
+                        stem_block_ids=["q34"],
+                        metadata={"problem_number": 34, "problem_number_source": "pdf_text_marker"},
+                    ),
+                ],
+                metadata={
+                    "source_type": "hwp",
+                    "source_hwp_path": str(source),
+                    "document_like": True,
+                    "segmenter": "pdf-text-markers",
+                    "ignored_tiny_pdf_marker_numbers": [32],
+                    "hwp_conversion_quality": quality,
+                },
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual([32, 33, 34], [entry.problem_number for entry in entries])
+            restored = entries[0]
+            self.assertIn("hwp_text_fallback_problem", restored.risk_flags)
+            self.assertGreaterEqual(restored.crop_path.stat().st_size, 1000)
+            with Image.open(restored.crop_path) as crop:
+                self.assertGreaterEqual(crop.width, 900)
+                self.assertGreaterEqual(crop.height, 420)
+
     def _make_source_image(self, path: Path) -> None:
         image = Image.new("RGB", (860, 620), "white")
         draw = ImageDraw.Draw(image)
@@ -981,6 +1079,237 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("passage_cross_page_merge_check", problems_by_id["page-2-problem-3"]["riskFlags"])
             self.assertEqual(2, result["ui_session"]["passageGroupCount"])
             self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
+
+    def test_problem_ui_session_infers_tamgu_passage_groups_from_hwp_text_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            crop = root / "crop.png"
+            for path in (page_1_image, page_2_image, crop):
+                Image.new("RGB", (900, 1200), "white").save(path)
+
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=Image.open(page_1_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=Image.open(page_2_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+            ]
+            quality = {
+                "hwp_text_passage_ranges": [
+                    {"start": 5, "end": 7, "text": "[5~7] 다음 자료를 보고 물음에 답하시오."}
+                ]
+            }
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.SOCIAL,
+                source_path=str(page_1_image),
+                blocks=[],
+                problems=[
+                    ProblemUnit(
+                        unit_id="p5",
+                        subject=Subject.SOCIAL,
+                        title="5.",
+                        metadata={"problem_number": 5},
+                    ),
+                    ProblemUnit(
+                        unit_id="p6",
+                        subject=Subject.SOCIAL,
+                        title="6.",
+                        metadata={"problem_number": 6},
+                    ),
+                ],
+                metadata={"source_type": "hwp", "hwp_conversion_quality": quality},
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.SOCIAL,
+                source_path=str(page_2_image),
+                blocks=[],
+                problems=[
+                    ProblemUnit(
+                        unit_id="p7",
+                        subject=Subject.SOCIAL,
+                        title="7.",
+                        metadata={"problem_number": 7},
+                    ),
+                ],
+                metadata={"source_type": "hwp"},
+            )
+            placements = []
+            for index, (problem_id, number, page_id, source_image) in enumerate(
+                [
+                    ("p5", 5, "page-1", page_1_image),
+                    ("p6", 6, "page-1", page_1_image),
+                    ("p7", 7, "page-2", page_2_image),
+                ],
+                start=1,
+            ):
+                placements.append(
+                    {
+                        "problem_id": problem_id,
+                        "title": f"{number}.",
+                        "problem_number": number,
+                        "subject": Subject.SOCIAL,
+                        "source_page_id": page_id,
+                        "source_path": str(source_image),
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "bbox": {"left": 40, "top": 80 + index * 160, "width": 520, "height": 120},
+                        "actual_content_height_pages": 0.8,
+                        "overflow_allowed": False,
+                        "start_y_pages": float(index),
+                        "snapped_next_start_y_pages": float(index + 1),
+                        "overflow_amount_pages": 0.0,
+                        "overflow_violation": False,
+                        "slot_span_count": 1,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.0,
+                        "record_mode": "image-only",
+                        "text_record_count": 0,
+                        "image_record_count": 1,
+                        "risk_flags": [],
+                    }
+                )
+
+            ui_session = build_problem_ui_session(
+                prepared_pages,
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+                pages=[page_1, page_2],
+            )
+
+            problems_by_id = {problem["id"]: problem for problem in ui_session["problems"]}
+            for problem_id in ("p5", "p6", "p7"):
+                problem = problems_by_id[problem_id]
+                self.assertEqual("hwp-text-passage-5-7", problem["passageGroupId"])
+                self.assertEqual({"start": 5, "end": 7}, problem["passageRange"])
+                self.assertEqual([5, 6, 7], problem["passageChildProblemNumbers"])
+            self.assertEqual(["page-1", "page-2"], problems_by_id["p7"]["passageSourcePageIds"])
+            self.assertTrue(problems_by_id["p7"]["passageContinuesAcrossPages"])
+            self.assertIn("passage_cross_page_merge_check", problems_by_id["p7"]["riskFlags"])
+            self.assertEqual(1, ui_session["passageGroupCount"])
+            self.assertEqual(1, ui_session["crossPagePassageGroupCount"])
+
+    def test_problem_ui_session_does_not_apply_global_hwp_text_range_to_duplicate_problem_numbers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            page_images = [root / "page-1.png", root / "page-2.png"]
+            crop = root / "crop.png"
+            for path in (*page_images, crop):
+                Image.new("RGB", (900, 1200), "white").save(path)
+
+            prepared_pages = [
+                PreparedPage(
+                    page_id=f"page-{index}",
+                    source_path=str(path),
+                    page_number=index,
+                    image=Image.open(path).convert("RGB"),
+                    original_size=(900, 1200),
+                )
+                for index, path in enumerate(page_images, start=1)
+            ]
+            quality = {
+                "hwp_text_passage_ranges": [
+                    {"start": 35, "end": 36, "text": "[35~36] 다음 글을 읽고 물음에 답하시오."}
+                ]
+            }
+            pages = []
+            placements = []
+            for page_index, page_image in enumerate(page_images, start=1):
+                page_id = f"page-{page_index}"
+                problem_ids = [f"{page_id}-p35", f"{page_id}-p36"]
+                problems = [
+                    ProblemUnit(
+                        unit_id=problem_ids[0],
+                        subject=Subject.KOREAN,
+                        title="35.",
+                        metadata={"problem_number": 35},
+                    ),
+                    ProblemUnit(
+                        unit_id=problem_ids[1],
+                        subject=Subject.KOREAN,
+                        title="36.",
+                        metadata={"problem_number": 36},
+                    ),
+                ]
+                pages.append(
+                    PageModel(
+                        page_id=page_id,
+                        width_px=900,
+                        height_px=1200,
+                        subject=Subject.KOREAN,
+                        source_path=str(page_image),
+                        blocks=[],
+                        problems=problems,
+                        metadata={"source_type": "hwp", "hwp_conversion_quality": quality if page_index == 1 else {}},
+                    )
+                )
+                for problem_index, (problem_id, number) in enumerate(zip(problem_ids, [35, 36]), start=1):
+                    placements.append(
+                        {
+                            "problem_id": problem_id,
+                            "title": f"{number}.",
+                            "problem_number": number,
+                            "subject": Subject.KOREAN,
+                            "source_page_id": page_id,
+                            "source_path": str(page_image),
+                            "crop_path": str(crop),
+                            "board_render_path": str(crop),
+                            "bbox": {"left": 40, "top": 80 + problem_index * 180, "width": 520, "height": 140},
+                            "actual_content_height_pages": 0.8,
+                            "overflow_allowed": False,
+                            "start_y_pages": float(len(placements) + 1),
+                            "snapped_next_start_y_pages": float(len(placements) + 2),
+                            "overflow_amount_pages": 0.0,
+                            "overflow_violation": False,
+                            "slot_span_count": 1,
+                            "placement_x_ratio": 0.0,
+                            "placement_y_ratio": 0.0,
+                            "placement_scale_ratio": 1.0,
+                            "record_mode": "image-only",
+                            "text_record_count": 0,
+                            "image_record_count": 1,
+                            "risk_flags": [],
+                        }
+                    )
+
+            ui_session = build_problem_ui_session(
+                prepared_pages,
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+                pages=pages,
+            )
+
+            self.assertEqual(0, ui_session["passageGroupCount"])
+            for problem in ui_session["problems"]:
+                self.assertNotIn("passageGroupId", problem)
+                self.assertNotIn("passage_cross_page_merge_check", problem["riskFlags"])
 
     def test_mvp_export_links_marker_continuation_page_to_following_passage_group(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1905,6 +2234,69 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual("hwp-continuation-passage-22-26", reuse_issues[0]["passageGroupId"])
             self.assertGreaterEqual(reuse_issues[0]["overlapAreaRatio"], 0.8)
             self.assertIn("passage_group_source_reuse", markdown)
+
+    def test_classin_preflight_ignores_hwp_text_fallback_passage_bbox_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            fallback_crop = root / "p32.png"
+            child_crop = root / "p33.png"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+            for path, label in ((fallback_crop, "32. text fallback"), (child_crop, "33. child question")):
+                image = Image.new("RGB", (640, 320), "white")
+                draw = ImageDraw.Draw(image)
+                for line in range(10):
+                    draw.text((36, 28 + line * 24), f"{label} line {line}", fill=(20, 20, 20))
+                image.save(path)
+
+            json_path, _md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 2,
+                    "supplemental_item_count": 0,
+                    "detected_problem_count": 2,
+                    "source_page_count": 1,
+                    "reviewSummary": {},
+                    "problems": [
+                        {
+                            "id": "p32",
+                            "title": "32.",
+                            "imagePath": fallback_crop.resolve().as_uri(),
+                            "sourcePageId": "page-012",
+                            "bbox": {"left": 0, "top": 0, "width": 2493, "height": 3412},
+                            "passageGroupId": "hwp-text-passage-32-34",
+                            "passageRole": "child_question",
+                            "riskFlags": ["hwp_text_fallback_problem"],
+                            "reviewStatus": "check_needed",
+                        },
+                        {
+                            "id": "p33",
+                            "title": "33.",
+                            "imagePath": child_crop.resolve().as_uri(),
+                            "sourcePageId": "page-012",
+                            "bbox": {"left": 1228, "top": 0, "width": 1264, "height": 1004},
+                            "passageGroupId": "hwp-text-passage-32-34",
+                            "passageRole": "child_question",
+                            "riskFlags": [],
+                            "reviewStatus": "normal",
+                        },
+                    ],
+                },
+                summary={"record_count": 2, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=50),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            reuse_issues = [
+                issue
+                for issue in handoff["classinPreflight"]["issues"]
+                if issue["type"] == "passage_group_source_reuse"
+            ]
+            self.assertEqual([], reuse_issues)
 
     def test_korean_edb_filename_download_header_is_http_safe(self):
         header = content_disposition_attachment(

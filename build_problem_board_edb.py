@@ -14,7 +14,7 @@ from typing import Any, Iterable, Sequence
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
-from PIL import Image, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
 try:
     import numpy as np  # type: ignore
@@ -78,6 +78,10 @@ PROCESSING_STEP_RAW = "raw"
 PROCESSING_STEP_ORIGINAL = "s1"
 PROCESSING_STEP_CHALK = "s2"
 PROCESSING_STEP_RECONSTRUCT = "s3"
+HWP_TEXT_FALLBACK_RISK_FLAG = "hwp_text_fallback_problem"
+HWP_TEXT_FALLBACK_CARD_WIDTH_PX = 1200
+HWP_TEXT_FALLBACK_CARD_MIN_HEIGHT_PX = 480
+HWP_TEXT_FALLBACK_CARD_MAX_HEIGHT_PX = 2200
 PROCESSING_STEPS = {
     PROCESSING_STEP_RAW,
     PROCESSING_STEP_ORIGINAL,
@@ -625,6 +629,8 @@ class _ProblemAssetTask:
     crop_path: Path
     board_render_path: Path
     chalk_color: tuple[int, int, int]
+    text_payload: str | None = None
+    text_title: str | None = None
 
 
 @dataclass(slots=True)
@@ -652,7 +658,112 @@ def _resolve_problem_asset_worker_count(task_count: int) -> int:
     return min(4, task_count)
 
 
+def _load_text_fallback_font(size: int) -> ImageFont.ImageFont:
+    candidates = [
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/Library/Fonts/AppleGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+    ]
+    for candidate in candidates:
+        path = Path(candidate)
+        if not path.exists():
+            continue
+        try:
+            return ImageFont.truetype(str(path), size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    if not text:
+        return 0
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return max(0, int(bbox[2] - bbox[0]))
+
+
+def _wrap_text_for_card(
+    text: str,
+    *,
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.ImageFont,
+    max_width_px: int,
+) -> list[str]:
+    wrapped: list[str] = []
+    for raw_line in str(text or "").replace("\r", "\n").splitlines():
+        line = raw_line.strip()
+        if not line:
+            wrapped.append("")
+            continue
+        current = ""
+        for char in line:
+            candidate = current + char
+            if current and _text_width(draw, candidate, font) > max_width_px:
+                wrapped.append(current.rstrip())
+                current = char.lstrip()
+            else:
+                current = candidate
+        if current:
+            wrapped.append(current.rstrip())
+    return wrapped
+
+
+def _render_text_fallback_problem_card(text: str, *, title: str | None = None) -> Image.Image:
+    width = HWP_TEXT_FALLBACK_CARD_WIDTH_PX
+    margin_x = 58
+    margin_y = 52
+    font = _load_text_fallback_font(36)
+    title_font = _load_text_fallback_font(42)
+    probe = Image.new("RGB", (width, 100), "white")
+    probe_draw = ImageDraw.Draw(probe)
+
+    body_text = str(text or "").strip()
+    if title and title.strip() and not body_text.startswith(title.strip()):
+        body_text = f"{title.strip()}\n{body_text}".strip()
+    lines = _wrap_text_for_card(
+        body_text,
+        draw=probe_draw,
+        font=font,
+        max_width_px=width - margin_x * 2,
+    )
+
+    line_height = max(42, int(font.getbbox("가")[3] - font.getbbox("가")[1]) + 10)
+    height = margin_y * 2 + max(1, len(lines)) * line_height
+    truncated = False
+    if height > HWP_TEXT_FALLBACK_CARD_MAX_HEIGHT_PX:
+        max_lines = max(1, (HWP_TEXT_FALLBACK_CARD_MAX_HEIGHT_PX - margin_y * 2) // line_height)
+        lines = lines[:max_lines]
+        if lines:
+            lines[-1] = (lines[-1].rstrip() + " ...").strip()
+        height = HWP_TEXT_FALLBACK_CARD_MAX_HEIGHT_PX
+        truncated = True
+    height = max(HWP_TEXT_FALLBACK_CARD_MIN_HEIGHT_PX, height)
+
+    card = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(card)
+    y = margin_y
+    for index, line in enumerate(lines):
+        resolved_font = title_font if index == 0 else font
+        draw.text((margin_x, y), line, fill=(20, 20, 20), font=resolved_font)
+        y += line_height
+    if truncated:
+        draw.text((margin_x, height - margin_y + 8), "...", fill=(20, 20, 20), font=font)
+    return card
+
+
 def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
+    if task.text_payload:
+        crop = _render_text_fallback_problem_card(task.text_payload, title=task.text_title)
+        task.crop_path.parent.mkdir(parents=True, exist_ok=True)
+        crop.save(task.crop_path)
+        cutout_image = _extract_problem_cutout(
+            _enhance_problem_crop(crop),
+            chalk_color=task.chalk_color,
+        )
+        _write_render_image(cutout_image, task.board_render_path)
+        return crop.size
+
     crop = task.source_image.crop(
         (
             int(task.bounds.left),
@@ -1454,6 +1565,136 @@ def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
         problem.metadata.setdefault("problem_number_source", "inferred_sequence")
 
 
+def _metadata_int_list(metadata: dict[str, Any], key: str) -> list[int]:
+    values = metadata.get(key)
+    if not isinstance(values, list):
+        return []
+    numbers: list[int] = []
+    for value in values:
+        number = _coerce_int(value)
+        if number is not None and number >= 1:
+            numbers.append(number)
+    return list(dict.fromkeys(numbers))
+
+
+def _hwp_text_problem_snippets_by_number(page: PageModel) -> dict[int, str]:
+    quality = page.metadata.get("hwp_conversion_quality")
+    if not isinstance(quality, dict):
+        return {}
+    snippets = quality.get("hwp_text_problem_snippets")
+    if not isinstance(snippets, list):
+        return {}
+    by_number: dict[int, str] = {}
+    for item in snippets:
+        if not isinstance(item, dict):
+            continue
+        number = _coerce_int(item.get("number"))
+        text = str(item.get("text") or "").strip()
+        if number is None or number < 1 or not text:
+            continue
+        by_number.setdefault(number, text)
+    return by_number
+
+
+def _hwp_text_fallback_bbox(page: PageModel, number: int) -> Box:
+    markers = page.metadata.get("pdf_problem_markers")
+    if isinstance(markers, list):
+        for marker in markers:
+            if not isinstance(marker, dict) or _coerce_int(marker.get("number")) != number:
+                continue
+            bbox = marker.get("bbox")
+            if not isinstance(bbox, dict):
+                continue
+            left = _coerce_float(bbox.get("left")) or 0.0
+            top = _coerce_float(bbox.get("top")) or 0.0
+            width = _coerce_float(bbox.get("width")) or 0.0
+            height = _coerce_float(bbox.get("height")) or 0.0
+            left = max(0.0, min(float(page.width_px), left))
+            top = max(0.0, min(float(page.height_px) - 1.0, top))
+            if width > 1.0 and height > 1.0:
+                return Box(
+                    left=left,
+                    top=top,
+                    width=min(float(page.width_px) - left, width),
+                    height=max(1.0, min(float(page.height_px) - top, height)),
+                )
+    return Box(
+        left=0.0,
+        top=0.0,
+        width=float(page.width_px),
+        height=min(float(page.height_px), 640.0),
+    )
+
+
+def _restore_hwp_text_fallback_problems(pages: list[PageModel]) -> None:
+    pages_by_scope: dict[str, list[PageModel]] = {}
+    for page in pages:
+        if page.metadata.get("source_type") != "hwp":
+            continue
+        pages_by_scope.setdefault(_marker_document_dedupe_scope(page), []).append(page)
+
+    for scoped_pages in pages_by_scope.values():
+        snippets_by_number: dict[int, str] = {}
+        detected_numbers: set[int] = set()
+        for page in scoped_pages:
+            snippets_by_number.update(_hwp_text_problem_snippets_by_number(page))
+            for problem in page.problems:
+                number = _problem_metadata_number(problem)
+                if number is not None:
+                    detected_numbers.add(number)
+
+        if not snippets_by_number:
+            continue
+
+        for page in scoped_pages:
+            restored_numbers: list[int] = []
+            for number in _metadata_int_list(page.metadata, "ignored_tiny_pdf_marker_numbers"):
+                if number in detected_numbers:
+                    continue
+                snippet = snippets_by_number.get(number)
+                if not snippet:
+                    continue
+                block_id = f"{page.page_id}-hwp-text-fallback-{number:03d}"
+                if any(block.block_id == block_id for block in page.blocks):
+                    continue
+
+                fallback_block = ContentBlock(
+                    block_id=block_id,
+                    block_type=BlockType.STEM,
+                    bbox=_hwp_text_fallback_bbox(page, number),
+                    reading_order=len(page.blocks),
+                    text=snippet,
+                    confidence=1.0,
+                    metadata={
+                        "problem_number": number,
+                        "problem_number_source": "hwp_text_snippet",
+                        "force_problem_start": True,
+                        "force_image_record": True,
+                        "hwp_text_fallback_problem": True,
+                    },
+                )
+                page.blocks.append(fallback_block)
+                page.problems.append(
+                    ProblemUnit(
+                        unit_id=f"{page.page_id}-hwp-text-problem-{number:03d}",
+                        subject=page.subject,
+                        title=f"{number}.",
+                        stem_block_ids=[block_id],
+                        metadata={
+                            "problem_number": number,
+                            "problem_number_source": "hwp_text_snippet",
+                            "hwp_text_fallback_problem": True,
+                            "hwp_text_fallback_text": snippet,
+                            "risk_flags": [HWP_TEXT_FALLBACK_RISK_FLAG],
+                        },
+                    )
+                )
+                detected_numbers.add(number)
+                restored_numbers.append(number)
+            if restored_numbers:
+                page.metadata["restored_hwp_text_problem_numbers"] = restored_numbers
+
+
 def _passage_range_tuple(metadata: dict[str, Any]) -> tuple[int, int] | None:
     value = metadata.get("passage_range")
     if not isinstance(value, dict):
@@ -1573,8 +1814,46 @@ def _hwp_preview_text_values(metadata: dict[str, Any]) -> list[str]:
     return values
 
 
-def _hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
+def _append_hwp_passage_range_item(
+    items: list[dict[str, Any]],
+    seen: set[tuple[int, int]],
+    *,
+    start: int,
+    end: int,
+    source: str,
+    group_prefix: str,
+) -> None:
+    if end <= start:
+        return
+    key = (start, end)
+    if key in seen:
+        return
+    seen.add(key)
+    items.append(
+        {
+            "start": start,
+            "end": end,
+            "source": source,
+            "group_prefix": group_prefix,
+        }
+    )
+
+
+def _hwp_text_passage_range_values(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    raw = metadata.get("hwp_text_passage_ranges")
+    if isinstance(raw, list):
+        values.extend(item for item in raw if isinstance(item, dict))
+    quality = metadata.get("hwp_conversion_quality")
+    if isinstance(quality, dict):
+        nested = quality.get("hwp_text_passage_ranges")
+        if isinstance(nested, list):
+            values.extend(item for item in nested if isinstance(item, dict))
+    return values
+
+
+def _hwp_passage_range_items(pages: Sequence[PageModel]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
     for page in pages:
         for text in _hwp_preview_text_values(page.metadata):
@@ -1583,18 +1862,47 @@ def _hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> list[tuple[int, i
                 if passage_range is None:
                     continue
                 start, end = passage_range
-                if end <= start or (start, end) in seen:
-                    continue
-                seen.add((start, end))
-                ranges.append((start, end))
-    ranges.sort()
-    return ranges
+                _append_hwp_passage_range_item(
+                    items,
+                    seen,
+                    start=start,
+                    end=end,
+                    source="hwp_preview_text",
+                    group_prefix="hwp-preview",
+                )
+        for raw_range in _hwp_text_passage_range_values(page.metadata):
+            start = _coerce_int(raw_range.get("start"))
+            end = _coerce_int(raw_range.get("end"))
+            if start is None or end is None:
+                continue
+            _append_hwp_passage_range_item(
+                items,
+                seen,
+                start=start,
+                end=end,
+                source="hwp_text_passage_ranges",
+                group_prefix="hwp-text",
+            )
+    items.sort(key=lambda item: (int(item["start"]), int(item["end"]), str(item["group_prefix"])))
+    return items
+
+
+def _problem_number_counts(pages: Sequence[PageModel]) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for page in pages:
+        for problem in page.problems:
+            number = _problem_metadata_number(problem)
+            if number is None:
+                continue
+            counts[number] = counts.get(number, 0) + 1
+    return counts
 
 
 def _annotate_hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> None:
-    ranges = _hwp_preview_passage_ranges(pages)
-    if not ranges:
+    range_items = _hwp_passage_range_items(pages)
+    if not range_items:
         return
+    number_counts = _problem_number_counts(pages)
     for page in pages:
         for problem in page.problems:
             if problem.metadata.get("passage_group_id"):
@@ -1602,15 +1910,21 @@ def _annotate_hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> None:
             problem_number = _problem_metadata_number(problem)
             if problem_number is None:
                 continue
-            for start, end in ranges:
+            for item in range_items:
+                start = int(item["start"])
+                end = int(item["end"])
                 if start <= problem_number <= end:
+                    group_prefix = str(item.get("group_prefix") or "hwp-preview")
+                    source = str(item.get("source") or "hwp_preview_text")
+                    if source == "hwp_text_passage_ranges" and number_counts.get(problem_number, 0) > 1:
+                        continue
                     problem.metadata.update(
                         {
-                            "passage_group_id": f"hwp-preview-passage-{start}-{end}",
+                            "passage_group_id": f"{group_prefix}-passage-{start}-{end}",
                             "passage_range": {"start": start, "end": end},
                             "passage_role": "child_question",
                             "passage_child_problem_numbers": list(range(start, end + 1)),
-                            "passage_grouping_source": "hwp_preview_text",
+                            "passage_grouping_source": source,
                         }
                     )
                     break
@@ -1800,6 +2114,7 @@ def build_problem_entries(
     drafts: list[_ProblemEntryDraft] = []
     _remove_duplicate_marker_document_problem_numbers(pages)
     _remove_hwp_template_instruction_problems(pages)
+    _restore_hwp_text_fallback_problems(pages)
     _annotate_cross_page_passage_groups(pages)
 
     for page in pages:
@@ -1909,6 +2224,11 @@ def build_problem_entries(
             board_render_path = cutout_dir / crop_name
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}
             problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {entry_index}")
+            text_fallback_payload = (
+                str(problem.metadata.get("hwp_text_fallback_text") or "").strip()
+                if problem.metadata.get("hwp_text_fallback_problem")
+                else ""
+            )
             drafts.append(
                 _ProblemEntryDraft(
                     problem_id=problem.unit_id,
@@ -1931,6 +2251,8 @@ def build_problem_entries(
                         crop_path=crop_path,
                         board_render_path=board_render_path,
                         chalk_color=chalk_color,
+                        text_payload=text_fallback_payload or None,
+                        text_title=problem_title if text_fallback_payload else None,
                     ),
                 )
             )
@@ -2894,6 +3216,9 @@ def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> l
     for problem in problems:
         if not isinstance(problem, dict):
             continue
+        risk_flags = {str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)}
+        if HWP_TEXT_FALLBACK_RISK_FLAG in risk_flags:
+            continue
         source_page_id = _problem_source_page_id(problem)
         bbox = _problem_bbox(problem)
         if not source_page_id or bbox is None:
@@ -2967,6 +3292,9 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
     ] = {}
     for problem in problems:
         if not isinstance(problem, dict):
+            continue
+        risk_flags = {str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)}
+        if HWP_TEXT_FALLBACK_RISK_FLAG in risk_flags:
             continue
         group_id = _session_problem_passage_group_id(problem)
         source_page_id = _problem_source_page_id(problem)
@@ -3505,6 +3833,10 @@ def build_ui_session(
     ]
     source_problem_overlap_groups = _session_source_problem_overlap_groups(problems)
     _mark_source_problem_overlap_review_flags(problems, source_problem_overlap_groups)
+    passage_groups = _session_passage_groups(problems)
+    cross_page_passage_group_count = sum(
+        1 for group in passage_groups if group.get("continuesAcrossPages")
+    )
 
     return {
         "session_name": output_dir.name,
@@ -3530,6 +3862,14 @@ def build_ui_session(
         "sourceProblemOverlapGroups": source_problem_overlap_groups,
         "source_problem_overlap_group_count": len(source_problem_overlap_groups),
         "sourceProblemOverlapGroupCount": len(source_problem_overlap_groups),
+        "passage_groups": passage_groups,
+        "passageGroups": passage_groups,
+        "passage_group_count": len(passage_groups),
+        "passageGroupCount": len(passage_groups),
+        "passage_problem_count": sum(int(group.get("problemCount") or 0) for group in passage_groups),
+        "passageProblemCount": sum(int(group.get("problemCount") or 0) for group in passage_groups),
+        "cross_page_passage_group_count": cross_page_passage_group_count,
+        "crossPagePassageGroupCount": cross_page_passage_group_count,
         "export_mode": "question",
         "record_mode": record_mode,
         "board_theme": _resolve_board_theme(board_theme),

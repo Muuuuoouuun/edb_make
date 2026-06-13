@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -45,7 +46,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-HWP_NORMALIZED_CACHE_VERSION = 2
+HWP_NORMALIZED_CACHE_VERSION = 5
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
 
@@ -1447,6 +1448,136 @@ def _summarize_hwp_text_problem_signals(text: str) -> dict[str, int]:
     }
 
 
+HWP_TEXT_PROBLEM_SNIPPET_MAX_CHARS = 2400
+HWP_TEXT_PROBLEM_SNIPPET_MAX_COUNT = 120
+HWP_TEXT_PROBLEM_START_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?P<number>[1-9][0-9]?)\s*(?:[\.)][\s\-.]*|[-–—]\s*)"
+)
+HWP_TEXT_PASSAGE_RANGE_MAX_COUNT = 120
+HWP_TEXT_PASSAGE_RANGE_BRACKET_RE = re.compile(
+    r"^\s*[\[（(<]"
+    r"(?P<start>[0-9]{1,3})\s*[~\-]\s*(?P<end>[0-9]{1,3})\s*(?:번)?"
+    r"[\]）)>]"
+)
+HWP_TEXT_PASSAGE_RANGE_KOREAN_RE = re.compile(
+    r"^\s*(?:제\s*)?(?P<start>[0-9]{1,3})\s*(?:번\s*)?"
+    r"(?:[~\-]|부터|에서)\s*"
+    r"(?:제\s*)?(?P<end>[0-9]{1,3})\s*번(?:까지)?"
+)
+HWP_TEXT_PASSAGE_RANGE_CUES = (
+    "다음",
+    "글",
+    "자료",
+    "지문",
+    "대화",
+    "담화",
+    "발표",
+    "작품",
+    "도표",
+    "그림",
+    "실험",
+    "보기",
+    "읽고",
+    "보고",
+    "물음",
+    "답하시오",
+    "following",
+    "read",
+    "passage",
+    "text",
+    "questions",
+    "conversation",
+    "dialogue",
+    "article",
+    "chart",
+    "graph",
+)
+
+
+def _extract_hwp_numbered_problem_snippets(
+    text: str,
+    *,
+    max_chars: int = HWP_TEXT_PROBLEM_SNIPPET_MAX_CHARS,
+    max_count: int = HWP_TEXT_PROBLEM_SNIPPET_MAX_COUNT,
+) -> list[dict[str, Any]]:
+    snippets: list[dict[str, Any]] = []
+    current_number: int | None = None
+    current_lines: list[str] = []
+
+    def flush_current() -> None:
+        nonlocal current_number, current_lines
+        if current_number is None:
+            return
+        snippet = "\n".join(line for line in current_lines if line).strip()
+        if snippet:
+            snippets.append(
+                {
+                    "number": current_number,
+                    "text": snippet[: max(1, int(max_chars))],
+                    "char_count": len(snippet),
+                    "truncated": len(snippet) > int(max_chars),
+                }
+            )
+        current_number = None
+        current_lines = []
+
+    for raw_line in str(text or "").replace("\r", "\n").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        match = HWP_TEXT_PROBLEM_START_RE.match(line)
+        if match:
+            try:
+                number = int(match.group("number"))
+            except (TypeError, ValueError):
+                number = 0
+            if 1 <= number <= 99:
+                flush_current()
+                if len(snippets) >= int(max_count):
+                    return snippets
+                current_number = number
+                current_lines = [line]
+                continue
+        if current_number is not None:
+            current_lines.append(line)
+
+    flush_current()
+    return snippets[: max(0, int(max_count))]
+
+
+def _extract_hwp_passage_ranges(
+    text: str,
+    *,
+    max_count: int = HWP_TEXT_PASSAGE_RANGE_MAX_COUNT,
+) -> list[dict[str, Any]]:
+    ranges: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    for raw_line in str(text or "").replace("\r", "\n").splitlines():
+        line = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", raw_line)).strip()
+        if not line:
+            continue
+        if not any(cue in line.lower() for cue in HWP_TEXT_PASSAGE_RANGE_CUES):
+            continue
+        match = HWP_TEXT_PASSAGE_RANGE_BRACKET_RE.match(line) or HWP_TEXT_PASSAGE_RANGE_KOREAN_RE.match(line)
+        if not match:
+            continue
+        try:
+            start = int(match.group("start"))
+            end = int(match.group("end"))
+        except (TypeError, ValueError):
+            continue
+        if start <= 0 or end <= start or end - start > 12:
+            continue
+        key = (start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        ranges.append({"start": start, "end": end, "text": line[:180]})
+        if len(ranges) >= int(max_count):
+            break
+    return ranges
+
+
 def _hwp_text_problem_signal_score(text: str) -> int:
     signals = _summarize_hwp_text_problem_signals(text)
     numbered = int(signals.get("hwp_text_numbered_problem_count") or 0)
@@ -1566,6 +1697,14 @@ def inspect_hwp_document(source: str | Path) -> dict[str, Any]:
         signal_text = str(inspection.get("hwp_preview_text") or "")
     if signal_text:
         inspection.update(_summarize_hwp_text_problem_signals(signal_text))
+        problem_snippets = _extract_hwp_numbered_problem_snippets(signal_text)
+        if problem_snippets:
+            inspection["hwp_text_problem_snippet_count"] = len(problem_snippets)
+            inspection["hwp_text_problem_snippets"] = problem_snippets
+        passage_ranges = _extract_hwp_passage_ranges(signal_text)
+        if passage_ranges:
+            inspection["hwp_text_passage_range_count"] = len(passage_ranges)
+            inspection["hwp_text_passage_ranges"] = passage_ranges
     return inspection
 
 
@@ -2866,9 +3005,9 @@ def prepare_pages(
             or bool(hwp_inspection.get("hwpx_zip_file"))
         )
         if can_try_direct_hwp_renderer:
-            rendered = _render_hwp_pages_with_rhwp_python(source_path, normalized_dir / "rhwp_python_rendered", dpi=dpi)
+            rendered = _render_hwp_pages_with_rhwp_core(source_path, normalized_dir / "rhwp_core_rendered", dpi=dpi)
             if not rendered:
-                rendered = _render_hwp_pages_with_rhwp_core(source_path, normalized_dir / "rhwp_core_rendered", dpi=dpi)
+                rendered = _render_hwp_pages_with_rhwp_python(source_path, normalized_dir / "rhwp_python_rendered", dpi=dpi)
             if rendered:
                 hwp_renderer = str(rendered[0].metadata.get("hwp_renderer") or "rhwp-core")
                 conversion_quality: dict[str, Any] = {
@@ -2885,6 +3024,10 @@ def prepare_pages(
                     "hwp_text_extractor",
                     "hwp_text_numbered_problem_count",
                     "hwp_text_stem_problem_count",
+                    "hwp_text_problem_snippet_count",
+                    "hwp_text_problem_snippets",
+                    "hwp_text_passage_range_count",
+                    "hwp_text_passage_ranges",
                     "hwp_layout_extractor",
                     "hwp_layout_page_count",
                     "hwp_layout_problem_marker_count",
@@ -2942,6 +3085,10 @@ def prepare_pages(
             "hwp_text_extractor",
             "hwp_text_numbered_problem_count",
             "hwp_text_stem_problem_count",
+            "hwp_text_problem_snippet_count",
+            "hwp_text_problem_snippets",
+            "hwp_text_passage_range_count",
+            "hwp_text_passage_ranges",
             "hwp_layout_extractor",
             "hwp_layout_page_count",
             "hwp_layout_problem_marker_count",
