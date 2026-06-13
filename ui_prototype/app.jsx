@@ -3338,7 +3338,7 @@ function filterActionableRiskFlagCounts(counts, options = {}){
   );
 }
 
-function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
+function collectActionableReviewProblemIds(session, actionableRiskFlagCounts){
   const actionableFlags = new Set(
     Object.entries(actionableRiskFlagCounts || {})
       .filter(([, count]) => Number(count) > 0)
@@ -3365,6 +3365,11 @@ function countActionableReviewMatches(session, actionableRiskFlagCounts, failedC
       matched.add(`page:${String(page?.id || matched.size)}`);
     }
   });
+  return matched;
+}
+
+function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
+  const matched = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
   return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
 }
 
@@ -5159,12 +5164,36 @@ function App(){
     }
     const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary.actionableNeedsReviewCount) || 0);
     if (actionableNeedsReviewCount > 0) {
+      const actionableProblemIds = collectActionableReviewProblemIds(
+        sessionForPublish,
+        publishReviewSummary.actionableRiskFlagCounts
+      );
+      const passageReviewProblemIds = new Set(
+        Array.isArray(publishReviewSummary.passageReviewProblemIds)
+          ? publishReviewSummary.passageReviewProblemIds.map(id => String(id || '').trim()).filter(Boolean)
+          : []
+      );
+      const passageReviewItemCount = Math.max(0, Number(publishReviewSummary.passageReviewItemCount) || 0);
+      const hasActionablePassageReview = passageReviewItemCount > 0
+        && Array.from(passageReviewProblemIds).some(id => actionableProblemIds.has(id));
+      const passageReviewLine = hasActionablePassageReview
+        ? [
+          publishReviewSummary.passageReviewLabel || `긴 지문 검수 ${passageReviewItemCount}`,
+          publishReviewSummary.passageReviewPreview ? `대상 ${publishReviewSummary.passageReviewPreview}` : '',
+        ].filter(Boolean).join(' · ')
+        : '';
       const confirmedPublish = window.confirm(
-        `검수 화면에 확인 필요 ${actionableNeedsReviewCount}개가 남아 있습니다.\n그래도 EDB를 제작할까요?`
+        [
+          passageReviewLine,
+          `검수 화면에 확인 필요 ${actionableNeedsReviewCount}개가 남아 있습니다.`,
+          '그래도 EDB를 제작할까요?',
+        ].filter(Boolean).join('\n')
       );
       if (!confirmedPublish) {
         setView('review');
-        showToast('제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.');
+        showToast(passageReviewLine
+          ? '제작을 멈췄어요. 긴 지문 검수 큐를 먼저 확인하세요.'
+          : '제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.');
         return;
       }
     }
