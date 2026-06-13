@@ -23,6 +23,8 @@ const SAMPLE_KINDS = ['geometry-circle','equation','table','graph','geometry-tri
 const SAMPLE_STEPS = ['raw','raw','raw','s1','s2','raw'];
 
 const REORDER_HELPERS = window.EDB_REORDER || {};
+const PUBLISH_GUARD = window.EDB_PUBLISH_GUARD || {};
+const findBoardPlacementOverlaps = PUBLISH_GUARD.findBoardPlacementOverlaps || (() => []);
 const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, fromId, toId, position = 'before') => {
   const sourceId = fromId == null ? '' : String(fromId);
   const targetId = toId == null ? '' : String(toId);
@@ -4734,6 +4736,20 @@ function App(){
       showToast('내보낼 자료가 없습니다. 먼저 파싱해 주세요.');
       return;
     }
+    const sessionIds = new Set(session.problems.map(p => p.id));
+    const currentIds = items.map(i => i.id);
+    const order = currentIds.filter(id => sessionIds.has(id));
+    const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
+    const placementOverlapIssues = findBoardPlacementOverlaps(items, { sessionProblemIds: sessionIds })
+      .filter(issue => issue.type === 'board_placement_overlap');
+    if (placementOverlapIssues.length > 0) {
+      const firstIssue = placementOverlapIssues[0];
+      setView('board');
+      showToast(
+        `문항 배치가 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+      );
+      return;
+    }
     const publishReviewSummary = sessionReviewSummary(session);
     const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary.actionableNeedsReviewCount) || 0);
     if (actionableNeedsReviewCount > 0) {
@@ -4746,10 +4762,6 @@ function App(){
         return;
       }
     }
-    const sessionIds = new Set(session.problems.map(p => p.id));
-    const currentIds = items.map(i => i.id);
-    const order = currentIds.filter(id => sessionIds.has(id));
-    const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
     const placements = Object.fromEntries(
       items
         .filter(item => sessionIds.has(item.id))
