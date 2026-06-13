@@ -1140,6 +1140,150 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, result["ui_session"]["passageGroupCount"])
             self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
 
+    def test_mvp_export_links_marker_continuation_page_to_single_english_passage_question(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            image_paths = [root / f"page-{number}.png" for number in range(1, 4)]
+            for path in image_paths:
+                Image.new("RGB", (900, 1200), "white").save(path)
+            prepared_pages = [
+                PreparedPage(
+                    page_id=f"page-{number}",
+                    source_path=str(image_paths[number - 1]),
+                    page_number=number,
+                    image=Image.open(image_paths[number - 1]).convert("RGB"),
+                    original_size=(900, 1200),
+                )
+                for number in range(1, 4)
+            ]
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.ENGLISH,
+                source_path=str(image_paths[0]),
+                blocks=[
+                    ContentBlock(
+                        block_id="q30",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=80, width=500, height=120),
+                        reading_order=0,
+                        text="30. previous question",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-problem-30",
+                        subject=Subject.ENGLISH,
+                        title="30.",
+                        stem_block_ids=["q30"],
+                        metadata={"problem_number": 30},
+                    ),
+                ],
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.ENGLISH,
+                source_path=str(image_paths[1]),
+                blocks=[
+                    ContentBlock(
+                        block_id="continued-english-passage",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=60, width=760, height=1040),
+                        reading_order=0,
+                        text=None,
+                        metadata={
+                            "segmenter": "document-bands",
+                            "column_index": 0,
+                            "question_band_index": 0,
+                            "source_band_index": 0,
+                        },
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-2-problem-1",
+                        subject=Subject.ENGLISH,
+                        title=None,
+                        stem_block_ids=["continued-english-passage"],
+                        metadata={
+                            "fallback_grouping": True,
+                            "grouping_source": "fallback_grouping",
+                            "question_band_index": 0,
+                            "column_index": 0,
+                        },
+                    ),
+                ],
+                metadata={
+                    "source_type": "hwp",
+                    "document_like": True,
+                    "segmenter": "document-bands",
+                    "pdf_problem_markers": [],
+                    "hwp_conversion_quality": {
+                        "has_pdf_text_markers": True,
+                        "pdf_text_marker_count": 45,
+                    },
+                },
+            )
+            page_3 = PageModel(
+                page_id="page-3",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.ENGLISH,
+                source_path=str(image_paths[2]),
+                blocks=[
+                    ContentBlock(
+                        block_id="q31",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=80, width=500, height=420),
+                        reading_order=0,
+                        text="31. single long passage question",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-3-problem-31",
+                        subject=Subject.ENGLISH,
+                        title="31.",
+                        stem_block_ids=["q31"],
+                        metadata={"problem_number": 31},
+                    ),
+                ],
+            )
+
+            with (
+                mock.patch("build_mvp_export.prepare_source_pages", return_value=prepared_pages),
+                mock.patch("build_mvp_export.build_page_model", side_effect=[page_1, page_2, page_3]),
+            ):
+                result = run_mvp_export(
+                    source,
+                    output_dir=root / "out",
+                    subject_name="english",
+                    ocr="none",
+                    sync_ui=False,
+                )
+
+            problems_by_id = {problem["id"]: problem for problem in result["ui_session"]["problems"]}
+            continuation = problems_by_id["page-2-continuation"]
+            problem_31 = problems_by_id["page-3-problem-31"]
+            for problem in (continuation, problem_31):
+                self.assertEqual("hwp-continuation-passage-31", problem["passageGroupId"])
+                self.assertEqual({"start": 31, "end": 31}, problem["passageRange"])
+                self.assertEqual([31], problem["passageChildProblemNumbers"])
+                self.assertEqual(["page-2", "page-3"], problem["passageSourcePageIds"])
+                self.assertTrue(problem["passageContinuesAcrossPages"])
+            self.assertEqual("passage_fragment", continuation["passageRole"])
+            self.assertEqual("child_question", problem_31["passageRole"])
+            self.assertIn("marker_document_continuation", continuation["riskFlags"])
+            self.assertIn("passage_cross_page_merge_check", problem_31["riskFlags"])
+            self.assertEqual(1, result["ui_session"]["supplemental_item_count"])
+            self.assertEqual(1, result["ui_session"]["passageGroupCount"])
+            self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
+
     def test_problem_entries_preserve_pre_question_cross_page_passage_continuation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3444,6 +3588,55 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, ui_session["supplemental_item_count"])
             self.assertNotIn("hwp_problem_count_mismatch", ui_session["pages"][0]["riskFlags"])
             self.assertFalse([message for message in ui_session["warning_messages"] if "HWP 내부 텍스트" in message])
+
+    def test_social_inquiry_problem_entries_allow_overflow_for_long_passages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "social.png"
+            Image.new("RGB", (900, 1200), "white").save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=Image.open(source).convert("RGB"),
+                original_size=(900, 1200),
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.SOCIAL,
+                source_path=str(source),
+                blocks=[
+                    ContentBlock(
+                        block_id="long-social-passage",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=60, width=760, height=1020),
+                        reading_order=0,
+                        text="1. 사회탐구 긴 지문",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="social-passage-1",
+                        subject=Subject.SOCIAL,
+                        title="1.",
+                        stem_block_ids=["long-social-passage"],
+                        metadata={"problem_number": 1},
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertTrue(entries[0].reading_heavy)
+            self.assertTrue(entries[0].overflow_allowed)
 
     def test_edge_vertical_guides_are_trimmed_without_removing_internal_lines(self):
         image = Image.new("RGB", (120, 90), "white")

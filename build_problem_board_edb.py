@@ -1617,13 +1617,15 @@ def _annotate_hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> None:
 
 def _following_numbered_problem_run(
     page: PageModel,
+    *,
+    min_length: int = 2,
 ) -> list[ProblemUnit]:
     numbered = [
         (number, problem)
         for problem in page.problems
         if (number := _problem_metadata_number(problem)) is not None
     ]
-    if len(numbered) < 2:
+    if len(numbered) < min_length:
         return []
     numbered.sort(key=lambda item: (item[0], item[1].unit_id))
     run: list[tuple[int, ProblemUnit]] = [numbered[0]]
@@ -1633,7 +1635,7 @@ def _following_numbered_problem_run(
             break
         run.append((number, problem))
         previous = number
-    if len(run) < 2:
+    if len(run) < min_length:
         return []
     return [problem for _, problem in run]
 
@@ -1641,12 +1643,14 @@ def _following_numbered_problem_run(
 def _next_numbered_problem_run(
     pages: Sequence[PageModel],
     start_index: int,
+    *,
+    min_length: int = 2,
 ) -> list[ProblemUnit]:
     reading_subjects = {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}
     for next_page in pages[start_index + 1:]:
         if next_page.subject not in reading_subjects:
             return []
-        next_run = _following_numbered_problem_run(next_page)
+        next_run = _following_numbered_problem_run(next_page, min_length=min_length)
         if next_run:
             return next_run
         if any(_problem_metadata_number(problem) is not None for problem in next_page.problems):
@@ -1666,8 +1670,8 @@ def _annotate_marker_continuation_pages_to_following_groups(pages: Sequence[Page
         if continuation.metadata.get("passage_group_id"):
             continue
 
-        following_run = _next_numbered_problem_run(pages, index)
-        if len(following_run) < 2:
+        following_run = _next_numbered_problem_run(pages, index, min_length=1)
+        if len(following_run) < 1:
             continue
 
         first_problem = following_run[0]
@@ -1680,7 +1684,8 @@ def _annotate_marker_continuation_pages_to_following_groups(pages: Sequence[Page
         child_numbers = _passage_child_numbers(first_problem.metadata, start, end)
         group_id = str(first_problem.metadata.get("passage_group_id") or "").strip()
         if not group_id:
-            group_id = f"hwp-continuation-passage-{start}-{end}"
+            number_label = str(start) if start == end else f"{start}-{end}"
+            group_id = f"hwp-continuation-passage-{number_label}"
 
         common_metadata = {
             "passage_group_id": group_id,
@@ -1901,7 +1906,7 @@ def build_problem_entries(
             crop_name = f"problem_{entry_index:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
             crop_path = crop_dir / crop_name
             board_render_path = cutout_dir / crop_name
-            reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH}
+            reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}
             problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {entry_index}")
             drafts.append(
                 _ProblemEntryDraft(
