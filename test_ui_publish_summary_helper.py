@@ -252,6 +252,35 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_preflight_block_labels_passage_review_queue(self) -> None:
+        run_node(
+            """
+            const { normalizePublishPreflightBlock } = require('./ui_prototype/publish_summary.js');
+            const block = normalizePublishPreflightBlock({
+              ok: false,
+              errorKind: 'publish_preflight_blocked',
+              classinPreflight: {
+                status: 'blocked',
+                passed: false,
+                issueCount: 1,
+                issues: [
+                  {
+                    type: 'passage_review_queue_remaining',
+                    problemTitle: '31-32',
+                    reviewReasonCodes: ['cross_page_passage_group', 'passage_fragment'],
+                  },
+                ],
+              },
+            });
+            if (block.issueSummaryLabel !== '긴 지문 검수 남음 1') {
+              throw new Error(`unexpected passage review queue summary: ${block.issueSummaryLabel}`);
+            }
+            if (!block.toastLabel.includes('긴 지문 검수 남음 1')) {
+              throw new Error(`toast label missing passage review queue summary: ${block.toastLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_passage_group_metrics(self) -> None:
         run_node(
             """

@@ -570,9 +570,14 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                         "groupId": "hwp-text-passage-31-32",
                         "numberLabel": "31-32",
                         "problemIds": ["p31", "p32"],
+                        "fragmentProblemIds": ["page-5-continuation"],
                         "sourcePageIds": ["page-5", "page-6"],
                         "problemCount": 2,
+                        "fragmentProblemCount": 1,
                         "continuesAcrossPages": True,
+                        "reviewReasonCodes": ["cross_page_passage_group", "passage_fragment"],
+                        "riskFlags": ["passage_cross_page_merge_check"],
+                        "message": "31-32 긴 지문 그룹은 2개 페이지와 2개 하위 문항, 이어짐 자료 1개를 확인해야 합니다.",
                     }
                 ],
                 "passageReviewItemCount": 1,
@@ -607,8 +612,17 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertFalse(body["ok"])
             self.assertEqual("publish_preflight_blocked", body["errorKind"])
             self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
-            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
+            issues = body["classinPreflight"]["issues"]
+            issue_types = {issue["type"] for issue in issues}
             self.assertIn("passage_review_queue_remaining", issue_types)
+            queue_issue = next(issue for issue in issues if issue["type"] == "passage_review_queue_remaining")
+            self.assertEqual(["p31", "p32", "page-5-continuation"], queue_issue["problemIds"])
+            self.assertEqual(["page-5-continuation"], queue_issue["fragmentProblemIds"])
+            self.assertEqual(["cross_page_passage_group", "passage_fragment"], queue_issue["reviewReasonCodes"])
+            self.assertEqual(["passage_cross_page_merge_check"], queue_issue["riskFlags"])
+            self.assertEqual(2, queue_issue["problemCount"])
+            self.assertEqual(1, queue_issue["fragmentProblemCount"])
+            self.assertIn("이어짐 자료 1개", queue_issue["message"])
             entries.assert_not_called()
 
     def test_session_publish_excludes_supplemental_passage_fragments_from_edb_entries(self):

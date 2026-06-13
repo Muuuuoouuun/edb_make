@@ -601,6 +601,24 @@ def _duplicate_problem_number_group_issue(group: dict[str, Any]) -> dict[str, An
 
 def _passage_review_queue_issue(item: dict[str, Any]) -> dict[str, Any]:
     problem_ids = _passage_review_item_problem_ids(item)
+    fragment_problem_ids: list[str] = []
+    for key in ("fragmentProblemIds", "fragment_problem_ids"):
+        values = item.get(key)
+        if isinstance(values, list):
+            fragment_problem_ids.extend(str(value or "").strip() for value in values)
+    fragment_problem_ids = list(dict.fromkeys(value for value in fragment_problem_ids if value))
+    review_reason_codes: list[str] = []
+    for key in ("reviewReasonCodes", "review_reason_codes"):
+        values = item.get(key)
+        if isinstance(values, list):
+            review_reason_codes.extend(str(value or "").strip() for value in values)
+    review_reason_codes = list(dict.fromkeys(value for value in review_reason_codes if value))
+    risk_flags: list[str] = []
+    for key in ("riskFlags", "risk_flags"):
+        values = item.get(key)
+        if isinstance(values, list):
+            risk_flags.extend(str(value or "").strip() for value in values)
+    risk_flags = list(dict.fromkeys(value for value in risk_flags if value))
     source_page_ids: list[str] = []
     for key in ("sourcePageIds", "source_page_ids"):
         values = item.get(key)
@@ -610,17 +628,36 @@ def _passage_review_queue_issue(item: dict[str, Any]) -> dict[str, Any]:
     number_label = str(item.get("numberLabel") or item.get("number_label") or "").strip()
     group_id = str(item.get("groupId") or item.get("group_id") or "").strip()
     title = number_label or group_id or "긴 지문"
+    detail_message = str(item.get("message") or item.get("reviewMessage") or item.get("review_message") or "").strip()
+    if detail_message:
+        message = f"{detail_message} EDB publish 전에 지문 병합/하위 문제 상태를 확인해 주세요."
+    else:
+        message = f"{title} 긴 지문 검수 큐가 남아 있습니다. EDB publish 전에 지문 병합/하위 문제 상태를 확인해 주세요."
+    problem_count = _coerce_optional_int(item.get("problemCount") or item.get("problem_count"))
+    fragment_problem_count = _coerce_optional_int(item.get("fragmentProblemCount") or item.get("fragment_problem_count"))
     return {
         "type": "passage_review_queue_remaining",
         "severity": "warning",
-        "message": f"{title} 긴 지문 검수 큐가 남아 있습니다. EDB publish 전에 지문 병합/하위 문제 상태를 확인해 주세요.",
+        "message": message,
         "problemId": problem_ids[0] if problem_ids else "",
         "problemTitle": title,
         "numberLabel": number_label,
         "groupId": group_id,
         "problemIds": problem_ids,
+        "fragmentProblemIds": fragment_problem_ids,
         "sourcePageIds": source_page_ids,
+        "problemCount": problem_count if problem_count is not None else 0,
+        "fragmentProblemCount": fragment_problem_count if fragment_problem_count is not None else len(fragment_problem_ids),
+        "reviewReasonCodes": review_reason_codes,
+        "riskFlags": risk_flags,
         "continuesAcrossPages": bool(item.get("continuesAcrossPages") or item.get("continues_across_pages")),
+        "fragment_problem_ids": fragment_problem_ids,
+        "source_page_ids": source_page_ids,
+        "problem_count": problem_count if problem_count is not None else 0,
+        "fragment_problem_count": fragment_problem_count if fragment_problem_count is not None else len(fragment_problem_ids),
+        "review_reason_codes": review_reason_codes,
+        "risk_flags": risk_flags,
+        "continues_across_pages": bool(item.get("continuesAcrossPages") or item.get("continues_across_pages")),
         "blocking": True,
     }
 
