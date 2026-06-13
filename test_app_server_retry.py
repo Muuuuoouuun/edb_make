@@ -310,6 +310,63 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertEqual(2, len(responses))
             self.assertTrue(all(response[0]["ok"] for response in responses))
 
+    def test_export_response_exposes_classin_preflight_from_session(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "sample.hwp"
+            source.write_bytes(b"hwp")
+            output_dir = tmpdir / "out"
+            preflight = {
+                "passed": False,
+                "status": "needs_attention",
+                "issueCount": 1,
+                "issues": [{"type": "board_placement_overlap", "problemId": "p1"}],
+            }
+            payload = {
+                "files": [str(source)],
+                "outputDir": str(output_dir),
+                "preview": True,
+                "exportEdb": False,
+            }
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                resolved_output = Path(kwargs.get("output_dir") or output_dir)
+                return {
+                    "ok": True,
+                    "ui_session": {
+                        "pages": [],
+                        "problems": [],
+                        "classinPreflight": preflight,
+                        "classin_preflight": preflight,
+                    },
+                    "output_dir": str(resolved_output),
+                    "ui_session_path": str(resolved_output / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            body = responses[0][0]
+            self.assertEqual(preflight, body["classinPreflight"])
+            self.assertEqual(preflight, body["classin_preflight"])
+            self.assertEqual("needs_attention", body["classinPreflightStatus"])
+            self.assertEqual(1, body["classinPreflightIssueCount"])
+            self.assertFalse(body["classinPreflightPassed"])
+
 
 class TestRuntimeDiagnostics(unittest.TestCase):
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):

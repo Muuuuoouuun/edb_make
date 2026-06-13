@@ -30,6 +30,12 @@ HWP_COUNT_MATCH_DISMISSIBLE_RISK_FLAGS = {
 HWP_PROBLEM_COUNT_MISMATCH_FLAG = "hwp_problem_count_mismatch"
 HWP_OVERSEGMENTATION_FLAG = "hwp_oversegmentation"
 SOURCE_PROBLEM_BBOX_OVERLAP_FLAG = "source_problem_bbox_overlap"
+CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES = {
+    "board_placement_overlap",
+    "missing_problem_image",
+    "source_problem_bbox_overlap",
+    "unreadable_problem_image",
+}
 
 
 def normalized_text(value: str | Path) -> str:
@@ -177,6 +183,77 @@ def source_problem_overlap_group_count(row: dict[str, Any]) -> int:
         return explicit
     groups = row.get("source_problem_overlap_groups") or row.get("sourceProblemOverlapGroups")
     return len(groups) if isinstance(groups, list) else 0
+
+
+def _classin_preflight(payload: dict[str, Any], session: dict[str, Any] | None = None) -> dict[str, Any]:
+    for source in (payload, session or {}):
+        for key in ("classinPreflight", "classin_preflight"):
+            preflight = source.get(key)
+            if isinstance(preflight, dict):
+                return preflight
+    return {}
+
+
+def _classin_preflight_issue_types(preflight: dict[str, Any]) -> list[str]:
+    issues = preflight.get("issues")
+    if not isinstance(issues, list):
+        return []
+    issue_types: list[str] = []
+    seen: set[str] = set()
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        issue_type = str(issue.get("type") or "").strip()
+        if not issue_type or issue_type in seen:
+            continue
+        seen.add(issue_type)
+        issue_types.append(issue_type)
+    return issue_types
+
+
+def _classin_preflight_blocking_issue_count(preflight: dict[str, Any]) -> int:
+    issues = preflight.get("issues")
+    if not isinstance(issues, list):
+        return 0
+    count = 0
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        issue_type = str(issue.get("type") or "").strip()
+        if issue_type in CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES:
+            count += 1
+    return count
+
+
+def classin_preflight_issue_count(row: dict[str, Any]) -> int:
+    explicit = _coerce_non_negative_int(
+        row.get("classin_preflight_issue_count") or row.get("classinPreflightIssueCount")
+    )
+    if explicit:
+        return explicit
+    issue_types = row.get("classin_preflight_issue_types") or row.get("classinPreflightIssueTypes")
+    if isinstance(issue_types, list):
+        return len([issue_type for issue_type in issue_types if str(issue_type or "").strip()])
+    return 0
+
+
+def classin_preflight_blocking_issue_count(row: dict[str, Any]) -> int:
+    explicit = _coerce_non_negative_int(
+        row.get("classin_preflight_blocking_issue_count")
+        or row.get("classinPreflightBlockingIssueCount")
+    )
+    if explicit:
+        return explicit
+    issue_types = row.get("classin_preflight_issue_types") or row.get("classinPreflightIssueTypes")
+    if not isinstance(issue_types, list):
+        return 0
+    return len(
+        [
+            issue_type
+            for issue_type in issue_types
+            if str(issue_type or "").strip() in CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES
+        ]
+    )
 
 
 def _review_summary(session: dict[str, Any]) -> dict[str, Any]:
@@ -382,6 +459,27 @@ def summarize_export_response(
         validation_flag is None or _coerce_bool(validation_flag)
     )
     edb_expected = bool(expect_edb or edb_path or edb_validation)
+    classin_preflight = _classin_preflight(payload, session)
+    classin_preflight_expected = bool(classin_preflight)
+    classin_preflight_status = str(classin_preflight.get("status") or "").strip()
+    classin_preflight_issues = classin_preflight.get("issues")
+    classin_preflight_issue_types = _classin_preflight_issue_types(classin_preflight)
+    classin_preflight_issue_count = max(
+        _coerce_non_negative_int(
+            classin_preflight.get("issueCount") or classin_preflight.get("issue_count")
+        ),
+        len(classin_preflight_issues) if isinstance(classin_preflight_issues, list) else 0,
+    )
+    classin_preflight_blocking_issue_count = _classin_preflight_blocking_issue_count(classin_preflight)
+    if classin_preflight_expected:
+        passed_value = classin_preflight.get("passed")
+        classin_preflight_passed = (
+            _coerce_bool(passed_value)
+            if passed_value is not None
+            else classin_preflight_issue_count == 0 and classin_preflight_status not in {"failed", "blocked", "needs_attention"}
+        )
+    else:
+        classin_preflight_passed = False
     failed_count = int(status_counts.get("failed") or 0)
     needs_review = bool(
         warnings
@@ -392,6 +490,8 @@ def summarize_export_response(
         or source_overlap_problem_count
         or actionable_counts
         or (edb_expected and not edb_validated)
+        or (classin_preflight_expected and not classin_preflight_passed)
+        or classin_preflight_issue_count
         or failed_count
     )
     return {
@@ -425,6 +525,12 @@ def summarize_export_response(
         "edb_record_count_actual": int(edb_validation.get("recordCountActual") or 0),
         "edb_record_count_hint": int(edb_validation.get("recordCountHint") or 0),
         "edb_page_count_hint": int(edb_validation.get("pageCountHint") or 0),
+        "classin_preflight_expected": classin_preflight_expected,
+        "classin_preflight_passed": classin_preflight_passed,
+        "classin_preflight_status": classin_preflight_status,
+        "classin_preflight_issue_count": classin_preflight_issue_count,
+        "classin_preflight_blocking_issue_count": classin_preflight_blocking_issue_count,
+        "classin_preflight_issue_types": classin_preflight_issue_types,
         "elapsed_s": round(elapsed_s, 2),
         "output_dir": str(output_dir),
     }
@@ -441,6 +547,7 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
     hwp_cache_hit_page_count = 0
     hwp_renderer_cache_hit_count = 0
     hwp_normalized_cache_hit_count = 0
+    classin_preflight_issue_types: Counter[str] = Counter()
     for row in rows:
         row_risk_counts = _coerce_count_map(row.get("risk_flag_counts"))
         if row_risk_counts:
@@ -459,6 +566,10 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         hwp_cache_hit_page_count += _coerce_non_negative_int(row.get("hwp_cache_hit_page_count"))
         hwp_renderer_cache_hit_count += _coerce_non_negative_int(row.get("hwp_renderer_cache_hit_count"))
         hwp_normalized_cache_hit_count += _coerce_non_negative_int(row.get("hwp_normalized_cache_hit_count"))
+        for issue_type in row.get("classin_preflight_issue_types") or []:
+            issue_type_text = str(issue_type or "").strip()
+            if issue_type_text:
+                classin_preflight_issue_types[issue_type_text] += 1
     page_count = sum(int(row.get("pages") or 0) for row in rows)
     return {
         "sample_count": len(rows),
@@ -482,6 +593,14 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "edb_expected_count": sum(1 for row in rows if row.get("edb_expected")),
         "edb_validated_count": sum(1 for row in rows if row.get("edb_expected") and row.get("edb_validated")),
         "edb_missing_count": sum(1 for row in rows if row.get("edb_expected") and not row.get("edb_validated")),
+        "classin_preflight_expected_count": sum(1 for row in rows if row.get("classin_preflight_expected")),
+        "classin_preflight_passed_count": sum(
+            1
+            for row in rows
+            if row.get("classin_preflight_expected") and row.get("classin_preflight_passed")
+        ),
+        "classin_preflight_issue_count": sum(classin_preflight_issue_count(row) for row in rows),
+        "classin_preflight_blocking_issue_count": sum(classin_preflight_blocking_issue_count(row) for row in rows),
         "top_risk_flags": [
             {"flag": flag, "count": count}
             for flag, count in sorted(risk_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
@@ -489,6 +608,10 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "top_actionable_risk_flags": [
             {"flag": flag, "count": count}
             for flag, count in sorted(actionable_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+        ],
+        "top_classin_preflight_issue_types": [
+            {"type": issue_type, "count": count}
+            for issue_type, count in sorted(classin_preflight_issue_types.items(), key=lambda item: (-item[1], item[0]))[:8]
         ],
     }
 
@@ -688,6 +811,19 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
         if edb_expected
         else ""
     )
+    classin_preflight_expected = int(summary.get("classin_preflight_expected_count") or 0)
+    classin_preflight_part = ""
+    if classin_preflight_expected:
+        preflight_issue_label = ", ".join(
+            f"{item.get('type')}:{item.get('count')}"
+            for item in (summary.get("top_classin_preflight_issue_types") or [])[:4]
+            if item.get("type")
+        ) or "-"
+        classin_preflight_part = (
+            f"preflight {summary.get('classin_preflight_passed_count', 0)}/{classin_preflight_expected} · "
+            f"blocking {summary.get('classin_preflight_blocking_issue_count', 0)} · "
+            f"preflight issues {preflight_issue_label} · "
+        )
     top_risk = ", ".join(
         f"{item.get('flag')}:{item.get('count')}"
         for item in (summary.get("top_risk_flags") or [])[:4]
@@ -715,6 +851,7 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
         f"overseg {summary.get('hwp_oversegmentation_count', 0)} · "
         f"source overlap {source_overlap_problem_count}/{source_overlap_group_count} · "
         f"{edb_part}"
+        f"{classin_preflight_part}"
         f"elapsed {summary.get('elapsed_s', 0)}s · "
         f"top risk {top_risk} · "
         f"actionable {top_actionable_risk}"
@@ -751,6 +888,8 @@ def main() -> int:
         return 1
     if any(row.get("edb_expected") and not row.get("edb_validated") for row in rows):
         return 3
+    if any(classin_preflight_blocking_issue_count(row) for row in rows):
+        return 4
     if args.fail_on_review and any(row.get("needs_review") for row in rows):
         return 2
     return 0

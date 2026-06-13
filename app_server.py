@@ -3067,6 +3067,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self.app_server.allowed_files |= collect_session_file_paths(session)
         else:
             self.app_server.remember_session(session)
+        classin_preflight = session.get("classinPreflight")
+        if not isinstance(classin_preflight, dict):
+            classin_preflight = session.get("classin_preflight")
+        if not isinstance(classin_preflight, dict):
+            classin_preflight = {}
+        classin_preflight_issue_count = int(
+            classin_preflight.get("issueCount") or classin_preflight.get("issue_count") or 0
+        )
+        classin_preflight_passed = bool(classin_preflight.get("passed")) if classin_preflight else False
+        classin_preflight_status = str(classin_preflight.get("status") or "")
         self._send_json(
             {
                 "ok": True,
@@ -3080,6 +3090,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "edbPath": str(result["edb_path"]) if result["edb_path"] else None,
                 "edb_validation": edb_validation,
                 "edbValidation": edb_validation,
+                "classin_preflight": classin_preflight,
+                "classinPreflight": classin_preflight,
+                "classin_preflight_status": classin_preflight_status,
+                "classinPreflightStatus": classin_preflight_status,
+                "classin_preflight_passed": classin_preflight_passed,
+                "classinPreflightPassed": classin_preflight_passed,
+                "classin_preflight_issue_count": classin_preflight_issue_count,
+                "classinPreflightIssueCount": classin_preflight_issue_count,
                 "export_mode": session.get("export_mode"),
                 "exportMode": session.get("export_mode"),
             }

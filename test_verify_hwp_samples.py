@@ -223,6 +223,51 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(45, summary["edb_record_count_actual"])
         self.assertFalse(summary["needs_review"])
 
+    def test_summarize_export_response_captures_classin_preflight_issues(self):
+        payload = {
+            "ok": True,
+            "edbPath": "/tmp/out.edb",
+            "edbValidation": {
+                "validated": True,
+                "recordCountActual": 2,
+                "recordCountHint": 2,
+            },
+            "classinPreflight": {
+                "passed": False,
+                "status": "needs_attention",
+                "issueCount": 2,
+                "issues": [
+                    {"type": "board_placement_overlap", "problemId": "p13", "nextProblemId": "p14"},
+                    {"type": "source_problem_bbox_overlap", "problemId": "p21", "nextProblemId": "p22"},
+                ],
+            },
+            "session": {
+                "pages": [],
+                "problems": [],
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("preflight.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+            expect_edb=True,
+        )
+
+        self.assertTrue(summary["classin_preflight_expected"])
+        self.assertFalse(summary["classin_preflight_passed"])
+        self.assertEqual("needs_attention", summary["classin_preflight_status"])
+        self.assertEqual(2, summary["classin_preflight_issue_count"])
+        self.assertEqual(2, summary["classin_preflight_blocking_issue_count"])
+        self.assertEqual(
+            ["board_placement_overlap", "source_problem_bbox_overlap"],
+            summary["classin_preflight_issue_types"],
+        )
+        self.assertTrue(summary["needs_review"])
+
     def test_summarize_export_response_counts_hwp_segmentation_risks(self):
         payload = {
             "ok": True,
@@ -513,6 +558,11 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "hwp_problem_count_mismatch_flags": [],
                 "edb_expected": True,
                 "edb_validated": True,
+                "classin_preflight_expected": True,
+                "classin_preflight_passed": True,
+                "classin_preflight_issue_count": 0,
+                "classin_preflight_blocking_issue_count": 0,
+                "classin_preflight_issue_types": [],
             },
             {
                 "ok": True,
@@ -534,6 +584,11 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "hwp_problem_count_mismatch_flags": [],
                 "edb_expected": True,
                 "edb_validated": False,
+                "classin_preflight_expected": True,
+                "classin_preflight_passed": False,
+                "classin_preflight_issue_count": 1,
+                "classin_preflight_blocking_issue_count": 1,
+                "classin_preflight_issue_types": ["board_placement_overlap"],
             },
             {
                 "ok": False,
@@ -548,6 +603,11 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "source_problem_bbox_overlap_count": 4,
                 "source_problem_overlap_group_count": 2,
                 "warnings": ["conversion failed"],
+                "classin_preflight_expected": True,
+                "classin_preflight_passed": False,
+                "classin_preflight_issue_count": 2,
+                "classin_preflight_blocking_issue_count": 2,
+                "classin_preflight_issue_types": ["board_placement_overlap", "source_problem_bbox_overlap"],
             },
         ]
 
@@ -574,6 +634,10 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(2, summary["edb_expected_count"])
         self.assertEqual(1, summary["edb_validated_count"])
         self.assertEqual(1, summary["edb_missing_count"])
+        self.assertEqual(3, summary["classin_preflight_expected_count"])
+        self.assertEqual(1, summary["classin_preflight_passed_count"])
+        self.assertEqual(3, summary["classin_preflight_issue_count"])
+        self.assertEqual(3, summary["classin_preflight_blocking_issue_count"])
         self.assertEqual(
             [
                 {"flag": "problem_per_block", "count": 39},
@@ -592,6 +656,13 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 {"flag": "hwp_oversegmentation", "count": 1},
             ],
             summary["top_actionable_risk_flags"],
+        )
+        self.assertEqual(
+            [
+                {"type": "board_placement_overlap", "count": 2},
+                {"type": "source_problem_bbox_overlap", "count": 1},
+            ],
+            summary["top_classin_preflight_issue_types"],
         )
 
     def test_main_fails_when_export_edb_is_missing_even_without_fail_on_review(self):
@@ -628,6 +699,84 @@ class TestVerifyHwpSamples(unittest.TestCase):
             exit_code = verify_hwp_samples.main()
 
         self.assertEqual(3, exit_code)
+
+    def test_main_fails_when_classin_preflight_has_issues_even_without_fail_on_review(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "source_dir": Path("samples"),
+                "output_dir": Path("out"),
+                "app_url": "http://127.0.0.1:8765",
+                "timeout_seconds": 240,
+                "export_edb": True,
+                "include": [],
+                "limit": None,
+                "fail_on_review": False,
+            },
+        )()
+        rows = [
+            {
+                "ok": True,
+                "needs_review": False,
+                "edb_expected": True,
+                "edb_validated": True,
+                "classin_preflight_expected": True,
+                "classin_preflight_passed": False,
+                "classin_preflight_issue_count": 1,
+                "classin_preflight_issue_types": ["board_placement_overlap"],
+            }
+        ]
+
+        with (
+            mock.patch.object(verify_hwp_samples, "parse_args", return_value=args),
+            mock.patch.object(verify_hwp_samples, "run_batch", return_value=rows),
+            mock.patch.object(verify_hwp_samples, "format_markdown_table", return_value="table"),
+            mock.patch.object(verify_hwp_samples, "format_batch_summary", return_value="summary"),
+            mock.patch("builtins.print"),
+        ):
+            exit_code = verify_hwp_samples.main()
+
+        self.assertEqual(4, exit_code)
+
+    def test_main_allows_nonblocking_classin_preflight_warnings_without_fail_on_review(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "source_dir": Path("samples"),
+                "output_dir": Path("out"),
+                "app_url": "http://127.0.0.1:8765",
+                "timeout_seconds": 240,
+                "export_edb": True,
+                "include": [],
+                "limit": None,
+                "fail_on_review": False,
+            },
+        )()
+        rows = [
+            {
+                "ok": True,
+                "needs_review": True,
+                "edb_expected": True,
+                "edb_validated": True,
+                "classin_preflight_expected": True,
+                "classin_preflight_passed": False,
+                "classin_preflight_issue_count": 4,
+                "classin_preflight_issue_types": ["review_flags_remaining"],
+            }
+        ]
+
+        with (
+            mock.patch.object(verify_hwp_samples, "parse_args", return_value=args),
+            mock.patch.object(verify_hwp_samples, "run_batch", return_value=rows),
+            mock.patch.object(verify_hwp_samples, "format_markdown_table", return_value="table"),
+            mock.patch.object(verify_hwp_samples, "format_batch_summary", return_value="summary"),
+            mock.patch("builtins.print"),
+        ):
+            exit_code = verify_hwp_samples.main()
+
+        self.assertEqual(0, exit_code)
 
     def test_summarize_batch_demotes_fallback_grouping_for_hwp_count_matches(self):
         rows = [
@@ -707,6 +856,13 @@ class TestVerifyHwpSamples(unittest.TestCase):
             "edb_expected_count": 8,
             "edb_validated_count": 8,
             "edb_missing_count": 0,
+            "classin_preflight_expected_count": 8,
+            "classin_preflight_passed_count": 7,
+            "classin_preflight_issue_count": 2,
+            "classin_preflight_blocking_issue_count": 2,
+            "top_classin_preflight_issue_types": [
+                {"type": "board_placement_overlap", "count": 2},
+            ],
         }
 
         text = verify_hwp_samples.format_batch_summary(summary)
@@ -719,6 +875,9 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertIn("overseg 0", text)
         self.assertIn("source overlap 2/1", text)
         self.assertIn("edb 8/8", text)
+        self.assertIn("preflight 7/8", text)
+        self.assertIn("blocking 2", text)
+        self.assertIn("preflight issues board_placement_overlap:2", text)
         self.assertIn("top risk problem_per_block:8", text)
         self.assertIn("actionable problem_per_block:8", text)
 
