@@ -1365,6 +1365,7 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
 
 def _refresh_session_problem_counts(session: dict[str, Any]) -> None:
     problems = [problem for problem in (session.get("problems") or []) if isinstance(problem, dict)]
+    pages = [page for page in (session.get("pages") or []) if isinstance(page, dict)]
     counts = _session_problem_count_payload(problems)
     session.update(counts)
     session["detectedProblemCount"] = counts["detected_problem_count"]
@@ -1373,6 +1374,14 @@ def _refresh_session_problem_counts(session: dict[str, Any]) -> None:
     summary = _session_review_summary(session)
     session["review_summary"] = summary
     session["reviewSummary"] = summary
+    _normalize_session_passage_review_queue(
+        session,
+        actionable_problem_ids=_session_actionable_problem_ids(
+            problems=problems,
+            pages=pages,
+            actionable_flags=set(summary.get("actionableRiskFlagCounts") or {}),
+        ),
+    )
 
 
 def _metadata_from_page(page: dict[str, Any]) -> dict[str, Any]:
@@ -1538,6 +1547,76 @@ def _copy_session_metadata_aliases(
 def _copy_publish_problem_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
     for aliases in PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS:
         _copy_session_metadata_aliases(target, source, aliases)
+
+
+def _session_actionable_problem_ids(
+    *,
+    problems: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+    actionable_flags: set[str],
+) -> set[str]:
+    actionable_problem_ids: set[str] = set()
+    for index, problem in enumerate(problems):
+        problem_id = str(problem.get("id") or problem.get("problem_id") or f"problem-index-{index}")
+        problem_flags = {
+            str(flag or "").strip()
+            for flag in (problem.get("riskFlags") or problem.get("risk_flags") or [])
+            if str(flag or "").strip()
+        }
+        if _problem_review_status(problem) == "failed" or problem_flags.intersection(actionable_flags):
+            actionable_problem_ids.add(problem_id)
+    for page in pages:
+        page_flags = {
+            str(flag or "").strip()
+            for flag in (page.get("riskFlags") or page.get("risk_flags") or [])
+            if str(flag or "").strip()
+        }
+        if not page_flags.intersection(actionable_flags):
+            continue
+        page_problem_ids = [str(pid) for pid in (page.get("problemIds") or page.get("problem_ids") or []) if pid]
+        actionable_problem_ids.update(page_problem_ids)
+    return actionable_problem_ids
+
+
+def _passage_review_item_problem_ids(item: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for key in ("problemIds", "problem_ids", "fragmentProblemIds", "fragment_problem_ids"):
+        values = item.get(key)
+        if isinstance(values, list):
+            ids.extend(str(value or "").strip() for value in values)
+    return [value for value in ids if value]
+
+
+def _normalize_session_passage_review_queue(
+    session: dict[str, Any],
+    *,
+    actionable_problem_ids: set[str],
+) -> None:
+    raw_items = session.get("passageReviewItems")
+    if not isinstance(raw_items, list):
+        raw_items = session.get("passage_review_items")
+    if not isinstance(raw_items, list):
+        return
+
+    unresolved_items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        problem_ids = _passage_review_item_problem_ids(item)
+        if not problem_ids or any(problem_id in actionable_problem_ids for problem_id in problem_ids):
+            unresolved_items.append(dict(item))
+
+    cross_page_count = sum(
+        1
+        for item in unresolved_items
+        if item.get("continuesAcrossPages") or item.get("continues_across_pages")
+    )
+    session["passageReviewItems"] = unresolved_items
+    session["passage_review_items"] = unresolved_items
+    session["passageReviewItemCount"] = len(unresolved_items)
+    session["passage_review_item_count"] = len(unresolved_items)
+    session["crossPagePassageReviewItemCount"] = cross_page_count
+    session["cross_page_passage_review_item_count"] = cross_page_count
 
 
 def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:

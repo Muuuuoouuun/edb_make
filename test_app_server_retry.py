@@ -1587,6 +1587,69 @@ class TestReviewSummary(unittest.TestCase):
         )
         self.assertEqual(1, summary["actionableNeedsReviewCount"])
 
+    def test_refresh_session_counts_removes_resolved_passage_review_queue(self):
+        session = {
+            "passageReviewItems": [
+                {
+                    "groupId": "hwp-text-passage-31-32",
+                    "numberLabel": "31-32",
+                    "problemIds": ["p31", "p32"],
+                    "sourcePageIds": ["page-5", "page-6"],
+                    "problemCount": 2,
+                    "continuesAcrossPages": True,
+                }
+            ],
+            "passage_review_items": [
+                {
+                    "group_id": "hwp-text-passage-31-32",
+                    "number_label": "31-32",
+                    "problem_ids": ["p31", "p32"],
+                    "source_page_ids": ["page-5", "page-6"],
+                    "problem_count": 2,
+                    "continues_across_pages": True,
+                }
+            ],
+            "passageReviewItemCount": 1,
+            "passage_review_item_count": 1,
+            "crossPagePassageReviewItemCount": 1,
+            "cross_page_passage_review_item_count": 1,
+            "problems": [
+                {
+                    "id": "p31",
+                    "bbox": {"width": 120, "height": 80},
+                    "reviewStatus": "normal",
+                    "riskFlags": [],
+                },
+                {
+                    "id": "p32",
+                    "bbox": {"width": 120, "height": 80},
+                    "reviewStatus": "normal",
+                    "riskFlags": [],
+                },
+            ],
+            "pages": [
+                {
+                    "id": "page-5",
+                    "problemIds": ["p31"],
+                    "riskFlags": [],
+                },
+                {
+                    "id": "page-6",
+                    "problemIds": ["p32"],
+                    "riskFlags": [],
+                },
+            ],
+        }
+
+        app_server._refresh_session_problem_counts(session)
+
+        self.assertEqual([], session["passageReviewItems"])
+        self.assertEqual([], session["passage_review_items"])
+        self.assertEqual(0, session["passageReviewItemCount"])
+        self.assertEqual(0, session["passage_review_item_count"])
+        self.assertEqual(0, session["crossPagePassageReviewItemCount"])
+        self.assertEqual(0, session["cross_page_passage_review_item_count"])
+
     def test_session_review_summary_reads_hwp_text_qa_from_pages_json_path(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
