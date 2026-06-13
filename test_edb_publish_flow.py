@@ -595,6 +595,112 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("passage_cross_page_merge_check", linked_problem["riskFlags"])
             self.assertEqual("check_needed", linked_problem["reviewStatus"])
 
+    def test_problem_entries_preserve_pre_question_cross_page_passage_continuation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            for path in (page_1_image, page_2_image):
+                Image.new("RGB", (900, 1200), "white").save(path)
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=Image.open(page_1_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=Image.open(page_2_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+            ]
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_1_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q13",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=80, width=500, height=120),
+                        reading_order=0,
+                        text="13. first child",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-problem-13",
+                        subject=Subject.KOREAN,
+                        title="13.",
+                        stem_block_ids=["q13"],
+                        metadata={
+                            "problem_number": 13,
+                            "passage_group_id": "page-1-passage-13-16",
+                            "passage_range": {"start": 13, "end": 16},
+                            "passage_role": "child_question",
+                            "shared_passage_block_ids": ["range-header", "shared-passage-a"],
+                            "passage_child_problem_numbers": [13, 14, 15, 16],
+                        },
+                    )
+                ],
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_2_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="passage-continuation",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=40, width=500, height=180),
+                        reading_order=0,
+                        text="앞 페이지에서 이어지는 긴 지문 내용이다.",
+                    ),
+                    ContentBlock(
+                        block_id="q15",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=260, width=500, height=520),
+                        reading_order=1,
+                        text="15. 위 글에 대한 설명으로 적절한 것은?",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-2-continuation",
+                        subject=Subject.KOREAN,
+                        title="지문 이어짐",
+                        stem_block_ids=["passage-continuation"],
+                    ),
+                    ProblemUnit(
+                        unit_id="page-2-problem-15",
+                        subject=Subject.KOREAN,
+                        title="15.",
+                        stem_block_ids=["q15"],
+                        metadata={"problem_number": 15},
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                prepared_pages,
+                [page_1, page_2],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            problem_15 = next(entry for entry in entries if entry.problem_id == "page-2-problem-15")
+            self.assertIn("passage-continuation", [block.block_id for block in problem_15.blocks])
+            self.assertLessEqual(problem_15.bounds.top, 40)
+            self.assertIn("passage_cross_page_merge_check", problem_15.risk_flags)
+
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

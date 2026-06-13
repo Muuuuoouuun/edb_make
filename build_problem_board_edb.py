@@ -1028,6 +1028,46 @@ def _should_prefer_problem_metadata_bbox(problem: ProblemUnit) -> bool:
     return "uncertain_bbox" not in {flag.strip() for flag in flags}
 
 
+def _append_problem_block_ids(target: list[str], values: Sequence[str]) -> None:
+    for value in values:
+        if value and value not in target:
+            target.append(value)
+
+
+def _merge_pre_question_passage_continuations(
+    target: ProblemUnit,
+    continuations: Sequence[ProblemUnit],
+) -> None:
+    merged_block_ids: list[str] = []
+    for continuation in continuations:
+        _append_problem_block_ids(target.stem_block_ids, continuation.stem_block_ids)
+        _append_problem_block_ids(target.choice_block_ids, continuation.choice_block_ids)
+        _append_problem_block_ids(target.explanation_block_ids, continuation.explanation_block_ids)
+        _append_problem_block_ids(target.figure_block_ids, continuation.figure_block_ids)
+        _append_problem_block_ids(merged_block_ids, _iter_problem_block_ids_raw(continuation))
+    if merged_block_ids:
+        target.metadata["passage_pre_question_continuation_block_ids"] = merged_block_ids
+
+
+def _problem_has_number(problem: ProblemUnit) -> bool:
+    raw = problem.metadata.get("problem_number")
+    return (isinstance(raw, int) and raw >= 1) or (isinstance(raw, str) and raw.isdigit())
+
+
+def _problem_is_spatially_before(
+    candidate: ProblemUnit,
+    target: ProblemUnit,
+    block_by_id: dict[str, ContentBlock],
+) -> bool:
+    target_top = _problem_top_y(target, block_by_id)
+    candidate_top = _problem_top_y(candidate, block_by_id)
+    if candidate_top >= target_top:
+        return False
+    target_column = _problem_column_value(target, block_by_id)
+    candidate_column = _problem_column_value(candidate, block_by_id)
+    return target_column is None or candidate_column is None or target_column == candidate_column
+
+
 def _drop_pre_first_problem_headers(
     problems: list[ProblemUnit],
     block_by_id: dict[str, ContentBlock],
@@ -1047,15 +1087,28 @@ def _drop_pre_first_problem_headers(
 
     first_numbered_index: int | None = None
     for index, problem in enumerate(problems):
-        raw = problem.metadata.get("problem_number")
-        if isinstance(raw, int) and raw >= 1:
-            first_numbered_index = index
-            break
-        if isinstance(raw, str) and raw.isdigit():
+        if _problem_has_number(problem):
             first_numbered_index = index
             break
 
-    if first_numbered_index is None or first_numbered_index == 0:
+    if first_numbered_index is None:
+        return problems
+
+    first_numbered = problems[first_numbered_index]
+    if _problem_passage_continues_across_pages(first_numbered.metadata):
+        continuation_problems = [
+            problem
+            for index, problem in enumerate(problems)
+            if index != first_numbered_index
+            and not _problem_has_number(problem)
+            and _problem_is_spatially_before(problem, first_numbered, block_by_id)
+        ]
+        if continuation_problems:
+            _merge_pre_question_passage_continuations(first_numbered, continuation_problems)
+            continuation_ids = {id(problem) for problem in continuation_problems}
+            return [problem for problem in problems if id(problem) not in continuation_ids]
+
+    if first_numbered_index == 0:
         return problems
 
     return problems[first_numbered_index:]
