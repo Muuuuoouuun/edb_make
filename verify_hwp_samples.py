@@ -33,8 +33,10 @@ SOURCE_PROBLEM_BBOX_OVERLAP_FLAG = "source_problem_bbox_overlap"
 PASSAGE_GROUP_SOURCE_REUSE_FLAG = "passage_group_source_reuse"
 CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES = {
     "board_placement_overlap",
+    "low_ink_problem_image",
     "missing_problem_image",
     PASSAGE_GROUP_SOURCE_REUSE_FLAG,
+    "small_problem_image",
     "source_problem_bbox_overlap",
     "unreadable_problem_image",
 }

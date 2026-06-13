@@ -268,6 +268,58 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertTrue(summary["needs_review"])
 
+    def test_summarize_export_response_treats_unreadable_asset_quality_as_blocking(self):
+        payload = {
+            "ok": True,
+            "edbPath": "/tmp/out.edb",
+            "edbValidation": {
+                "validated": True,
+                "recordCountActual": 1,
+                "recordCountHint": 1,
+            },
+            "classinPreflight": {
+                "passed": False,
+                "status": "needs_attention",
+                "issues": [
+                    {
+                        "type": "small_problem_image",
+                        "problemId": "p32",
+                        "problemTitle": "32.",
+                        "width": 1264,
+                        "height": 43,
+                    },
+                    {
+                        "type": "low_ink_problem_image",
+                        "problemId": "p32",
+                        "problemTitle": "32.",
+                        "darkPixelRatio": 0.00011,
+                    },
+                ],
+            },
+            "session": {
+                "pages": [],
+                "problems": [],
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("tiny-crop.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+            expect_edb=True,
+        )
+
+        self.assertEqual(2, summary["classin_preflight_issue_count"])
+        self.assertEqual(2, summary["classin_preflight_blocking_issue_count"])
+        self.assertEqual(
+            ["small_problem_image", "low_ink_problem_image"],
+            summary["classin_preflight_issue_types"],
+        )
+        self.assertTrue(summary["needs_review"])
+
     def test_summarize_export_response_counts_passage_group_source_reuse_preflight(self):
         payload = {
             "ok": True,
