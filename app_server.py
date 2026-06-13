@@ -2873,6 +2873,47 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         new_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
         new_session["classin_preflight"] = classin_preflight
         new_session["classinPreflight"] = classin_preflight
+        if isinstance(handoff_payload.get("passageReviewItems"), list):
+            new_session["passageReviewItems"] = [
+                dict(item)
+                for item in handoff_payload.get("passageReviewItems", [])
+                if isinstance(item, dict)
+            ]
+            new_session["passage_review_items"] = new_session["passageReviewItems"]
+            new_session["passageReviewItemCount"] = (
+                int(handoff_payload.get("passageReviewItemCount"))
+                if isinstance(handoff_payload.get("passageReviewItemCount"), (int, float, str))
+                and str(handoff_payload.get("passageReviewItemCount")).isdigit()
+                else len(new_session["passageReviewItems"])
+            )
+            new_session["passage_review_item_count"] = new_session["passageReviewItemCount"]
+            new_session["crossPagePassageReviewItemCount"] = (
+                int(handoff_payload.get("crossPagePassageReviewItemCount"))
+                if isinstance(handoff_payload.get("crossPagePassageReviewItemCount"), (int, float, str))
+                and str(handoff_payload.get("crossPagePassageReviewItemCount")).isdigit()
+                else sum(
+                    1
+                    for item in new_session["passageReviewItems"]
+                    if item.get("continuesAcrossPages") or item.get("continues_across_pages")
+                )
+            )
+            new_session["cross_page_passage_review_item_count"] = new_session["crossPagePassageReviewItemCount"]
+            _normalize_session_passage_review_queue(
+                new_session,
+                actionable_problem_ids=_session_actionable_problem_ids(
+                    problems=[
+                        problem
+                        for problem in (new_session.get("problems") or [])
+                        if isinstance(problem, dict)
+                    ],
+                    pages=[
+                        page
+                        for page in (new_session.get("pages") or [])
+                        if isinstance(page, dict)
+                    ],
+                    actionable_flags=set((new_session.get("reviewSummary") or {}).get("actionableRiskFlagCounts") or {}),
+                ),
+            )
 
         publish_summary = _session_publish_summary(
             edb_path=edb_path,
@@ -2908,20 +2949,20 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else None
             ),
             passage_review_items=(
-                handoff_payload.get("passageReviewItems")
-                if isinstance(handoff_payload.get("passageReviewItems"), list)
+                new_session.get("passageReviewItems")
+                if isinstance(new_session.get("passageReviewItems"), list)
                 else None
             ),
             passage_review_item_count=(
-                int(handoff_payload.get("passageReviewItemCount"))
-                if isinstance(handoff_payload.get("passageReviewItemCount"), (int, float, str))
-                and str(handoff_payload.get("passageReviewItemCount")).isdigit()
+                int(new_session.get("passageReviewItemCount"))
+                if isinstance(new_session.get("passageReviewItemCount"), (int, float, str))
+                and str(new_session.get("passageReviewItemCount")).isdigit()
                 else None
             ),
             cross_page_passage_review_item_count=(
-                int(handoff_payload.get("crossPagePassageReviewItemCount"))
-                if isinstance(handoff_payload.get("crossPagePassageReviewItemCount"), (int, float, str))
-                and str(handoff_payload.get("crossPagePassageReviewItemCount")).isdigit()
+                int(new_session.get("crossPagePassageReviewItemCount"))
+                if isinstance(new_session.get("crossPagePassageReviewItemCount"), (int, float, str))
+                and str(new_session.get("crossPagePassageReviewItemCount")).isdigit()
                 else None
             ),
         )
