@@ -3141,7 +3141,14 @@ function publishBlockedTarget(blockedPublish){
     && issueTypes.every(type => type === 'board_placement_overlap');
   if (onlyBoardPlacement) return { view: 'board', reviewFocus: null };
   if (issueTypes.includes('passage_review_queue_remaining')) {
-    return { view: 'review', reviewFocus: { filter: 'passage-review', source: 'publish-preflight' } };
+    return {
+      view: 'review',
+      reviewFocus: {
+        filter: 'passage-review',
+        ...(focusedProblemIds.length ? { problemIds: focusedProblemIds } : {}),
+        source: 'publish-preflight',
+      },
+    };
   }
   if (focusedProblemIds.length) {
     return {

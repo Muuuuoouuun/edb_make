@@ -89,7 +89,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
         self.assertIn("publish_summary.js?v=passage-review-label-20260614", html)
-        self.assertIn("app.jsx?v=preflight-block-focus-20260614", html)
+        self.assertIn("app.jsx?v=passage-review-focus-20260614", html)
 
 
 if __name__ == "__main__":

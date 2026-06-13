@@ -462,6 +462,24 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (duplicateTarget.reviewFocus?.problemIds?.join(',') !== 'p7-a,p7-b') {
               throw new Error(`expected duplicate ids focus, got ${duplicateTarget.reviewFocus?.problemIds}`);
             }
+            const passageTarget = sandbox.publishBlockedTarget({
+              issueTypes: ['passage_review_queue_remaining'],
+              blockingProblemIds: ['p31', 'p32', 'p31-fragment'],
+              classinPreflight: {
+                issues: [
+                  {
+                    type: 'passage_review_queue_remaining',
+                    problemIds: ['p31', 'p32', 'p31-fragment'],
+                  },
+                ],
+              },
+            });
+            if (passageTarget.reviewFocus?.filter !== 'passage-review') {
+              throw new Error(`expected passage-review filter, got ${passageTarget.reviewFocus?.filter}`);
+            }
+            if (passageTarget.reviewFocus?.problemIds?.join(',') !== 'p31,p32,p31-fragment') {
+              throw new Error(`expected passage ids focus, got ${passageTarget.reviewFocus?.problemIds}`);
+            }
             const boardTarget = sandbox.publishBlockedTarget({ issueTypes: ['board_placement_overlap'] });
             if (boardTarget.view !== 'board' || boardTarget.reviewFocus !== null) {
               throw new Error(`expected board-only target, got ${JSON.stringify(boardTarget)}`);
