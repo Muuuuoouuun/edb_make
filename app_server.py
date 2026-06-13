@@ -30,6 +30,7 @@ from build_problem_board_edb import (
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     ProblemEntry,
     _classin_board_placement_overlap_issues,
+    _classin_passage_group_source_reuse_issues,
     _classin_source_bbox_overlap_issues,
     _normalize_processing_step,
     _session_duplicate_problem_number_groups,
@@ -613,6 +614,7 @@ def _session_publish_blocking_preflight(problems: list[dict[str, Any]]) -> tuple
         _duplicate_problem_number_group_issue(group)
         for group in duplicate_groups
     ]
+    issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_board_placement_overlap_issues(checked_problems))
 

@@ -74,6 +74,47 @@ class TestUiPublishGuardHelper(unittest.TestCase):
             """
         )
 
+    def test_detects_passage_group_source_reuse_before_publish(self) -> None:
+        run_node(
+            """
+            const { findPassageGroupSourceReuse } = require('./ui_prototype/publish_guard.js');
+            const issues = findPassageGroupSourceReuse([
+              {
+                id: 'p22',
+                title: '22.',
+                sourcePageId: 'page-004',
+                bbox: { left: 42, top: 120, width: 520, height: 430 },
+                passageGroupId: 'hwp-continuation-passage-22-26',
+                passageRole: 'child_question',
+              },
+              {
+                id: 'p23',
+                title: '23.',
+                sourcePageId: 'page-004',
+                bbox: { left: 48, top: 132, width: 510, height: 410 },
+                passageGroupId: 'hwp-continuation-passage-22-26',
+                passageRole: 'child_question',
+              },
+            ]);
+            if (issues.length !== 1) {
+              throw new Error(`expected 1 passage reuse issue, got ${issues.length}`);
+            }
+            const issue = issues[0];
+            if (issue.type !== 'passage_group_source_reuse') {
+              throw new Error(`unexpected issue type ${issue.type}`);
+            }
+            if (issue.passageGroupId !== 'hwp-continuation-passage-22-26') {
+              throw new Error(`unexpected passage group ${issue.passageGroupId}`);
+            }
+            if (issue.problemId !== 'p22' || issue.nextProblemId !== 'p23') {
+              throw new Error(`unexpected ids ${issue.problemId}/${issue.nextProblemId}`);
+            }
+            if (!(issue.overlapAreaRatio >= 0.8)) {
+              throw new Error(`expected high overlap ratio, got ${issue.overlapAreaRatio}`);
+            }
+            """
+        )
+
     def test_detects_requested_scale_overlap_before_publish(self) -> None:
         run_node(
             """

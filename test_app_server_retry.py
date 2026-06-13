@@ -423,6 +423,47 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertIn("source_problem_bbox_overlap", issue_types)
             entries.assert_not_called()
 
+    def test_session_publish_blocks_passage_group_source_reuse_before_build(self):
+        with TemporaryDirectory() as raw_tmp:
+            session = {
+                "session_name": "passage-source-reuse",
+                "output_dir": raw_tmp,
+                "pages": [{"id": "page-4", "problemIds": ["p22", "p23"]}],
+                "problems": [
+                    {
+                        "id": "p22",
+                        "title": "22.",
+                        "problemNumber": 22,
+                        "sourcePageId": "page-4",
+                        "bbox": {"left": 42, "top": 120, "width": 520, "height": 430},
+                        "passageGroupId": "hwp-continuation-passage-22-26",
+                        "passageRole": "child_question",
+                    },
+                    {
+                        "id": "p23",
+                        "title": "23.",
+                        "problemNumber": 23,
+                        "sourcePageId": "page-4",
+                        "bbox": {"left": 48, "top": 132, "width": 510, "height": 410},
+                        "passageGroupId": "hwp-continuation-passage-22-26",
+                        "passageRole": "child_question",
+                    },
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+                handler._handle_session_publish()
+
+            self.assertEqual(1, len(responses))
+            body, kwargs = responses[0]
+            self.assertFalse(body["ok"])
+            self.assertEqual("publish_preflight_blocked", body["errorKind"])
+            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
+            self.assertIn("passage_group_source_reuse", issue_types)
+            entries.assert_not_called()
+
     def test_session_publish_blocks_duplicate_problem_numbers_before_build(self):
         with TemporaryDirectory() as raw_tmp:
             session = {

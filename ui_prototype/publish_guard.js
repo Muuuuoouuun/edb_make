@@ -12,6 +12,7 @@
   const MIN_HEIGHT_PAGES = 0.12;
   const OVERLAP_TOLERANCE_PAGES = 0.01;
   const SOURCE_BBOX_OVERLAP_RATIO = 0.65;
+  const PASSAGE_GROUP_SOURCE_REUSE_RATIO = 0.65;
 
   function finiteNumber(value, fallback) {
     const number = Number(value);
@@ -48,6 +49,14 @@
 
   function sourcePageIdFor(item) {
     return String(item?.sourcePageId || item?.source_page_id || item?.pageId || item?.page_id || "").trim();
+  }
+
+  function passageGroupIdFor(item) {
+    return String(item?.passageGroupId || item?.passage_group_id || item?.metadata?.passageGroupId || item?.metadata?.passage_group_id || "").trim();
+  }
+
+  function passageRoleFor(item) {
+    return String(item?.passageRole || item?.passage_role || item?.metadata?.passageRole || item?.metadata?.passage_role || "").trim();
   }
 
   function numberOrNull(value) {
@@ -196,6 +205,69 @@
     return issues;
   }
 
+  function findPassageGroupSourceReuse(problems, options = {}) {
+    const threshold = finiteNumber(options.overlapAreaRatio, PASSAGE_GROUP_SOURCE_REUSE_RATIO);
+    const groups = new Map();
+    (Array.isArray(problems) ? problems : []).forEach((problem, index) => {
+      if (!problem || typeof problem !== "object") return;
+      const passageGroupId = passageGroupIdFor(problem);
+      const sourcePageId = sourcePageIdFor(problem);
+      const bbox = bboxFor(problem);
+      const role = passageRoleFor(problem);
+      const problemId = problemIdFor(problem, index);
+      if (!passageGroupId || !sourcePageId || !bbox) return;
+      if (role === "passage_fragment" || problemId.endsWith("-continuation")) return;
+      const key = `${passageGroupId}\\n${sourcePageId}`;
+      const group = groups.get(key) || [];
+      group.push({ problem, bbox, index, passageGroupId, sourcePageId });
+      groups.set(key, group);
+    });
+
+    const issues = [];
+    groups.forEach(group => {
+      if (group.length < 2) return;
+      group.sort((a, b) => (
+        a.bbox.top - b.bbox.top
+        || a.bbox.left - b.bbox.left
+        || String(problemIdFor(a.problem, a.index)).localeCompare(String(problemIdFor(b.problem, b.index)))
+      ));
+      for (let index = 0; index < group.length; index += 1) {
+        const current = group[index];
+        const currentArea = current.bbox.width * current.bbox.height;
+        if (currentArea <= 0) continue;
+        for (let nextIndex = index + 1; nextIndex < group.length; nextIndex += 1) {
+          const next = group[nextIndex];
+          const nextArea = next.bbox.width * next.bbox.height;
+          if (nextArea <= 0) continue;
+          const intersectionWidth = Math.max(0, Math.min(current.bbox.right, next.bbox.right) - Math.max(current.bbox.left, next.bbox.left));
+          const intersectionHeight = Math.max(0, Math.min(current.bbox.bottom, next.bbox.bottom) - Math.max(current.bbox.top, next.bbox.top));
+          const intersectionArea = intersectionWidth * intersectionHeight;
+          if (intersectionArea <= 0) continue;
+          const overlapAreaRatio = intersectionArea / Math.min(currentArea, nextArea);
+          if (overlapAreaRatio < threshold) continue;
+          const unionArea = currentArea + nextArea - intersectionArea;
+          issues.push({
+            type: "passage_group_source_reuse",
+            severity: "warning",
+            problemId: problemIdFor(current.problem, current.index),
+            problemTitle: problemTitleFor(current.problem, problemIdFor(current.problem, current.index)),
+            nextProblemId: problemIdFor(next.problem, next.index),
+            nextProblemTitle: problemTitleFor(next.problem, problemIdFor(next.problem, next.index)),
+            passageGroupId: current.passageGroupId,
+            sourcePageId: current.sourcePageId,
+            overlapAreaRatio: rounded(overlapAreaRatio),
+            intersectionOverUnion: unionArea > 0 ? rounded(intersectionArea / unionArea) : 0,
+            intersectionAreaPx: rounded(intersectionArea),
+            passageGroupSourceReuseThreshold: threshold,
+            bbox: bboxPayload(current.bbox),
+            nextBbox: bboxPayload(next.bbox),
+          });
+        }
+      }
+    });
+    return issues;
+  }
+
   function findBoardPlacementOverlaps(items, options = {}) {
     const tolerancePages = finiteNumber(options.tolerancePages, OVERLAP_TOLERANCE_PAGES);
     const placements = simulatedBoardPlacements(items, options);
@@ -222,6 +294,7 @@
 
   return {
     findBoardPlacementOverlaps,
+    findPassageGroupSourceReuse,
     findSourceProblemOverlaps,
     simulatedBoardPlacements,
   };

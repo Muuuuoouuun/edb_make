@@ -1832,6 +1832,76 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertGreaterEqual(overlap_issues[0]["overlapAreaRatio"], 0.8)
             self.assertIn("source_problem_bbox_overlap", markdown)
 
+    def test_classin_preflight_flags_passage_group_source_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            first_crop = root / "p22.png"
+            second_crop = root / "p23.png"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+            for path, label in ((first_crop, "22. child question"), (second_crop, "23. child question")):
+                image = Image.new("RGB", (640, 320), "white")
+                draw = ImageDraw.Draw(image)
+                for line in range(10):
+                    draw.text((36, 28 + line * 24), f"{label} shared passage line {line}", fill=(20, 20, 20))
+                image.save(path)
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 2,
+                    "supplemental_item_count": 0,
+                    "detected_problem_count": 2,
+                    "source_page_count": 1,
+                    "reviewSummary": {},
+                    "problems": [
+                        {
+                            "id": "p22",
+                            "title": "22.",
+                            "imagePath": first_crop.resolve().as_uri(),
+                            "sourcePageId": "page-004",
+                            "bbox": {"left": 42, "top": 120, "width": 520, "height": 430},
+                            "passageGroupId": "hwp-continuation-passage-22-26",
+                            "passageRole": "child_question",
+                            "riskFlags": [],
+                            "reviewStatus": "normal",
+                        },
+                        {
+                            "id": "p23",
+                            "title": "23.",
+                            "imagePath": second_crop.resolve().as_uri(),
+                            "sourcePageId": "page-004",
+                            "bbox": {"left": 48, "top": 132, "width": 510, "height": 410},
+                            "passageGroupId": "hwp-continuation-passage-22-26",
+                            "passageRole": "child_question",
+                            "riskFlags": [],
+                            "reviewStatus": "normal",
+                        },
+                    ],
+                },
+                summary={"record_count": 2, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=50),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            preflight = handoff["classinPreflight"]
+            reuse_issues = [
+                issue for issue in preflight["issues"] if issue["type"] == "passage_group_source_reuse"
+            ]
+            self.assertEqual("needs_attention_before_classin", handoff["status"])
+            self.assertFalse(handoff["readyForClassIn"])
+            self.assertEqual(1, len(reuse_issues))
+            self.assertEqual("p22", reuse_issues[0]["problemId"])
+            self.assertEqual("p23", reuse_issues[0]["nextProblemId"])
+            self.assertEqual("hwp-continuation-passage-22-26", reuse_issues[0]["passageGroupId"])
+            self.assertGreaterEqual(reuse_issues[0]["overlapAreaRatio"], 0.8)
+            self.assertIn("passage_group_source_reuse", markdown)
+
     def test_korean_edb_filename_download_header_is_http_safe(self):
         header = content_disposition_attachment(
             "20260610_223707_1781098627053740000_고1_샘플_7f796ebe63.edb"

@@ -90,6 +90,7 @@ CLASSIN_PREFLIGHT_INK_THRESHOLD = 245
 CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO = 0.002
 CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES = 0.01
 CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO = 0.65
+CLASSIN_PREFLIGHT_PASSAGE_SOURCE_REUSE_RATIO = 0.65
 CLASSIN_PREFLIGHT_MAX_ISSUES = 50
 CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
     "fallback_grouping",
@@ -2955,6 +2956,83 @@ def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> l
     return issues
 
 
+def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates_by_group: dict[
+        tuple[str, str],
+        list[tuple[tuple[float, float, float, float], dict[str, Any]]],
+    ] = {}
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        group_id = _session_problem_passage_group_id(problem)
+        source_page_id = _problem_source_page_id(problem)
+        bbox = _problem_bbox(problem)
+        role = str(_session_problem_field(problem, "passageRole", "passage_role") or "").strip()
+        if not group_id or not source_page_id or bbox is None:
+            continue
+        if role == "passage_fragment" or _session_problem_is_supplemental(problem):
+            continue
+        candidates_by_group.setdefault((group_id, source_page_id), []).append((bbox, problem))
+
+    issues: list[dict[str, Any]] = []
+    threshold = CLASSIN_PREFLIGHT_PASSAGE_SOURCE_REUSE_RATIO
+    for (group_id, source_page_id), candidates in candidates_by_group.items():
+        if len(candidates) < 2:
+            continue
+        candidates.sort(
+            key=lambda item: (
+                item[0][1],
+                item[0][0],
+                str(item[1].get("id") or item[1].get("problem_id") or ""),
+            )
+        )
+        for index, (bbox, problem) in enumerate(candidates):
+            left, top, right, bottom = bbox
+            area = (right - left) * (bottom - top)
+            if area <= 0:
+                continue
+            for next_bbox, next_problem in candidates[index + 1:]:
+                next_left, next_top, next_right, next_bottom = next_bbox
+                next_area = (next_right - next_left) * (next_bottom - next_top)
+                if next_area <= 0:
+                    continue
+                intersection_width = max(0.0, min(right, next_right) - max(left, next_left))
+                intersection_height = max(0.0, min(bottom, next_bottom) - max(top, next_top))
+                intersection_area = intersection_width * intersection_height
+                if intersection_area <= 0:
+                    continue
+                overlap_area_ratio = intersection_area / min(area, next_area)
+                if overlap_area_ratio < threshold:
+                    continue
+                union_area = area + next_area - intersection_area
+                issues.append(
+                    _classin_preflight_issue(
+                        "passage_group_source_reuse",
+                        severity="warning",
+                        message=(
+                            "같은 긴 지문 그룹의 하위 문항 원본 영역이 크게 겹칩니다. "
+                            "공통 지문/문항 crop이 EDB에 반복 등록되지 않도록 지문 병합 상태를 확인해 주세요."
+                        ),
+                        problem=problem,
+                        details={
+                            "nextProblemId": str(next_problem.get("id") or next_problem.get("problem_id") or ""),
+                            "nextProblemTitle": str(
+                                next_problem.get("title") or next_problem.get("problemNumber") or ""
+                            ),
+                            "passageGroupId": group_id,
+                            "sourcePageId": source_page_id,
+                            "overlapAreaRatio": round(overlap_area_ratio, 6),
+                            "intersectionOverUnion": round(intersection_area / union_area, 6) if union_area > 0 else 0.0,
+                            "intersectionAreaPx": round(intersection_area, 6),
+                            "passageGroupSourceReuseThreshold": threshold,
+                            "bbox": _bbox_payload(bbox),
+                            "nextBbox": _bbox_payload(next_bbox),
+                        },
+                    )
+                )
+    return issues
+
+
 def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     placements: list[tuple[float, float, dict[str, Any]]] = []
     for problem in problems:
@@ -3131,6 +3209,11 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
                 break
     if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
+        for issue in _classin_passage_group_source_reuse_issues(problems):
+            issues.append(issue)
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+    if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
         for issue in _classin_source_bbox_overlap_issues(problems):
             issues.append(issue)
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
@@ -3149,6 +3232,7 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             "minDarkPixelRatio": CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO,
             "darkPixelThreshold": CLASSIN_PREFLIGHT_INK_THRESHOLD,
             "placementOverlapTolerancePages": CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES,
+            "passageGroupSourceReuseRatio": CLASSIN_PREFLIGHT_PASSAGE_SOURCE_REUSE_RATIO,
             "sourceBboxOverlapRatio": CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO,
         },
     }

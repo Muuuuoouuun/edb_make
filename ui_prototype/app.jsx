@@ -25,6 +25,7 @@ const SAMPLE_STEPS = ['raw','raw','raw','s1','s2','raw'];
 const REORDER_HELPERS = window.EDB_REORDER || {};
 const PUBLISH_GUARD = window.EDB_PUBLISH_GUARD || {};
 const findBoardPlacementOverlaps = PUBLISH_GUARD.findBoardPlacementOverlaps || (() => []);
+const findPassageGroupSourceReuse = PUBLISH_GUARD.findPassageGroupSourceReuse || (() => []);
 const findSourceProblemOverlaps = PUBLISH_GUARD.findSourceProblemOverlaps || (() => []);
 const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, fromId, toId, position = 'before') => {
   const sourceId = fromId == null ? '' : String(fromId);
@@ -2962,6 +2963,7 @@ const RISK_FLAG_META = {
   needs_review: '검토 필요',
   no_problem_markers: '문항 번호 부족',
   ocr_disabled: 'OCR 미사용',
+  passage_group_source_reuse: '지문 그룹 원본 중복',
   passage_cross_page_merge_check: '긴 지문 병합 확인',
   problem_per_block: '블록 단위 분리',
   sparse_segmentation: '성긴 분할',
@@ -2973,6 +2975,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   duplicate_problem_number: '중복 번호',
   low_ink_problem_image: '이미지 내용 부족',
   missing_problem_image: '문항 이미지 없음',
+  passage_group_source_reuse: '지문 그룹 원본 중복',
   review_flags_remaining: '검수 플래그 남음',
   small_problem_image: '문항 이미지 작음',
   source_problem_bbox_overlap: '원본 영역 겹침',
@@ -4999,6 +5002,16 @@ function App(){
       setView('review');
       const duplicateLabel = publishReviewSummary.duplicateProblemNumberLabel || `${duplicateProblemNumberGroups.length}그룹`;
       showToast(`중복 문항 번호가 있어 제작을 멈췄어요. ${duplicateLabel}`);
+      return;
+    }
+    const passageSourceReuseIssues = findPassageGroupSourceReuse(sessionForPublish.problems || [])
+      .filter(issue => issue.type === 'passage_group_source_reuse');
+    if (passageSourceReuseIssues.length > 0) {
+      const firstIssue = passageSourceReuseIssues[0];
+      setView('review');
+      showToast(
+        `긴 지문 그룹 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+      );
       return;
     }
     const sourceOverlapIssues = findSourceProblemOverlaps(sessionForPublish.problems || [])
