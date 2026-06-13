@@ -268,6 +268,56 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertTrue(summary["needs_review"])
 
+    def test_summarize_export_response_counts_passage_group_source_reuse_preflight(self):
+        payload = {
+            "ok": True,
+            "edbPath": "/tmp/out.edb",
+            "edbValidation": {
+                "validated": True,
+                "recordCountActual": 2,
+                "recordCountHint": 2,
+            },
+            "classinPreflight": {
+                "passed": False,
+                "status": "blocked",
+                "issues": [
+                    {
+                        "type": "passage_group_source_reuse",
+                        "problemId": "p22",
+                        "nextProblemId": "p23",
+                        "passageGroupId": "hwp-continuation-passage-22-26",
+                    },
+                    {
+                        "type": "review_flags_remaining",
+                        "problemId": "p24",
+                    },
+                ],
+            },
+            "session": {
+                "pages": [],
+                "problems": [],
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("passage-reuse.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+            expect_edb=True,
+        )
+
+        self.assertEqual(1, summary["passage_group_source_reuse_count"])
+        self.assertEqual(2, summary["classin_preflight_issue_count"])
+        self.assertEqual(1, summary["classin_preflight_blocking_issue_count"])
+        self.assertEqual(
+            ["passage_group_source_reuse", "review_flags_remaining"],
+            summary["classin_preflight_issue_types"],
+        )
+        self.assertTrue(summary["needs_review"])
+
     def test_summarize_export_response_counts_hwp_segmentation_risks(self):
         payload = {
             "ok": True,
@@ -909,6 +959,39 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertIn("passage questions 25", text)
         self.assertIn("fragments 2", text)
         self.assertIn("cross-page 4", text)
+
+    def test_summarize_batch_rolls_up_passage_source_reuse_metrics(self):
+        rows = [
+            {
+                "ok": True,
+                "needs_review": True,
+                "passage_group_source_reuse_count": 1,
+                "classin_preflight_issue_count": 1,
+                "classin_preflight_blocking_issue_count": 1,
+                "classin_preflight_issue_types": ["passage_group_source_reuse"],
+                "risk_flags": [],
+                "risk_flag_counts": {},
+                "actionable_risk_flag_counts": {},
+            },
+            {
+                "ok": True,
+                "needs_review": True,
+                "passage_group_source_reuse_count": 2,
+                "classin_preflight_issue_count": 2,
+                "classin_preflight_blocking_issue_count": 2,
+                "classin_preflight_issue_types": ["passage_group_source_reuse"],
+                "risk_flags": [],
+                "risk_flag_counts": {},
+                "actionable_risk_flag_counts": {},
+            },
+        ]
+
+        summary = verify_hwp_samples.summarize_batch(rows)
+        text = verify_hwp_samples.format_batch_summary(summary)
+
+        self.assertEqual(3, summary["passage_group_source_reuse_count"])
+        self.assertIn("passage reuse 3", text)
+        self.assertIn("preflight issues passage_group_source_reuse:2", text)
 
     def test_format_batch_summary_mentions_review_and_top_risk(self):
         summary = {

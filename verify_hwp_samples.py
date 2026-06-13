@@ -30,9 +30,11 @@ HWP_COUNT_MATCH_DISMISSIBLE_RISK_FLAGS = {
 HWP_PROBLEM_COUNT_MISMATCH_FLAG = "hwp_problem_count_mismatch"
 HWP_OVERSEGMENTATION_FLAG = "hwp_oversegmentation"
 SOURCE_PROBLEM_BBOX_OVERLAP_FLAG = "source_problem_bbox_overlap"
+PASSAGE_GROUP_SOURCE_REUSE_FLAG = "passage_group_source_reuse"
 CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES = {
     "board_placement_overlap",
     "missing_problem_image",
+    PASSAGE_GROUP_SOURCE_REUSE_FLAG,
     "source_problem_bbox_overlap",
     "unreadable_problem_image",
 }
@@ -286,6 +288,20 @@ def _classin_preflight_issue_types(preflight: dict[str, Any]) -> list[str]:
     return issue_types
 
 
+def _classin_preflight_issue_type_count(preflight: dict[str, Any], issue_type: str) -> int:
+    issues = preflight.get("issues")
+    if not isinstance(issues, list):
+        return 0
+    target = str(issue_type or "").strip()
+    if not target:
+        return 0
+    return sum(
+        1
+        for issue in issues
+        if isinstance(issue, dict) and str(issue.get("type") or "").strip() == target
+    )
+
+
 def _classin_preflight_blocking_issue_count(preflight: dict[str, Any]) -> int:
     issues = preflight.get("issues")
     if not isinstance(issues, list):
@@ -328,6 +344,17 @@ def classin_preflight_blocking_issue_count(row: dict[str, Any]) -> int:
             for issue_type in issue_types
             if str(issue_type or "").strip() in CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES
         ]
+    )
+
+
+def has_classin_preflight(row: dict[str, Any]) -> bool:
+    return bool(
+        row.get("classin_preflight_expected")
+        or row.get("classinPreflightExpected")
+        or classin_preflight_issue_count(row)
+        or classin_preflight_blocking_issue_count(row)
+        or row.get("classin_preflight_issue_types")
+        or row.get("classinPreflightIssueTypes")
     )
 
 
@@ -540,6 +567,10 @@ def summarize_export_response(
     classin_preflight_status = str(classin_preflight.get("status") or "").strip()
     classin_preflight_issues = classin_preflight.get("issues")
     classin_preflight_issue_types = _classin_preflight_issue_types(classin_preflight)
+    passage_group_source_reuse_count = _classin_preflight_issue_type_count(
+        classin_preflight,
+        PASSAGE_GROUP_SOURCE_REUSE_FLAG,
+    )
     classin_preflight_issue_count = max(
         _coerce_non_negative_int(
             classin_preflight.get("issueCount") or classin_preflight.get("issue_count")
@@ -607,6 +638,7 @@ def summarize_export_response(
         "classin_preflight_status": classin_preflight_status,
         "classin_preflight_issue_count": classin_preflight_issue_count,
         "classin_preflight_blocking_issue_count": classin_preflight_blocking_issue_count,
+        "passage_group_source_reuse_count": passage_group_source_reuse_count,
         "classin_preflight_issue_types": classin_preflight_issue_types,
         "elapsed_s": round(elapsed_s, 2),
         "output_dir": str(output_dir),
@@ -628,6 +660,7 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
     passage_problem_count = 0
     passage_fragment_count = 0
     cross_page_passage_group_count = 0
+    passage_group_source_reuse_count = 0
     classin_preflight_issue_types: Counter[str] = Counter()
     for row in rows:
         row_risk_counts = _coerce_count_map(row.get("risk_flag_counts"))
@@ -651,6 +684,7 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         passage_problem_count += _coerce_non_negative_int(row.get("passage_problem_count"))
         passage_fragment_count += _coerce_non_negative_int(row.get("passage_fragment_count"))
         cross_page_passage_group_count += _coerce_non_negative_int(row.get("cross_page_passage_group_count"))
+        passage_group_source_reuse_count += _coerce_non_negative_int(row.get("passage_group_source_reuse_count"))
         for issue_type in row.get("classin_preflight_issue_types") or []:
             issue_type_text = str(issue_type or "").strip()
             if issue_type_text:
@@ -679,14 +713,15 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "passage_problem_count": passage_problem_count,
         "passage_fragment_count": passage_fragment_count,
         "cross_page_passage_group_count": cross_page_passage_group_count,
+        "passage_group_source_reuse_count": passage_group_source_reuse_count,
         "edb_expected_count": sum(1 for row in rows if row.get("edb_expected")),
         "edb_validated_count": sum(1 for row in rows if row.get("edb_expected") and row.get("edb_validated")),
         "edb_missing_count": sum(1 for row in rows if row.get("edb_expected") and not row.get("edb_validated")),
-        "classin_preflight_expected_count": sum(1 for row in rows if row.get("classin_preflight_expected")),
+        "classin_preflight_expected_count": sum(1 for row in rows if has_classin_preflight(row)),
         "classin_preflight_passed_count": sum(
             1
             for row in rows
-            if row.get("classin_preflight_expected") and row.get("classin_preflight_passed")
+            if has_classin_preflight(row) and row.get("classin_preflight_passed")
         ),
         "classin_preflight_issue_count": sum(classin_preflight_issue_count(row) for row in rows),
         "classin_preflight_blocking_issue_count": sum(classin_preflight_blocking_issue_count(row) for row in rows),
@@ -927,14 +962,16 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     hwp_cache_hit_page_count = _coerce_non_negative_int(summary.get("hwp_cache_hit_page_count"))
     source_overlap_problem_count = _coerce_non_negative_int(summary.get("source_problem_bbox_overlap_count"))
     source_overlap_group_count = _coerce_non_negative_int(summary.get("source_problem_overlap_group_count"))
+    passage_group_source_reuse_count = _coerce_non_negative_int(summary.get("passage_group_source_reuse_count"))
     passage_group_count = _coerce_non_negative_int(summary.get("passage_group_count"))
     passage_part = ""
-    if passage_group_count:
+    if passage_group_count or passage_group_source_reuse_count:
         passage_part = (
             f"passage groups {passage_group_count} · "
             f"passage questions {_coerce_non_negative_int(summary.get('passage_problem_count'))} · "
             f"fragments {_coerce_non_negative_int(summary.get('passage_fragment_count'))} · "
             f"cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_group_count'))} · "
+            f"passage reuse {passage_group_source_reuse_count} · "
         )
     return (
         "Batch summary: "
