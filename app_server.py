@@ -29,7 +29,10 @@ from build_problem_board_edb import (
     DEFAULT_BOARD_THEME,
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     ProblemEntry,
+    _classin_board_placement_overlap_issues,
+    _classin_source_bbox_overlap_issues,
     _normalize_processing_step,
+    _session_duplicate_problem_number_groups,
     _session_problem_count_payload,
     build_records,
     build_ui_session,
@@ -561,6 +564,96 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
     annotated["classin_handoff_status"] = annotated["classinHandoffStatus"]
     annotated["ready_for_classin"] = annotated["readyForClassIn"]
     return annotated
+
+
+def _duplicate_problem_number_group_issue(group: dict[str, Any]) -> dict[str, Any]:
+    problem_ids = [str(value) for value in (group.get("problemIds") or []) if str(value or "")]
+    source_page_ids = [str(value) for value in (group.get("sourcePageIds") or []) if str(value or "")]
+    number_label = str(group.get("numberLabel") or "")
+    message = str(group.get("message") or "").strip()
+    if not message:
+        message = f"문항 번호 {number_label}가 중복되었습니다. EDB publish 전에 분리/병합 상태를 확인해 주세요."
+    return {
+        "type": "duplicate_problem_number",
+        "severity": "warning",
+        "message": message,
+        "problemId": problem_ids[0] if problem_ids else "",
+        "problemTitle": number_label,
+        "numberLabel": number_label,
+        "problemNumbers": list(group.get("problemNumbers") or []),
+        "problemIds": problem_ids,
+        "sourcePageIds": source_page_ids,
+        "classification": str(group.get("classification") or "duplicate"),
+        "blocking": True,
+    }
+
+
+def _session_publish_blocking_preflight(problems: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    checked_problems = [problem for problem in problems if isinstance(problem, dict)]
+    duplicate_groups = [
+        dict(group)
+        for group in _session_duplicate_problem_number_groups(checked_problems)
+        if isinstance(group, dict) and group.get("blocking") is not False
+    ]
+    issues: list[dict[str, Any]] = [
+        _duplicate_problem_number_group_issue(group)
+        for group in duplicate_groups
+    ]
+    issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
+    issues.extend(dict(issue) for issue in _classin_board_placement_overlap_issues(checked_problems))
+
+    blocking_issues: list[dict[str, Any]] = []
+    for issue in issues:
+        issue_copy = dict(issue)
+        issue_copy["blocking"] = True
+        blocking_issues.append(issue_copy)
+
+    status = "passed" if not blocking_issues else "blocked"
+    preflight = {
+        "status": status,
+        "passed": not blocking_issues,
+        "checkedProblemCount": len(checked_problems),
+        "checked_problem_count": len(checked_problems),
+        "issueCount": len(blocking_issues),
+        "issue_count": len(blocking_issues),
+        "issues": blocking_issues,
+        "gate": "session_publish",
+        "gateLabel": "EDB publish",
+        "gate_label": "EDB publish",
+    }
+    return preflight, duplicate_groups
+
+
+def _session_publish_preflight_blocked_payload(
+    preflight: dict[str, Any],
+    duplicate_groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    issues = preflight.get("issues") if isinstance(preflight.get("issues"), list) else []
+    issue_types = sorted(
+        {
+            str(issue.get("type") or "")
+            for issue in issues
+            if isinstance(issue, dict) and str(issue.get("type") or "")
+        }
+    )
+    return {
+        "ok": False,
+        "error": "ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB publish를 중단했습니다.",
+        "errorKind": "publish_preflight_blocked",
+        "error_kind": "publish_preflight_blocked",
+        "classinPreflight": preflight,
+        "classin_preflight": preflight,
+        "classinPreflightStatus": preflight.get("status"),
+        "classin_preflight_status": preflight.get("status"),
+        "classinPreflightPassed": False,
+        "classin_preflight_passed": False,
+        "classinPreflightIssueCount": int(preflight.get("issueCount") or 0),
+        "classin_preflight_issue_count": int(preflight.get("issueCount") or 0),
+        "blockingDuplicateProblemNumberGroups": duplicate_groups,
+        "blocking_duplicate_problem_number_groups": duplicate_groups,
+        "blockingIssueTypes": issue_types,
+        "blocking_issue_types": issue_types,
+    }
 
 
 def _session_publish_summary(
@@ -2395,6 +2488,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 problem_copy["placementScaleRatio"] = max(1.0, scale_ratio)
             sequence_with_placements.append(problem_copy)
         sequence = sequence_with_placements
+
+        publish_preflight, duplicate_groups = _session_publish_blocking_preflight(sequence)
+        if not publish_preflight.get("passed"):
+            self._send_json(
+                _session_publish_preflight_blocked_payload(publish_preflight, duplicate_groups),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
 
         try:
             entries = _problems_to_entries(sequence)

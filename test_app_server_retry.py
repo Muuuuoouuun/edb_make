@@ -368,6 +368,172 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertFalse(body["classinPreflightPassed"])
 
 
+class TestSessionPublishPreflightGuard(unittest.TestCase):
+    def _publish(self, session: dict, payload: dict | None = None):
+        class FakeServer:
+            def __init__(self, latest_session):
+                self.latest_session = latest_session
+                self.remembered_session = None
+
+            def remember_session(self, new_session):
+                self.latest_session = new_session
+                self.remembered_session = new_session
+
+        responses = []
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = FakeServer(session)
+        handler._read_json_body = lambda: dict(payload or {})
+        handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+        return handler, responses
+
+    def test_session_publish_blocks_source_bbox_overlap_before_build(self):
+        with TemporaryDirectory() as raw_tmp:
+            session = {
+                "session_name": "source-overlap",
+                "output_dir": raw_tmp,
+                "pages": [{"id": "page-1", "problemIds": ["p21", "p22"]}],
+                "problems": [
+                    {
+                        "id": "p21",
+                        "title": "21.",
+                        "problemNumber": 21,
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 40, "top": 100, "width": 520, "height": 320},
+                    },
+                    {
+                        "id": "p22",
+                        "title": "22.",
+                        "problemNumber": 22,
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 60, "top": 125, "width": 500, "height": 300},
+                    },
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+                handler._handle_session_publish()
+
+            self.assertEqual(1, len(responses))
+            body, kwargs = responses[0]
+            self.assertFalse(body["ok"])
+            self.assertEqual("publish_preflight_blocked", body["errorKind"])
+            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
+            self.assertIn("source_problem_bbox_overlap", issue_types)
+            entries.assert_not_called()
+
+    def test_session_publish_blocks_duplicate_problem_numbers_before_build(self):
+        with TemporaryDirectory() as raw_tmp:
+            session = {
+                "session_name": "duplicate-number",
+                "output_dir": raw_tmp,
+                "pages": [
+                    {"id": "page-1", "problemIds": ["p7-a"]},
+                    {"id": "page-2", "problemIds": ["p7-b"]},
+                ],
+                "problems": [
+                    {
+                        "id": "p7-a",
+                        "title": "7.",
+                        "problemNumber": 7,
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 10, "top": 10, "width": 120, "height": 100},
+                    },
+                    {
+                        "id": "p7-b",
+                        "title": "7.",
+                        "problemNumber": 7,
+                        "sourcePageId": "page-2",
+                        "bbox": {"left": 10, "top": 140, "width": 120, "height": 100},
+                    },
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+                handler._handle_session_publish()
+
+            body, kwargs = responses[0]
+            self.assertFalse(body["ok"])
+            self.assertEqual("publish_preflight_blocked", body["errorKind"])
+            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
+            self.assertIn("duplicate_problem_number", issue_types)
+            self.assertEqual("7", body["blockingDuplicateProblemNumberGroups"][0]["numberLabel"])
+            entries.assert_not_called()
+
+    def test_session_publish_blocks_board_placement_overlap_before_build(self):
+        with TemporaryDirectory() as raw_tmp:
+            session = {
+                "session_name": "placement-overlap",
+                "output_dir": raw_tmp,
+                "pages": [
+                    {"id": "page-1", "problemIds": ["p13"]},
+                    {"id": "page-2", "problemIds": ["p14"]},
+                ],
+                "problems": [
+                    {
+                        "id": "p13",
+                        "title": "13.",
+                        "problemNumber": 13,
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 10, "top": 10, "width": 120, "height": 100},
+                        "startYPages": 0.0,
+                        "actualHeightPages": 1.1,
+                    },
+                    {
+                        "id": "p14",
+                        "title": "14.",
+                        "problemNumber": 14,
+                        "sourcePageId": "page-2",
+                        "bbox": {"left": 10, "top": 140, "width": 120, "height": 100},
+                        "startYPages": 1.2,
+                        "actualHeightPages": 0.8,
+                    },
+                ],
+            }
+            handler, responses = self._publish(
+                session,
+                {"placements": {"p13": {"placementScaleRatio": 1.4}}},
+            )
+
+            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+                handler._handle_session_publish()
+
+            body, kwargs = responses[0]
+            self.assertFalse(body["ok"])
+            self.assertEqual("publish_preflight_blocked", body["errorKind"])
+            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
+            self.assertIn("board_placement_overlap", issue_types)
+            entries.assert_not_called()
+
+    def test_session_publish_allows_official_alternate_section_duplicate_numbers(self):
+        problems = []
+        for section_index, source_prefix in enumerate(("speech-writing", "language-media")):
+            for number in range(35, 41):
+                problems.append({
+                    "id": f"{source_prefix}-{number}",
+                    "title": f"{number}.",
+                    "problemNumber": number,
+                    "sourcePageId": f"{source_prefix}-{number}",
+                    "bbox": {
+                        "left": 10,
+                        "top": 20 + section_index * 220,
+                        "width": 120,
+                        "height": 100,
+                    },
+                })
+
+        preflight, duplicate_groups = app_server._session_publish_blocking_preflight(problems)
+
+        self.assertTrue(preflight["passed"])
+        self.assertEqual("passed", preflight["status"])
+        self.assertEqual(0, preflight["issueCount"])
+        self.assertEqual([], duplicate_groups)
+
+
 class TestRuntimeDiagnostics(unittest.TestCase):
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):
         with (
