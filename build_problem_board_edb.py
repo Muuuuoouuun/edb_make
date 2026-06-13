@@ -4226,9 +4226,17 @@ def write_classin_handoff_manifest(
                 continue
             label = str(item.get("numberLabel") or item.get("groupId") or "").strip()
             reasons = ", ".join(str(reason) for reason in item.get("reviewReasonCodes") or [])
+            problem_ids = ", ".join(_ordered_unique_strings(item.get("problemIds") or item.get("problem_ids") or []))
+            fragment_ids = ", ".join(
+                _ordered_unique_strings(item.get("fragmentProblemIds") or item.get("fragment_problem_ids") or [])
+            )
+            page_ids = ", ".join(_ordered_unique_strings(item.get("sourcePageIds") or item.get("source_page_ids") or []))
             passage_review_lines.append(
                 f"- `{item.get('groupId')}` {label}"
                 + (f" · {item.get('message')}" if item.get("message") else "")
+                + (f" · problems: {problem_ids}" if problem_ids else "")
+                + (f" · fragments: {fragment_ids}" if fragment_ids else "")
+                + (f" · pages: {page_ids}" if page_ids else "")
                 + (f" · reasons: {reasons}" if reasons else "")
             )
     if classin_preflight["passed"]:

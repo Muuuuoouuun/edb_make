@@ -2082,6 +2082,9 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
             self.assertIn("## Passage Review Queue", markdown)
             self.assertIn("hwp-text-passage-31-34", markdown)
+            self.assertIn("problems: p31, p32, p34", markdown)
+            self.assertIn("fragments: p31-fragment", markdown)
+            self.assertIn("pages: page-5, page-6", markdown)
             self.assertIn("cross_page_passage_group", markdown)
 
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
