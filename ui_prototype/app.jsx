@@ -240,7 +240,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
-function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable, aiBusy, onConfirm }){
+function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable, aiBusy, onConfirm, reviewFocus }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
     const map = new Map();
@@ -273,6 +273,13 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     setSelectedIds(new Set());
     setReviewRiskFilter(null);
   }, [session]);
+  useEffect(() => {
+    const nextFilter = String(reviewFocus?.filter || '').trim();
+    if (!nextFilter) return;
+    setReviewFilter(nextFilter);
+    setReviewRiskFilter(null);
+    setSelectedIds(new Set());
+  }, [reviewFocus]);
 
   const onBoxClick = (probId, evt) => {
     if (splitTarget) return;  // ignore clicks while splitting
@@ -3072,6 +3079,19 @@ function normalizePublishPreflightBlock(raw){
   };
 }
 
+function publishBlockedTarget(blockedPublish){
+  const issueTypes = Array.isArray(blockedPublish?.issueTypes)
+    ? blockedPublish.issueTypes.map(type => String(type || '').trim()).filter(Boolean)
+    : [];
+  const onlyBoardPlacement = issueTypes.length > 0
+    && issueTypes.every(type => type === 'board_placement_overlap');
+  if (onlyBoardPlacement) return { view: 'board', reviewFocus: null };
+  if (issueTypes.includes('passage_review_queue_remaining')) {
+    return { view: 'review', reviewFocus: { filter: 'passage-review', source: 'publish-preflight' } };
+  }
+  return { view: 'review', reviewFocus: null };
+}
+
 const NON_ACTIONABLE_RISK_FLAGS = new Set([
   'marker_document_continuation',
   'ocr_disabled',
@@ -3728,6 +3748,7 @@ function publishReviewWarningMessage(session, publishReviewSummary){
     cancelToast: passageReviewLine
       ? '제작을 멈췄어요. 긴 지문 검수 큐를 먼저 확인하세요.'
       : '제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.',
+    reviewFilter: passageReviewLine ? 'passage-review' : 'check_needed',
   };
 }
 
@@ -4352,6 +4373,7 @@ function App(){
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
   const [view, setView] = useState(initialViewRef.current);
+  const [reviewFocus, setReviewFocus] = useState(null);
   const [mutating, setMutating] = useState(false);
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
@@ -5239,6 +5261,7 @@ function App(){
     if (publishReviewWarning) {
       const confirmedPublish = window.confirm(publishReviewWarning.message);
       if (!confirmedPublish) {
+        setReviewFocus({ filter: publishReviewWarning.reviewFilter, source: 'publish-warning' });
         setView('review');
         showToast(publishReviewWarning.cancelToast);
         return;
@@ -5277,9 +5300,9 @@ function App(){
       if (!resp.ok || !json.ok) {
         const blockedPublish = normalizePublishPreflightBlock(json);
         if (blockedPublish) {
-          const onlyBoardPlacement = blockedPublish.issueTypes.length > 0
-            && blockedPublish.issueTypes.every(type => type === 'board_placement_overlap');
-          setView(onlyBoardPlacement ? 'board' : 'review');
+          const blockedTarget = publishBlockedTarget(blockedPublish);
+          setReviewFocus(blockedTarget.reviewFocus);
+          setView(blockedTarget.view);
           showToast(
             `서버 사전점검에서 제작을 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}`
           );
@@ -5363,6 +5386,7 @@ function App(){
             aiAvailable={!!userSettings?.hasGeminiApiKey}
             aiBusy={hasRunningSessionRecognition}
             onConfirm={onConfirm}
+            reviewFocus={reviewFocus}
           />
         ) : (
           <BoardStage

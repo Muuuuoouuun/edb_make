@@ -69,9 +69,18 @@ class TestUiPublishGuard(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         on_publish = source.split("const onPublish = async () => {", 1)[1]
         on_publish = on_publish.split("  return (", 1)[0]
+        target_helper = source.split("function publishBlockedTarget", 1)[1]
+        target_helper = target_helper.split("const NON_ACTIONABLE_RISK_FLAGS", 1)[0]
+        review_stage_signature = source.split("function ReviewStage", 1)[1].split("){", 1)[0]
 
         self.assertIn("normalizePublishPreflightBlock(json)", on_publish)
+        self.assertIn("publishBlockedTarget(blockedPublish)", on_publish)
+        self.assertIn("setReviewFocus(blockedTarget.reviewFocus)", on_publish)
+        self.assertIn("reviewFocus={reviewFocus}", source)
+        self.assertIn("reviewFocus", review_stage_signature)
         self.assertIn("blockedPublish.issueSummaryLabel", on_publish)
+        self.assertIn("passage_review_queue_remaining", target_helper)
+        self.assertIn("passage-review", target_helper)
         self.assertIn("서버 사전점검", on_publish)
         self.assertIn("setView('review')", on_publish)
 

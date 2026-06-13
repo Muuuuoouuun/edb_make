@@ -340,6 +340,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (!warning.cancelToast.includes('긴 지문 검수 큐')) {
               throw new Error(`expected passage cancel toast, got ${warning.cancelToast}`);
             }
+            if (warning.reviewFilter !== 'passage-review') {
+              throw new Error(`expected passage-review focus filter, got ${warning.reviewFilter}`);
+            }
             """
         )
 
