@@ -64,6 +64,23 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("duplicate_problem_number", risk_meta)
         self.assertIn("중복 번호", risk_meta)
 
+    def test_review_summary_surfaces_source_problem_overlap_groups(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]
+        review_stage = review_stage.split("{reviewSummary.warningPreview &&", 1)[0]
+        summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
+        summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
+        risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
+        risk_meta = risk_meta.split("};", 1)[0]
+
+        self.assertIn("원본 겹침", review_stage)
+        self.assertIn("sourceProblemOverlapGroups", review_stage)
+        self.assertIn("sourceProblemOverlapGroups", summary_helper)
+        self.assertIn("source_problem_overlap_groups", summary_helper)
+        self.assertIn("sourceProblemOverlapLabel", summary_helper)
+        self.assertIn("source_problem_bbox_overlap", risk_meta)
+        self.assertIn("원본 영역 겹침", risk_meta)
+
     def test_review_summary_surfaces_passage_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")

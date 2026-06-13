@@ -629,6 +629,14 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                 중복 번호 {reviewSummary.duplicateProblemNumberLabel}
               </span>
             )}
+            {reviewSummary.sourceProblemOverlapGroups.length > 0 && (
+              <span
+                className="review-summary-chip warn"
+                title="같은 원본 페이지에서 문항 인식 영역이 크게 겹칩니다."
+              >
+                원본 겹침 {reviewSummary.sourceProblemOverlapLabel}
+              </span>
+            )}
             {reviewSummary.passageGroupCount > 0 && (
               <button
                 type="button"
@@ -2955,6 +2963,7 @@ const RISK_FLAG_META = {
   passage_cross_page_merge_check: '긴 지문 병합 확인',
   problem_per_block: '블록 단위 분리',
   sparse_segmentation: '성긴 분할',
+  source_problem_bbox_overlap: '원본 영역 겹침',
 };
 
 const NON_ACTIONABLE_RISK_FLAGS = new Set([
@@ -3384,6 +3393,20 @@ function sessionReviewSummary(session){
     })
     .filter(Boolean)
     .join(', ');
+  const sourceProblemOverlapGroups = Array.isArray(session?.sourceProblemOverlapGroups)
+    ? session.sourceProblemOverlapGroups
+    : Array.isArray(session?.source_problem_overlap_groups)
+      ? session.source_problem_overlap_groups
+      : [];
+  const sourceProblemOverlapLabel = sourceProblemOverlapGroups
+    .map(group => {
+      const pageId = String(group?.sourcePageId || group?.source_page_id || '').trim();
+      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : '';
+      return [pageId, percent].filter(Boolean).join(' ');
+    })
+    .filter(Boolean)
+    .join(', ') || `${sourceProblemOverlapGroups.length}`;
   return {
     counts,
     reviewStatusCounts,
@@ -3415,6 +3438,8 @@ function sessionReviewSummary(session){
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
     duplicateProblemNumberLabel,
+    sourceProblemOverlapGroups,
+    sourceProblemOverlapLabel,
     passageGroups: passageSummary.passageGroups,
     passageGroupCount: passageSummary.passageGroupCount,
     passageProblemCount: passageSummary.passageProblemCount,

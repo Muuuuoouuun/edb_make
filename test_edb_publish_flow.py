@@ -348,6 +348,81 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertNotIn("duplicate_problem_number", unique_problem["riskFlags"])
             self.assertEqual("normal", unique_problem["reviewStatus"])
 
+    def test_problem_ui_session_flags_source_bbox_overlap_for_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            crop = root / "crop.png"
+            Image.new("RGB", (640, 260), "white").save(crop)
+
+            placements = []
+            for index, (page_id, bbox) in enumerate(
+                [
+                    ("page-001", {"left": 40, "top": 100, "width": 520, "height": 320}),
+                    ("page-001", {"left": 60, "top": 125, "width": 500, "height": 300}),
+                    ("page-002", {"left": 60, "top": 125, "width": 500, "height": 300}),
+                ],
+                start=1,
+            ):
+                placements.append(
+                    {
+                        "problem_id": f"problem-{index}",
+                        "title": f"{20 + index}.",
+                        "problem_number": 20 + index,
+                        "subject": Subject.KOREAN,
+                        "source_page_id": page_id,
+                        "source_path": str(source),
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "bbox": bbox,
+                        "actual_content_height_pages": 0.8,
+                        "overflow_allowed": False,
+                        "start_y_pages": float(index),
+                        "snapped_next_start_y_pages": float(index + 1),
+                        "overflow_amount_pages": 0.0,
+                        "overflow_violation": False,
+                        "slot_span_count": 1,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.0,
+                        "record_mode": "image-only",
+                        "text_record_count": 0,
+                        "image_record_count": 1,
+                        "risk_flags": [],
+                    }
+                )
+
+            ui_session = build_problem_ui_session(
+                [],
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+            )
+
+            groups = ui_session["sourceProblemOverlapGroups"]
+            self.assertEqual(groups, ui_session["source_problem_overlap_groups"])
+            self.assertEqual(1, ui_session["sourceProblemOverlapGroupCount"])
+            self.assertEqual(1, len(groups))
+            self.assertEqual("page-001", groups[0]["sourcePageId"])
+            self.assertEqual(["problem-1", "problem-2"], groups[0]["problemIds"])
+            self.assertGreaterEqual(groups[0]["overlapAreaRatio"], 0.8)
+
+            flagged = {
+                problem["id"]: problem
+                for problem in ui_session["problems"]
+                if "source_problem_bbox_overlap" in problem["riskFlags"]
+            }
+            self.assertEqual({"problem-1", "problem-2"}, set(flagged))
+            for problem in flagged.values():
+                self.assertEqual("check_needed", problem["reviewStatus"])
+
+            safe_problem = next(problem for problem in ui_session["problems"] if problem["id"] == "problem-3")
+            self.assertNotIn("source_problem_bbox_overlap", safe_problem["riskFlags"])
+            self.assertEqual("normal", safe_problem["reviewStatus"])
+
     def test_ui_session_exposes_shared_passage_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

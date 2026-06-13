@@ -2467,6 +2467,7 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
 
 
 DUPLICATE_PROBLEM_NUMBER_RISK_FLAG = "duplicate_problem_number"
+SOURCE_PROBLEM_BBOX_OVERLAP_RISK_FLAG = "source_problem_bbox_overlap"
 
 
 def _mark_duplicate_problem_number_review_flags(
@@ -2488,6 +2489,62 @@ def _mark_duplicate_problem_number_review_flags(
             continue
         flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
         flags.append(DUPLICATE_PROBLEM_NUMBER_RISK_FLAG)
+        problem["riskFlags"] = list(dict.fromkeys(flags))
+        if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
+            problem["reviewStatus"] = "check_needed"
+
+
+def _session_source_problem_overlap_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for issue in _classin_source_bbox_overlap_issues(problems):
+        problem_id = str(issue.get("problemId") or "").strip()
+        next_problem_id = str(issue.get("nextProblemId") or "").strip()
+        if not problem_id or not next_problem_id:
+            continue
+        source_page_id = str(issue.get("sourcePageId") or "").strip()
+        overlap_area_ratio = _coerce_float(issue.get("overlapAreaRatio")) or 0.0
+        groups.append(
+            {
+                "sourcePageId": source_page_id,
+                "source_page_id": source_page_id,
+                "problemIds": [problem_id, next_problem_id],
+                "problem_ids": [problem_id, next_problem_id],
+                "problemTitles": [
+                    str(issue.get("problemTitle") or problem_id),
+                    str(issue.get("nextProblemTitle") or next_problem_id),
+                ],
+                "overlapAreaRatio": round(overlap_area_ratio, 6),
+                "overlap_area_ratio": round(overlap_area_ratio, 6),
+                "intersectionOverUnion": issue.get("intersectionOverUnion", 0.0),
+                "intersection_over_union": issue.get("intersectionOverUnion", 0.0),
+                "bbox": issue.get("bbox") or {},
+                "nextBbox": issue.get("nextBbox") or {},
+                "next_bbox": issue.get("nextBbox") or {},
+                "message": str(issue.get("message") or ""),
+            }
+        )
+    return groups
+
+
+def _mark_source_problem_overlap_review_flags(
+    problems: list[dict[str, Any]],
+    groups: Sequence[dict[str, Any]],
+) -> None:
+    overlap_problem_ids: set[str] = set()
+    for group in groups:
+        for problem_id in group.get("problemIds") or group.get("problem_ids") or []:
+            problem_id_text = str(problem_id or "").strip()
+            if problem_id_text:
+                overlap_problem_ids.add(problem_id_text)
+    if not overlap_problem_ids:
+        return
+
+    for problem in problems:
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
+        if problem_id not in overlap_problem_ids:
+            continue
+        flags = [str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or []) if flag]
+        flags.append(SOURCE_PROBLEM_BBOX_OVERLAP_RISK_FLAG)
         problem["riskFlags"] = list(dict.fromkeys(flags))
         if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "failed":
             problem["reviewStatus"] = "check_needed"
@@ -3120,6 +3177,8 @@ def build_ui_session(
     problem_counts = _session_problem_count_payload(problems)
     duplicate_problem_number_groups = _session_duplicate_problem_number_groups(problems)
     _mark_duplicate_problem_number_review_flags(problems, duplicate_problem_number_groups)
+    source_problem_overlap_groups = _session_source_problem_overlap_groups(problems)
+    _mark_source_problem_overlap_review_flags(problems, source_problem_overlap_groups)
 
     return {
         "session_name": output_dir.name,
@@ -3137,6 +3196,10 @@ def build_ui_session(
         "duplicateProblemNumberGroups": duplicate_problem_number_groups,
         "duplicate_problem_number_group_count": len(duplicate_problem_number_groups),
         "duplicateProblemNumberGroupCount": len(duplicate_problem_number_groups),
+        "source_problem_overlap_groups": source_problem_overlap_groups,
+        "sourceProblemOverlapGroups": source_problem_overlap_groups,
+        "source_problem_overlap_group_count": len(source_problem_overlap_groups),
+        "sourceProblemOverlapGroupCount": len(source_problem_overlap_groups),
         "export_mode": "question",
         "record_mode": record_mode,
         "board_theme": _resolve_board_theme(board_theme),
