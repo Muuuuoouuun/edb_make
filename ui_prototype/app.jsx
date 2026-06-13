@@ -3346,12 +3346,37 @@ function collectPassageGroupSummary(session){
     const group = groups.get(groupId) || {
       id: groupId,
       problemCount: 0,
+      detectedProblemCount: 0,
+      fragmentProblemCount: 0,
+      problemNumbers: new Set(),
       sourcePageIds: new Set(),
       range: problem.passageRange || problem.passage_range || null,
       continuesAcrossPages: false,
       continuationBlockIds: new Set(),
     };
-    group.problemCount += 1;
+    group.detectedProblemCount += 1;
+    const role = String(problem.passageRole || problem.passage_role || '').trim();
+    const problemId = String(problem.id || problem.problem_id || '').trim();
+    const riskFlags = Array.isArray(problem.riskFlags || problem.risk_flags) ? (problem.riskFlags || problem.risk_flags) : [];
+    const isFragment = role === 'passage_fragment'
+      || problemId.endsWith('-continuation')
+      || riskFlags.map(flag => String(flag || '').trim()).includes('marker_document_continuation');
+    if (isFragment) {
+      group.fragmentProblemCount += 1;
+    } else {
+      group.problemCount += 1;
+    }
+    const explicitNumbers = problem.passageChildProblemNumbers || problem.passage_child_problem_numbers || [];
+    if (Array.isArray(explicitNumbers)) {
+      explicitNumbers.forEach(number => {
+        const normalized = Number(number);
+        if (Number.isFinite(normalized) && normalized > 0) group.problemNumbers.add(normalized);
+      });
+    }
+    const problemNumber = Number(problem.problemNumber ?? problem.problem_number);
+    if (!isFragment && Number.isFinite(problemNumber) && problemNumber > 0) {
+      group.problemNumbers.add(problemNumber);
+    }
     const rawPageIds = problem.passageSourcePageIds || problem.passage_source_page_ids || [];
     if (Array.isArray(rawPageIds)) {
       rawPageIds.forEach(pageId => {
@@ -3374,15 +3399,22 @@ function collectPassageGroupSummary(session){
     }
     groups.set(groupId, group);
   });
-  const items = Array.from(groups.values()).map(group => ({
-    id: group.id,
-    problemCount: group.problemCount,
-    sourcePageIds: Array.from(group.sourcePageIds),
-    sourcePageCount: group.sourcePageIds.size,
-    range: group.range,
-    continuesAcrossPages: group.continuesAcrossPages || group.sourcePageIds.size > 1,
-    continuationBlockCount: group.continuationBlockIds.size,
-  }));
+  const items = Array.from(groups.values()).map(group => {
+    const problemNumbers = Array.from(group.problemNumbers).sort((a, b) => a - b);
+    const problemCount = problemNumbers.length || group.problemCount;
+    return {
+      id: group.id,
+      problemCount,
+      detectedProblemCount: group.detectedProblemCount,
+      fragmentProblemCount: group.fragmentProblemCount,
+      problemNumbers,
+      sourcePageIds: Array.from(group.sourcePageIds),
+      sourcePageCount: group.sourcePageIds.size,
+      range: group.range,
+      continuesAcrossPages: group.continuesAcrossPages || group.sourcePageIds.size > 1,
+      continuationBlockCount: group.continuationBlockIds.size,
+    };
+  });
   return {
     passageGroups: items,
     passageGroupCount: items.length,

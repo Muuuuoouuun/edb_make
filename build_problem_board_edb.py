@@ -2486,6 +2486,8 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
                 "problemNumbers": [],
                 "childProblemNumbers": [],
                 "problemIds": [],
+                "coreProblemIds": [],
+                "fragmentProblemIds": [],
                 "sourcePageIds": [],
                 "roles": [],
                 "continuesAcrossPages": False,
@@ -2513,13 +2515,19 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
         if problem_id and problem_id not in group["problemIds"]:
             group["problemIds"].append(problem_id)
 
+        role = str(
+            _session_problem_field(problem, "passageRole", "passage_role") or ""
+        ).strip()
+        is_fragment = role == "passage_fragment" or _session_problem_is_supplemental(problem)
+        if problem_id:
+            target_ids = group["fragmentProblemIds"] if is_fragment else group["coreProblemIds"]
+            if problem_id not in target_ids:
+                target_ids.append(problem_id)
+
         for page_id in _session_problem_passage_source_page_ids(problem):
             if page_id not in group["sourcePageIds"]:
                 group["sourcePageIds"].append(page_id)
 
-        role = str(
-            _session_problem_field(problem, "passageRole", "passage_role") or ""
-        ).strip()
         if role and role not in group["roles"]:
             group["roles"].append(role)
 
@@ -2551,22 +2559,34 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
         continues_across_pages = bool(group["continuesAcrossPages"]) or len(source_page_ids) > 1
         label = _passage_number_label(start, end, child_numbers)
         source_page_count = len(source_page_ids)
-        problem_count = len(group["problemIds"])
+        core_problem_ids = _ordered_unique_strings(group["coreProblemIds"])
+        fragment_problem_ids = _ordered_unique_strings(group["fragmentProblemIds"])
+        detected_problem_count = len(group["problemIds"])
+        problem_numbers = _ordered_unique_ints(group["problemNumbers"])
+        problem_count = len(problem_numbers) if problem_numbers else len(core_problem_ids)
+        fragment_problem_count = len(fragment_problem_ids)
         message_label = label or str(group["groupId"])
+        problem_count_label = f"{problem_count}개 하위 문항"
+        if fragment_problem_count:
+            problem_count_label += f", 자료 {fragment_problem_count}개"
         group.update(
             {
                 "numberStart": start,
                 "numberEnd": end,
                 "numberLabel": label,
-                "problemNumbers": _ordered_unique_ints(group["problemNumbers"]),
+                "problemNumbers": problem_numbers,
                 "childProblemNumbers": child_numbers,
+                "coreProblemIds": core_problem_ids,
+                "fragmentProblemIds": fragment_problem_ids,
                 "sourcePageIds": source_page_ids,
                 "sourcePageCount": source_page_count,
                 "problemCount": problem_count,
+                "detectedProblemCount": detected_problem_count,
+                "fragmentProblemCount": fragment_problem_count,
                 "continuesAcrossPages": continues_across_pages,
                 "message": (
                     f"긴 지문 그룹 {message_label}이 {source_page_count}개 원본 페이지와 "
-                    f"{problem_count}개 감지 문항에 걸쳐 있습니다."
+                    f"{problem_count_label}에 걸쳐 있습니다."
                 ),
             }
         )

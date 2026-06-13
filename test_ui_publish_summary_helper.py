@@ -281,6 +281,34 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_counts_passage_children_without_fragments(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              passageGroups: [
+                {
+                  id: 'hwp-continuation-passage-22-26',
+                  problemCount: 6,
+                  detectedProblemCount: 6,
+                  fragmentProblemCount: 1,
+                  problemNumbers: [22, 23, 24, 25, 26],
+                  fragmentProblemIds: ['page-8-continuation'],
+                  continuesAcrossPages: true,
+                },
+              ],
+            });
+            if (summary.passageProblemCount !== 5) {
+              throw new Error(`passage child count should ignore fragments: ${summary.passageProblemCount}`);
+            }
+            if (summary.passageGroupLabel !== '긴 지문 그룹 1 · 5문항 · 페이지 넘김 1') {
+              throw new Error(`unexpected passage label: ${summary.passageGroupLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_classin_handoff_readiness(self) -> None:
         run_node(
             """

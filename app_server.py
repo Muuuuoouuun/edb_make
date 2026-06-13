@@ -508,6 +508,16 @@ def _classin_handoff_readiness(path: Path | None) -> tuple[str, bool | None]:
     return status, ready
 
 
+def _passage_group_problem_count(group: dict[str, Any]) -> int:
+    for key in ("problemNumbers", "problem_numbers", "childProblemNumbers", "child_problem_numbers"):
+        value = group.get(key)
+        if isinstance(value, list) and value:
+            return len({str(item).strip() for item in value if str(item).strip()})
+    raw_count = int(group.get("problemCount") or group.get("problem_count") or 0)
+    fragment_count = int(group.get("fragmentProblemCount") or group.get("fragment_problem_count") or 0)
+    return max(0, raw_count - fragment_count)
+
+
 def _path_exists(value: Any, *, directory: bool = False) -> bool:
     path = decode_file_reference(str(value)) if value else None
     if path is None:
@@ -710,10 +720,7 @@ def _session_publish_summary(
     if passage_group_count is None:
         passage_group_count = len(normalized_passage_groups)
     if passage_problem_count is None:
-        passage_problem_count = sum(
-            int(group.get("problemCount") or group.get("problem_count") or 0)
-            for group in normalized_passage_groups
-        )
+        passage_problem_count = sum(_passage_group_problem_count(group) for group in normalized_passage_groups)
     if cross_page_passage_group_count is None:
         cross_page_passage_group_count = sum(
             1

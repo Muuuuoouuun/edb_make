@@ -1493,6 +1493,18 @@ class TestEdbPublishFlow(unittest.TestCase):
                                 "passage_continues_across_pages": True,
                             },
                         },
+                        {
+                            "id": "p13-fragment",
+                            "title": "이어지는 자료",
+                            "sourcePageId": "page-1",
+                            "passageGroupId": "page-1-passage-13-16",
+                            "passageRange": {"start": 13, "end": 16},
+                            "passageRole": "passage_fragment",
+                            "passageChildProblemNumbers": [13, 14, 15, 16],
+                            "passageSourcePageIds": ["page-1", "page-2"],
+                            "passageContinuesAcrossPages": True,
+                            "riskFlags": ["marker_document_continuation"],
+                        },
                     ],
                 },
                 summary={"record_count": 4, "record_mode": "image-only", "placements": []},
@@ -1513,13 +1525,17 @@ class TestEdbPublishFlow(unittest.TestCase):
                         "numberLabel": "13-16",
                         "problemNumbers": [13, 15, 16],
                         "childProblemNumbers": [13, 14, 15, 16],
-                        "problemIds": ["p13", "p15", "p16"],
+                        "problemIds": ["p13", "p15", "p16", "p13-fragment"],
+                        "coreProblemIds": ["p13", "p15", "p16"],
+                        "fragmentProblemIds": ["p13-fragment"],
                         "sourcePageIds": ["page-1", "page-2"],
                         "sourcePageCount": 2,
                         "problemCount": 3,
+                        "detectedProblemCount": 4,
+                        "fragmentProblemCount": 1,
                         "continuesAcrossPages": True,
-                        "roles": ["child_question"],
-                        "message": "긴 지문 그룹 13-16이 2개 원본 페이지와 3개 감지 문항에 걸쳐 있습니다.",
+                        "roles": ["child_question", "passage_fragment"],
+                        "message": "긴 지문 그룹 13-16이 2개 원본 페이지와 3개 하위 문항, 자료 1개에 걸쳐 있습니다.",
                     }
                 ],
                 handoff["passageGroups"],
@@ -1994,6 +2010,41 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(4, summary["passage_problem_count"])
             self.assertEqual(1, summary["crossPagePassageGroupCount"])
             self.assertEqual(1, summary["cross_page_passage_group_count"])
+
+    def test_publish_summary_counts_passage_children_without_fragments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            edb_path = root / "lesson.edb"
+            edb_path.write_bytes(b"placeholder")
+            passage_groups = [
+                {
+                    "id": "hwp-continuation-passage-22-26",
+                    "problemCount": 6,
+                    "detectedProblemCount": 6,
+                    "fragmentProblemCount": 1,
+                    "problemNumbers": [22, 23, 24, 25, 26],
+                    "fragmentProblemIds": ["page-008-continuation"],
+                    "continuesAcrossPages": True,
+                }
+            ]
+
+            summary = _session_publish_summary(
+                edb_path=edb_path,
+                output_dir=root,
+                edb_validation={
+                    "outerSize": 1234,
+                    "innerSize": 987,
+                    "pageCountHint": 50,
+                    "recordCountHint": 5,
+                    "recordCountActual": 5,
+                },
+                record_count=5,
+                passage_groups=passage_groups,
+                published_at="2026-06-13T12:00:00+09:00",
+            )
+
+            self.assertEqual(5, summary["passageProblemCount"])
+            self.assertEqual(5, summary["passage_problem_count"])
 
     def test_publish_summary_preserves_core_and_supplemental_counts(self):
         with tempfile.TemporaryDirectory() as tmp:

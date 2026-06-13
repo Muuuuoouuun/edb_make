@@ -122,7 +122,13 @@
 
   function passageProblemCount(groups) {
     return groups.reduce((total, group) => {
-      return total + positiveNumber(group.problemCount ?? group.problem_count);
+      const problemNumbers = group.problemNumbers || group.problem_numbers || group.childProblemNumbers || group.child_problem_numbers;
+      if (Array.isArray(problemNumbers) && problemNumbers.length > 0) {
+        return total + new Set(problemNumbers.map(value => String(value).trim()).filter(Boolean)).size;
+      }
+      const rawCount = positiveNumber(group.problemCount ?? group.problem_count);
+      const fragmentCount = positiveNumber(group.fragmentProblemCount ?? group.fragment_problem_count);
+      return total + Math.max(0, rawCount - fragmentCount);
     }, 0);
   }
 
