@@ -268,6 +268,55 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertTrue(summary["needs_review"])
 
+    def test_summarize_export_response_counts_source_problem_overlap_risks(self):
+        payload = {
+            "ok": True,
+            "session": {
+                "pages": [],
+                "problems": [
+                    {
+                        "id": "problem-1",
+                        "riskFlags": ["source_problem_bbox_overlap"],
+                        "reviewStatus": "check_needed",
+                    },
+                    {
+                        "id": "problem-2",
+                        "riskFlags": ["source_problem_bbox_overlap"],
+                        "reviewStatus": "check_needed",
+                    },
+                ],
+                "sourceProblemOverlapGroupCount": 1,
+                "sourceProblemOverlapGroups": [
+                    {
+                        "sourcePageId": "page-001",
+                        "problemIds": ["problem-1", "problem-2"],
+                        "overlapAreaRatio": 0.91,
+                    }
+                ],
+                "reviewSummary": {
+                    "riskFlagCounts": {
+                        "source_problem_bbox_overlap": 2,
+                    }
+                },
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("overlap.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+        )
+
+        self.assertEqual(2, summary["source_problem_bbox_overlap_count"])
+        self.assertEqual(1, summary["source_problem_overlap_group_count"])
+        self.assertEqual(
+            {"source_problem_bbox_overlap": 2},
+            summary["actionable_risk_flag_counts"],
+        )
+        self.assertTrue(summary["needs_review"])
+
     def test_summarize_export_response_prefers_review_summary_hwp_segmentation_counts(self):
         payload = {
             "ok": True,
@@ -419,6 +468,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "risk_flags": ["problem_per_block", "ocr_disabled"],
                 "risk_flag_counts": {"problem_per_block": 39, "ocr_disabled": 23},
                 "actionable_risk_flag_counts": {"problem_per_block": 39},
+                "source_problem_bbox_overlap_count": 0,
+                "source_problem_overlap_group_count": 0,
                 "warnings": [],
                 "hwp_problem_count_mismatch_flags": [],
                 "edb_expected": True,
@@ -438,6 +489,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "risk_flags": ["ocr_disabled"],
                 "risk_flag_counts": {"ocr_disabled": 12},
                 "actionable_risk_flag_counts": {},
+                "source_problem_bbox_overlap_count": 0,
+                "source_problem_overlap_group_count": 0,
                 "warnings": [],
                 "hwp_problem_count_mismatch_flags": [],
                 "edb_expected": True,
@@ -451,7 +504,10 @@ class TestVerifyHwpSamples(unittest.TestCase):
                 "risk_flag_counts": {
                     "hwp_problem_count_mismatch": 2,
                     "hwp_oversegmentation": 1,
+                    "source_problem_bbox_overlap": 4,
                 },
+                "source_problem_bbox_overlap_count": 4,
+                "source_problem_overlap_group_count": 2,
                 "warnings": ["conversion failed"],
             },
         ]
@@ -474,6 +530,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(1, summary["warning_count"])
         self.assertEqual(2, summary["hwp_problem_count_mismatch_count"])
         self.assertEqual(1, summary["hwp_oversegmentation_count"])
+        self.assertEqual(4, summary["source_problem_bbox_overlap_count"])
+        self.assertEqual(2, summary["source_problem_overlap_group_count"])
         self.assertEqual(2, summary["edb_expected_count"])
         self.assertEqual(1, summary["edb_validated_count"])
         self.assertEqual(1, summary["edb_missing_count"])
@@ -481,6 +539,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
             [
                 {"flag": "problem_per_block", "count": 39},
                 {"flag": "ocr_disabled", "count": 35},
+                {"flag": "source_problem_bbox_overlap", "count": 4},
                 {"flag": "hwp_problem_count_mismatch", "count": 2},
                 {"flag": "hwp_oversegmentation", "count": 1},
             ],
@@ -489,6 +548,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertEqual(
             [
                 {"flag": "problem_per_block", "count": 39},
+                {"flag": "source_problem_bbox_overlap", "count": 4},
                 {"flag": "hwp_problem_count_mismatch", "count": 2},
                 {"flag": "hwp_oversegmentation", "count": 1},
             ],
@@ -596,6 +656,8 @@ class TestVerifyHwpSamples(unittest.TestCase):
             "warning_count": 1,
             "hwp_problem_count_mismatch_count": 0,
             "hwp_oversegmentation_count": 0,
+            "source_problem_bbox_overlap_count": 2,
+            "source_problem_overlap_group_count": 1,
             "top_risk_flags": [
                 {"flag": "problem_per_block", "count": 8},
                 {"flag": "large_block_dominance", "count": 6},
@@ -616,6 +678,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertIn("cache 118/118", text)
         self.assertIn("mismatch 0", text)
         self.assertIn("overseg 0", text)
+        self.assertIn("source overlap 2/1", text)
         self.assertIn("edb 8/8", text)
         self.assertIn("top risk problem_per_block:8", text)
         self.assertIn("actionable problem_per_block:8", text)

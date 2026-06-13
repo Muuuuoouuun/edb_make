@@ -29,6 +29,7 @@ HWP_COUNT_MATCH_DISMISSIBLE_RISK_FLAGS = {
 }
 HWP_PROBLEM_COUNT_MISMATCH_FLAG = "hwp_problem_count_mismatch"
 HWP_OVERSEGMENTATION_FLAG = "hwp_oversegmentation"
+SOURCE_PROBLEM_BBOX_OVERLAP_FLAG = "source_problem_bbox_overlap"
 
 
 def normalized_text(value: str | Path) -> str:
@@ -157,6 +158,25 @@ def hwp_oversegmentation_count(row: dict[str, Any]) -> int:
     if explicit:
         return explicit
     return _risk_count(row.get("risk_flag_counts") or {}, HWP_OVERSEGMENTATION_FLAG)
+
+
+def source_problem_bbox_overlap_count(row: dict[str, Any]) -> int:
+    explicit = _coerce_non_negative_int(
+        row.get("source_problem_bbox_overlap_count") or row.get("sourceProblemBboxOverlapCount")
+    )
+    if explicit:
+        return explicit
+    return _risk_count(row.get("risk_flag_counts") or {}, SOURCE_PROBLEM_BBOX_OVERLAP_FLAG)
+
+
+def source_problem_overlap_group_count(row: dict[str, Any]) -> int:
+    explicit = _coerce_non_negative_int(
+        row.get("source_problem_overlap_group_count") or row.get("sourceProblemOverlapGroupCount")
+    )
+    if explicit:
+        return explicit
+    groups = row.get("source_problem_overlap_groups") or row.get("sourceProblemOverlapGroups")
+    return len(groups) if isinstance(groups, list) else 0
 
 
 def _review_summary(session: dict[str, Any]) -> dict[str, Any]:
@@ -330,6 +350,27 @@ def summarize_export_response(
         ),
         _risk_count(risk_flag_counts, HWP_OVERSEGMENTATION_FLAG),
     )
+    source_overlap_groups = (
+        session.get("sourceProblemOverlapGroups")
+        or session.get("source_problem_overlap_groups")
+        or []
+    )
+    source_overlap_group_count = max(
+        _coerce_non_negative_int(
+            session.get("sourceProblemOverlapGroupCount")
+            or session.get("source_problem_overlap_group_count")
+            or summary.get("sourceProblemOverlapGroupCount")
+            or summary.get("source_problem_overlap_group_count")
+        ),
+        len(source_overlap_groups) if isinstance(source_overlap_groups, list) else 0,
+    )
+    source_overlap_problem_count = max(
+        _coerce_non_negative_int(
+            summary.get("sourceProblemBboxOverlapCount")
+            or summary.get("source_problem_bbox_overlap_count")
+        ),
+        _risk_count(risk_flag_counts, SOURCE_PROBLEM_BBOX_OVERLAP_FLAG),
+    )
     edb_validation = payload.get("edbValidation")
     if not isinstance(edb_validation, dict):
         edb_validation = payload.get("edb_validation")
@@ -347,6 +388,8 @@ def summarize_export_response(
         or mismatches
         or hwp_mismatch_count
         or hwp_overseg_count
+        or source_overlap_group_count
+        or source_overlap_problem_count
         or actionable_counts
         or (edb_expected and not edb_validated)
         or failed_count
@@ -365,6 +408,8 @@ def summarize_export_response(
         "hwp_problem_count_mismatch_flags": list(mismatches) if isinstance(mismatches, list) else [],
         "hwp_problem_count_mismatch_count": hwp_mismatch_count,
         "hwp_oversegmentation_count": hwp_overseg_count,
+        "source_problem_bbox_overlap_count": source_overlap_problem_count,
+        "source_problem_overlap_group_count": source_overlap_group_count,
         "risk_flags": risk_flags,
         "risk_flag_counts": risk_flag_counts,
         "actionable_risk_flag_counts": actionable_counts,
@@ -391,6 +436,8 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
     warning_count = 0
     mismatch_count = 0
     oversegmentation_count = 0
+    source_overlap_problem_count = 0
+    source_overlap_group_count = 0
     hwp_cache_hit_page_count = 0
     hwp_renderer_cache_hit_count = 0
     hwp_normalized_cache_hit_count = 0
@@ -407,6 +454,8 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         warning_count += len(row.get("warnings") or [])
         mismatch_count += hwp_problem_count_mismatch_count(row)
         oversegmentation_count += hwp_oversegmentation_count(row)
+        source_overlap_problem_count += source_problem_bbox_overlap_count(row)
+        source_overlap_group_count += source_problem_overlap_group_count(row)
         hwp_cache_hit_page_count += _coerce_non_negative_int(row.get("hwp_cache_hit_page_count"))
         hwp_renderer_cache_hit_count += _coerce_non_negative_int(row.get("hwp_renderer_cache_hit_count"))
         hwp_normalized_cache_hit_count += _coerce_non_negative_int(row.get("hwp_normalized_cache_hit_count"))
@@ -428,6 +477,8 @@ def summarize_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "warning_count": warning_count,
         "hwp_problem_count_mismatch_count": mismatch_count,
         "hwp_oversegmentation_count": oversegmentation_count,
+        "source_problem_bbox_overlap_count": source_overlap_problem_count,
+        "source_problem_overlap_group_count": source_overlap_group_count,
         "edb_expected_count": sum(1 for row in rows if row.get("edb_expected")),
         "edb_validated_count": sum(1 for row in rows if row.get("edb_expected") and row.get("edb_validated")),
         "edb_missing_count": sum(1 for row in rows if row.get("edb_expected") and not row.get("edb_validated")),
@@ -611,6 +662,8 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     ) or "-"
     page_count = _coerce_non_negative_int(summary.get("page_count"))
     hwp_cache_hit_page_count = _coerce_non_negative_int(summary.get("hwp_cache_hit_page_count"))
+    source_overlap_problem_count = _coerce_non_negative_int(summary.get("source_problem_bbox_overlap_count"))
+    source_overlap_group_count = _coerce_non_negative_int(summary.get("source_problem_overlap_group_count"))
     return (
         "Batch summary: "
         f"samples {summary.get('ok_count', 0)}/{summary.get('sample_count', 0)} OK · "
@@ -622,6 +675,7 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
         f"warnings {summary.get('warning_count', 0)} · "
         f"mismatch {summary.get('hwp_problem_count_mismatch_count', 0)} · "
         f"overseg {summary.get('hwp_oversegmentation_count', 0)} · "
+        f"source overlap {source_overlap_problem_count}/{source_overlap_group_count} · "
         f"{edb_part}"
         f"elapsed {summary.get('elapsed_s', 0)}s · "
         f"top risk {top_risk} · "
