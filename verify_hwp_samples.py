@@ -189,6 +189,17 @@ def source_problem_overlap_group_count(row: dict[str, Any]) -> int:
     return len(groups) if isinstance(groups, list) else 0
 
 
+def passage_group_source_reuse_group_count(row: dict[str, Any]) -> int:
+    explicit = _coerce_non_negative_int(
+        row.get("passage_group_source_reuse_group_count")
+        or row.get("passageGroupSourceReuseGroupCount")
+    )
+    if explicit:
+        return explicit
+    groups = row.get("passage_group_source_reuse_groups") or row.get("passageGroupSourceReuseGroups")
+    return len(groups) if isinstance(groups, list) else 0
+
+
 def _passage_group_child_count(group: dict[str, Any]) -> int:
     for key in ("problemNumbers", "problem_numbers", "childProblemNumbers", "child_problem_numbers"):
         values = group.get(key)
@@ -763,9 +774,14 @@ def summarize_export_response(
     classin_preflight_status = str(classin_preflight.get("status") or "").strip()
     classin_preflight_issues = classin_preflight.get("issues")
     classin_preflight_issue_types = _classin_preflight_issue_types(classin_preflight)
-    passage_group_source_reuse_count = _classin_preflight_issue_type_count(
-        classin_preflight,
-        PASSAGE_GROUP_SOURCE_REUSE_FLAG,
+    passage_group_source_reuse_count = max(
+        _classin_preflight_issue_type_count(
+            classin_preflight,
+            PASSAGE_GROUP_SOURCE_REUSE_FLAG,
+        ),
+        passage_group_source_reuse_group_count(session),
+        passage_group_source_reuse_group_count(summary),
+        passage_group_source_reuse_group_count(payload),
     )
     classin_preflight_issue_count = max(
         _coerce_non_negative_int(
@@ -791,6 +807,7 @@ def summarize_export_response(
         or hwp_overseg_count
         or source_overlap_group_count
         or source_overlap_problem_count
+        or passage_group_source_reuse_count
         or passage_review_metrics["passage_review_item_count"]
         or actionable_counts
         or (edb_expected and not edb_validated)

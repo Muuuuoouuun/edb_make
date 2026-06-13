@@ -370,6 +370,37 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertTrue(summary["needs_review"])
 
+    def test_summarize_export_response_counts_session_passage_group_source_reuse(self):
+        payload = {
+            "ok": True,
+            "session": {
+                "pages": [],
+                "problems": [],
+                "passageGroupSourceReuseGroups": [
+                    {
+                        "passageGroupId": "hwp-text-passage-31-34",
+                        "sourcePageId": "page-004",
+                        "problemIds": ["p31", "p32"],
+                        "overlapAreaRatio": 0.92,
+                    }
+                ],
+                "passageGroupSourceReuseGroupCount": 1,
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("session-passage-reuse.hwp"),
+            subject="영어",
+            output_dir=Path("out"),
+            elapsed_s=0.5,
+        )
+
+        self.assertFalse(summary["classin_preflight_expected"])
+        self.assertEqual(1, summary["passage_group_source_reuse_count"])
+        self.assertTrue(summary["needs_review"])
+
     def test_summarize_export_response_counts_hwp_segmentation_risks(self):
         payload = {
             "ok": True,
