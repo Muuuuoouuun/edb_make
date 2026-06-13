@@ -3639,6 +3639,49 @@ def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) 
     return issues
 
 
+def _classin_missing_passage_child_question_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    problems_by_id = {
+        str(problem.get("id") or problem.get("problem_id") or "").strip(): problem
+        for problem in problems
+        if isinstance(problem, dict)
+    }
+    issues: list[dict[str, Any]] = []
+    for group in _session_passage_groups(problems):
+        missing_numbers = _ordered_unique_ints(
+            group.get("missingChildProblemNumbers") or group.get("missing_child_problem_numbers") or []
+        )
+        if not missing_numbers:
+            continue
+        problem_ids = _ordered_unique_strings(group.get("coreProblemIds") or group.get("core_problem_ids") or [])
+        issue_problem = problems_by_id.get(problem_ids[0]) if problem_ids else None
+        missing_label = ", ".join(f"{number}번" for number in missing_numbers)
+        issues.append(
+            _classin_preflight_issue(
+                "passage_missing_child_questions",
+                severity="warning",
+                message=(
+                    f"긴 지문 그룹에서 예상 하위 문항 {missing_label}이 감지되지 않았습니다. "
+                    "EDB 등록 전 지문 병합/문항 분리 결과를 확인해 주세요."
+                ),
+                problem=issue_problem,
+                details={
+                    "passageGroupId": str(group.get("groupId") or ""),
+                    "numberLabel": str(group.get("numberLabel") or ""),
+                    "problemIds": problem_ids,
+                    "problem_ids": problem_ids,
+                    "sourcePageIds": _ordered_unique_strings(
+                        group.get("sourcePageIds") or group.get("source_page_ids") or []
+                    ),
+                    "missingChildProblemNumbers": missing_numbers,
+                    "missing_child_problem_numbers": missing_numbers,
+                    "missingChildProblemCount": len(missing_numbers),
+                    "missing_child_problem_count": len(missing_numbers),
+                },
+            )
+        )
+    return issues
+
+
 def _classin_preflight_has_actionable_review_state(risk_flags: Sequence[str], review_status: str) -> bool:
     status = str(review_status or "").strip()
     if status == "failed":
@@ -3753,6 +3796,11 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
                 break
 
+    if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
+        for issue in _classin_missing_passage_child_question_issues(problems):
+            issues.append(issue)
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
     if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
         for issue in _classin_board_placement_overlap_issues(problems):
             issues.append(issue)

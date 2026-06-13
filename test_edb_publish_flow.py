@@ -2099,6 +2099,74 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("missing: 33", markdown)
             self.assertIn("cross_page_passage_group", markdown)
 
+    def test_classin_preflight_flags_missing_passage_child_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+            crop_paths = {}
+            for number in (31, 32, 34):
+                path = root / f"p{number}.png"
+                image = Image.new("RGB", (760, 420), "white")
+                draw = ImageDraw.Draw(image)
+                for line in range(12):
+                    draw.text((40, 30 + line * 28), f"{number}. question line {line}", fill=(20, 20, 20))
+                image.save(path)
+                crop_paths[number] = path
+
+            problems = []
+            for index, number in enumerate((31, 32, 34), start=1):
+                problems.append(
+                    {
+                        "id": f"p{number}",
+                        "title": f"{number}.",
+                        "problemNumber": number,
+                        "imagePath": crop_paths[number].resolve().as_uri(),
+                        "sourcePageId": f"page-{index}",
+                        "bbox": {"left": 40, "top": 80, "width": 560, "height": 160},
+                        "passageGroupId": "hwp-text-passage-31-34",
+                        "passageRange": {"start": 31, "end": 34},
+                        "passageRole": "child_question",
+                        "passageChildProblemNumbers": [31, 32, 33, 34],
+                        "passageSourcePageIds": ["page-1", "page-2", "page-3"],
+                        "riskFlags": [],
+                        "reviewStatus": "normal",
+                    }
+                )
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 3,
+                    "supplemental_item_count": 0,
+                    "detected_problem_count": 3,
+                    "source_page_count": 3,
+                    "reviewSummary": {},
+                    "problems": problems,
+                },
+                summary={"record_count": 3, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=8),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            preflight = handoff["classinPreflight"]
+            missing_issues = [
+                issue for issue in preflight["issues"] if issue["type"] == "passage_missing_child_questions"
+            ]
+            self.assertFalse(handoff["readyForClassIn"])
+            self.assertEqual("needs_attention", preflight["status"])
+            self.assertEqual(1, len(missing_issues))
+            self.assertEqual("hwp-text-passage-31-34", missing_issues[0]["passageGroupId"])
+            self.assertEqual([33], missing_issues[0]["missingChildProblemNumbers"])
+            self.assertEqual([33], missing_issues[0]["missing_child_problem_numbers"])
+            self.assertEqual(["p31", "p32", "p34"], missing_issues[0]["problemIds"])
+            self.assertIn("passage_missing_child_questions", markdown)
+
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
