@@ -42,6 +42,26 @@
     return Boolean(passageGroupIdFor(problem));
   }
 
+  function problemIdFor(problem) {
+    if (!problem || typeof problem !== "object") return "";
+    return String(problem.id || problem.problem_id || "").trim();
+  }
+
+  function reviewProblemIdSet(options) {
+    const rawIds = options?.passageReviewProblemIds || options?.passage_review_problem_ids || [];
+    if (rawIds instanceof Set) return rawIds;
+    return new Set(
+      Array.isArray(rawIds)
+        ? rawIds.map(id => String(id || "").trim()).filter(Boolean)
+        : []
+    );
+  }
+
+  function isPassageReviewProblem(problem, options = {}) {
+    const id = problemIdFor(problem);
+    return Boolean(id && reviewProblemIdSet(options).has(id));
+  }
+
   function deriveProblemStatus(problem) {
     const rawStatus = String(problem?.reviewStatus || problem?.review_status || "").trim();
     if (rawStatus === "normal" || rawStatus === "check_needed" || rawStatus === "failed") {
@@ -53,11 +73,12 @@
     return riskFlagsFor(problem).length ? "check_needed" : "normal";
   }
 
-  function problemMatchesReviewFilter(problem, filter) {
+  function problemMatchesReviewFilter(problem, filter, options = {}) {
     const normalizedFilter = String(filter || "all").trim() || "all";
     if (normalizedFilter === "all") return true;
     if (normalizedFilter === "supplemental") return isSupplementalProblem(problem);
     if (normalizedFilter === "passage") return isPassageProblem(problem);
+    if (normalizedFilter === "passage-review") return isPassageReviewProblem(problem, options);
     return deriveProblemStatus(problem) === normalizedFilter;
   }
 
@@ -85,8 +106,10 @@
     deriveProblemStatus,
     hasRiskFlag,
     isPassageProblem,
+    isPassageReviewProblem,
     isSupplementalProblem,
     passageGroupIdFor,
+    problemIdFor,
     problemMatchesReviewFilter,
     riskFlagsFor,
   };

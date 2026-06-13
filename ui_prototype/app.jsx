@@ -314,6 +314,10 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   }, [session]);
   const sessionCounts = useMemo(() => sessionProblemCounts(session), [session]);
   const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
+  const passageReviewProblemIds = useMemo(
+    () => new Set(reviewSummary.passageReviewProblemIds || []),
+    [reviewSummary.passageReviewProblemIds]
+  );
   const riskFilterHasProblemMatches = useMemo(() => {
     if (!reviewRiskFilter) return false;
     return (session?.problems || []).some(problem => hasRiskFlag(problem, reviewRiskFilter));
@@ -347,7 +351,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
         ? hasRiskFlag(page, reviewRiskFilter)
         : false;
       const pageProblems = allPageProblems
-        .filter(problem => problemMatchesReviewFilter(problem, reviewFilter))
+        .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
         .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
       problemCount += pageProblems.length;
       pageProblems.forEach(problem => {
@@ -362,7 +366,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       problemIds: Array.from(problemIdSet),
       retryPageIds: Array.from(retryPageIdSet),
     };
-  }, [pages, problemsById, pageRetryIds, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches]);
+  }, [pages, problemsById, pageRetryIds, passageReviewProblemIds, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches]);
   const actionableProblemIds = useMemo(() => (session?.problems || [])
     .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
     .map(problem => problem.id), [session]);
@@ -657,14 +661,14 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
             {reviewSummary.passageReviewItemCount > 0 && (
               <button
                 type="button"
-                className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
+                className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
                 title={[
                   '긴 지문 검수 큐',
                   reviewSummary.passageReviewLabel,
                   reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
                 ].filter(Boolean).join(' · ')}
-                aria-pressed={reviewFilter === 'passage'}
-                onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
+                aria-pressed={reviewFilter === 'passage-review'}
+                onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
               >
                 {reviewSummary.passageReviewLabel}
               </button>
@@ -734,7 +738,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
               ? hasRiskFlag(page, reviewRiskFilter)
               : false;
             const pageProblems = allPageProblems
-              .filter(problem => problemMatchesReviewFilter(problem, reviewFilter))
+              .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
               .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
             if ((reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
             const pageCounts = countSessionProblems(allPageProblems);
@@ -3194,13 +3198,21 @@ function isPassageProblem(problem){
   return Boolean(passageGroupIdFor(problem));
 }
 
-function problemMatchesReviewFilter(problem, filter){
+function problemMatchesReviewFilter(problem, filter, options = {}){
   const helper = globalThis.EDB_REVIEW_FILTERS?.problemMatchesReviewFilter;
-  if (typeof helper === 'function') return helper(problem, filter);
+  if (typeof helper === 'function') return helper(problem, filter, options);
   const normalizedFilter = String(filter || 'all').trim() || 'all';
   if (normalizedFilter === 'all') return true;
   if (normalizedFilter === 'supplemental') return isSupplementalProblem(problem);
   if (normalizedFilter === 'passage') return isPassageProblem(problem);
+  if (normalizedFilter === 'passage-review') {
+    const rawIds = options?.passageReviewProblemIds || options?.passage_review_problem_ids || [];
+    const idSet = rawIds instanceof Set
+      ? rawIds
+      : new Set(Array.isArray(rawIds) ? rawIds.map(id => String(id || '').trim()).filter(Boolean) : []);
+    const problemId = String(problem?.id || problem?.problem_id || '').trim();
+    return Boolean(problemId && idSet.has(problemId));
+  }
   return deriveProblemStatus(problem) === normalizedFilter;
 }
 
@@ -3472,8 +3484,17 @@ function collectPassageReviewSummary(session){
     .filter(Boolean)
     .slice(0, 5)
     .join(', ');
+  const passageReviewProblemIds = Array.from(new Set(
+    passageReviewItems.flatMap(item => [
+      ...(Array.isArray(item.problemIds || item.problem_ids) ? (item.problemIds || item.problem_ids) : []),
+      ...(Array.isArray(item.fragmentProblemIds || item.fragment_problem_ids) ? (item.fragmentProblemIds || item.fragment_problem_ids) : []),
+    ])
+      .map(id => String(id || '').trim())
+      .filter(Boolean)
+  ));
   return {
     passageReviewItems,
+    passageReviewProblemIds,
     passageReviewItemCount,
     crossPagePassageReviewItemCount,
     passageReviewLabel,
@@ -3624,6 +3645,7 @@ function sessionReviewSummary(session){
     crossPagePassageGroupCount: passageSummary.crossPagePassageGroupCount,
     passageContinuationBlockCount: passageSummary.passageContinuationBlockCount,
     passageReviewItems: passageReviewSummary.passageReviewItems,
+    passageReviewProblemIds: passageReviewSummary.passageReviewProblemIds,
     passageReviewItemCount: passageReviewSummary.passageReviewItemCount,
     crossPagePassageReviewItemCount: passageReviewSummary.crossPagePassageReviewItemCount,
     passageReviewLabel: passageReviewSummary.passageReviewLabel,

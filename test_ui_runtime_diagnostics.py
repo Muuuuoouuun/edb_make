@@ -135,6 +135,19 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("passageReviewItems", summary_helper)
         self.assertIn("passageReviewLabel", summary_helper)
 
+    def test_review_summary_passage_review_chip_filters_only_queue_items(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+        queue_helper = source.split("function collectPassageReviewSummary(session)", 1)[1]
+        queue_helper = queue_helper.split("function sessionReviewSummary(session)", 1)[0]
+
+        self.assertIn("passageReviewProblemIds", queue_helper)
+        self.assertIn("reviewFilter === 'passage-review'", review_stage)
+        self.assertIn("'passage-review' ? 'all' : 'passage-review'", review_stage)
+        self.assertIn("passageReviewProblemIds", review_stage)
+        self.assertIn("problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds })", review_stage)
+
 
 if __name__ == "__main__":
     unittest.main()

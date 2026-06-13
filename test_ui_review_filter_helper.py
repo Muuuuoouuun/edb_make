@@ -49,6 +49,26 @@ class TestUiReviewFilterHelper(unittest.TestCase):
             """
         )
 
+    def test_passage_review_filter_matches_only_review_queue_problem_ids(self) -> None:
+        run_node(
+            """
+            const { problemMatchesReviewFilter } = require('./ui_prototype/review_filters.js');
+            const options = { passageReviewProblemIds: ['p31', 'p32-fragment'] };
+            if (!problemMatchesReviewFilter({ id: 'p31', passageGroupId: 'hwp-text-passage-31-34' }, 'passage-review', options)) {
+              throw new Error('passage-review filter should match queued core problem');
+            }
+            if (!problemMatchesReviewFilter({ problem_id: 'p32-fragment', passageGroupId: 'hwp-text-passage-31-34' }, 'passage-review', options)) {
+              throw new Error('passage-review filter should match queued fragment problem');
+            }
+            if (problemMatchesReviewFilter({ id: 'p33', passageGroupId: 'hwp-text-passage-31-34' }, 'passage-review', options)) {
+              throw new Error('passage-review filter should not match non-queued passage problem');
+            }
+            if (problemMatchesReviewFilter({ id: 'p1', reviewStatus: 'check_needed' }, 'passage-review', options)) {
+              throw new Error('passage-review filter should not match generic review risks');
+            }
+            """
+        )
+
     def test_status_filters_still_match_review_status(self) -> None:
         run_node(
             """
