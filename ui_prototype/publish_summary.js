@@ -10,6 +10,32 @@
     return Number.isFinite(number) ? Math.max(0, number) : 0;
   }
 
+  const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
+    board_placement_overlap: "판서 배치 겹침",
+    low_ink_problem_image: "이미지 내용 부족",
+    missing_problem_image: "문항 이미지 없음",
+    review_flags_remaining: "검수 플래그 남음",
+    small_problem_image: "문항 이미지 작음",
+    source_problem_bbox_overlap: "원본 영역 겹침",
+    unreadable_problem_image: "문항 이미지 흐림",
+  };
+
+  function classinPreflightIssueLabel(type) {
+    const normalized = String(type || "").trim();
+    return CLASSIN_PREFLIGHT_ISSUE_LABELS[normalized] || normalized || "기타 주의";
+  }
+
+  function classinPreflightIssueLabels(preflight) {
+    const issues = Array.isArray(preflight?.issues) ? preflight.issues : [];
+    const counts = new Map();
+    issues.forEach(issue => {
+      const type = String(issue?.type || issue?.issueType || issue?.issue_type || "").trim();
+      const key = type || "unknown";
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return Array.from(counts.entries()).map(([type, count]) => `${classinPreflightIssueLabel(type)} ${count}`);
+  }
+
   function formatRecordCountLabel(summary) {
     const explicit = String(summary?.recordCountLabel || summary?.record_count_label || "").trim();
     if (explicit) return explicit;
@@ -109,6 +135,14 @@
         ? (classinPreflightPassed ? "ClassIn 사전점검 OK" : `ClassIn 사전점검 주의 ${classinPreflightIssueCount}`)
         : "")
     ).trim();
+    const classinPreflightIssueLabelList = Array.isArray(raw.classinPreflightIssueLabels)
+      ? raw.classinPreflightIssueLabels.map(label => String(label || "").trim()).filter(Boolean)
+      : classinPreflightIssueLabels(classinPreflight);
+    const classinPreflightIssueSummaryLabel = String(
+      raw.classinPreflightIssueSummaryLabel
+      || raw.classin_preflight_issue_summary_label
+      || classinPreflightIssueLabelList.join(" · ")
+    ).trim();
     const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
     const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
     if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -135,6 +169,8 @@
       classinPreflightStatusLabel,
       classinPreflightPassed,
       classinPreflightIssueCount,
+      classinPreflightIssueLabels: classinPreflightIssueLabelList,
+      classinPreflightIssueSummaryLabel,
       edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
       outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
       recordCount,
@@ -173,6 +209,8 @@
   }
 
   return {
+    classinPreflightIssueLabel,
+    classinPreflightIssueLabels,
     formatPublishHistoryMeta,
     formatRecordCountLabel,
     formatPublishTime,

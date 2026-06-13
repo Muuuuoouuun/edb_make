@@ -176,6 +176,44 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_labels_top_classin_preflight_issues(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              classinPreflight: {
+                status: 'needs_attention',
+                passed: false,
+                issueCount: 4,
+                issues: [
+                  { type: 'source_problem_bbox_overlap', problemTitle: '21.', nextProblemTitle: '22.' },
+                  { type: 'source_problem_bbox_overlap', problemTitle: '31.', nextProblemTitle: '32.' },
+                  { type: 'board_placement_overlap', problemTitle: '33.', nextProblemTitle: '34.' },
+                  { type: 'review_flags_remaining', problemTitle: '35.' },
+                ],
+              },
+            });
+            if (!Array.isArray(summary.classinPreflightIssueLabels)) {
+              throw new Error('preflight issue labels should be an array');
+            }
+            const labels = summary.classinPreflightIssueLabels.join(' / ');
+            if (!labels.includes('원본 영역 겹침 2')) {
+              throw new Error(`missing source overlap count: ${labels}`);
+            }
+            if (!labels.includes('판서 배치 겹침 1')) {
+              throw new Error(`missing board overlap count: ${labels}`);
+            }
+            if (!labels.includes('검수 플래그 남음 1')) {
+              throw new Error(`missing review flag count: ${labels}`);
+            }
+            if (summary.classinPreflightIssueSummaryLabel !== '원본 영역 겹침 2 · 판서 배치 겹침 1 · 검수 플래그 남음 1') {
+              throw new Error(`unexpected issue summary: ${summary.classinPreflightIssueSummaryLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_classin_handoff_readiness(self) -> None:
         run_node(
             """
