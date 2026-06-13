@@ -2995,6 +2995,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   duplicate_problem_number: '중복 번호',
   low_ink_problem_image: '이미지 내용 부족',
   missing_problem_image: '문항 이미지 없음',
+  passage_review_queue_remaining: '긴 지문 검수 남음',
   passage_group_source_reuse: '지문 그룹 원본 중복',
   review_flags_remaining: '검수 플래그 남음',
   small_problem_image: '문항 이미지 작음',

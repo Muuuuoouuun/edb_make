@@ -550,6 +550,61 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertIn("board_placement_overlap", issue_types)
             entries.assert_not_called()
 
+    def test_session_publish_blocks_unresolved_passage_review_queue_before_build(self):
+        with TemporaryDirectory() as raw_tmp:
+            session = {
+                "session_name": "passage-review-queue",
+                "output_dir": raw_tmp,
+                "pages": [
+                    {"id": "page-5", "problemIds": ["p31"]},
+                    {"id": "page-6", "problemIds": ["p32"]},
+                ],
+                "passageReviewItems": [
+                    {
+                        "groupId": "hwp-text-passage-31-32",
+                        "numberLabel": "31-32",
+                        "problemIds": ["p31", "p32"],
+                        "sourcePageIds": ["page-5", "page-6"],
+                        "problemCount": 2,
+                        "continuesAcrossPages": True,
+                    }
+                ],
+                "passageReviewItemCount": 1,
+                "crossPagePassageReviewItemCount": 1,
+                "problems": [
+                    {
+                        "id": "p31",
+                        "title": "31.",
+                        "problemNumber": 31,
+                        "sourcePageId": "page-5",
+                        "bbox": {"left": 10, "top": 10, "width": 120, "height": 100},
+                        "reviewStatus": "check_needed",
+                        "riskFlags": [],
+                    },
+                    {
+                        "id": "p32",
+                        "title": "32.",
+                        "problemNumber": 32,
+                        "sourcePageId": "page-6",
+                        "bbox": {"left": 20, "top": 20, "width": 130, "height": 100},
+                        "reviewStatus": "normal",
+                        "riskFlags": [],
+                    },
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+                handler._handle_session_publish()
+
+            body, kwargs = responses[0]
+            self.assertFalse(body["ok"])
+            self.assertEqual("publish_preflight_blocked", body["errorKind"])
+            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
+            self.assertIn("passage_review_queue_remaining", issue_types)
+            entries.assert_not_called()
+
     def test_session_publish_excludes_supplemental_passage_fragments_from_edb_entries(self):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)

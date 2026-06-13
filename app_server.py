@@ -599,12 +599,85 @@ def _duplicate_problem_number_group_issue(group: dict[str, Any]) -> dict[str, An
     }
 
 
-def _session_publish_blocking_preflight(problems: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _passage_review_queue_issue(item: dict[str, Any]) -> dict[str, Any]:
+    problem_ids = _passage_review_item_problem_ids(item)
+    source_page_ids: list[str] = []
+    for key in ("sourcePageIds", "source_page_ids"):
+        values = item.get(key)
+        if isinstance(values, list):
+            source_page_ids.extend(str(value or "").strip() for value in values)
+    source_page_ids = [value for value in source_page_ids if value]
+    number_label = str(item.get("numberLabel") or item.get("number_label") or "").strip()
+    group_id = str(item.get("groupId") or item.get("group_id") or "").strip()
+    title = number_label or group_id or "긴 지문"
+    return {
+        "type": "passage_review_queue_remaining",
+        "severity": "warning",
+        "message": f"{title} 긴 지문 검수 큐가 남아 있습니다. EDB publish 전에 지문 병합/하위 문제 상태를 확인해 주세요.",
+        "problemId": problem_ids[0] if problem_ids else "",
+        "problemTitle": title,
+        "numberLabel": number_label,
+        "groupId": group_id,
+        "problemIds": problem_ids,
+        "sourcePageIds": source_page_ids,
+        "continuesAcrossPages": bool(item.get("continuesAcrossPages") or item.get("continues_across_pages")),
+        "blocking": True,
+    }
+
+
+def _session_passage_review_queue_issues(
+    session: dict[str, Any] | None,
+    *,
+    problems: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+    actionable_flags: set[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(session, dict):
+        return []
+    raw_items = session.get("passageReviewItems")
+    if not isinstance(raw_items, list):
+        raw_items = session.get("passage_review_items")
+    if not isinstance(raw_items, list):
+        return []
+    unresolved_problem_ids = _session_unresolved_review_problem_ids(
+        problems=problems,
+        pages=pages,
+        actionable_flags=actionable_flags,
+    )
+    publish_problem_ids = {
+        str(problem.get("id") or problem.get("problem_id") or "").strip()
+        for problem in problems
+        if str(problem.get("id") or problem.get("problem_id") or "").strip()
+    }
+    issues: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        problem_ids = _passage_review_item_problem_ids(item)
+        if problem_ids:
+            if not any(problem_id in publish_problem_ids for problem_id in problem_ids):
+                continue
+            if not any(problem_id in unresolved_problem_ids for problem_id in problem_ids):
+                continue
+        issues.append(_passage_review_queue_issue(item))
+    return issues
+
+
+def _session_publish_blocking_preflight(
+    problems: list[dict[str, Any]],
+    session: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     checked_problems = [
         problem
         for problem in problems
         if isinstance(problem, dict) and not _session_problem_is_supplemental(problem)
     ]
+    pages = [page for page in ((session or {}).get("pages") or []) if isinstance(page, dict)]
+    review_session = dict(session or {})
+    review_session["problems"] = checked_problems
+    review_session["pages"] = pages
+    review_summary = _session_review_summary(review_session)
+    actionable_flags = set(review_summary.get("actionableRiskFlagCounts") or {})
     duplicate_groups = [
         dict(group)
         for group in _session_duplicate_problem_number_groups(checked_problems)
@@ -617,6 +690,14 @@ def _session_publish_blocking_preflight(problems: list[dict[str, Any]]) -> tuple
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_board_placement_overlap_issues(checked_problems))
+    issues.extend(
+        _session_passage_review_queue_issues(
+            session,
+            problems=checked_problems,
+            pages=pages,
+            actionable_flags=actionable_flags,
+        )
+    )
 
     blocking_issues: list[dict[str, Any]] = []
     for issue in issues:
@@ -2744,7 +2825,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             sequence_with_placements.append(problem_copy)
         sequence = sequence_with_placements
 
-        publish_preflight, duplicate_groups = _session_publish_blocking_preflight(sequence)
+        publish_preflight, duplicate_groups = _session_publish_blocking_preflight(sequence, session=session)
         if not publish_preflight.get("passed"):
             self._send_json(
                 _session_publish_preflight_blocked_payload(publish_preflight, duplicate_groups),
