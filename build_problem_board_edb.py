@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover - optional dependency
     np = None
 
 from build_structured_page_json import build_page_models_for_prepared_pages, resolve_recognition_worker_count
+from assemble_page import extract_set_problem_range
 from segment import draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
@@ -1547,7 +1548,65 @@ def _seed_cross_page_passage_group(
     return group
 
 
+def _hwp_preview_text_values(metadata: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    raw = metadata.get("hwp_preview_text")
+    if isinstance(raw, str) and raw.strip():
+        values.append(raw)
+    quality = metadata.get("hwp_conversion_quality")
+    if isinstance(quality, dict):
+        for key in ("hwp_preview_text", "preview_text"):
+            nested = quality.get(key)
+            if isinstance(nested, str) and nested.strip():
+                values.append(nested)
+    return values
+
+
+def _hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for page in pages:
+        for text in _hwp_preview_text_values(page.metadata):
+            for line in text.splitlines():
+                passage_range = extract_set_problem_range(line)
+                if passage_range is None:
+                    continue
+                start, end = passage_range
+                if end <= start or (start, end) in seen:
+                    continue
+                seen.add((start, end))
+                ranges.append((start, end))
+    ranges.sort()
+    return ranges
+
+
+def _annotate_hwp_preview_passage_ranges(pages: Sequence[PageModel]) -> None:
+    ranges = _hwp_preview_passage_ranges(pages)
+    if not ranges:
+        return
+    for page in pages:
+        for problem in page.problems:
+            if problem.metadata.get("passage_group_id"):
+                continue
+            problem_number = _problem_metadata_number(problem)
+            if problem_number is None:
+                continue
+            for start, end in ranges:
+                if start <= problem_number <= end:
+                    problem.metadata.update(
+                        {
+                            "passage_group_id": f"hwp-preview-passage-{start}-{end}",
+                            "passage_range": {"start": start, "end": end},
+                            "passage_role": "child_question",
+                            "passage_child_problem_numbers": list(range(start, end + 1)),
+                            "passage_grouping_source": "hwp_preview_text",
+                        }
+                    )
+                    break
+
+
 def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
+    _annotate_hwp_preview_passage_ranges(pages)
     active_groups: dict[str, dict[str, Any]] = {}
     for page in pages:
         ordered_problems = sorted(

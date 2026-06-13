@@ -731,6 +731,257 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("passage_cross_page_merge_check", linked_problem["riskFlags"])
             self.assertEqual("check_needed", linked_problem["reviewStatus"])
 
+    def test_mvp_export_links_cross_page_passage_child_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            for path in (page_1_image, page_2_image):
+                Image.new("RGB", (900, 1200), "white").save(path)
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=Image.open(page_1_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=Image.open(page_2_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+            ]
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_1_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q13",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=80, width=500, height=120),
+                        reading_order=0,
+                        text="13. first child",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-problem-13",
+                        subject=Subject.KOREAN,
+                        title="13.",
+                        stem_block_ids=["q13"],
+                        metadata={
+                            "problem_number": 13,
+                            "passage_group_id": "page-1-passage-13-16",
+                            "passage_range": {"start": 13, "end": 16},
+                            "passage_role": "child_question",
+                            "shared_passage_block_ids": ["range-header", "shared-passage"],
+                            "passage_child_problem_numbers": [13, 14, 15, 16],
+                        },
+                    )
+                ],
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_2_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q15",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=120, width=500, height=160),
+                        reading_order=0,
+                        text="15. next page child",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-2-problem-15",
+                        subject=Subject.KOREAN,
+                        title="15.",
+                        stem_block_ids=["q15"],
+                        metadata={"problem_number": 15},
+                    ),
+                ],
+            )
+
+            with (
+                mock.patch("build_mvp_export.prepare_source_pages", return_value=prepared_pages),
+                mock.patch("build_mvp_export.build_page_model", side_effect=[page_1, page_2]),
+            ):
+                result = run_mvp_export(
+                    source,
+                    output_dir=root / "out",
+                    subject_name="korean",
+                    ocr="none",
+                    sync_ui=False,
+                )
+
+            problems_by_id = {problem["id"]: problem for problem in result["ui_session"]["problems"]}
+            linked_problem = problems_by_id["page-2-problem-15"]
+            self.assertEqual(15, linked_problem["problemNumber"])
+            self.assertEqual("page-1-passage-13-16", linked_problem["passageGroupId"])
+            self.assertEqual({"start": 13, "end": 16}, linked_problem["passageRange"])
+            self.assertEqual([13, 14, 15, 16], linked_problem["passageChildProblemNumbers"])
+            self.assertEqual(["page-1", "page-2"], linked_problem["passageSourcePageIds"])
+            self.assertTrue(linked_problem["passageContinuesAcrossPages"])
+            self.assertIn("passage_cross_page_merge_check", linked_problem["riskFlags"])
+            self.assertEqual("check_needed", linked_problem["reviewStatus"])
+            self.assertEqual(1, result["ui_session"]["passageGroupCount"])
+            self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
+
+    def test_mvp_export_infers_passage_groups_from_hwp_preview_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            source.write_bytes(b"hwp")
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            for path in (page_1_image, page_2_image):
+                Image.new("RGB", (900, 1200), "white").save(path)
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=Image.open(page_1_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=Image.open(page_2_image).convert("RGB"),
+                    original_size=(900, 1200),
+                ),
+            ]
+            hwp_preview_text = (
+                "[1～3] 다음 글을 읽고 물음에 답하시오.\n"
+                "1. first\n2. second\n3. third\n"
+                "[4~5] 다음 자료를 보고 물음에 답하시오.\n"
+                "4. fourth\n5. fifth"
+            )
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_1_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q1",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=80, width=500, height=120),
+                        reading_order=0,
+                        text="1. first",
+                    ),
+                    ContentBlock(
+                        block_id="q2",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=260, width=500, height=120),
+                        reading_order=1,
+                        text="2. second",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-problem-1",
+                        subject=Subject.KOREAN,
+                        title="1.",
+                        stem_block_ids=["q1"],
+                        metadata={"problem_number": 1},
+                    ),
+                    ProblemUnit(
+                        unit_id="page-1-problem-2",
+                        subject=Subject.KOREAN,
+                        title="2.",
+                        stem_block_ids=["q2"],
+                        metadata={"problem_number": 2},
+                    ),
+                ],
+                metadata={
+                    "source_type": "hwp",
+                    "hwp_preview_text": hwp_preview_text,
+                },
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_2_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q3",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=80, width=500, height=120),
+                        reading_order=0,
+                        text="3. third",
+                    ),
+                    ContentBlock(
+                        block_id="q4",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=260, width=500, height=120),
+                        reading_order=1,
+                        text="4. fourth",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-2-problem-3",
+                        subject=Subject.KOREAN,
+                        title="3.",
+                        stem_block_ids=["q3"],
+                        metadata={"problem_number": 3},
+                    ),
+                    ProblemUnit(
+                        unit_id="page-2-problem-4",
+                        subject=Subject.KOREAN,
+                        title="4.",
+                        stem_block_ids=["q4"],
+                        metadata={"problem_number": 4},
+                    ),
+                ],
+                metadata={
+                    "source_type": "hwp",
+                    "hwp_preview_text": hwp_preview_text,
+                },
+            )
+
+            with (
+                mock.patch("build_mvp_export.prepare_source_pages", return_value=prepared_pages),
+                mock.patch("build_mvp_export.build_page_model", side_effect=[page_1, page_2]),
+            ):
+                result = run_mvp_export(
+                    source,
+                    output_dir=root / "out",
+                    subject_name="korean",
+                    ocr="none",
+                    sync_ui=False,
+                )
+
+            problems_by_id = {problem["id"]: problem for problem in result["ui_session"]["problems"]}
+            grouped_ids = ["page-1-problem-1", "page-1-problem-2", "page-2-problem-3"]
+            for problem_id in grouped_ids:
+                problem = problems_by_id[problem_id]
+                self.assertEqual("hwp-preview-passage-1-3", problem["passageGroupId"])
+                self.assertEqual({"start": 1, "end": 3}, problem["passageRange"])
+                self.assertEqual([1, 2, 3], problem["passageChildProblemNumbers"])
+            self.assertEqual(["page-1", "page-2"], problems_by_id["page-2-problem-3"]["passageSourcePageIds"])
+            self.assertTrue(problems_by_id["page-2-problem-3"]["passageContinuesAcrossPages"])
+            self.assertIn("passage_cross_page_merge_check", problems_by_id["page-2-problem-3"]["riskFlags"])
+            self.assertEqual(2, result["ui_session"]["passageGroupCount"])
+            self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
+
     def test_problem_entries_preserve_pre_question_cross_page_passage_continuation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

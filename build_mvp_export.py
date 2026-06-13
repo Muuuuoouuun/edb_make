@@ -13,13 +13,16 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from build_problem_board_edb import (
+    _annotate_cross_page_passage_groups,
     _collapse_marker_document_continuation_page,
     _collect_problem_risk_flags,
     _count_core_hwp_problems,
     _is_hwp_oversegmentation,
     _is_marker_document_continuation_page,
+    _problem_passage_payload,
     _remove_duplicate_marker_document_problem_numbers,
     _remove_hwp_template_instruction_problems,
+    _session_passage_groups,
     _session_problem_count_payload,
 )
 from build_structured_page_json import build_page_model
@@ -525,11 +528,16 @@ def build_ui_session(
             board_path = board_path_by_page_id.get(page_model.page_id)
             crop_path = problem_crop_paths.get(problem.unit_id)
             risk_flags = _collect_problem_risk_flags(problem)
+            problem_number = _coerce_int(problem.metadata.get("problem_number"))
+            if problem_number <= 0:
+                problem_number = None
+            passage_payload = _problem_passage_payload(problem.metadata)
             problems_by_page_id.setdefault(page_model.page_id, []).append(problem.unit_id)
             problems.append(
                 {
                     "id": problem.unit_id,
                     "title": _problem_title(page_model, problem, index),
+                    "problemNumber": problem_number,
                     "subject": problem.subject.value,
                     "imagePath": _to_file_uri(crop_path),
                     "sourceImagePath": _to_file_uri(page_model.source_path),
@@ -546,6 +554,7 @@ def build_ui_session(
                     "slotSpanCount": placement.slot_span_count if placement else 1,
                     "riskFlags": risk_flags,
                     "reviewStatus": "check_needed" if risk_flags else "normal",
+                    **passage_payload,
                 }
             )
 
@@ -569,6 +578,10 @@ def build_ui_session(
         )
 
     problem_counts = _session_problem_count_payload(problems)
+    passage_groups = _session_passage_groups(problems)
+    cross_page_passage_group_count = sum(
+        1 for group in passage_groups if group.get("continuesAcrossPages")
+    )
 
     return {
         "session_name": output_dir.name,
@@ -588,6 +601,14 @@ def build_ui_session(
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
         **problem_counts,
+        "passageGroups": passage_groups,
+        "passage_groups": passage_groups,
+        "passageGroupCount": len(passage_groups),
+        "passage_group_count": len(passage_groups),
+        "passageProblemCount": sum(int(group.get("problemCount") or 0) for group in passage_groups),
+        "passage_problem_count": sum(int(group.get("problemCount") or 0) for group in passage_groups),
+        "crossPagePassageGroupCount": cross_page_passage_group_count,
+        "cross_page_passage_group_count": cross_page_passage_group_count,
         "warning_messages": hwp_warning_messages,
         "pages": pages,
         "problems": problems,
@@ -684,6 +705,7 @@ def run_export(
     _remove_duplicate_marker_document_problem_numbers(page_models)
     _remove_hwp_template_instruction_problems(page_models)
     _normalize_marker_document_continuation_problems(page_models)
+    _annotate_cross_page_passage_groups(page_models)
     save_pages_json(page_models, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(page_models, ai_fallback_config)
 
