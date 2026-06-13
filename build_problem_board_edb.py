@@ -88,6 +88,7 @@ CLASSIN_PREFLIGHT_MIN_IMAGE_HEIGHT_PX = 120
 CLASSIN_PREFLIGHT_INK_THRESHOLD = 245
 CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO = 0.002
 CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES = 0.01
+CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO = 0.65
 CLASSIN_PREFLIGHT_MAX_ISSUES = 50
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
@@ -2554,6 +2555,126 @@ def _problem_float(problem: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
+def _problem_source_page_id(problem: dict[str, Any]) -> str:
+    return str(
+        problem.get("sourcePageId")
+        or problem.get("source_page_id")
+        or problem.get("pageId")
+        or problem.get("page_id")
+        or ""
+    ).strip()
+
+
+def _problem_bbox(problem: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    raw_bbox = problem.get("bbox") or problem.get("sourceBbox") or problem.get("source_bbox")
+    if not isinstance(raw_bbox, dict):
+        return None
+
+    left = _coerce_float(raw_bbox.get("left"))
+    if left is None:
+        left = _coerce_float(raw_bbox.get("x"))
+    top = _coerce_float(raw_bbox.get("top"))
+    if top is None:
+        top = _coerce_float(raw_bbox.get("y"))
+    width = _coerce_float(raw_bbox.get("width"))
+    if width is None:
+        width = _coerce_float(raw_bbox.get("w"))
+    height = _coerce_float(raw_bbox.get("height"))
+    if height is None:
+        height = _coerce_float(raw_bbox.get("h"))
+    right = _coerce_float(raw_bbox.get("right"))
+    bottom = _coerce_float(raw_bbox.get("bottom"))
+
+    if left is None or top is None:
+        return None
+    if width is not None:
+        right = left + width
+    if height is not None:
+        bottom = top + height
+    if right is None or bottom is None:
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def _bbox_payload(box: tuple[float, float, float, float]) -> dict[str, float]:
+    left, top, right, bottom = box
+    return {
+        "left": round(left, 6),
+        "top": round(top, 6),
+        "width": round(right - left, 6),
+        "height": round(bottom - top, 6),
+    }
+
+
+def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates_by_page: dict[str, list[tuple[tuple[float, float, float, float], dict[str, Any]]]] = {}
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        source_page_id = _problem_source_page_id(problem)
+        bbox = _problem_bbox(problem)
+        if not source_page_id or bbox is None:
+            continue
+        candidates_by_page.setdefault(source_page_id, []).append((bbox, problem))
+
+    issues: list[dict[str, Any]] = []
+    threshold = CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO
+    for source_page_id, candidates in candidates_by_page.items():
+        candidates.sort(
+            key=lambda item: (
+                item[0][1],
+                item[0][0],
+                str(item[1].get("id") or item[1].get("problem_id") or ""),
+            )
+        )
+        for index, (bbox, problem) in enumerate(candidates):
+            left, top, right, bottom = bbox
+            area = (right - left) * (bottom - top)
+            if area <= 0:
+                continue
+            for next_bbox, next_problem in candidates[index + 1:]:
+                next_left, next_top, next_right, next_bottom = next_bbox
+                next_area = (next_right - next_left) * (next_bottom - next_top)
+                if next_area <= 0:
+                    continue
+                intersection_width = max(0.0, min(right, next_right) - max(left, next_left))
+                intersection_height = max(0.0, min(bottom, next_bottom) - max(top, next_top))
+                intersection_area = intersection_width * intersection_height
+                if intersection_area <= 0:
+                    continue
+                overlap_area_ratio = intersection_area / min(area, next_area)
+                if overlap_area_ratio < threshold:
+                    continue
+                union_area = area + next_area - intersection_area
+                issues.append(
+                    _classin_preflight_issue(
+                        "source_problem_bbox_overlap",
+                        severity="warning",
+                        message=(
+                            "두 문항의 원본 인식 영역이 크게 겹칩니다. "
+                            "긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+                        ),
+                        problem=problem,
+                        details={
+                            "nextProblemId": str(next_problem.get("id") or next_problem.get("problem_id") or ""),
+                            "nextProblemTitle": str(
+                                next_problem.get("title") or next_problem.get("problemNumber") or ""
+                            ),
+                            "sourcePageId": source_page_id,
+                            "overlapAreaRatio": round(overlap_area_ratio, 6),
+                            "intersectionOverUnion": round(intersection_area / union_area, 6) if union_area > 0 else 0.0,
+                            "intersectionAreaPx": round(intersection_area, 6),
+                            "sourceBBoxOverlapThreshold": threshold,
+                            "bbox": _bbox_payload(bbox),
+                            "nextBbox": _bbox_payload(next_bbox),
+                        },
+                    )
+                )
+    return issues
+
+
 def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     placements: list[tuple[float, float, dict[str, Any]]] = []
     for problem in problems:
@@ -2717,6 +2838,11 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             issues.append(issue)
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
                 break
+    if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
+        for issue in _classin_source_bbox_overlap_issues(problems):
+            issues.append(issue)
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
 
     status = "passed" if not issues else "needs_attention"
     return {
@@ -2731,6 +2857,7 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             "minDarkPixelRatio": CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO,
             "darkPixelThreshold": CLASSIN_PREFLIGHT_INK_THRESHOLD,
             "placementOverlapTolerancePages": CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES,
+            "sourceBboxOverlapRatio": CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO,
         },
     }
 

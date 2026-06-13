@@ -13,6 +13,67 @@ def run_node(script: str) -> None:
 
 
 class TestUiPublishGuardHelper(unittest.TestCase):
+    def test_detects_source_problem_bbox_overlap_before_publish(self) -> None:
+        run_node(
+            """
+            const { findSourceProblemOverlaps } = require('./ui_prototype/publish_guard.js');
+            const overlaps = findSourceProblemOverlaps([
+              {
+                id: 'p21',
+                title: '21.',
+                sourcePageId: 'page-001',
+                bbox: { left: 40, top: 100, width: 520, height: 320 },
+              },
+              {
+                id: 'p22',
+                title: '22.',
+                sourcePageId: 'page-001',
+                bbox: { left: 60, top: 125, width: 500, height: 300 },
+              },
+            ]);
+            if (overlaps.length !== 1) {
+              throw new Error(`expected 1 source overlap, got ${overlaps.length}`);
+            }
+            const issue = overlaps[0];
+            if (issue.type !== 'source_problem_bbox_overlap') {
+              throw new Error(`unexpected issue type ${issue.type}`);
+            }
+            if (issue.problemId !== 'p21' || issue.nextProblemId !== 'p22') {
+              throw new Error(`unexpected ids ${issue.problemId}/${issue.nextProblemId}`);
+            }
+            if (issue.sourcePageId !== 'page-001') {
+              throw new Error(`unexpected page ${issue.sourcePageId}`);
+            }
+            if (!(issue.overlapAreaRatio >= 0.8)) {
+              throw new Error(`expected high overlap ratio, got ${issue.overlapAreaRatio}`);
+            }
+            """
+        )
+
+    def test_ignores_source_bbox_overlap_across_different_pages(self) -> None:
+        run_node(
+            """
+            const { findSourceProblemOverlaps } = require('./ui_prototype/publish_guard.js');
+            const overlaps = findSourceProblemOverlaps([
+              {
+                id: 'p21',
+                title: '21.',
+                sourcePageId: 'page-001',
+                bbox: { left: 40, top: 100, width: 520, height: 320 },
+              },
+              {
+                id: 'p22',
+                title: '22.',
+                sourcePageId: 'page-002',
+                bbox: { left: 60, top: 125, width: 500, height: 300 },
+              },
+            ]);
+            if (overlaps.length !== 0) {
+              throw new Error(`expected no cross-page overlap, got ${JSON.stringify(overlaps)}`);
+            }
+            """
+        )
+
     def test_detects_requested_scale_overlap_before_publish(self) -> None:
         run_node(
             """

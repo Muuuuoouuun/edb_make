@@ -25,6 +25,7 @@ const SAMPLE_STEPS = ['raw','raw','raw','s1','s2','raw'];
 const REORDER_HELPERS = window.EDB_REORDER || {};
 const PUBLISH_GUARD = window.EDB_PUBLISH_GUARD || {};
 const findBoardPlacementOverlaps = PUBLISH_GUARD.findBoardPlacementOverlaps || (() => []);
+const findSourceProblemOverlaps = PUBLISH_GUARD.findSourceProblemOverlaps || (() => []);
 const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, fromId, toId, position = 'before') => {
   const sourceId = fromId == null ? '' : String(fromId);
   const targetId = toId == null ? '' : String(toId);
@@ -4781,6 +4782,17 @@ function App(){
     const currentIds = items.map(i => i.id);
     const order = currentIds.filter(id => sessionIds.has(id));
     const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
+    const sessionForPublish = materializeSessionForItems(session, items, fileName) || session;
+    const sourceOverlapIssues = findSourceProblemOverlaps(sessionForPublish.problems || [])
+      .filter(issue => issue.type === 'source_problem_bbox_overlap');
+    if (sourceOverlapIssues.length > 0) {
+      const firstIssue = sourceOverlapIssues[0];
+      setView('review');
+      showToast(
+        `문항 원본 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+      );
+      return;
+    }
     const placementOverlapIssues = findBoardPlacementOverlaps(items, { sessionProblemIds: sessionIds })
       .filter(issue => issue.type === 'board_placement_overlap');
     if (placementOverlapIssues.length > 0) {
@@ -4829,7 +4841,7 @@ function App(){
           order,
           excluded,
           placements,
-          session: materializeSessionForItems(session, items, fileName) || session,
+          session: sessionForPublish,
         }),
       });
       const json = await resp.json();

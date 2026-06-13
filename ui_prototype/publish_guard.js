@@ -11,6 +11,7 @@
   const PLACEMENT_SCALE_MAX = 1.6;
   const MIN_HEIGHT_PAGES = 0.12;
   const OVERLAP_TOLERANCE_PAGES = 0.01;
+  const SOURCE_BBOX_OVERLAP_RATIO = 0.65;
 
   function finiteNumber(value, fallback) {
     const number = Number(value);
@@ -43,6 +44,44 @@
 
   function problemTitleFor(item, fallback) {
     return String(item?.name || item?.title || item?.problemNumber || item?.problem_number || fallback || "").trim();
+  }
+
+  function sourcePageIdFor(item) {
+    return String(item?.sourcePageId || item?.source_page_id || item?.pageId || item?.page_id || "").trim();
+  }
+
+  function numberOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function bboxFor(item) {
+    const raw = item?.bbox || item?.sourceBbox || item?.source_bbox;
+    if (!raw || typeof raw !== "object") return null;
+    const left = numberOrNull(raw.left ?? raw.x);
+    const top = numberOrNull(raw.top ?? raw.y);
+    const width = numberOrNull(raw.width ?? raw.w);
+    const height = numberOrNull(raw.height ?? raw.h);
+    let right = numberOrNull(raw.right);
+    let bottom = numberOrNull(raw.bottom);
+    if (left === null || top === null) return null;
+    if (width !== null) right = left + width;
+    if (height !== null) bottom = top + height;
+    if (right === null || bottom === null || right <= left || bottom <= top) return null;
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+
+  function rounded(value) {
+    return Number(value.toFixed(6));
+  }
+
+  function bboxPayload(bbox) {
+    return {
+      left: rounded(bbox.left),
+      top: rounded(bbox.top),
+      width: rounded(bbox.width),
+      height: rounded(bbox.height),
+    };
   }
 
   function normalizeIdFilter(value) {
@@ -101,6 +140,62 @@
     return placements;
   }
 
+  function findSourceProblemOverlaps(problems, options = {}) {
+    const threshold = finiteNumber(options.overlapAreaRatio, SOURCE_BBOX_OVERLAP_RATIO);
+    const groups = new Map();
+    (Array.isArray(problems) ? problems : []).forEach((problem, index) => {
+      if (!problem || typeof problem !== "object") return;
+      const sourcePageId = sourcePageIdFor(problem);
+      const bbox = bboxFor(problem);
+      if (!sourcePageId || !bbox) return;
+      const group = groups.get(sourcePageId) || [];
+      group.push({ problem, bbox, index });
+      groups.set(sourcePageId, group);
+    });
+
+    const issues = [];
+    groups.forEach((group, sourcePageId) => {
+      group.sort((a, b) => (
+        a.bbox.top - b.bbox.top
+        || a.bbox.left - b.bbox.left
+        || String(problemIdFor(a.problem, a.index)).localeCompare(String(problemIdFor(b.problem, b.index)))
+      ));
+      for (let index = 0; index < group.length; index += 1) {
+        const current = group[index];
+        const currentArea = current.bbox.width * current.bbox.height;
+        if (currentArea <= 0) continue;
+        for (let nextIndex = index + 1; nextIndex < group.length; nextIndex += 1) {
+          const next = group[nextIndex];
+          const nextArea = next.bbox.width * next.bbox.height;
+          if (nextArea <= 0) continue;
+          const intersectionWidth = Math.max(0, Math.min(current.bbox.right, next.bbox.right) - Math.max(current.bbox.left, next.bbox.left));
+          const intersectionHeight = Math.max(0, Math.min(current.bbox.bottom, next.bbox.bottom) - Math.max(current.bbox.top, next.bbox.top));
+          const intersectionArea = intersectionWidth * intersectionHeight;
+          if (intersectionArea <= 0) continue;
+          const overlapAreaRatio = intersectionArea / Math.min(currentArea, nextArea);
+          if (overlapAreaRatio < threshold) continue;
+          const unionArea = currentArea + nextArea - intersectionArea;
+          issues.push({
+            type: "source_problem_bbox_overlap",
+            severity: "warning",
+            problemId: problemIdFor(current.problem, current.index),
+            problemTitle: problemTitleFor(current.problem, problemIdFor(current.problem, current.index)),
+            nextProblemId: problemIdFor(next.problem, next.index),
+            nextProblemTitle: problemTitleFor(next.problem, problemIdFor(next.problem, next.index)),
+            sourcePageId,
+            overlapAreaRatio: rounded(overlapAreaRatio),
+            intersectionOverUnion: unionArea > 0 ? rounded(intersectionArea / unionArea) : 0,
+            intersectionAreaPx: rounded(intersectionArea),
+            sourceBBoxOverlapThreshold: threshold,
+            bbox: bboxPayload(current.bbox),
+            nextBbox: bboxPayload(next.bbox),
+          });
+        }
+      }
+    });
+    return issues;
+  }
+
   function findBoardPlacementOverlaps(items, options = {}) {
     const tolerancePages = finiteNumber(options.tolerancePages, OVERLAP_TOLERANCE_PAGES);
     const placements = simulatedBoardPlacements(items, options);
@@ -127,6 +222,7 @@
 
   return {
     findBoardPlacementOverlaps,
+    findSourceProblemOverlaps,
     simulatedBoardPlacements,
   };
 });

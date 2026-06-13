@@ -982,6 +982,72 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("Handoff status: `needs_attention_before_classin`", markdown)
             self.assertIn("board_placement_overlap", markdown)
 
+    def test_classin_preflight_flags_source_problem_bbox_overlap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.hwp"
+            edb_path = root / "lesson.edb"
+            first_crop = root / "first.png"
+            second_crop = root / "second.png"
+            source.write_bytes(b"hwp")
+            edb_path.write_bytes(b"edb")
+            for path, label in ((first_crop, "21. first crop"), (second_crop, "22. overlapping crop")):
+                image = Image.new("RGB", (640, 260), "white")
+                draw = ImageDraw.Draw(image)
+                for line in range(10):
+                    draw.text((36, 28 + line * 22), f"{label} text line {line}", fill=(20, 20, 20))
+                image.save(path)
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 2,
+                    "supplemental_item_count": 0,
+                    "detected_problem_count": 2,
+                    "source_page_count": 1,
+                    "reviewSummary": {},
+                    "problems": [
+                        {
+                            "id": "p21",
+                            "title": "21.",
+                            "imagePath": first_crop.resolve().as_uri(),
+                            "sourcePageId": "page-001",
+                            "bbox": {"left": 40, "top": 100, "width": 520, "height": 320},
+                            "riskFlags": [],
+                            "reviewStatus": "normal",
+                        },
+                        {
+                            "id": "p22",
+                            "title": "22.",
+                            "imagePath": second_crop.resolve().as_uri(),
+                            "sourcePageId": "page-001",
+                            "bbox": {"left": 60, "top": 125, "width": 500, "height": 300},
+                            "riskFlags": [],
+                            "reviewStatus": "normal",
+                        },
+                    ],
+                },
+                summary={"record_count": 2, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=50),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            preflight = handoff["classinPreflight"]
+            overlap_issues = [
+                issue for issue in preflight["issues"] if issue["type"] == "source_problem_bbox_overlap"
+            ]
+            self.assertEqual("needs_attention_before_classin", handoff["status"])
+            self.assertFalse(handoff["readyForClassIn"])
+            self.assertEqual(1, len(overlap_issues))
+            self.assertEqual("p21", overlap_issues[0]["problemId"])
+            self.assertEqual("p22", overlap_issues[0]["nextProblemId"])
+            self.assertEqual("page-001", overlap_issues[0]["sourcePageId"])
+            self.assertGreaterEqual(overlap_issues[0]["overlapAreaRatio"], 0.8)
+            self.assertIn("source_problem_bbox_overlap", markdown)
+
     def test_korean_edb_filename_download_header_is_http_safe(self):
         header = content_disposition_attachment(
             "20260610_223707_1781098627053740000_고1_샘플_7f796ebe63.edb"
