@@ -86,6 +86,18 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("source_problem_bbox_overlap", risk_meta)
         self.assertIn("원본 영역 겹침", risk_meta)
 
+    def test_app_labels_passage_missing_child_preflight_issue(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
+        risk_meta = risk_meta.split("};", 1)[0]
+        preflight_meta = source.split("const CLASSIN_PREFLIGHT_ISSUE_LABELS = {", 1)[1]
+        preflight_meta = preflight_meta.split("};", 1)[0]
+
+        self.assertIn("passage_missing_child_questions", risk_meta)
+        self.assertIn("지문 하위 문항 누락", risk_meta)
+        self.assertIn("passage_missing_child_questions", preflight_meta)
+        self.assertIn("지문 하위 문항 누락", preflight_meta)
+
     def test_review_summary_surfaces_passage_group_source_reuse_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]

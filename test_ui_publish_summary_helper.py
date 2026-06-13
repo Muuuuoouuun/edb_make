@@ -186,12 +186,13 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
               classinPreflight: {
                 status: 'needs_attention',
                 passed: false,
-                issueCount: 4,
+                issueCount: 5,
                 issues: [
                   { type: 'source_problem_bbox_overlap', problemTitle: '21.', nextProblemTitle: '22.' },
                   { type: 'source_problem_bbox_overlap', problemTitle: '31.', nextProblemTitle: '32.' },
                   { type: 'board_placement_overlap', problemTitle: '33.', nextProblemTitle: '34.' },
                   { type: 'review_flags_remaining', problemTitle: '35.' },
+                  { type: 'passage_missing_child_questions', problemTitle: '31-34', missingChildProblemNumbers: [33] },
                 ],
               },
             });
@@ -208,7 +209,10 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (!labels.includes('검수 플래그 남음 1')) {
               throw new Error(`missing review flag count: ${labels}`);
             }
-            if (summary.classinPreflightIssueSummaryLabel !== '원본 영역 겹침 2 · 판서 배치 겹침 1 · 검수 플래그 남음 1') {
+            if (!labels.includes('지문 하위 문항 누락 1')) {
+              throw new Error(`missing passage child count: ${labels}`);
+            }
+            if (summary.classinPreflightIssueSummaryLabel !== '원본 영역 겹침 2 · 판서 배치 겹침 1 · 검수 플래그 남음 1 · 지문 하위 문항 누락 1') {
               throw new Error(`unexpected issue summary: ${summary.classinPreflightIssueSummaryLabel}`);
             }
             """
@@ -225,11 +229,12 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
               classinPreflight: {
                 status: 'blocked',
                 passed: false,
-                issueCount: 3,
+                issueCount: 4,
                 issues: [
                   { type: 'source_problem_bbox_overlap', problemTitle: '21.', nextProblemTitle: '22.' },
                   { type: 'source_problem_bbox_overlap', problemTitle: '31.', nextProblemTitle: '32.' },
                   { type: 'duplicate_problem_number', problemTitle: '7.' },
+                  { type: 'passage_missing_child_questions', problemTitle: '31-34', missingChildProblemNumbers: [33] },
                 ],
               },
               blockingProblemIds: ['p21', 'p22', 'p7-a'],
@@ -237,14 +242,17 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (!block || !block.blocked) {
               throw new Error('server rejection should normalize to a blocked payload');
             }
-            if (block.issueCount !== 3) {
+            if (block.issueCount !== 4) {
               throw new Error(`issue count not preserved: ${block.issueCount}`);
             }
-            if (block.issueSummaryLabel !== '원본 영역 겹침 2 · 중복 번호 1') {
+            if (block.issueSummaryLabel !== '원본 영역 겹침 2 · 중복 번호 1 · 지문 하위 문항 누락 1') {
               throw new Error(`unexpected issue summary: ${block.issueSummaryLabel}`);
             }
             if (!block.toastLabel.includes('원본 영역 겹침 2')) {
               throw new Error(`toast label missing issue summary: ${block.toastLabel}`);
+            }
+            if (!block.toastLabel.includes('지문 하위 문항 누락 1')) {
+              throw new Error(`toast label missing passage child summary: ${block.toastLabel}`);
             }
             if (JSON.stringify(block.blockingProblemIds) !== JSON.stringify(['p21', 'p22', 'p7-a'])) {
               throw new Error(`blocking problem ids not preserved: ${JSON.stringify(block.blockingProblemIds)}`);
