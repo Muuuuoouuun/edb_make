@@ -3416,6 +3416,10 @@ def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> l
                 if overlap_area_ratio < threshold:
                     continue
                 union_area = area + next_area - intersection_area
+                problem_ids = [
+                    str(problem.get("id") or problem.get("problem_id") or ""),
+                    str(next_problem.get("id") or next_problem.get("problem_id") or ""),
+                ]
                 issues.append(
                     _classin_preflight_issue(
                         "source_problem_bbox_overlap",
@@ -3426,10 +3430,12 @@ def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> l
                         ),
                         problem=problem,
                         details={
-                            "nextProblemId": str(next_problem.get("id") or next_problem.get("problem_id") or ""),
+                            "nextProblemId": problem_ids[1],
                             "nextProblemTitle": str(
                                 next_problem.get("title") or next_problem.get("problemNumber") or ""
                             ),
+                            "problemIds": problem_ids,
+                            "problem_ids": problem_ids,
                             "sourcePageId": source_page_id,
                             "overlapAreaRatio": round(overlap_area_ratio, 6),
                             "intersectionOverUnion": round(intersection_area / union_area, 6) if union_area > 0 else 0.0,
@@ -3495,6 +3501,10 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
                 if overlap_area_ratio < threshold:
                     continue
                 union_area = area + next_area - intersection_area
+                problem_ids = [
+                    str(problem.get("id") or problem.get("problem_id") or ""),
+                    str(next_problem.get("id") or next_problem.get("problem_id") or ""),
+                ]
                 issues.append(
                     _classin_preflight_issue(
                         "passage_group_source_reuse",
@@ -3505,10 +3515,12 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
                         ),
                         problem=problem,
                         details={
-                            "nextProblemId": str(next_problem.get("id") or next_problem.get("problem_id") or ""),
+                            "nextProblemId": problem_ids[1],
                             "nextProblemTitle": str(
                                 next_problem.get("title") or next_problem.get("problemNumber") or ""
                             ),
+                            "problemIds": problem_ids,
+                            "problem_ids": problem_ids,
                             "passageGroupId": group_id,
                             "sourcePageId": source_page_id,
                             "overlapAreaRatio": round(overlap_area_ratio, 6),

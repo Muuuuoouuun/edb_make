@@ -41,6 +41,9 @@ class TestUiPublishGuardHelper(unittest.TestCase):
             if (issue.problemId !== 'p21' || issue.nextProblemId !== 'p22') {
               throw new Error(`unexpected ids ${issue.problemId}/${issue.nextProblemId}`);
             }
+            if (JSON.stringify(issue.problemIds) !== JSON.stringify(['p21', 'p22'])) {
+              throw new Error(`missing focus problem ids ${JSON.stringify(issue.problemIds)}`);
+            }
             if (issue.sourcePageId !== 'page-001') {
               throw new Error(`unexpected page ${issue.sourcePageId}`);
             }
@@ -108,6 +111,9 @@ class TestUiPublishGuardHelper(unittest.TestCase):
             }
             if (issue.problemId !== 'p22' || issue.nextProblemId !== 'p23') {
               throw new Error(`unexpected ids ${issue.problemId}/${issue.nextProblemId}`);
+            }
+            if (JSON.stringify(issue.problemIds) !== JSON.stringify(['p22', 'p23'])) {
+              throw new Error(`missing focus problem ids ${JSON.stringify(issue.problemIds)}`);
             }
             if (!(issue.overlapAreaRatio >= 0.8)) {
               throw new Error(`expected high overlap ratio, got ${issue.overlapAreaRatio}`);

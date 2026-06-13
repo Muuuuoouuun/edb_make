@@ -5344,9 +5344,12 @@ function App(){
       .filter(issue => issue.type === 'passage_group_source_reuse');
     if (passageSourceReuseIssues.length > 0) {
       const firstIssue = passageSourceReuseIssues[0];
+      const focusProblemIds = Array.isArray(firstIssue.problemIds || firstIssue.problem_ids)
+        ? (firstIssue.problemIds || firstIssue.problem_ids)
+        : [firstIssue.problemId, firstIssue.nextProblemId];
       setReviewFocus({
         filter: 'all',
-        problemIds: [firstIssue.problemId, firstIssue.nextProblemId],
+        problemIds: focusProblemIds,
         source: 'passage-source-reuse-preflight',
       });
       setView('review');
@@ -5359,9 +5362,12 @@ function App(){
       .filter(issue => issue.type === 'source_problem_bbox_overlap');
     if (sourceOverlapIssues.length > 0) {
       const firstIssue = sourceOverlapIssues[0];
+      const focusProblemIds = Array.isArray(firstIssue.problemIds || firstIssue.problem_ids)
+        ? (firstIssue.problemIds || firstIssue.problem_ids)
+        : [firstIssue.problemId, firstIssue.nextProblemId];
       setReviewFocus({
         filter: 'all',
-        problemIds: [firstIssue.problemId, firstIssue.nextProblemId],
+        problemIds: focusProblemIds,
         source: 'source-overlap-preflight',
       });
       setView('review');

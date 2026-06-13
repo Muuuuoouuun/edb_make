@@ -184,13 +184,19 @@
           const overlapAreaRatio = intersectionArea / Math.min(currentArea, nextArea);
           if (overlapAreaRatio < threshold) continue;
           const unionArea = currentArea + nextArea - intersectionArea;
+          const problemIds = [
+            problemIdFor(current.problem, current.index),
+            problemIdFor(next.problem, next.index),
+          ];
           issues.push({
             type: "source_problem_bbox_overlap",
             severity: "warning",
-            problemId: problemIdFor(current.problem, current.index),
-            problemTitle: problemTitleFor(current.problem, problemIdFor(current.problem, current.index)),
-            nextProblemId: problemIdFor(next.problem, next.index),
-            nextProblemTitle: problemTitleFor(next.problem, problemIdFor(next.problem, next.index)),
+            problemId: problemIds[0],
+            problemTitle: problemTitleFor(current.problem, problemIds[0]),
+            nextProblemId: problemIds[1],
+            nextProblemTitle: problemTitleFor(next.problem, problemIds[1]),
+            problemIds,
+            problem_ids: problemIds,
             sourcePageId,
             overlapAreaRatio: rounded(overlapAreaRatio),
             intersectionOverUnion: unionArea > 0 ? rounded(intersectionArea / unionArea) : 0,
@@ -246,13 +252,19 @@
           const overlapAreaRatio = intersectionArea / Math.min(currentArea, nextArea);
           if (overlapAreaRatio < threshold) continue;
           const unionArea = currentArea + nextArea - intersectionArea;
+          const problemIds = [
+            problemIdFor(current.problem, current.index),
+            problemIdFor(next.problem, next.index),
+          ];
           issues.push({
             type: "passage_group_source_reuse",
             severity: "warning",
-            problemId: problemIdFor(current.problem, current.index),
-            problemTitle: problemTitleFor(current.problem, problemIdFor(current.problem, current.index)),
-            nextProblemId: problemIdFor(next.problem, next.index),
-            nextProblemTitle: problemTitleFor(next.problem, problemIdFor(next.problem, next.index)),
+            problemId: problemIds[0],
+            problemTitle: problemTitleFor(current.problem, problemIds[0]),
+            nextProblemId: problemIds[1],
+            nextProblemTitle: problemTitleFor(next.problem, problemIds[1]),
+            problemIds,
+            problem_ids: problemIds,
             passageGroupId: current.passageGroupId,
             sourcePageId: current.sourcePageId,
             overlapAreaRatio: rounded(overlapAreaRatio),

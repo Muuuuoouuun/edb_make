@@ -52,7 +52,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("findSourceProblemOverlaps", on_publish)
         self.assertIn("source_problem_bbox_overlap", on_publish)
-        self.assertIn("problemIds: [firstIssue.problemId, firstIssue.nextProblemId]", on_publish)
+        self.assertIn("firstIssue.problemIds || firstIssue.problem_ids", on_publish)
+        self.assertIn("problemIds: focusProblemIds", on_publish)
         self.assertIn("source: 'source-overlap-preflight'", on_publish)
         self.assertIn("문항 원본 영역이 겹칠 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
@@ -76,7 +77,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("findPassageGroupSourceReuse", on_publish)
         self.assertIn("passage_group_source_reuse", on_publish)
-        self.assertIn("problemIds: [firstIssue.problemId, firstIssue.nextProblemId]", on_publish)
+        self.assertIn("firstIssue.problemIds || firstIssue.problem_ids", on_publish)
+        self.assertIn("problemIds: focusProblemIds", on_publish)
         self.assertIn("source: 'passage-source-reuse-preflight'", on_publish)
         self.assertIn("긴 지문 그룹 안에서 원본 영역이 반복될 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
@@ -112,8 +114,8 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.jsx?v=passage-reuse-summary-20260614", html)
-        self.assertIn("publish_guard.js?v=passage-reuse-20260614", html)
+        self.assertIn("app.jsx?v=preflight-focus-20260614", html)
+        self.assertIn("publish_guard.js?v=preflight-focus-20260614", html)
 
 
 if __name__ == "__main__":
