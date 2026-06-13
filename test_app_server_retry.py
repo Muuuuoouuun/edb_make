@@ -509,6 +509,181 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertIn("board_placement_overlap", issue_types)
             entries.assert_not_called()
 
+    def test_session_publish_excludes_supplemental_passage_fragments_from_edb_entries(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            fragment_crop = root / "page-2-continuation.png"
+            p22_crop = root / "p22.png"
+            p23_crop = root / "p23.png"
+            for crop_path in (fragment_crop, p22_crop, p23_crop):
+                crop_path.write_bytes(b"fake image")
+
+            session = {
+                "session_name": "passage-fragment-publish",
+                "output_dir": str(root),
+                "input_files": [str(root / "source.hwp")],
+                "pages": [
+                    {"id": "page-2", "problemIds": ["page-2-continuation", "p22"]},
+                    {"id": "page-3", "problemIds": ["p23"]},
+                ],
+                "problems": [
+                    {
+                        "id": "page-2-continuation",
+                        "title": "지문 계속",
+                        "sourcePageId": "page-2",
+                        "subject": "korean",
+                        "imagePath": fragment_crop.resolve().as_uri(),
+                        "bbox": {"left": 10, "top": 20, "width": 520, "height": 420},
+                        "riskFlags": ["marker_document_continuation", "passage_cross_page_merge_check"],
+                        "passageGroupId": "hwp-continuation-passage-22-23",
+                        "passageRole": "passage_fragment",
+                        "passageRange": {"start": 22, "end": 23},
+                        "passageChildProblemNumbers": [22, 23],
+                        "passageSourcePageIds": ["page-2", "page-3"],
+                        "passageContinuesAcrossPages": True,
+                    },
+                    {
+                        "id": "p22",
+                        "title": "22.",
+                        "problemNumber": 22,
+                        "sourcePageId": "page-2",
+                        "subject": "korean",
+                        "imagePath": p22_crop.resolve().as_uri(),
+                        "bbox": {"left": 30, "top": 60, "width": 500, "height": 360},
+                        "passageGroupId": "hwp-continuation-passage-22-23",
+                        "passageRole": "child_question",
+                        "passageRange": {"start": 22, "end": 23},
+                        "passageChildProblemNumbers": [22, 23],
+                        "passageSourcePageIds": ["page-2", "page-3"],
+                        "passageContinuesAcrossPages": True,
+                    },
+                    {
+                        "id": "p23",
+                        "title": "23.",
+                        "problemNumber": 23,
+                        "sourcePageId": "page-3",
+                        "subject": "korean",
+                        "imagePath": p23_crop.resolve().as_uri(),
+                        "bbox": {"left": 30, "top": 430, "width": 500, "height": 220},
+                        "passageGroupId": "hwp-continuation-passage-22-23",
+                        "passageRole": "child_question",
+                        "passageRange": {"start": 22, "end": 23},
+                        "passageChildProblemNumbers": [22, 23],
+                        "passageSourcePageIds": ["page-2", "page-3"],
+                        "passageContinuesAcrossPages": True,
+                    },
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            def fake_build_records(entries, template, **_kwargs):
+                self.assertEqual(["p22", "p23"], [entry.problem_id for entry in entries])
+                return (
+                    [{"record": "p22"}, {"record": "p23"}],
+                    [
+                        {
+                            "problem_id": "p22",
+                            "title": "22.",
+                            "record_index": 0,
+                            "crop_path": str(p22_crop),
+                            "board_render_path": str(p22_crop),
+                            "start_y_pages": 0.0,
+                            "actual_height_pages": 1.0,
+                        },
+                        {
+                            "problem_id": "p23",
+                            "title": "23.",
+                            "record_index": 1,
+                            "crop_path": str(p23_crop),
+                            "board_render_path": str(p23_crop),
+                            "start_y_pages": 2.0,
+                            "actual_height_pages": 1.0,
+                        },
+                    ],
+                    0,
+                )
+
+            def fake_build_ui_session(**_kwargs):
+                return {
+                    "session_name": "published",
+                    "output_dir": str(root),
+                    "problems": [
+                        {
+                            "id": "p22",
+                            "title": "22.",
+                            "problemNumber": 22,
+                            "sourcePageId": "page-2",
+                            "imagePath": p22_crop.resolve().as_uri(),
+                            "bbox": {},
+                            "riskFlags": [],
+                        },
+                        {
+                            "id": "p23",
+                            "title": "23.",
+                            "problemNumber": 23,
+                            "sourcePageId": "page-3",
+                            "imagePath": p23_crop.resolve().as_uri(),
+                            "bbox": {},
+                            "riskFlags": [],
+                        },
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_handoff(output_dir, *, ui_session, **_kwargs):
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps(
+                        {
+                            "status": "ready_for_classin_review",
+                            "readyForClassIn": True,
+                            "classinPreflight": {"status": "passed", "passed": True, "issueCount": 0, "issues": []},
+                            "passageGroups": [
+                                {
+                                    "id": "hwp-continuation-passage-22-23",
+                                    "problemCount": 2,
+                                    "continuesAcrossPages": True,
+                                    "sourcePageIds": ["page-2", "page-3"],
+                                }
+                            ],
+                            "passageGroupCount": 1,
+                            "passageProblemCount": 2,
+                            "crossPagePassageGroupCount": 1,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "build_edb", return_value=b"edb"),
+                patch.object(app_server, "write_edb", side_effect=lambda path, data: Path(path).write_bytes(data)),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": 2,
+                    "recordCountActual": 2,
+                }),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
+                handler._handle_session_publish()
+
+            self.assertEqual(1, len(responses))
+            body, kwargs = responses[0]
+            self.assertTrue(body["ok"], body)
+            self.assertNotEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            summary = body["publishSummary"]
+            self.assertEqual(2, summary["recordCount"])
+            self.assertEqual(2, summary["coreProblemCount"])
+            self.assertEqual(1, summary["supplementalItemCount"])
+            self.assertEqual("2문항 + 자료 1", summary["recordCountLabel"])
+            self.assertEqual(["p22", "p23"], [problem["id"] for problem in handler.server.remembered_session["problems"]])
+
     def test_session_publish_allows_official_alternate_section_duplicate_numbers(self):
         problems = []
         for section_index, source_prefix in enumerate(("speech-writing", "language-media")):

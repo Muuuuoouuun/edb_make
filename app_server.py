@@ -589,7 +589,11 @@ def _duplicate_problem_number_group_issue(group: dict[str, Any]) -> dict[str, An
 
 
 def _session_publish_blocking_preflight(problems: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    checked_problems = [problem for problem in problems if isinstance(problem, dict)]
+    checked_problems = [
+        problem
+        for problem in problems
+        if isinstance(problem, dict) and not _session_problem_is_supplemental(problem)
+    ]
     duplicate_groups = [
         dict(group)
         for group in _session_duplicate_problem_number_groups(checked_problems)
@@ -1145,6 +1149,8 @@ def _open_system_target(target: Path) -> None:
 def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
     entries: list[ProblemEntry] = []
     for problem in problems:
+        if _session_problem_is_supplemental(problem):
+            continue
         crop_path = _file_uri_to_path(problem.get("imagePath"))
         board_render_path = _file_uri_to_path(problem.get("boardRenderPath")) or crop_path
         if crop_path is None or not crop_path.exists():
