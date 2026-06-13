@@ -4808,6 +4808,16 @@ function App(){
     const order = currentIds.filter(id => sessionIds.has(id));
     const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
     const sessionForPublish = materializeSessionForItems(session, items, fileName) || session;
+    const publishReviewSummary = sessionReviewSummary(sessionForPublish);
+    const duplicateProblemNumberGroups = Array.isArray(publishReviewSummary.duplicateProblemNumberGroups)
+      ? publishReviewSummary.duplicateProblemNumberGroups
+      : [];
+    if (duplicateProblemNumberGroups.length > 0) {
+      setView('review');
+      const duplicateLabel = publishReviewSummary.duplicateProblemNumberLabel || `${duplicateProblemNumberGroups.length}그룹`;
+      showToast(`중복 문항 번호가 있어 제작을 멈췄어요. ${duplicateLabel}`);
+      return;
+    }
     const sourceOverlapIssues = findSourceProblemOverlaps(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'source_problem_bbox_overlap');
     if (sourceOverlapIssues.length > 0) {
@@ -4828,7 +4838,6 @@ function App(){
       );
       return;
     }
-    const publishReviewSummary = sessionReviewSummary(session);
     const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary.actionableNeedsReviewCount) || 0);
     if (actionableNeedsReviewCount > 0) {
       const confirmedPublish = window.confirm(
