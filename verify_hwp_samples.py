@@ -40,6 +40,24 @@ CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES = {
     "source_problem_bbox_overlap",
     "unreadable_problem_image",
 }
+CLASSIN_PREFLIGHT_ISSUE_LABELS = {
+    "board_placement_overlap": "판서 배치 겹침",
+    "duplicate_problem_number": "중복 번호",
+    "low_ink_problem_image": "이미지 내용 부족",
+    "missing_problem_image": "문항 이미지 없음",
+    "passage_missing_child_questions": "지문 하위 문항 누락",
+    PASSAGE_GROUP_SOURCE_REUSE_FLAG: "지문 그룹 원본 중복",
+    "passage_review_queue_remaining": "긴 지문 검수 남음",
+    "review_flags_remaining": "검수 플래그 남음",
+    "small_problem_image": "문항 이미지 작음",
+    "source_problem_bbox_overlap": "원본 영역 겹침",
+    "unreadable_problem_image": "문항 이미지 흐림",
+}
+
+
+def classin_preflight_issue_label(issue_type: Any) -> str:
+    normalized = str(issue_type or "").strip()
+    return CLASSIN_PREFLIGHT_ISSUE_LABELS.get(normalized, normalized)
 
 
 def normalized_text(value: str | Path) -> str:
@@ -530,7 +548,7 @@ def format_classin_preflight_label(row: dict[str, Any]) -> str:
     if passage_reuse_count:
         parts.append(f"passage reuse {passage_reuse_count}")
     issue_types = [
-        str(issue_type or "").strip()
+        classin_preflight_issue_label(issue_type)
         for issue_type in (row.get("classin_preflight_issue_types") or row.get("classinPreflightIssueTypes") or [])
         if str(issue_type or "").strip()
     ]
@@ -1172,7 +1190,7 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     classin_preflight_part = ""
     if classin_preflight_expected:
         preflight_issue_label = ", ".join(
-            f"{item.get('type')}:{item.get('count')}"
+            f"{classin_preflight_issue_label(item.get('type'))}:{item.get('count')}"
             for item in (summary.get("top_classin_preflight_issue_types") or [])[:4]
             if item.get("type")
         ) or "-"
