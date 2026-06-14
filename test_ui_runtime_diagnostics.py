@@ -219,6 +219,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("crossPagePassageReviewItemCount", queue_helper)
         self.assertIn("passageReviewItems", summary_helper)
         self.assertIn("passageReviewLabel", summary_helper)
+        self.assertIn("passageReviewReasonLabel", review_stage)
+        self.assertIn("passageReviewReasonLabel", queue_helper)
+        self.assertIn("passageReviewReasonLabel", summary_helper)
 
     def test_review_summary_passage_review_chip_filters_only_queue_items(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -260,6 +263,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
                   numberLabel: '31-32',
                   problemIds: ['p31', 'p32'],
                   continuesAcrossPages: true,
+                  reviewReasonCodes: ['cross_page_passage_group', 'passage_missing_child_questions'],
                 },
               ],
               problems: [
@@ -329,6 +333,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
                   numberLabel: '31-32',
                   problemIds: ['p31', 'p32'],
                   continuesAcrossPages: true,
+                  reviewReasonCodes: ['cross_page_passage_group', 'passage_missing_child_questions'],
                 },
               ],
               problems: [
@@ -359,6 +364,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             }
             if (!summary.passageReviewLabel.includes('긴 지문 검수 1')) {
               throw new Error(`expected passage review label, got ${summary.passageReviewLabel}`);
+            }
+            if (summary.passageReviewReasonLabel !== '페이지 넘김 긴 지문, 지문 하위 문항 누락') {
+              throw new Error(`expected passage reason label, got ${summary.passageReviewReasonLabel}`);
             }
             """
         )

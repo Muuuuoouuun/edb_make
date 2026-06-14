@@ -688,12 +688,14 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                 title={[
                   '긴 지문 검수 큐',
                   reviewSummary.passageReviewLabel,
+                  reviewSummary.passageReviewReasonLabel,
                   reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
                 ].filter(Boolean).join(' · ')}
                 aria-pressed={reviewFilter === 'passage-review'}
                 onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
               >
                 {reviewSummary.passageReviewLabel}
+                {reviewSummary.passageReviewReasonLabel ? ` · ${reviewSummary.passageReviewReasonLabel}` : ''}
               </button>
             )}
             {reviewSummary.topRiskFlags.map(item => (
@@ -1716,6 +1718,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
         {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
         {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
         {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
+        {summary.passageReviewReasonLabel && <span title="긴 지문 검수 사유">{summary.passageReviewReasonLabel}</span>}
         {summary.passageGroupSourceReuseLabel && <span title="지문 원본 중복">{summary.passageGroupSourceReuseLabel}</span>}
         {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
       </div>
@@ -3028,10 +3031,25 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   source_problem_bbox_overlap: '원본 영역 겹침',
   unreadable_problem_image: '문항 이미지 흐림',
 };
+const PASSAGE_REVIEW_REASON_LABELS = {
+  cross_page_passage_group: '페이지 넘김 긴 지문',
+  hwp_text_fallback_problem: 'HWP 텍스트 fallback',
+  marker_document_continuation: '문서 이어짐 표시',
+  passage_cross_page_merge_check: '긴 지문 병합 확인',
+  passage_fragment: '이어짐 자료',
+  passage_group_source_reuse: '지문 그룹 원본 중복',
+  passage_missing_child_questions: '지문 하위 문항 누락',
+  source_problem_bbox_overlap: '원본 영역 겹침',
+};
 
 function classinPreflightIssueLabel(type){
   const normalized = String(type || '').trim();
   return CLASSIN_PREFLIGHT_ISSUE_LABELS[normalized] || normalized || '기타 주의';
+}
+
+function passageReviewReasonLabel(reason){
+  const normalized = String(reason || '').trim();
+  return PASSAGE_REVIEW_REASON_LABELS[normalized] || normalized;
 }
 
 function classinPreflightIssueLabels(preflight){
@@ -3586,6 +3604,29 @@ function passageReviewItemProblemIds(item){
     .filter(Boolean);
 }
 
+function passageReviewItemReasonCodes(item){
+  const rawCodes = Array.isArray(item?.reviewReasonCodes)
+    ? item.reviewReasonCodes
+    : Array.isArray(item?.review_reason_codes)
+      ? item.review_reason_codes
+      : [];
+  return rawCodes.map(code => String(code || '').trim()).filter(Boolean);
+}
+
+function passageReviewReasonSummary(items){
+  const seen = new Set();
+  const labels = [];
+  items.forEach(item => {
+    passageReviewItemReasonCodes(item).forEach(code => {
+      if (seen.has(code)) return;
+      seen.add(code);
+      const label = passageReviewReasonLabel(code);
+      if (label) labels.push(label);
+    });
+  });
+  return labels.join(', ');
+}
+
 function collectPassageReviewSummary(session, options = {}){
   const rawItems = Array.isArray(session?.passageReviewItems)
     ? session.passageReviewItems
@@ -3632,6 +3673,7 @@ function collectPassageReviewSummary(session, options = {}){
     .filter(Boolean)
     .slice(0, 5)
     .join(', ');
+  const passageReviewReasonLabel = passageReviewReasonSummary(unresolvedPassageReviewItems);
   const passageReviewProblemIds = Array.from(new Set(
     unresolvedPassageReviewItems.flatMap(item => passageReviewItemProblemIds(item))
   ));
@@ -3642,6 +3684,7 @@ function collectPassageReviewSummary(session, options = {}){
     crossPagePassageReviewItemCount,
     passageReviewLabel,
     passageReviewPreview,
+    passageReviewReasonLabel,
   };
 }
 
@@ -3808,6 +3851,7 @@ function sessionReviewSummary(session){
     crossPagePassageReviewItemCount: passageReviewSummary.crossPagePassageReviewItemCount,
     passageReviewLabel: passageReviewSummary.passageReviewLabel,
     passageReviewPreview: passageReviewSummary.passageReviewPreview,
+    passageReviewReasonLabel: passageReviewSummary.passageReviewReasonLabel,
   };
 }
 
@@ -3832,6 +3876,7 @@ function publishReviewWarningMessage(session, publishReviewSummary){
   const passageReviewLine = hasUnresolvedPassageReview
     ? [
       publishReviewSummary?.passageReviewLabel || `긴 지문 검수 ${passageReviewItemCount}`,
+      publishReviewSummary?.passageReviewReasonLabel || '',
       publishReviewSummary?.passageReviewPreview ? `대상 ${publishReviewSummary.passageReviewPreview}` : '',
     ].filter(Boolean).join(' · ')
     : '';
@@ -4029,6 +4074,11 @@ function normalizePublishSummary(raw, session = null){
       ].filter(Boolean).join(' · ')
       : '')
   ).trim();
+  const passageReviewReasonLabel = String(
+    raw.passageReviewReasonLabel
+    || raw.passage_review_reason_label
+    || passageReviewReasonSummary(passageReviewItems)
+  ).trim();
   const passageGroupSourceReuseGroupsRaw = raw.passageGroupSourceReuseGroups
     || raw.passage_group_source_reuse_groups
     || session?.passageGroupSourceReuseGroups
@@ -4106,6 +4156,7 @@ function normalizePublishSummary(raw, session = null){
     passageReviewItemCount: normalizedPassageReviewItemCount,
     crossPagePassageReviewItemCount: normalizedCrossPagePassageReviewItemCount,
     passageReviewLabel,
+    passageReviewReasonLabel,
     passageGroupSourceReuseGroups,
     passageGroupSourceReuseGroupCount: normalizedPassageGroupSourceReuseGroupCount,
     passageGroupSourceReuseLabel,

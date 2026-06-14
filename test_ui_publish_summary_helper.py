@@ -363,6 +363,36 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_labels_passage_review_reasons(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              passageReviewItems: [
+                {
+                  groupId: 'hwp-text-passage-31-34',
+                  numberLabel: '31-34',
+                  problemIds: ['p31', 'p32', 'p34'],
+                  continuesAcrossPages: true,
+                  reviewReasonCodes: [
+                    'cross_page_passage_group',
+                    'passage_missing_child_questions',
+                    'cross_page_passage_group',
+                  ],
+                },
+              ],
+            });
+            if (summary.passageReviewReasonLabel !== '페이지 넘김 긴 지문, 지문 하위 문항 누락') {
+              throw new Error(`unexpected passage reason label: ${summary.passageReviewReasonLabel}`);
+            }
+            if (summary.passageReviewLabel !== '긴 지문 검수 1 · 페이지 넘김 1') {
+              throw new Error(`unexpected passage review label: ${summary.passageReviewLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_passage_group_source_reuse(self) -> None:
         run_node(
             """

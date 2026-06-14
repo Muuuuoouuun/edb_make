@@ -23,6 +23,16 @@
     source_problem_bbox_overlap: "원본 영역 겹침",
     unreadable_problem_image: "문항 이미지 흐림",
   };
+  const PASSAGE_REVIEW_REASON_LABELS = {
+    cross_page_passage_group: "페이지 넘김 긴 지문",
+    hwp_text_fallback_problem: "HWP 텍스트 fallback",
+    marker_document_continuation: "문서 이어짐 표시",
+    passage_cross_page_merge_check: "긴 지문 병합 확인",
+    passage_fragment: "이어짐 자료",
+    passage_group_source_reuse: "지문 그룹 원본 중복",
+    passage_missing_child_questions: "지문 하위 문항 누락",
+    source_problem_bbox_overlap: "원본 영역 겹침",
+  };
 
   function classinPreflightIssueLabel(type) {
     const normalized = String(type || "").trim();
@@ -164,6 +174,37 @@
 
   function countCrossPagePassageReviewItems(items) {
     return items.filter(item => Boolean(item.continuesAcrossPages || item.continues_across_pages)).length;
+  }
+
+  function passageReviewReasonLabel(reason) {
+    const normalized = String(reason || "").trim();
+    return PASSAGE_REVIEW_REASON_LABELS[normalized] || normalized;
+  }
+
+  function passageReviewReasonCodes(items) {
+    const seen = new Set();
+    const codes = [];
+    items.forEach(item => {
+      const rawCodes = Array.isArray(item?.reviewReasonCodes)
+        ? item.reviewReasonCodes
+        : Array.isArray(item?.review_reason_codes)
+          ? item.review_reason_codes
+          : [];
+      rawCodes.forEach(code => {
+        const normalized = String(code || "").trim();
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        codes.push(normalized);
+      });
+    });
+    return codes;
+  }
+
+  function formatPassageReviewReasonLabel(items) {
+    return passageReviewReasonCodes(items)
+      .map(passageReviewReasonLabel)
+      .filter(Boolean)
+      .join(", ");
   }
 
   function formatPassageReviewLabel({ itemCount, crossPageCount }) {
@@ -346,6 +387,11 @@
         crossPageCount: crossPagePassageReviewItemCount,
       })
     ).trim();
+    const passageReviewReasonLabel = String(
+      raw.passageReviewReasonLabel
+      || raw.passage_review_reason_label
+      || formatPassageReviewReasonLabel(passageReviewItems)
+    ).trim();
     const passageGroupSourceReuseGroups = normalizePassageGroupSourceReuseGroups(raw, session);
     const passageGroupSourceReuseGroupCount = positiveNumber(
       raw.passageGroupSourceReuseGroupCount
@@ -399,6 +445,7 @@
       passageReviewItemCount,
       crossPagePassageReviewItemCount,
       passageReviewLabel,
+      passageReviewReasonLabel,
       passageGroupSourceReuseGroups,
       passageGroupSourceReuseGroupCount,
       passageGroupSourceReuseLabel,
