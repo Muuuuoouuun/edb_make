@@ -1719,6 +1719,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
         {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
         {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
         {summary.passageReviewReasonLabel && <span title="긴 지문 검수 사유">{summary.passageReviewReasonLabel}</span>}
+        {summary.sourceProblemOverlapLabel && <span title="원본 문제 영역 겹침">{summary.sourceProblemOverlapLabel}</span>}
         {summary.passageGroupSourceReuseLabel && <span title="지문 원본 중복">{summary.passageGroupSourceReuseLabel}</span>}
         {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
       </div>
@@ -4079,6 +4080,42 @@ function normalizePublishSummary(raw, session = null){
     || raw.passage_review_reason_label
     || passageReviewReasonSummary(passageReviewItems)
   ).trim();
+  const sourceProblemOverlapGroupsRaw = raw.sourceProblemOverlapGroups
+    || raw.source_problem_overlap_groups
+    || session?.sourceProblemOverlapGroups
+    || session?.source_problem_overlap_groups
+    || [];
+  const sourceProblemOverlapGroups = Array.isArray(sourceProblemOverlapGroupsRaw)
+    ? sourceProblemOverlapGroupsRaw.filter(group => group && typeof group === 'object')
+    : [];
+  const sourceProblemOverlapGroupCount = Number(
+    raw.sourceProblemOverlapGroupCount
+    ?? raw.source_problem_overlap_group_count
+    ?? session?.sourceProblemOverlapGroupCount
+    ?? session?.source_problem_overlap_group_count
+    ?? sourceProblemOverlapGroups.length
+  );
+  const normalizedSourceProblemOverlapGroupCount = Number.isFinite(sourceProblemOverlapGroupCount)
+    ? Math.max(0, sourceProblemOverlapGroupCount)
+    : 0;
+  const sourceProblemOverlapDetails = sourceProblemOverlapGroups
+    .map(group => {
+      const pageId = String(group?.sourcePageId || group?.source_page_id || '').trim();
+      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : '';
+      return [pageId, percent].filter(Boolean).join(' ');
+    })
+    .filter(Boolean)
+    .join(', ');
+  const sourceProblemOverlapLabel = String(
+    raw.sourceProblemOverlapLabel
+    || raw.source_problem_overlap_label
+    || (normalizedSourceProblemOverlapGroupCount > 0
+      ? [`원본 겹침 ${normalizedSourceProblemOverlapGroupCount}`, sourceProblemOverlapDetails]
+        .filter(Boolean)
+        .join(' · ')
+      : '')
+  ).trim();
   const passageGroupSourceReuseGroupsRaw = raw.passageGroupSourceReuseGroups
     || raw.passage_group_source_reuse_groups
     || session?.passageGroupSourceReuseGroups
@@ -4157,6 +4194,9 @@ function normalizePublishSummary(raw, session = null){
     crossPagePassageReviewItemCount: normalizedCrossPagePassageReviewItemCount,
     passageReviewLabel,
     passageReviewReasonLabel,
+    sourceProblemOverlapGroups,
+    sourceProblemOverlapGroupCount: normalizedSourceProblemOverlapGroupCount,
+    sourceProblemOverlapLabel,
     passageGroupSourceReuseGroups,
     passageGroupSourceReuseGroupCount: normalizedPassageGroupSourceReuseGroupCount,
     passageGroupSourceReuseLabel,

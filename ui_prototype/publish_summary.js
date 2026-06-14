@@ -214,6 +214,28 @@
     return parts.join(" · ");
   }
 
+  function normalizeSourceProblemOverlapGroups(raw, session = null) {
+    const groups = raw?.sourceProblemOverlapGroups
+      || raw?.source_problem_overlap_groups
+      || session?.sourceProblemOverlapGroups
+      || session?.source_problem_overlap_groups
+      || [];
+    return Array.isArray(groups)
+      ? groups.filter(group => group && typeof group === "object")
+      : [];
+  }
+
+  function formatSourceProblemOverlapLabel({ groupCount, groups }) {
+    if (groupCount <= 0) return "";
+    const details = groups.map(group => {
+      const pageId = String(group?.sourcePageId || group?.source_page_id || "").trim();
+      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : "";
+      return [pageId, percent].filter(Boolean).join(" ");
+    }).filter(Boolean);
+    return [`원본 겹침 ${groupCount}`, details.join(", ")].filter(Boolean).join(" · ");
+  }
+
   function normalizePassageGroupSourceReuseGroups(raw, session = null) {
     const groups = raw?.passageGroupSourceReuseGroups
       || raw?.passage_group_source_reuse_groups
@@ -392,6 +414,22 @@
       || raw.passage_review_reason_label
       || formatPassageReviewReasonLabel(passageReviewItems)
     ).trim();
+    const sourceProblemOverlapGroups = normalizeSourceProblemOverlapGroups(raw, session);
+    const sourceProblemOverlapGroupCount = positiveNumber(
+      raw.sourceProblemOverlapGroupCount
+      ?? raw.source_problem_overlap_group_count
+      ?? session?.sourceProblemOverlapGroupCount
+      ?? session?.source_problem_overlap_group_count
+      ?? sourceProblemOverlapGroups.length
+    );
+    const sourceProblemOverlapLabel = String(
+      raw.sourceProblemOverlapLabel
+      || raw.source_problem_overlap_label
+      || formatSourceProblemOverlapLabel({
+        groupCount: sourceProblemOverlapGroupCount,
+        groups: sourceProblemOverlapGroups,
+      })
+    ).trim();
     const passageGroupSourceReuseGroups = normalizePassageGroupSourceReuseGroups(raw, session);
     const passageGroupSourceReuseGroupCount = positiveNumber(
       raw.passageGroupSourceReuseGroupCount
@@ -446,6 +484,9 @@
       crossPagePassageReviewItemCount,
       passageReviewLabel,
       passageReviewReasonLabel,
+      sourceProblemOverlapGroups,
+      sourceProblemOverlapGroupCount,
+      sourceProblemOverlapLabel,
       passageGroupSourceReuseGroups,
       passageGroupSourceReuseGroupCount,
       passageGroupSourceReuseLabel,
@@ -494,6 +535,7 @@
     formatRecordCountLabel,
     formatPublishTime,
     formatPassageGroupLabel,
+    formatSourceProblemOverlapLabel,
     formatPassageGroupSourceReuseLabel,
     normalizePublishSummary,
   };

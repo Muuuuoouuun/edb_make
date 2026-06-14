@@ -422,6 +422,34 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_source_problem_overlap(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              edbFileUri: '/api/file?path=lesson',
+              sourceProblemOverlapGroups: [
+                {
+                  sourcePageId: 'page-004',
+                  problemIds: ['p31', 'p32'],
+                  overlapAreaRatio: 0.88,
+                },
+              ],
+              sourceProblemOverlapGroupCount: 1,
+            });
+            if (summary.sourceProblemOverlapGroupCount !== 1) {
+              throw new Error(`source overlap count not normalized: ${summary.sourceProblemOverlapGroupCount}`);
+            }
+            if (summary.sourceProblemOverlapGroups[0].sourcePageId !== 'page-004') {
+              throw new Error('source overlap groups not preserved');
+            }
+            if (summary.sourceProblemOverlapLabel !== '원본 겹침 1 · page-004 88%') {
+              throw new Error(`unexpected source overlap label: ${summary.sourceProblemOverlapLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_summary_counts_passage_children_without_fragments(self) -> None:
         run_node(
             """

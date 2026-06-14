@@ -553,6 +553,32 @@ def _passage_review_reason_summary(items: list[dict[str, Any]]) -> str:
     )
 
 
+def _source_problem_overlap_label(
+    groups: list[dict[str, Any]],
+    *,
+    group_count: int | None = None,
+) -> str:
+    count = max(0, int(group_count if group_count is not None else len(groups)))
+    if count <= 0:
+        return ""
+    details: list[str] = []
+    for group in groups:
+        page_id = str(group.get("sourcePageId") or group.get("source_page_id") or "").strip()
+        raw_ratio = group.get("overlapAreaRatio", group.get("overlap_area_ratio", 0))
+        try:
+            ratio = float(raw_ratio)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        percent = f"{int(ratio * 100 + 0.5)}%" if ratio > 0 else ""
+        detail = " ".join(part for part in (page_id, percent) if part)
+        if detail:
+            details.append(detail)
+    parts = [f"원본 겹침 {count}"]
+    if details:
+        parts.append(", ".join(details))
+    return " · ".join(parts)
+
+
 def _path_exists(value: Any, *, directory: bool = False) -> bool:
     path = decode_file_reference(str(value)) if value else None
     if path is None:
@@ -621,6 +647,42 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
             )
     annotated["passageReviewReasonLabel"] = passage_review_reason_label
     annotated["passage_review_reason_label"] = passage_review_reason_label
+    source_problem_overlap_groups = annotated.get("sourceProblemOverlapGroups")
+    if not isinstance(source_problem_overlap_groups, list):
+        source_problem_overlap_groups = annotated.get("source_problem_overlap_groups")
+    normalized_source_problem_overlap_groups = [
+        dict(group)
+        for group in (source_problem_overlap_groups or [])
+        if isinstance(group, dict)
+    ]
+    raw_source_problem_overlap_group_count = (
+        annotated.get("sourceProblemOverlapGroupCount")
+        if annotated.get("sourceProblemOverlapGroupCount") is not None
+        else annotated.get("source_problem_overlap_group_count")
+    )
+    if (
+        isinstance(raw_source_problem_overlap_group_count, (int, float, str))
+        and str(raw_source_problem_overlap_group_count).isdigit()
+    ):
+        source_problem_overlap_group_count = int(raw_source_problem_overlap_group_count)
+    else:
+        source_problem_overlap_group_count = len(normalized_source_problem_overlap_groups)
+    source_problem_overlap_label = str(
+        annotated.get("sourceProblemOverlapLabel")
+        or annotated.get("source_problem_overlap_label")
+        or ""
+    ).strip()
+    if not source_problem_overlap_label:
+        source_problem_overlap_label = _source_problem_overlap_label(
+            normalized_source_problem_overlap_groups,
+            group_count=source_problem_overlap_group_count,
+        )
+    annotated["sourceProblemOverlapGroups"] = normalized_source_problem_overlap_groups
+    annotated["source_problem_overlap_groups"] = normalized_source_problem_overlap_groups
+    annotated["sourceProblemOverlapGroupCount"] = max(0, source_problem_overlap_group_count)
+    annotated["source_problem_overlap_group_count"] = annotated["sourceProblemOverlapGroupCount"]
+    annotated["sourceProblemOverlapLabel"] = source_problem_overlap_label
+    annotated["source_problem_overlap_label"] = source_problem_overlap_label
     return annotated
 
 
@@ -874,6 +936,8 @@ def _session_publish_summary(
     cross_page_passage_review_item_count: int | None = None,
     passage_group_source_reuse_groups: list[dict[str, Any]] | None = None,
     passage_group_source_reuse_group_count: int | None = None,
+    source_problem_overlap_groups: list[dict[str, Any]] | None = None,
+    source_problem_overlap_group_count: int | None = None,
     published_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_edb_path = Path(edb_path).resolve()
@@ -937,6 +1001,17 @@ def _session_publish_summary(
     ]
     if passage_group_source_reuse_group_count is None:
         passage_group_source_reuse_group_count = len(normalized_passage_group_source_reuse_groups)
+    normalized_source_problem_overlap_groups = [
+        dict(group)
+        for group in (source_problem_overlap_groups or [])
+        if isinstance(group, dict)
+    ]
+    if source_problem_overlap_group_count is None:
+        source_problem_overlap_group_count = len(normalized_source_problem_overlap_groups)
+    source_problem_overlap_label = _source_problem_overlap_label(
+        normalized_source_problem_overlap_groups,
+        group_count=source_problem_overlap_group_count,
+    )
     handoff_status, ready_for_classin = _classin_handoff_readiness(resolved_classin_handoff_path)
     if ready_for_classin is None and handoff_status:
         ready_for_classin = handoff_status == "ready_for_classin_review"
@@ -972,6 +1047,9 @@ def _session_publish_summary(
         "passageReviewReasonLabel": passage_review_reason_label,
         "passageGroupSourceReuseGroups": normalized_passage_group_source_reuse_groups,
         "passageGroupSourceReuseGroupCount": max(0, int(passage_group_source_reuse_group_count or 0)),
+        "sourceProblemOverlapGroups": normalized_source_problem_overlap_groups,
+        "sourceProblemOverlapGroupCount": max(0, int(source_problem_overlap_group_count or 0)),
+        "sourceProblemOverlapLabel": source_problem_overlap_label,
         "edbFileExists": resolved_edb_path.is_file(),
         "outputDirExists": resolved_output_dir.is_dir(),
         "recordCount": int(record_count or record_count_actual),
@@ -1012,6 +1090,9 @@ def _session_publish_summary(
         "passage_review_reason_label": summary["passageReviewReasonLabel"],
         "passage_group_source_reuse_groups": summary["passageGroupSourceReuseGroups"],
         "passage_group_source_reuse_group_count": summary["passageGroupSourceReuseGroupCount"],
+        "source_problem_overlap_groups": summary["sourceProblemOverlapGroups"],
+        "source_problem_overlap_group_count": summary["sourceProblemOverlapGroupCount"],
+        "source_problem_overlap_label": summary["sourceProblemOverlapLabel"],
         "edb_file_exists": summary["edbFileExists"],
         "output_dir_exists": summary["outputDirExists"],
         "record_count": summary["recordCount"],
@@ -3174,6 +3255,25 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if passage_group_source_reuse_group_count is not None:
                 break
 
+        source_problem_overlap_groups = None
+        for source in (handoff_payload, new_session):
+            for key in ("sourceProblemOverlapGroups", "source_problem_overlap_groups"):
+                value = source.get(key)
+                if isinstance(value, list):
+                    source_problem_overlap_groups = value
+                    break
+            if source_problem_overlap_groups is not None:
+                break
+        source_problem_overlap_group_count = None
+        for source in (handoff_payload, new_session):
+            for key in ("sourceProblemOverlapGroupCount", "source_problem_overlap_group_count"):
+                value = source.get(key)
+                if isinstance(value, (int, float, str)) and str(value).isdigit():
+                    source_problem_overlap_group_count = int(value)
+                    break
+            if source_problem_overlap_group_count is not None:
+                break
+
         publish_summary = _session_publish_summary(
             edb_path=edb_path,
             output_dir=output_dir,
@@ -3226,6 +3326,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             ),
             passage_group_source_reuse_groups=passage_group_source_reuse_groups,
             passage_group_source_reuse_group_count=passage_group_source_reuse_group_count,
+            source_problem_overlap_groups=source_problem_overlap_groups,
+            source_problem_overlap_group_count=source_problem_overlap_group_count,
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
