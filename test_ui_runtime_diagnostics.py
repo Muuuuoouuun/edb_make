@@ -510,6 +510,21 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (missingChildTarget.reviewFocus?.problemIds?.join(',') !== 'p31,p32,p34') {
               throw new Error(`expected missing child focus ids, got ${missingChildTarget.reviewFocus?.problemIds}`);
             }
+            const missingChildBlock = sandbox.normalizePublishPreflightBlock({
+              errorKind: 'publish_preflight_blocked',
+              classinPreflight: {
+                status: 'blocked',
+                passed: false,
+                issueCount: 1,
+                issues: [{ type: 'passage_missing_child_questions', problemIds: ['p31', 'p32', 'p34'] }],
+              },
+            });
+            if (!missingChildBlock.toastLabel.includes('제작 전 확인')) {
+              throw new Error(`expected generic fallback message, got ${missingChildBlock.toastLabel}`);
+            }
+            if (missingChildBlock.toastLabel.includes('겹침/중복')) {
+              throw new Error(`fallback message should not narrow missing child blocks: ${missingChildBlock.toastLabel}`);
+            }
             const boardTarget = sandbox.publishBlockedTarget({ issueTypes: ['board_placement_overlap'] });
             if (boardTarget.view !== 'board' || boardTarget.reviewFocus !== null) {
               throw new Error(`expected board-only target, got ${JSON.stringify(boardTarget)}`);

@@ -612,6 +612,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertFalse(body["ok"])
             self.assertEqual("publish_preflight_blocked", body["errorKind"])
             self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            self.assertIn("제작 전 확인", body["error"])
+            self.assertNotIn("겹침/중복", body["error"])
             issues = body["classinPreflight"]["issues"]
             issue_types = {issue["type"] for issue in issues}
             self.assertIn("passage_review_queue_remaining", issue_types)

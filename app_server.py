@@ -787,7 +787,7 @@ def _session_publish_preflight_blocked_payload(
                 blocking_problem_ids.append(problem_id)
     return {
         "ok": False,
-        "error": "ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB publish를 중단했습니다.",
+        "error": "ClassIn 사전점검에서 제작 전 확인 문제가 발견되어 EDB publish를 중단했습니다.",
         "errorKind": "publish_preflight_blocked",
         "error_kind": "publish_preflight_blocked",
         "classinPreflight": preflight,

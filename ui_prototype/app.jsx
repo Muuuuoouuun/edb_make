@@ -3091,7 +3091,7 @@ function normalizePublishPreflightBlock(raw){
   ));
   const message = String(
     raw.error
-    || 'ClassIn 사전점검에서 겹침/중복 문제가 발견되어 EDB 제작을 중단했습니다.'
+    || 'ClassIn 사전점검에서 제작 전 확인 문제가 발견되어 EDB 제작을 중단했습니다.'
   ).trim();
   return {
     blocked: true,

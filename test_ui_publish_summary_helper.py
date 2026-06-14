@@ -286,6 +286,12 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (!block.toastLabel.includes('긴 지문 검수 남음 1')) {
               throw new Error(`toast label missing passage review queue summary: ${block.toastLabel}`);
             }
+            if (!block.toastLabel.includes('제작 전 확인')) {
+              throw new Error(`toast label should use generic preflight fallback message: ${block.toastLabel}`);
+            }
+            if (block.toastLabel.includes('겹침/중복')) {
+              throw new Error(`toast label should not narrow passage review blocks to overlap/duplicate issues: ${block.toastLabel}`);
+            }
             """
         )
 
