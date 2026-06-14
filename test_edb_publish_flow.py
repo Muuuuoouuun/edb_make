@@ -2188,6 +2188,13 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("pages: page-5, page-6", markdown)
             self.assertIn("missing: 33", markdown)
             self.assertIn("cross_page_passage_group", markdown)
+            self.assertIn(
+                "reasons: 페이지 넘김 긴 지문 (`cross_page_passage_group`), "
+                "이어짐 자료 (`passage_fragment`), "
+                "지문 하위 문항 누락 (`passage_missing_child_questions`), "
+                "긴 지문 병합 확인 (`passage_cross_page_merge_check`)",
+                markdown,
+            )
 
     def test_classin_preflight_flags_missing_passage_child_questions(self):
         with tempfile.TemporaryDirectory() as tmp:

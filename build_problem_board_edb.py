@@ -114,6 +114,16 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
+PASSAGE_REVIEW_REASON_LABELS = {
+    "cross_page_passage_group": "페이지 넘김 긴 지문",
+    "hwp_text_fallback_problem": "HWP 텍스트 fallback",
+    "marker_document_continuation": "문서 이어짐 표시",
+    "passage_cross_page_merge_check": "긴 지문 병합 확인",
+    "passage_fragment": "이어짐 자료",
+    "passage_group_source_reuse": "지문 그룹 원본 중복",
+    "passage_missing_child_questions": "지문 하위 문항 누락",
+    "source_problem_bbox_overlap": "원본 영역 겹침",
+}
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
 # Brightness above this value (0-255) is treated as a light background that
@@ -3383,6 +3393,17 @@ def _classin_preflight_issue_label(issue_type: object) -> str:
     return CLASSIN_PREFLIGHT_ISSUE_LABELS.get(normalized, normalized)
 
 
+def _passage_review_reason_label(reason: object) -> str:
+    normalized = str(reason or "").strip()
+    return PASSAGE_REVIEW_REASON_LABELS.get(normalized, normalized)
+
+
+def _format_passage_review_reason(reason: object) -> str:
+    normalized = str(reason or "").strip()
+    label = _passage_review_reason_label(normalized)
+    return f"{label} (`{normalized}`)" if normalized and label != normalized else normalized
+
+
 def _problem_float(problem: dict[str, Any], *keys: str) -> float | None:
     for key in keys:
         value = _coerce_float(problem.get(key))
@@ -4380,7 +4401,14 @@ def write_classin_handoff_manifest(
             if not isinstance(item, dict):
                 continue
             label = str(item.get("numberLabel") or item.get("groupId") or "").strip()
-            reasons = ", ".join(str(reason) for reason in item.get("reviewReasonCodes") or [])
+            reasons = ", ".join(
+                formatted
+                for formatted in (
+                    _format_passage_review_reason(reason)
+                    for reason in item.get("reviewReasonCodes") or []
+                )
+                if formatted
+            )
             problem_ids = ", ".join(_ordered_unique_strings(item.get("problemIds") or item.get("problem_ids") or []))
             fragment_ids = ", ".join(
                 _ordered_unique_strings(item.get("fragmentProblemIds") or item.get("fragment_problem_ids") or [])

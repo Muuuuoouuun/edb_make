@@ -56,11 +56,26 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "source_problem_bbox_overlap": "원본 영역 겹침",
     "unreadable_problem_image": "문항 이미지 흐림",
 }
+PASSAGE_REVIEW_REASON_LABELS = {
+    "cross_page_passage_group": "페이지 넘김 긴 지문",
+    "hwp_text_fallback_problem": "HWP 텍스트 fallback",
+    "marker_document_continuation": "문서 이어짐 표시",
+    "passage_cross_page_merge_check": "긴 지문 병합 확인",
+    "passage_fragment": "이어짐 자료",
+    "passage_group_source_reuse": "지문 그룹 원본 중복",
+    "passage_missing_child_questions": "지문 하위 문항 누락",
+    "source_problem_bbox_overlap": "원본 영역 겹침",
+}
 
 
 def classin_preflight_issue_label(issue_type: Any) -> str:
     normalized = str(issue_type or "").strip()
     return CLASSIN_PREFLIGHT_ISSUE_LABELS.get(normalized, normalized)
+
+
+def passage_review_reason_label(reason: Any) -> str:
+    normalized = str(reason or "").strip()
+    return PASSAGE_REVIEW_REASON_LABELS.get(normalized, normalized)
 
 
 def normalized_text(value: str | Path) -> str:
@@ -1223,17 +1238,25 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     passage_group_source_reuse_count = _coerce_non_negative_int(summary.get("passage_group_source_reuse_count"))
     passage_group_count = _coerce_non_negative_int(summary.get("passage_group_count"))
     passage_review_item_count = _coerce_non_negative_int(summary.get("passage_review_item_count"))
+    passage_review_reason_summary = ", ".join(
+        f"{passage_review_reason_label(item.get('reason'))}:{item.get('count')}"
+        for item in (summary.get("top_passage_review_reasons") or [])[:4]
+        if item.get("reason")
+    )
     passage_part = ""
-    if passage_group_count or passage_group_source_reuse_count or passage_review_item_count:
-        passage_part = (
+    if passage_group_count or passage_group_source_reuse_count or passage_review_item_count or passage_review_reason_summary:
+        passage_parts = [
             f"passage groups {passage_group_count} · "
             f"passage questions {_coerce_non_negative_int(summary.get('passage_problem_count'))} · "
             f"fragments {_coerce_non_negative_int(summary.get('passage_fragment_count'))} · "
             f"cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_group_count'))} · "
-            f"review {passage_review_item_count} · "
-            f"review cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_review_item_count'))} · "
-            f"passage reuse {passage_group_source_reuse_count} · "
-        )
+            f"review {passage_review_item_count} · ",
+            f"review cross-page {_coerce_non_negative_int(summary.get('cross_page_passage_review_item_count'))} · ",
+        ]
+        if passage_review_reason_summary:
+            passage_parts.append(f"review reasons {passage_review_reason_summary} · ")
+        passage_parts.append(f"passage reuse {passage_group_source_reuse_count} · ")
+        passage_part = "".join(passage_parts)
     return (
         "Batch summary: "
         f"samples {summary.get('ok_count', 0)}/{summary.get('sample_count', 0)} OK · "

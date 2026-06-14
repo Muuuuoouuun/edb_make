@@ -1273,6 +1273,10 @@ class TestVerifyHwpSamples(unittest.TestCase):
             "top_classin_preflight_issue_types": [
                 {"type": "board_placement_overlap", "count": 2},
             ],
+            "top_passage_review_reasons": [
+                {"reason": "passage_fragment", "count": 2},
+                {"reason": "cross_page_passage_group", "count": 1},
+            ],
         }
 
         text = verify_hwp_samples.format_batch_summary(summary)
@@ -1288,6 +1292,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertIn("preflight 7/8", text)
         self.assertIn("blocking 2", text)
         self.assertIn("preflight issues 판서 배치 겹침:2", text)
+        self.assertIn("review reasons 이어짐 자료:2, 페이지 넘김 긴 지문:1", text)
         self.assertIn("top risk problem_per_block:8", text)
         self.assertIn("actionable problem_per_block:8", text)
 
