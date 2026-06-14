@@ -3119,6 +3119,11 @@ function publishBlockedTarget(blockedPublish){
     'source_problem_bbox_overlap',
     'duplicate_problem_number',
     'passage_group_source_reuse',
+    'passage_missing_child_questions',
+  ];
+  const passageReviewIssueTypes = [
+    'passage_review_queue_remaining',
+    'passage_missing_child_questions',
   ];
   const topLevelProblemIds = Array.isArray(blockedPublish?.blockingProblemIds)
     ? blockedPublish.blockingProblemIds
@@ -3142,7 +3147,7 @@ function publishBlockedTarget(blockedPublish){
   const onlyBoardPlacement = issueTypes.length > 0
     && issueTypes.every(type => type === 'board_placement_overlap');
   if (onlyBoardPlacement) return { view: 'board', reviewFocus: null };
-  if (issueTypes.includes('passage_review_queue_remaining')) {
+  if (issueTypes.some(type => passageReviewIssueTypes.includes(type))) {
     return {
       view: 'review',
       reviewFocus: {

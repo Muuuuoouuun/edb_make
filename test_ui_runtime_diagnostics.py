@@ -492,6 +492,24 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (passageTarget.reviewFocus?.problemIds?.join(',') !== 'p31,p32,p31-fragment') {
               throw new Error(`expected passage ids focus, got ${passageTarget.reviewFocus?.problemIds}`);
             }
+            const missingChildTarget = sandbox.publishBlockedTarget({
+              issueTypes: ['passage_missing_child_questions'],
+              classinPreflight: {
+                issues: [
+                  {
+                    type: 'passage_missing_child_questions',
+                    problemIds: ['p31', 'p32', 'p34'],
+                    missingChildProblemNumbers: [33],
+                  },
+                ],
+              },
+            });
+            if (missingChildTarget.reviewFocus?.filter !== 'passage-review') {
+              throw new Error(`expected missing child passage-review filter, got ${missingChildTarget.reviewFocus?.filter}`);
+            }
+            if (missingChildTarget.reviewFocus?.problemIds?.join(',') !== 'p31,p32,p34') {
+              throw new Error(`expected missing child focus ids, got ${missingChildTarget.reviewFocus?.problemIds}`);
+            }
             const boardTarget = sandbox.publishBlockedTarget({ issueTypes: ['board_placement_overlap'] });
             if (boardTarget.view !== 'board' || boardTarget.reviewFocus !== null) {
               throw new Error(`expected board-only target, got ${JSON.stringify(boardTarget)}`);
