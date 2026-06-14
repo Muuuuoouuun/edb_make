@@ -1208,7 +1208,11 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                     "sourcePageIds": ["page-5", "page-6"],
                     "problemCount": 2,
                     "continuesAcrossPages": True,
-                    "reviewReasonCodes": ["cross_page_passage_group"],
+                    "reviewReasonCodes": [
+                        "cross_page_passage_group",
+                        "passage_missing_child_questions",
+                        "cross_page_passage_group",
+                    ],
                 }
             ]
 
@@ -1233,6 +1237,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(1, summary["passage_review_item_count"])
             self.assertEqual(1, summary["crossPagePassageReviewItemCount"])
             self.assertEqual(1, summary["cross_page_passage_review_item_count"])
+            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passageReviewReasonLabel"])
+            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passage_review_reason_label"])
 
 
 class TestRuntimeDiagnostics(unittest.TestCase):
@@ -1479,6 +1485,42 @@ class TestSessionHistory(unittest.TestCase):
             self.assertFalse(summary["readyForClassIn"])
             self.assertEqual("needs_attention_before_classin", summary["classin_handoff_status"])
             self.assertFalse(summary["ready_for_classin"])
+
+    def test_public_session_history_backfills_passage_review_reason_label(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = {
+                "session_name": "긴 지문 제작본",
+                "generated_at": "2026-06-13T12:00:00+09:00",
+                "output_dir": str(root),
+                "problems": [{"id": "p31"}, {"id": "p32"}],
+                "publishSummary": {
+                    "edbFileName": "lesson.edb",
+                    "edbPath": str(root / "lesson.edb"),
+                    "outputDir": str(root),
+                    "passageReviewItems": [
+                        {
+                            "numberLabel": "31-32",
+                            "problemIds": ["p31", "p32"],
+                            "reviewReasonCodes": [
+                                "cross_page_passage_group",
+                                "passage_missing_child_questions",
+                            ],
+                        }
+                    ],
+                },
+            }
+            history = app_server._session_history_with_session(
+                [],
+                session,
+                updated_at="2026-06-13T12:00:00+09:00",
+            )
+
+            public = app_server._public_session_history(history)
+
+            summary = public[0]["publishSummary"]
+            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passageReviewReasonLabel"])
+            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passage_review_reason_label"])
 
 
 class TestSystemOpenTargets(unittest.TestCase):

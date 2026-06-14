@@ -28,6 +28,7 @@ from build_mvp_export import run_export
 from build_problem_board_edb import (
     DEFAULT_BOARD_THEME,
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+    PASSAGE_REVIEW_REASON_LABELS,
     ProblemEntry,
     _classin_board_placement_overlap_issues,
     _classin_passage_group_source_reuse_issues,
@@ -519,6 +520,39 @@ def _passage_group_problem_count(group: dict[str, Any]) -> int:
     return max(0, raw_count - fragment_count)
 
 
+def _passage_review_reason_label(reason: Any) -> str:
+    normalized = str(reason or "").strip()
+    return PASSAGE_REVIEW_REASON_LABELS.get(normalized, normalized)
+
+
+def _passage_review_reason_codes(items: list[dict[str, Any]]) -> list[str]:
+    codes: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        values = item.get("reviewReasonCodes")
+        if not isinstance(values, list):
+            values = item.get("review_reason_codes")
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            code = str(value or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            codes.append(code)
+    return codes
+
+
+def _passage_review_reason_summary(items: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        label
+        for label in (_passage_review_reason_label(code) for code in _passage_review_reason_codes(items))
+        if label
+    )
+
+
 def _path_exists(value: Any, *, directory: bool = False) -> bool:
     path = decode_file_reference(str(value)) if value else None
     if path is None:
@@ -574,6 +608,19 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
     annotated["classin_handoff_markdown_uri"] = annotated["classinHandoffMarkdownUri"]
     annotated["classin_handoff_status"] = annotated["classinHandoffStatus"]
     annotated["ready_for_classin"] = annotated["readyForClassIn"]
+    passage_review_reason_label = str(
+        annotated.get("passageReviewReasonLabel")
+        or annotated.get("passage_review_reason_label")
+        or ""
+    ).strip()
+    if not passage_review_reason_label:
+        passage_review_items = annotated.get("passageReviewItems") or annotated.get("passage_review_items")
+        if isinstance(passage_review_items, list):
+            passage_review_reason_label = _passage_review_reason_summary(
+                [item for item in passage_review_items if isinstance(item, dict)]
+            )
+    annotated["passageReviewReasonLabel"] = passage_review_reason_label
+    annotated["passage_review_reason_label"] = passage_review_reason_label
     return annotated
 
 
@@ -882,6 +929,7 @@ def _session_publish_summary(
             for item in normalized_passage_review_items
             if item.get("continuesAcrossPages") or item.get("continues_across_pages")
         )
+    passage_review_reason_label = _passage_review_reason_summary(normalized_passage_review_items)
     normalized_passage_group_source_reuse_groups = [
         dict(group)
         for group in (passage_group_source_reuse_groups or [])
@@ -921,6 +969,7 @@ def _session_publish_summary(
         "passageReviewItems": normalized_passage_review_items,
         "passageReviewItemCount": max(0, int(passage_review_item_count or 0)),
         "crossPagePassageReviewItemCount": max(0, int(cross_page_passage_review_item_count or 0)),
+        "passageReviewReasonLabel": passage_review_reason_label,
         "passageGroupSourceReuseGroups": normalized_passage_group_source_reuse_groups,
         "passageGroupSourceReuseGroupCount": max(0, int(passage_group_source_reuse_group_count or 0)),
         "edbFileExists": resolved_edb_path.is_file(),
@@ -960,6 +1009,7 @@ def _session_publish_summary(
         "passage_review_items": summary["passageReviewItems"],
         "passage_review_item_count": summary["passageReviewItemCount"],
         "cross_page_passage_review_item_count": summary["crossPagePassageReviewItemCount"],
+        "passage_review_reason_label": summary["passageReviewReasonLabel"],
         "passage_group_source_reuse_groups": summary["passageGroupSourceReuseGroups"],
         "passage_group_source_reuse_group_count": summary["passageGroupSourceReuseGroupCount"],
         "edb_file_exists": summary["edbFileExists"],
