@@ -2256,6 +2256,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([33], missing_issues[0]["missing_child_problem_numbers"])
             self.assertEqual(["p31", "p32", "p34"], missing_issues[0]["problemIds"])
             self.assertIn("passage_missing_child_questions", markdown)
+            self.assertIn("지문 하위 문항 누락", markdown)
 
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2325,6 +2326,9 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("small_problem_image", markdown)
             self.assertIn("missing_problem_image", markdown)
             self.assertIn("low_ink_problem_image", markdown)
+            self.assertIn("문항 이미지 작음", markdown)
+            self.assertIn("문항 이미지 없음", markdown)
+            self.assertIn("이미지 내용 부족", markdown)
 
     def test_classin_preflight_ignores_nonactionable_continuation_review_flags(self):
         with tempfile.TemporaryDirectory() as tmp:

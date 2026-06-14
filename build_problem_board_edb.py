@@ -100,6 +100,19 @@ CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
     "fallback_grouping",
     "marker_document_continuation",
 }
+CLASSIN_PREFLIGHT_ISSUE_LABELS = {
+    "board_placement_overlap": "판서 배치 겹침",
+    "duplicate_problem_number": "중복 번호",
+    "low_ink_problem_image": "이미지 내용 부족",
+    "missing_problem_image": "문항 이미지 없음",
+    "passage_group_source_reuse": "지문 그룹 원본 중복",
+    "passage_missing_child_questions": "지문 하위 문항 누락",
+    "passage_review_queue_remaining": "긴 지문 검수 남음",
+    "review_flags_remaining": "검수 플래그 남음",
+    "small_problem_image": "문항 이미지 작음",
+    "source_problem_bbox_overlap": "원본 영역 겹침",
+    "unreadable_problem_image": "문항 이미지 흐림",
+}
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
@@ -3365,6 +3378,11 @@ def _classin_preflight_issue(
     return issue
 
 
+def _classin_preflight_issue_label(issue_type: object) -> str:
+    normalized = str(issue_type or "").strip()
+    return CLASSIN_PREFLIGHT_ISSUE_LABELS.get(normalized, normalized)
+
+
 def _problem_float(problem: dict[str, Any], *keys: str) -> float | None:
     for key in keys:
         value = _coerce_float(problem.get(key))
@@ -4387,7 +4405,7 @@ def write_classin_handoff_manifest(
         preflight_lines = ["- OK: no automatic asset issues found."]
     else:
         preflight_lines = [
-            f"- `{issue['type']}` ({issue['severity']}): {issue['message']}"
+            f"- {_classin_preflight_issue_label(issue.get('type'))} (`{issue['type']}`, {issue['severity']}): {issue['message']}"
             + (f" [{issue.get('problemId')}]" if issue.get("problemId") else "")
             for issue in classin_preflight["issues"]
         ]
