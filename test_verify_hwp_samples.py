@@ -370,6 +370,50 @@ class TestVerifyHwpSamples(unittest.TestCase):
         )
         self.assertTrue(summary["needs_review"])
 
+    def test_summarize_export_response_counts_explicit_blocking_preflight_issues(self):
+        payload = {
+            "ok": False,
+            "classinPreflight": {
+                "passed": False,
+                "status": "blocked",
+                "issues": [
+                    {"type": "duplicate_problem_number", "blocking": True},
+                    {"type": "passage_review_queue_remaining", "blocking": True},
+                    {"type": "passage_missing_child_questions", "blocking": True},
+                ],
+            },
+            "session": {
+                "pages": [],
+                "problems": [],
+                "reviewSummary": {},
+            },
+        }
+
+        summary = verify_hwp_samples.summarize_export_response(
+            payload,
+            source_path=Path("blocking.hwp"),
+            subject="국어",
+            output_dir=Path("out"),
+            elapsed_s=0.1,
+            expect_edb=False,
+        )
+
+        self.assertEqual(3, summary["classin_preflight_issue_count"])
+        self.assertEqual(3, summary["classin_preflight_blocking_issue_count"])
+        self.assertTrue(summary["needs_review"])
+
+    def test_classin_preflight_blocking_issue_count_treats_publish_guard_types_as_blocking(self):
+        row = {
+            "classin_preflight_issue_types": [
+                "duplicate_problem_number",
+                "passage_review_queue_remaining",
+                "passage_missing_child_questions",
+                "review_flags_remaining",
+            ],
+        }
+
+        self.assertEqual(3, verify_hwp_samples.classin_preflight_blocking_issue_count(row))
+
     def test_summarize_export_response_counts_session_passage_group_source_reuse(self):
         payload = {
             "ok": True,

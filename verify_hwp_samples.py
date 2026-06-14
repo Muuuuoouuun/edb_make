@@ -33,9 +33,12 @@ SOURCE_PROBLEM_BBOX_OVERLAP_FLAG = "source_problem_bbox_overlap"
 PASSAGE_GROUP_SOURCE_REUSE_FLAG = "passage_group_source_reuse"
 CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES = {
     "board_placement_overlap",
+    "duplicate_problem_number",
     "low_ink_problem_image",
     "missing_problem_image",
+    "passage_missing_child_questions",
     PASSAGE_GROUP_SOURCE_REUSE_FLAG,
+    "passage_review_queue_remaining",
     "small_problem_image",
     "source_problem_bbox_overlap",
     "unreadable_problem_image",
@@ -484,6 +487,10 @@ def _classin_preflight_blocking_issue_count(preflight: dict[str, Any]) -> int:
     count = 0
     for issue in issues:
         if not isinstance(issue, dict):
+            continue
+        if "blocking" in issue:
+            if _coerce_bool(issue.get("blocking")):
+                count += 1
             continue
         issue_type = str(issue.get("type") or "").strip()
         if issue_type in CLASSIN_PREFLIGHT_BLOCKING_ISSUE_TYPES:
