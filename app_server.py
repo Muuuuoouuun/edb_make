@@ -2435,6 +2435,149 @@ def _coerce_problem_ids(problem_ids: Any) -> list[str]:
     return ids
 
 
+MANUAL_CROP_RATIO_KEYS = {
+    "leftRatio": ("leftRatio", "left", "cropLeftRatio", "crop_left_ratio"),
+    "rightRatio": ("rightRatio", "right", "cropRightRatio", "crop_right_ratio"),
+    "topRatio": ("topRatio", "top", "cropTopRatio", "crop_top_ratio"),
+    "bottomRatio": ("bottomRatio", "bottom", "cropBottomRatio", "crop_bottom_ratio"),
+}
+MANUAL_CROP_EDGE_MAX = 0.45
+
+
+def _coerce_manual_crop_ratios(raw_crop: Any) -> dict[str, float]:
+    crop = raw_crop if isinstance(raw_crop, dict) else {}
+    ratios: dict[str, float] = {}
+    for target_key, aliases in MANUAL_CROP_RATIO_KEYS.items():
+        raw_value = None
+        for alias in aliases:
+            if alias in crop:
+                raw_value = crop.get(alias)
+                break
+        try:
+            value = float(raw_value if raw_value is not None else 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        ratios[target_key] = max(0.0, min(MANUAL_CROP_EDGE_MAX, value))
+    if ratios["leftRatio"] + ratios["rightRatio"] >= 0.92:
+        raise ValueError("left/right crop is too large")
+    if ratios["topRatio"] + ratios["bottomRatio"] >= 0.92:
+        raise ValueError("top/bottom crop is too large")
+    return ratios
+
+
+def _bbox_from_problem(problem: dict[str, Any], *, prefer_crop_base: bool = False) -> Box:
+    raw_bbox = problem.get("cropBaseBbox") if prefer_crop_base else None
+    if not isinstance(raw_bbox, dict):
+        raw_bbox = problem.get("bbox") or {}
+    left = float(raw_bbox.get("left", 0.0))
+    top = float(raw_bbox.get("top", 0.0))
+    width = float(raw_bbox.get("width", 0.0))
+    height = float(raw_bbox.get("height", 0.0))
+    if width <= 0 or height <= 0:
+        raise ValueError("problem bbox is empty")
+    return Box(left=left, top=top, width=width, height=height)
+
+
+def _bbox_with_manual_crop(base: Box, crop: dict[str, float]) -> Box:
+    left_trim = base.width * crop["leftRatio"]
+    right_trim = base.width * crop["rightRatio"]
+    top_trim = base.height * crop["topRatio"]
+    bottom_trim = base.height * crop["bottomRatio"]
+    width = base.width - left_trim - right_trim
+    height = base.height - top_trim - bottom_trim
+    if width < 1 or height < 1:
+        raise ValueError("manual crop leaves the problem too small")
+    return Box(
+        left=base.left + left_trim,
+        top=base.top + top_trim,
+        width=width,
+        height=height,
+    )
+
+
+def _manual_crop_is_empty(crop: dict[str, float]) -> bool:
+    return all(value <= 0.0001 for value in crop.values())
+
+
+def _crop_image_by_ratios(source_path: Path, crop: dict[str, float], output_path: Path) -> tuple[int, int]:
+    from PIL import Image
+
+    with Image.open(source_path) as image:
+        if image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+            image = image.convert("RGBA")
+        width, height = image.size
+        left = int(round(width * crop["leftRatio"]))
+        right = int(round(width * (1.0 - crop["rightRatio"])))
+        top = int(round(height * crop["topRatio"]))
+        bottom = int(round(height * (1.0 - crop["bottomRatio"])))
+        left = max(0, min(width - 1, left))
+        top = max(0, min(height - 1, top))
+        right = max(left + 1, min(width, right))
+        bottom = max(top + 1, min(height, bottom))
+        cropped = image.crop((left, top, right, bottom))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cropped.save(output_path)
+        return cropped.size
+
+
+def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dict[str, Any]:
+    _index, problem = _find_problem(session, problem_id)
+    crop = _coerce_manual_crop_ratios(raw_crop)
+    if "cropBaseBbox" not in problem:
+        base_bbox = _bbox_from_problem(problem)
+        problem["cropBaseBbox"] = {
+            "left": base_bbox.left,
+            "top": base_bbox.top,
+            "width": base_bbox.width,
+            "height": base_bbox.height,
+        }
+        problem["cropBaseImagePath"] = problem.get("imagePath")
+        problem["cropBaseBoardRenderPath"] = problem.get("boardRenderPath") or problem.get("imagePath")
+    else:
+        base_bbox = _bbox_from_problem(problem, prefer_crop_base=True)
+
+    next_bbox = _bbox_with_manual_crop(base_bbox, crop)
+    base_image_path = _resolve_session_path(problem.get("cropBaseImagePath") or problem.get("imagePath"))
+    base_board_path = _resolve_session_path(
+        problem.get("cropBaseBoardRenderPath")
+        or problem.get("boardRenderPath")
+        or problem.get("cropBaseImagePath")
+        or problem.get("imagePath")
+    )
+    if base_image_path is None or not base_image_path.exists():
+        raise FileNotFoundError(f"problem image missing for {problem_id}: {base_image_path}")
+    if base_board_path is None or not base_board_path.exists():
+        base_board_path = base_image_path
+
+    crop_dir = _crop_dir_for_session(session)
+    if _manual_crop_is_empty(crop):
+        raw_uri = base_image_path.resolve().as_uri()
+        board_uri = base_board_path.resolve().as_uri()
+    else:
+        raw_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop")
+        _crop_image_by_ratios(base_image_path, crop, raw_crop_path)
+        raw_uri = raw_crop_path.resolve().as_uri()
+        if base_board_path == base_image_path:
+            board_uri = raw_uri
+        else:
+            board_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop_board")
+            _crop_image_by_ratios(base_board_path, crop, board_crop_path)
+            board_uri = board_crop_path.resolve().as_uri()
+
+    problem["imagePath"] = raw_uri
+    problem["boardRenderPath"] = board_uri
+    problem["bbox"] = {
+        "left": next_bbox.left,
+        "top": next_bbox.top,
+        "width": next_bbox.width,
+        "height": next_bbox.height,
+    }
+    problem["manualCrop"] = crop
+    problem["manual_crop"] = crop
+    _refresh_session_problem_counts(session)
+    return session
+
+
 def _mutate_exclude_many(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]:
     ids = _coerce_problem_ids(problem_ids)
     if not ids:
@@ -3422,7 +3565,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         })
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "exclude", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "exclude", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
@@ -3450,6 +3593,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 ids_raw = payload.get("problemIds") or payload.get("problem_ids") or []
                 problem_ids = [str(pid) for pid in ids_raw if pid]
                 new_session = _mutate_merge(session, problem_ids)
+            elif action in {"crop", "manual-crop", "manual_crop"}:
+                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                raw_crop = payload.get("crop")
+                if raw_crop is None:
+                    raw_crop = payload.get("manualCrop")
+                if raw_crop is None:
+                    raw_crop = payload.get("manual_crop")
+                if raw_crop is None:
+                    raw_crop = payload
+                new_session = _mutate_crop(session, problem_id, raw_crop)
             elif action == "exclude":
                 ids_raw = payload.get("problemIds", payload.get("problem_ids"))
                 if ids_raw is not None:
@@ -3463,7 +3616,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|exclude|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|exclude|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return

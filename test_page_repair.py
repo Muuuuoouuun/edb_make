@@ -165,6 +165,92 @@ class TestPageRepairConfig(unittest.TestCase):
         self.assertTrue(any("gemini-3.1-pro-preview" in url for url in urls))
         self.assertTrue(any("gemini-2.5-pro" in url for url in urls))
 
+    def test_repair_uses_fallback_model_cache_before_api_key_check(self):
+        repair_payload = {
+            "problem_start_block_ids": ["block-1"],
+            "choice_block_ids": [],
+            "figure_block_ids": [],
+            "display_titles": [{"block_id": "block-1", "title": "1."}],
+            "notes": ["cached"],
+        }
+
+        class FallbackOnlyCache:
+            def __init__(self):
+                self.models = []
+
+            def load_ai_repair(self, *, page, provider, model, trigger_reasons):
+                self.models.append(model)
+                if model == page_repair.FALLBACK_GEMINI_REPAIR_MODEL:
+                    return repair_payload, "cached-response"
+                return None
+
+        prepared_page = PreparedPage(
+            page_id="page-1",
+            source_path="sample.png",
+            page_number=1,
+            image=Image.new("RGB", (100, 120), "white"),
+            original_size=(100, 120),
+        )
+        page = PageModel(
+            page_id="page-1",
+            width_px=100,
+            height_px=120,
+            subject=Subject.SCIENCE,
+            blocks=[
+                ContentBlock(
+                    block_id="block-1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=0, top=0, width=80, height=40),
+                    reading_order=0,
+                    text="1. 문제",
+                )
+            ],
+        )
+        cache = FallbackOnlyCache()
+
+        with patch.dict(page_repair.os.environ, {}, clear=True):
+            repaired = page_repair.repair_page_model(
+                prepared_page,
+                page,
+                ocr_mode="none",
+                config=build_ai_fallback_config(mode="force"),
+                cache=cache,
+            )
+
+        summary = repaired.metadata["ai_fallback"]
+        self.assertEqual(
+            [
+                page_repair.DEFAULT_GEMINI_REPAIR_MODEL,
+                page_repair.FALLBACK_GEMINI_REPAIR_MODEL,
+            ],
+            cache.models,
+        )
+        self.assertTrue(summary["cache_hit"])
+        self.assertTrue(summary["applied"])
+        self.assertEqual("cached-response", summary["response_id"])
+        self.assertEqual(page_repair.FALLBACK_GEMINI_REPAIR_MODEL, summary["model_used"])
+        self.assertEqual("page_repair", summary["stage"])
+        self.assertEqual("3단계 문항 경계 보정", summary["stage_label"])
+        self.assertEqual("fallback_model_cache_hit", summary["model_fallback"]["reason"])
+        self.assertEqual(
+            {
+                "stage": "page_repair",
+                "order": 3,
+                "label": "3단계 문항 경계 보정",
+                "status": "cache_hit",
+                "provider": "gemini",
+                "model": page_repair.DEFAULT_GEMINI_REPAIR_MODEL,
+                "model_used": page_repair.FALLBACK_GEMINI_REPAIR_MODEL,
+                "enabled": True,
+                "attempted": False,
+                "applied": True,
+                "cache_hit": True,
+                "route": "ai_patch",
+                "route_tier": "red",
+            },
+            repaired.metadata["ai_stages"]["page_repair"],
+        )
+
     def test_repair_prompt_prioritizes_all_problem_starts_on_busy_pages(self):
         page = PageModel(
             page_id="page-1",

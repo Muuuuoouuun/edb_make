@@ -181,6 +181,54 @@ class TestSessionExcludeMutation(unittest.TestCase):
         self.assertEqual(["p2"], [problem["id"] for problem in remembered["problems"]])
 
 
+class TestSessionCropMutation(unittest.TestCase):
+    def test_manual_crop_updates_bbox_image_and_can_reset(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source_path = tmpdir / "problem.png"
+            Image.new("RGB", (200, 120), "white").save(source_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{"id": "page-1", "problemIds": ["p1"]}],
+                "problems": [{
+                    "id": "p1",
+                    "sourcePageId": "page-1",
+                    "imagePath": source_path.resolve().as_uri(),
+                    "boardRenderPath": source_path.resolve().as_uri(),
+                    "bbox": {"left": 10, "top": 20, "width": 100, "height": 80},
+                }],
+            }
+
+            cropped_session = app_server._mutate_crop(
+                session,
+                "p1",
+                {"leftRatio": 0.1, "rightRatio": 0.2, "topRatio": 0.25, "bottomRatio": 0.05},
+            )
+
+            problem = cropped_session["problems"][0]
+            self.assertEqual({"left": 10.0, "top": 20.0, "width": 100.0, "height": 80.0}, problem["cropBaseBbox"])
+            self.assertEqual({"leftRatio": 0.1, "rightRatio": 0.2, "topRatio": 0.25, "bottomRatio": 0.05}, problem["manualCrop"])
+            self.assertEqual(20.0, problem["bbox"]["left"])
+            self.assertEqual(40.0, problem["bbox"]["top"])
+            self.assertEqual(70.0, problem["bbox"]["width"])
+            self.assertEqual(56.0, problem["bbox"]["height"])
+            crop_path = app_server._resolve_session_path(problem["imagePath"])
+            self.assertIsNotNone(crop_path)
+            self.assertTrue(crop_path.exists())
+            self.assertEqual((140, 84), Image.open(crop_path).size)
+
+            reset_session = app_server._mutate_crop(cropped_session, "p1", {"leftRatio": 0})
+            reset_problem = reset_session["problems"][0]
+            self.assertEqual({"left": 10.0, "top": 20.0, "width": 100.0, "height": 80.0}, reset_problem["bbox"])
+            self.assertEqual(source_path.resolve().as_uri(), reset_problem["imagePath"])
+            self.assertEqual(
+                {"leftRatio": 0.0, "rightRatio": 0.0, "topRatio": 0.0, "bottomRatio": 0.0},
+                reset_problem["manualCrop"],
+            )
+
+
 class TestExportErrorPayload(unittest.TestCase):
     def test_hangul_conversion_error_includes_recovery_steps(self):
         payload = app_server._export_error_payload(

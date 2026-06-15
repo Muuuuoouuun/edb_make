@@ -6,11 +6,7 @@ def test_pdf_text_marker_blocks_skip_backend_ocr(monkeypatch, tmp_path):
     from preprocess import PreparedPage
     from structured_schema import Subject
 
-    class ExplodingBackend:
-        engine_name = "gemini"
-
-        def recognize(self, image):
-            raise AssertionError("trusted PDF marker block should not call OCR")
+    backend_factory_calls = []
 
     source = tmp_path / "page.png"
     Image.new("RGB", (600, 800), "white").save(source)
@@ -31,7 +27,11 @@ def test_pdf_text_marker_blocks_skip_backend_ocr(monkeypatch, tmp_path):
             ],
         },
     )
-    monkeypatch.setattr(pipeline, "create_ocr_backend", lambda _mode: ExplodingBackend())
+    def fail_if_backend_is_created(mode):
+        backend_factory_calls.append(mode)
+        raise AssertionError("trusted PDF marker page should not create OCR backend")
+
+    monkeypatch.setattr(pipeline, "create_ocr_backend", fail_if_backend_is_created)
 
     page = pipeline.build_page_model(
         prepared,
@@ -44,6 +44,9 @@ def test_pdf_text_marker_blocks_skip_backend_ocr(monkeypatch, tmp_path):
     assert page.blocks[0].text == "1."
     assert page.blocks[0].metadata["ocr_skipped_reason"] == "trusted_pdf_text_marker"
     assert page.blocks[0].metadata["ocr_backend"] == "pdf_text_marker"
+    assert backend_factory_calls == []
+    assert page.metadata["ai_stages"]["ocr"]["status"] == "skipped"
+    assert page.metadata["ai_stages"]["ocr"]["skipped_block_count"] == 1
 
 
 def test_marker_like_block_uses_backend_when_page_segmenter_is_not_pdf_markers(monkeypatch, tmp_path):
@@ -362,11 +365,17 @@ def test_build_page_model_passes_stable_cache_identity_to_primary_and_escalated_
     )
 
     assert page.blocks[0].text == "escalated"
+    assert page.blocks[0].metadata["ocr_stage"] == "primary_ocr"
+    assert page.blocks[0].metadata["ocr_escalation_attempted"] is True
     assert [call[0] for call in cache.load_calls] == ["primary_ocr", "gemini_escalated"]
     assert [call[0] for call in cache.save_calls] == ["primary_ocr", "gemini_escalated"]
     assert all(call[1] is not None for call in cache.load_calls + cache.save_calls)
     assert cache.load_calls[0][1] == cache.save_calls[0][1]
     assert cache.load_calls[1][1] == cache.save_calls[1][1]
+    assert page.metadata["ai_stages"]["ocr"]["status"] == "used"
+    assert page.metadata["ai_stages"]["ocr"]["api_call_block_count"] == 1
+    assert page.metadata["ai_stages"]["ocr_escalation"]["attempted_block_count"] == 1
+    assert page.metadata["ai_stages"]["ocr_escalation"]["applied_block_count"] == 1
 
 
 def test_block_worker_count_defaults_and_env_override(monkeypatch):
@@ -618,3 +627,5 @@ def test_page_model_records_recognition_timing_metadata_before_repair(
     assert metadata["ocr_cache_hit_count"] == 0
     assert metadata["ocr_cache_miss_count"] == 1
     assert metadata["ocr_escalated_block_count"] == 0
+    assert metadata["ai_stages"]["ocr"]["label"] == "1단계 OCR 인식"
+    assert metadata["ai_stages"]["ocr_escalation"]["label"] == "2단계 블록 보강"

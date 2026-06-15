@@ -217,7 +217,10 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
         for block in text_blocks
         if (block.text and block.text.strip())
         and block.metadata.get("segmenter") == "pdf-text-markers"
-        and block.metadata.get("problem_number_source") == "pdf_text_marker"
+        and (
+            block.metadata.get("problem_number_source") == "pdf_text_marker"
+            or block.metadata.get("ocr_backend") == "pdf_text_marker"
+        )
     )
     cache_hits = sum(1 for block in page.blocks if block.metadata.get("ocr_cache_hit"))
     cache_misses = sum(1 for block in page.blocks if block.metadata.get("ocr_cache_miss"))
@@ -271,6 +274,7 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
     choice_marker_count = sum(1 for block in page.blocks if block.metadata.get("choice_marker"))
     marker_conflict_count = sum(1 for block in page.blocks if block.metadata.get("marker_conflict"))
     fallback_grouping_problem_count = sum(1 for problem in page.problems if problem.metadata.get("fallback_grouping"))
+    fallback_stats_used = bool(fallback_stats.get("used"))
     excess_marker_block_count_blocks = sum(
         1
         for block in page.blocks
@@ -312,7 +316,7 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
         ),
         "fallback_grouping_problem_count": int(
             metadata.get("fallback_grouping_problem_count")
-            or fallback_stats.get("problem_count")
+            or (fallback_stats.get("problem_count") if fallback_stats_used else 0)
             or fallback_grouping_problem_count
         ),
         "problem_number_source_counts": metadata.get("problem_number_source_counts") or problem_number_source_counts,
@@ -391,9 +395,12 @@ def _score_grouping(diagnostics: dict[str, Any], page: PageModel) -> tuple[float
     marker_sources = diagnostics.get("problem_number_source_counts")
     marker_sources = marker_sources if isinstance(marker_sources, dict) else {}
     pdf_marker_problem_count = int(marker_sources.get("pdf_text_marker") or 0)
+    pdf_text_prefix_problem_count = int(marker_sources.get("text_prefix") or 0)
     trusted_pdf_marker_grouping = (
         str(diagnostics.get("segmenter") or "") == "pdf-text-markers"
-        and pdf_marker_problem_count >= max(problem_count, 1)
+        and marker_conflict_count == 0
+        and problem_marker_count >= max(problem_count, 1)
+        and (pdf_marker_problem_count + pdf_text_prefix_problem_count) >= max(problem_count, 1)
     )
 
     if block_count > 1 and problem_marker_count == 0 and not trusted_pdf_marker_grouping:
@@ -402,7 +409,7 @@ def _score_grouping(diagnostics: dict[str, Any], page: PageModel) -> tuple[float
     if marker_conflict_count > 0:
         score += 0.48
         reasons.append("marker_conflicts")
-    if fallback_grouping_problem_count > 0:
+    if fallback_grouping_problem_count > 0 and not trusted_pdf_marker_grouping:
         score += 0.52
         reasons.append("fallback_grouping")
     if block_count > 1 and problem_count == block_count and not trusted_pdf_marker_grouping:

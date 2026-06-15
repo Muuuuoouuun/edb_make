@@ -194,6 +194,7 @@ function normalizeAiSummary(rawSummary) {
       attemptedPageCount: 0,
       appliedPageCount: 0,
       statusCounts: {},
+      stages: [],
       provided: false,
     };
   }
@@ -206,6 +207,7 @@ function normalizeAiSummary(rawSummary) {
     }
     return accumulator;
   }, {});
+  const stages = normalizeAiStages(rawSummary.stages || rawSummary.aiStages || []);
 
   return {
     requested: Boolean(rawSummary.requested),
@@ -215,8 +217,43 @@ function normalizeAiSummary(rawSummary) {
     attemptedPageCount: Math.max(0, Math.round(toNumber(rawSummary.attempted_page_count ?? rawSummary.attemptedPageCount, 0))),
     appliedPageCount: Math.max(0, Math.round(toNumber(rawSummary.applied_page_count ?? rawSummary.appliedPageCount, 0))),
     statusCounts,
+    stages,
     provided: true,
   };
+}
+
+function normalizeAiStages(rawStages) {
+  if (!Array.isArray(rawStages)) {
+    return [];
+  }
+  return rawStages
+    .filter((stage) => stage && typeof stage === "object")
+    .map((stage) => {
+      const statusCounts = stage.status_counts && typeof stage.status_counts === "object"
+        ? stage.status_counts
+        : (stage.statusCounts && typeof stage.statusCounts === "object" ? stage.statusCounts : {});
+      return {
+        stage: String(stage.stage || "").trim(),
+        order: toNumber(stage.order, 999),
+        label: String(stage.label || stage.stage || "AI 단계").trim(),
+        provider: String(stage.provider || "").trim(),
+        pageCount: toNumber(stage.page_count ?? stage.pageCount, 0),
+        usedPageCount: toNumber(stage.used_page_count ?? stage.usedPageCount, 0),
+        attemptedPageCount: toNumber(stage.attempted_page_count ?? stage.attemptedPageCount, 0),
+        appliedPageCount: toNumber(stage.applied_page_count ?? stage.appliedPageCount, 0),
+        eligibleBlockCount: toNumber(stage.eligible_block_count ?? stage.eligibleBlockCount, 0),
+        processedBlockCount: toNumber(stage.processed_block_count ?? stage.processedBlockCount, 0),
+        apiCallBlockCount: toNumber(stage.api_call_block_count ?? stage.apiCallBlockCount, 0),
+        cacheHitCount: toNumber(stage.cache_hit_count ?? stage.cacheHitCount, 0),
+        cacheMissCount: toNumber(stage.cache_miss_count ?? stage.cacheMissCount, 0),
+        skippedBlockCount: toNumber(stage.skipped_block_count ?? stage.skippedBlockCount, 0),
+        attemptedBlockCount: toNumber(stage.attempted_block_count ?? stage.attemptedBlockCount, 0),
+        appliedBlockCount: toNumber(stage.applied_block_count ?? stage.appliedBlockCount, 0),
+        statusCounts,
+      };
+    })
+    .filter((stage) => stage.stage)
+    .sort((a, b) => a.order - b.order || a.stage.localeCompare(b.stage));
 }
 
 function normalizeProblemNumber(value) {
@@ -504,6 +541,19 @@ function formatAiStatusCounts(statusCounts) {
     return "";
   }
   return entries.map(([status, count]) => `${aiStatusLabel(status)} ${count}p`).join(" · ");
+}
+
+function formatAiStageChip(stage) {
+  if (stage.stage === "ocr") {
+    return `${stage.label} · 블록 ${stage.processedBlockCount || stage.eligibleBlockCount}`;
+  }
+  if (stage.stage === "ocr_escalation") {
+    return `${stage.label} · 보강 ${stage.appliedBlockCount}/${stage.attemptedBlockCount}`;
+  }
+  if (stage.stage === "page_repair") {
+    return `${stage.label} · 적용 ${stage.appliedPageCount}/${stage.usedPageCount || stage.pageCount}`;
+  }
+  return `${stage.label} · ${stage.usedPageCount || stage.pageCount}`;
 }
 
 function getAiControlElements() {
@@ -1712,6 +1762,12 @@ function renderInspector(selected) {
         <label>상태</label>
         <span>${formatAiStatusCounts(aiSummary.statusCounts) || "기록 없음"}</span>
       </div>
+      ${aiSummary.stages?.length ? `
+      <div class="inspector-row">
+        <label>단계</label>
+        <span>${aiSummary.stages.map(formatAiStageChip).join(" · ")}</span>
+      </div>
+      ` : ""}
       ${aiFallback.provider === "gemini" ? `
       <p class="helper-text">Gemini API 키가 설정되어 있으면 애매한 문항 경계를 선택적으로 보정합니다.</p>
       ` : ""}

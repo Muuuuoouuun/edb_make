@@ -68,6 +68,56 @@ class TestPipelineRouter(unittest.TestCase):
         self.assertFalse(decision.should_use_ai)
         self.assertEqual([], decision.trigger_reasons)
 
+    def test_pdf_text_marker_backend_stays_trusted_after_text_prefix_normalization(self):
+        page = PageModel(
+            page_id="pdf-page-text-prefix",
+            width_px=600,
+            height_px=800,
+            subject=Subject.MATH,
+            blocks=[
+                _block(
+                    f"b-{number}",
+                    number * 100,
+                    metadata={
+                        "segmenter": "pdf-text-markers",
+                        "ocr_backend": "pdf_text_marker",
+                        "force_problem_start": True,
+                        "problem_marker": True,
+                        "problem_number": number,
+                        "problem_number_source": "text_prefix",
+                    },
+                )
+                for number in range(1, 5)
+            ],
+            problems=[_problem(f"p-{number}", number, source="text_prefix") for number in range(1, 5)],
+            metadata={
+                "segmenter": "pdf-text-markers",
+                "segmentation_mode": "document",
+                "block_count": 4,
+                "large_block_ratio": 1.0,
+                "pdf_text_marker_count": 4,
+                "grouping_diagnostics": {
+                    "grouping_source": "marker_grouping",
+                    "grouping_mode": "marker",
+                    "marker_counts": {"problem_marker_block_count": 4},
+                    "fallback_grouping_stats": {
+                        "used": False,
+                        "problem_count": 4,
+                    },
+                    "problem_number_source_counts": {"text_prefix": 4},
+                },
+            },
+        )
+
+        decision = decide_page_route(page, ocr_mode="none", ai_enabled=True, ai_mode="auto")
+        metadata = decision.to_metadata()
+
+        self.assertEqual("trusted", metadata["quality_status"])
+        self.assertEqual("skip_ai", metadata["recommended_action"])
+        self.assertEqual("local_only", decision.route)
+        self.assertFalse(decision.should_use_ai)
+        self.assertEqual([], decision.trigger_reasons)
+
     def test_unreliable_pdf_text_markers_are_suspicious_and_route_to_ai_when_enabled(self):
         page = PageModel(
             page_id="unreliable-pdf-page",

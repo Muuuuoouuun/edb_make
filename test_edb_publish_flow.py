@@ -294,6 +294,29 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(validation["recordCountActual"], 1)
             self.assertGreater(validation["outerSize"], 0)
 
+    def test_problem_export_records_stage_timing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            self._make_source_image(source)
+
+            result = run_problem_export(
+                source,
+                output_dir=root / "out",
+                input_intent="single-problem",
+                ocr="noop",
+                record_mode="image-only",
+                export_edb=True,
+            )
+
+            timing = result["summary"]["timing_ms"]
+            self.assertGreaterEqual(timing["total"], 0)
+            self.assertGreaterEqual(timing["source_build"], 0)
+            self.assertGreaterEqual(timing["problem_assets"], 0)
+            self.assertGreaterEqual(timing["records"], 0)
+            self.assertGreaterEqual(timing["ui_session"], 0)
+            self.assertEqual(timing, result["ui_session"]["timing_ms"])
+
     def test_problem_export_writes_classin_handoff_manifest_for_manual_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

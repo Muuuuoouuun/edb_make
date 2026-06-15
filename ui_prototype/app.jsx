@@ -64,6 +64,14 @@ const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
+const MANUAL_CROP_EDGE_MAX = 0.45;
+const MANUAL_CROP_EDGE_STEP = 0.01;
+const EMPTY_MANUAL_CROP = Object.freeze({
+  leftRatio: 0,
+  rightRatio: 0,
+  topRatio: 0,
+  bottomRatio: 0,
+});
 
 function normalizePlacementXRatio(value){
   const n = Number(value);
@@ -83,6 +91,42 @@ function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
   return Number.isFinite(n)
     ? Math.max(PLACEMENT_SCALE_MIN, Math.min(resolvedMax, n))
     : Math.min(DEFAULT_PLACEMENT_SCALE_RATIO, resolvedMax);
+}
+
+function normalizeManualCropEdgeRatio(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(MANUAL_CROP_EDGE_MAX, n)) : 0;
+}
+
+function manualCropValue(rawCrop, camelKey, snakeKey, plainKey){
+  if (!rawCrop || typeof rawCrop !== 'object') return 0;
+  const topLevelKey = `crop${camelKey.charAt(0).toUpperCase()}${camelKey.slice(1)}`;
+  return rawCrop[camelKey] ?? rawCrop[topLevelKey] ?? rawCrop[snakeKey] ?? rawCrop[plainKey] ?? 0;
+}
+
+function normalizeManualCrop(rawCrop){
+  return {
+    leftRatio: normalizeManualCropEdgeRatio(manualCropValue(rawCrop, 'leftRatio', 'crop_left_ratio', 'left')),
+    rightRatio: normalizeManualCropEdgeRatio(manualCropValue(rawCrop, 'rightRatio', 'crop_right_ratio', 'right')),
+    topRatio: normalizeManualCropEdgeRatio(manualCropValue(rawCrop, 'topRatio', 'crop_top_ratio', 'top')),
+    bottomRatio: normalizeManualCropEdgeRatio(manualCropValue(rawCrop, 'bottomRatio', 'crop_bottom_ratio', 'bottom')),
+  };
+}
+
+function manualCropIsActive(crop){
+  const normalized = normalizeManualCrop(crop);
+  return Object.values(normalized).some(value => value > 0.0001);
+}
+
+function manualCropEquals(a, b){
+  const left = normalizeManualCrop(a);
+  const right = normalizeManualCrop(b);
+  return ['leftRatio', 'rightRatio', 'topRatio', 'bottomRatio']
+    .every(key => Math.abs(left[key] - right[key]) < 0.0001);
+}
+
+function manualCropPercent(value){
+  return `${Math.round(normalizeManualCropEdgeRatio(value) * 100)}%`;
 }
 
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
@@ -621,6 +665,15 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
             <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
               주의 {reviewSummary.warningCount}
             </span>
+            {reviewSummary.aiStages.map(stage => (
+              <span
+                key={stage.stage}
+                className={`review-summary-chip ${stage.usedPageCount || stage.attemptedBlockCount || stage.appliedPageCount ? 'ok' : ''}`}
+                title={aiStageTooltip(stage)}
+              >
+                {aiStageChipText(stage)}
+              </span>
+            ))}
             {reviewSummary.actionableNeedsReviewCount > 0 && (
               <span className="review-summary-chip warn">
                 확인 {reviewSummary.actionableNeedsReviewCount}
@@ -1813,7 +1866,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete }){
 function SidePanel({
   item, items, activeIndex,
   setStep, applyToAll, bulk, setBulk,
-  setPlacement,
+  setPlacement, mutateSession, mutating,
   boardColumns, setBoardColumns,
   boardColor, setBoardColor,
   accent, setAccent,
@@ -1834,8 +1887,10 @@ function SidePanel({
   const [showKey, setShowKey] = useState(false);
   const [showOpenAiKey, setShowOpenAiKey] = useState(false);
   const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);
+  const [cropDraft, setCropDraft] = useState({ ...EMPTY_MANUAL_CROP });
   const dragging = useRef(false);
   const wrapRef = useRef(null);
+  const cropControlRef = useRef(null);
   const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
   const hangulStatusMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
   const hangulToolRows = hangulRuntimeToolRows(hangulDiagnostics);
@@ -1861,6 +1916,16 @@ function SidePanel({
     if (hangulDiagnostics) setHangulDetailsExpanded(hangulDetailsOpen);
   }, [hangulDiagnostics?.status]);
 
+  useEffect(() => {
+    setCropDraft(item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP });
+  }, [
+    item?.id,
+    item?.manualCrop?.leftRatio,
+    item?.manualCrop?.rightRatio,
+    item?.manualCrop?.topRatio,
+    item?.manualCrop?.bottomRatio,
+  ]);
+
   const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
   const maxScale = maxPlacementScaleRatio(item);
   const placementScale = item ? normalizePlacementScaleRatio(item.placementScaleRatio, maxScale) : DEFAULT_PLACEMENT_SCALE_RATIO;
@@ -1870,6 +1935,10 @@ function SidePanel({
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
+  const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
+  const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
+  const savedCropActive = manualCropIsActive(savedCrop);
+  const draftCropActive = manualCropIsActive(cropDraft);
   const updatePlacement = (patch) => {
     if (!item) return;
     setPlacement?.(item.id, patch);
@@ -1893,6 +1962,24 @@ function SidePanel({
   };
   const resetScale = () => {
     updatePlacement({ scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO });
+  };
+  const updateCropDraft = (key, value) => {
+    setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
+  };
+  const focusManualCrop = () => {
+    setPreviewMode('raw');
+    cropControlRef.current?.scrollIntoView({ block: 'nearest' });
+  };
+  const applyManualCrop = (nextCrop = cropDraft) => {
+    if (!item || mutating) return;
+    const normalized = normalizeManualCrop(nextCrop);
+    setCropDraft(normalized);
+    mutateSession?.('crop', { problemId: item.id, crop: normalized });
+  };
+  const resetManualCrop = () => {
+    const reset = { ...EMPTY_MANUAL_CROP };
+    setCropDraft(reset);
+    if (savedCropActive) applyManualCrop(reset);
   };
 
   return (
@@ -1958,7 +2045,12 @@ function SidePanel({
 
                   <div className="ptools">
                     <button className="icon-btn" title="회전">{Icon.rotate}</button>
-                    <button className="icon-btn" title="자르기">{Icon.crop}</button>
+                    <button
+                      className={`icon-btn ${savedCropActive ? 'on' : ''}`}
+                      type="button"
+                      title="상하좌우 자체 자르기"
+                      onClick={focusManualCrop}
+                    >{Icon.crop}</button>
                     <button
                       className="icon-btn"
                       title="축소"
@@ -1973,6 +2065,77 @@ function SidePanel({
                     >{Icon.zoomIn}</button>
                     <div className="spacer" />
                     <span className="scale">{Math.round(placementScale * 100)}%</span>
+                  </div>
+                </div>
+
+                <div className="panel-section-hd">
+                  자체 자르기 <span className="line" />
+                </div>
+
+                <div className="manual-crop-control" ref={cropControlRef}>
+                  <div className="manual-crop-grid">
+                    <label>
+                      <span>왼쪽</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
+                        step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
+                        value={Math.round(cropDraft.leftRatio * 100)}
+                        onChange={e => updateCropDraft('leftRatio', Number(e.target.value) / 100)}
+                      />
+                      <strong>{manualCropPercent(cropDraft.leftRatio)}</strong>
+                    </label>
+                    <label>
+                      <span>오른쪽</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
+                        step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
+                        value={Math.round(cropDraft.rightRatio * 100)}
+                        onChange={e => updateCropDraft('rightRatio', Number(e.target.value) / 100)}
+                      />
+                      <strong>{manualCropPercent(cropDraft.rightRatio)}</strong>
+                    </label>
+                    <label>
+                      <span>위</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
+                        step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
+                        value={Math.round(cropDraft.topRatio * 100)}
+                        onChange={e => updateCropDraft('topRatio', Number(e.target.value) / 100)}
+                      />
+                      <strong>{manualCropPercent(cropDraft.topRatio)}</strong>
+                    </label>
+                    <label>
+                      <span>아래</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
+                        step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
+                        value={Math.round(cropDraft.bottomRatio * 100)}
+                        onChange={e => updateCropDraft('bottomRatio', Number(e.target.value) / 100)}
+                      />
+                      <strong>{manualCropPercent(cropDraft.bottomRatio)}</strong>
+                    </label>
+                  </div>
+                  <div className="manual-crop-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={!item || mutating || (!draftCropActive && !savedCropActive)}
+                      onClick={resetManualCrop}
+                    >초기화</button>
+                    <button
+                      className="btn primary"
+                      type="button"
+                      disabled={!item || mutating || !cropChanged}
+                      onClick={() => applyManualCrop()}
+                    >자르기 적용</button>
                   </div>
                 </div>
 
@@ -2876,6 +3039,7 @@ function mapProblemToItem(problem, idx){
   const statusMeta = reviewStatusMeta(reviewStatus);
   const initialScale = normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio);
   const step = normalizeProcessingStep(problem.step || problem.processingStep || problem.processing_step);
+  const manualCrop = normalizeManualCrop(problem.manualCrop || problem.manual_crop || problem.cropAdjustments || problem);
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -2906,6 +3070,7 @@ function mapProblemToItem(problem, idx){
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
     placementScaleRatio: initialScale < 0.95 ? DEFAULT_PLACEMENT_SCALE_RATIO : initialScale,
+    manualCrop,
   };
 }
 
@@ -3689,6 +3854,80 @@ function collectPassageReviewSummary(session, options = {}){
   };
 }
 
+function nonNegativeNumber(value){
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function normalizeAiStageSummaries(session){
+  const rawSummary = session?.ai_summary || session?.aiSummary || {};
+  const rawStages = Array.isArray(rawSummary?.stages || rawSummary?.aiStages)
+    ? (rawSummary.stages || rawSummary.aiStages)
+    : [];
+  return rawStages
+    .filter(stage => stage && typeof stage === 'object')
+    .map(stage => {
+      const statusCounts = stage.status_counts && typeof stage.status_counts === 'object'
+        ? stage.status_counts
+        : (stage.statusCounts && typeof stage.statusCounts === 'object' ? stage.statusCounts : {});
+      return {
+        stage: String(stage.stage || '').trim(),
+        order: nonNegativeNumber(stage.order || 999),
+        label: String(stage.label || stage.stage || 'AI 단계').trim(),
+        provider: String(stage.provider || '').trim(),
+        pageCount: nonNegativeNumber(stage.page_count ?? stage.pageCount),
+        usedPageCount: nonNegativeNumber(stage.used_page_count ?? stage.usedPageCount),
+        attemptedPageCount: nonNegativeNumber(stage.attempted_page_count ?? stage.attemptedPageCount),
+        appliedPageCount: nonNegativeNumber(stage.applied_page_count ?? stage.appliedPageCount),
+        eligibleBlockCount: nonNegativeNumber(stage.eligible_block_count ?? stage.eligibleBlockCount),
+        processedBlockCount: nonNegativeNumber(stage.processed_block_count ?? stage.processedBlockCount),
+        apiCallBlockCount: nonNegativeNumber(stage.api_call_block_count ?? stage.apiCallBlockCount),
+        cacheHitCount: nonNegativeNumber(stage.cache_hit_count ?? stage.cacheHitCount),
+        cacheMissCount: nonNegativeNumber(stage.cache_miss_count ?? stage.cacheMissCount),
+        skippedBlockCount: nonNegativeNumber(stage.skipped_block_count ?? stage.skippedBlockCount),
+        attemptedBlockCount: nonNegativeNumber(stage.attempted_block_count ?? stage.attemptedBlockCount),
+        appliedBlockCount: nonNegativeNumber(stage.applied_block_count ?? stage.appliedBlockCount),
+        statusCounts,
+      };
+    })
+    .filter(stage => stage.stage)
+    .sort((a, b) => a.order - b.order || a.stage.localeCompare(b.stage));
+}
+
+function aiStageChipText(stage){
+  if (stage.stage === 'ocr') {
+    return `${stage.label} · 블록 ${stage.processedBlockCount || stage.eligibleBlockCount}`;
+  }
+  if (stage.stage === 'ocr_escalation') {
+    return `${stage.label} · 보강 ${stage.appliedBlockCount}/${stage.attemptedBlockCount}`;
+  }
+  if (stage.stage === 'page_repair') {
+    return `${stage.label} · 적용 ${stage.appliedPageCount}/${stage.usedPageCount || stage.pageCount}`;
+  }
+  return `${stage.label} · ${stage.usedPageCount || stage.pageCount}`;
+}
+
+function aiStageTooltip(stage){
+  const statuses = Object.entries(stage.statusCounts || {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([status, count]) => `${status} ${count}`)
+    .join(', ');
+  return [
+    stage.label,
+    stage.provider ? `provider: ${stage.provider}` : '',
+    `pages: ${stage.usedPageCount}/${stage.pageCount}`,
+    stage.eligibleBlockCount ? `eligible blocks: ${stage.eligibleBlockCount}` : '',
+    stage.processedBlockCount ? `processed blocks: ${stage.processedBlockCount}` : '',
+    stage.apiCallBlockCount ? `API calls: ${stage.apiCallBlockCount}` : '',
+    stage.cacheHitCount ? `cache hits: ${stage.cacheHitCount}` : '',
+    stage.attemptedBlockCount ? `escalation attempts: ${stage.attemptedBlockCount}` : '',
+    stage.appliedBlockCount ? `applied blocks: ${stage.appliedBlockCount}` : '',
+    stage.attemptedPageCount ? `attempted pages: ${stage.attemptedPageCount}` : '',
+    stage.appliedPageCount ? `applied pages: ${stage.appliedPageCount}` : '',
+    statuses ? `status: ${statuses}` : '',
+  ].filter(Boolean).join(' · ');
+}
+
 function sessionReviewSummary(session){
   const raw = session?.review_summary || session?.reviewSummary || {};
   const counts = sessionProblemCounts(session);
@@ -3752,6 +3991,7 @@ function sessionReviewSummary(session){
     ?? riskFlagCounts.hwp_oversegmentation
     ?? 0
   );
+  const aiStages = normalizeAiStageSummaries(session);
   const duplicateProblemNumberGroups = Array.isArray(session?.duplicateProblemNumberGroups)
     ? session.duplicateProblemNumberGroups
     : Array.isArray(session?.duplicate_problem_number_groups)
@@ -3831,6 +4071,7 @@ function sessionReviewSummary(session){
     hwpCacheHitPageCount: Number.isFinite(hwpCacheHitPageCount) ? Math.max(0, hwpCacheHitPageCount) : 0,
     hwpRendererCacheHitCount: Number.isFinite(hwpRendererCacheHitCount) ? Math.max(0, hwpRendererCacheHitCount) : 0,
     hwpNormalizedCacheHitCount: Number.isFinite(hwpNormalizedCacheHitCount) ? Math.max(0, hwpNormalizedCacheHitCount) : 0,
+    aiStages,
     hwpProblemCountMismatchCount: Number.isFinite(hwpProblemCountMismatchCount) ? Math.max(0, hwpProblemCountMismatchCount) : 0,
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
@@ -4773,7 +5014,7 @@ function App(){
     }
   }, [items, activeId]);
 
-  // Run a server-side mutation (split / merge / exclude). Captures the
+  // Run a server-side mutation (split / merge / crop / exclude). Captures the
   // current session into the undo history *before* the request goes out
   // so that a failed mutation does not clutter the stack.
   const mutateSession = useCallback(async (action, args) => {
@@ -4785,6 +5026,7 @@ function App(){
     setLoading({
       label: action === 'split' ? '문제를 가르는 중…'
         : action === 'merge' ? '문제를 합치는 중…'
+        : action === 'crop' ? '이미지를 자르는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
@@ -4798,6 +5040,7 @@ function App(){
       showToast(
         action === 'split' ? '문제를 두 개로 갈랐어요'
         : action === 'merge' ? '문제를 합쳤어요'
+        : action === 'crop' ? '자르기를 적용했어요'
         : '문제를 제외했어요'
       );
     } catch (e) {
@@ -5663,6 +5906,8 @@ function App(){
           bulk={bulk}
           setBulk={setBulk}
           setPlacement={setPlacement}
+          mutateSession={mutateSession}
+          mutating={mutating}
           boardColumns={t.boardColumns}
           setBoardColumns={v => setTweak('boardColumns', v)}
           boardColor={t.boardColor}

@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2423,8 +2424,71 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
     route_counts: dict[str, int] = {}
     route_tier_counts: dict[str, int] = {}
     model_fallbacks: list[dict[str, Any]] = []
+    stage_totals: dict[str, dict[str, Any]] = {}
+
+    def _record_stage(raw_stage: dict[str, Any]) -> None:
+        stage = str(raw_stage.get("stage") or "").strip()
+        if not stage:
+            return
+        entry = stage_totals.setdefault(
+            stage,
+            {
+                "stage": stage,
+                "order": int(raw_stage.get("order") or 999),
+                "label": str(raw_stage.get("label") or stage),
+                "provider": str(raw_stage.get("provider") or ""),
+                "page_count": 0,
+                "used_page_count": 0,
+                "status_counts": {},
+                "eligible_block_count": 0,
+                "processed_block_count": 0,
+                "api_call_block_count": 0,
+                "cache_hit_count": 0,
+                "cache_miss_count": 0,
+                "skipped_block_count": 0,
+                "attempted_block_count": 0,
+                "applied_block_count": 0,
+                "attempted_page_count": 0,
+                "applied_page_count": 0,
+            },
+        )
+        entry["order"] = min(int(entry.get("order") or 999), int(raw_stage.get("order") or 999))
+        if raw_stage.get("label"):
+            entry["label"] = str(raw_stage["label"])
+        if raw_stage.get("provider"):
+            entry["provider"] = str(raw_stage["provider"])
+        status = str(raw_stage.get("status") or "unknown")
+        status_counts_for_stage = entry["status_counts"]
+        status_counts_for_stage[status] = status_counts_for_stage.get(status, 0) + 1
+        entry["page_count"] += 1
+        if status not in {"skipped", "disabled", "not_needed", "unknown"}:
+            entry["used_page_count"] += 1
+        if raw_stage.get("attempted"):
+            entry["attempted_page_count"] += 1
+        if raw_stage.get("applied"):
+            entry["applied_page_count"] += 1
+        for key in (
+            "eligible_block_count",
+            "processed_block_count",
+            "api_call_block_count",
+            "cache_hit_count",
+            "cache_miss_count",
+            "skipped_block_count",
+            "attempted_block_count",
+            "applied_block_count",
+        ):
+            try:
+                entry[key] += int(raw_stage.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
 
     for page in pages:
+        raw_stages = page.metadata.get("ai_stages")
+        if isinstance(raw_stages, dict):
+            for raw_stage in raw_stages.values():
+                if isinstance(raw_stage, dict):
+                    _record_stage(raw_stage)
+
         ai_summary = page.metadata.get("ai_fallback")
         if not isinstance(ai_summary, dict):
             ai_summary = {}
@@ -2469,6 +2533,10 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
         "model_fallbacks": model_fallbacks,
+        "stages": sorted(
+            stage_totals.values(),
+            key=lambda item: (int(item.get("order") or 999), str(item.get("stage") or "")),
+        ),
     }
 
 
@@ -2491,6 +2559,36 @@ INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 def _normalize_input_intent(value: str | None) -> str:
     normalized = (value or "auto").strip().lower().replace("_", "-")
     return normalized if normalized in INPUT_INTENTS else "auto"
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int(round((time.perf_counter() - started_at) * 1000.0))
+
+
+def _summarize_page_timing_ms(pages: list[PageModel]) -> dict[str, int]:
+    totals = {
+        "page_segmentation_sum": 0,
+        "page_block_ocr_sum": 0,
+        "page_total_before_repair_sum": 0,
+        "page_ai_repair_sum": 0,
+    }
+    for page in pages:
+        timing = page.metadata.get("recognition_timing_ms")
+        if isinstance(timing, dict):
+            for source_key, target_key in (
+                ("segmentation", "page_segmentation_sum"),
+                ("block_ocr", "page_block_ocr_sum"),
+                ("total_before_repair", "page_total_before_repair_sum"),
+            ):
+                value = timing.get(source_key)
+                if isinstance(value, (int, float)):
+                    totals[target_key] += int(round(float(value)))
+        ai_summary = page.metadata.get("ai_fallback")
+        if isinstance(ai_summary, dict):
+            value = ai_summary.get("latency_ms")
+            if isinstance(value, (int, float)):
+                totals["page_ai_repair_sum"] += int(round(float(value)))
+    return totals
 
 
 def _normalize_problem_title(title: str | None, index: int, source_page_id: str, problem_number: int | None = None) -> str:
@@ -5063,6 +5161,8 @@ def run_problem_export(
     ai_fallback_save_debug: bool = False,
     fail_on_ai_error: bool = False,
 ) -> dict[str, Any]:
+    run_started_at = time.perf_counter()
+    timing_ms: dict[str, int] = {}
     if isinstance(source, (str, Path)):
         source_paths = [Path(source).resolve()]
     else:
@@ -5113,11 +5213,13 @@ def run_problem_export(
         ocr_mode=ocr,
         ai_config=_to_page_ai_config(ai_fallback_config),
     )
+    source_build_started_at = time.perf_counter()
     if source_worker_count <= 1:
         source_results = [_build_source_pages(source_path) for source_path in source_paths]
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=source_worker_count) as executor:
             source_results = list(executor.map(_build_source_pages, source_paths))
+    timing_ms["source_build"] = _elapsed_ms(source_build_started_at)
 
     prepared_pages: list[PreparedPage] = []
     pages: list[PageModel] = []
@@ -5139,6 +5241,7 @@ def run_problem_export(
             "ocr='gemini') to enable Gemini OCR.",
             flush=True,
         )
+    problem_assets_started_at = time.perf_counter()
     problem_entries = build_problem_entries(
         prepared_pages,
         pages,
@@ -5146,6 +5249,7 @@ def run_problem_export(
         template,
         board_theme=resolved_board_theme,
     )
+    timing_ms["problem_assets"] = _elapsed_ms(problem_assets_started_at)
     save_pages_json(pages, out_dir / "pages.json")
     # Match ClassIn's observed publish behaviour: page_count_hint scales with the
     # number of problems on the board so the logical canvas always covers the
@@ -5153,6 +5257,7 @@ def run_problem_export(
     # (e.g. 44 problems -> pages_hint=88); keep 50 as the floor for short boards.
     template.board_page_count = max(50, len(problem_entries) * 2)
     resolved_crop_format = crop_format if crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
+    records_started_at = time.perf_counter()
     records, placements, header_flag = build_records(
         problem_entries,
         template,
@@ -5163,6 +5268,8 @@ def run_problem_export(
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
     )
+    timing_ms["records"] = _elapsed_ms(records_started_at)
+    timing_ms.update(_summarize_page_timing_ms(pages))
 
     summary = {
         "source_paths": [str(path) for path in source_paths],
@@ -5185,6 +5292,7 @@ def run_problem_export(
         "ocr_backend_requested": ocr,
         "ocr_summary": ocr_summary,
         "input_intent": resolved_input_intent,
+        "timing_ms": dict(timing_ms),
     }
 
     placements_path = out_dir / "placements.json"
@@ -5193,6 +5301,7 @@ def run_problem_export(
     edb_path: Path | None = None
     if export_edb:
         edb_path = out_dir / edb_name
+        edb_write_started_at = time.perf_counter()
         write_edb(
             edb_path,
             build_edb(
@@ -5202,9 +5311,12 @@ def run_problem_export(
                 page_count_hint=template.board_page_count,
             ),
         )
+        timing_ms["edb_write"] = _elapsed_ms(edb_write_started_at)
         summary["edb_path"] = str(edb_path.resolve())
+        summary["timing_ms"] = dict(timing_ms)
         placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    ui_session_started_at = time.perf_counter()
     ui_session = build_ui_session(
         prepared_pages,
         placements,
@@ -5221,6 +5333,7 @@ def run_problem_export(
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
     )
+    timing_ms["ui_session"] = _elapsed_ms(ui_session_started_at)
     classin_handoff_path: Path | None = None
     classin_handoff_markdown_path: Path | None = None
     if edb_path is not None and edb_path.exists():
@@ -5242,6 +5355,10 @@ def run_problem_export(
         ui_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
         ui_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
         ui_session.update(handoff_session_fields)
+    timing_ms["total"] = _elapsed_ms(run_started_at)
+    summary["timing_ms"] = dict(timing_ms)
+    ui_session["timing_ms"] = dict(timing_ms)
+    placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
 
     return {

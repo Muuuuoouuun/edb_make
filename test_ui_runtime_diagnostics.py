@@ -13,6 +13,18 @@ def run_node(script: str) -> None:
 
 
 class TestUiRuntimeDiagnostics(unittest.TestCase):
+    def test_side_panel_exposes_four_edge_manual_crop_controls(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn("자체 자르기", side_panel)
+        self.assertIn("mutateSession?.('crop'", side_panel)
+        self.assertIn("cropDraft.leftRatio", side_panel)
+        self.assertIn("cropDraft.rightRatio", side_panel)
+        self.assertIn("cropDraft.topRatio", side_panel)
+        self.assertIn("cropDraft.bottomRatio", side_panel)
+
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         summary_helper = source.split("function hangulRuntimeSummary", 1)[1]
@@ -37,6 +49,19 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("hwpCacheHitPageCount", summary_helper)
         self.assertIn("hwpRendererCacheHitCount", summary_helper)
         self.assertIn("hwpNormalizedCacheHitCount", summary_helper)
+
+    def test_review_summary_surfaces_ai_stage_counts(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]
+        review_stage = review_stage.split("{reviewSummary.warningPreview &&", 1)[0]
+        summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
+        summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
+
+        self.assertIn("reviewSummary.aiStages.map", review_stage)
+        self.assertIn("aiStageChipText(stage)", review_stage)
+        self.assertIn("aiStageTooltip(stage)", review_stage)
+        self.assertIn("normalizeAiStageSummaries(session)", summary_helper)
+        self.assertIn("aiStages", summary_helper)
 
     def test_review_summary_surfaces_hwp_segmentation_risk_counts(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

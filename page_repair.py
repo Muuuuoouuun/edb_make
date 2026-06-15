@@ -103,6 +103,35 @@ def build_ai_fallback_config(
     )
 
 
+def _page_repair_stage_metadata(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "stage": "page_repair",
+        "order": 3,
+        "label": "3단계 문항 경계 보정",
+        "status": str(summary.get("status") or "unknown"),
+        "provider": str(summary.get("provider") or "gemini"),
+        "model": str(summary.get("model") or ""),
+        "model_used": str(summary.get("model_used") or summary.get("model") or ""),
+        "enabled": bool(summary.get("enabled")),
+        "attempted": bool(summary.get("attempted")),
+        "applied": bool(summary.get("applied")),
+        "cache_hit": bool(summary.get("cache_hit")),
+        "route": str(summary.get("route") or "unknown"),
+        "route_tier": str(summary.get("route_tier") or "unknown"),
+    }
+
+
+def _attach_ai_fallback_summary(page: PageModel, summary: dict[str, Any]) -> PageModel:
+    summary.setdefault("stage", "page_repair")
+    summary.setdefault("stage_label", "3단계 문항 경계 보정")
+    page.metadata["ai_fallback"] = summary
+    raw_stages = page.metadata.get("ai_stages")
+    stages = dict(raw_stages) if isinstance(raw_stages, dict) else {}
+    stages["page_repair"] = _page_repair_stage_metadata(summary)
+    page.metadata["ai_stages"] = stages
+    return page
+
+
 def repair_page_model(
     prepared_page: PreparedPage,
     page: PageModel,
@@ -140,16 +169,14 @@ def repair_page_model(
         "baseline_block_count": len(baseline.blocks),
     }
     if not resolved_config.enabled:
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
     trigger_reasons = list(route_decision.trigger_reasons)
     if not route_decision.should_use_ai:
         summary["status"] = "local_retry_recommended" if route_decision.next_best_action == "local_retry" else "not_needed"
         if route_decision.next_best_action:
             summary["next_best_action"] = route_decision.next_best_action
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
     # `force` mode is an explicit user opt-in to always attempt AI repair —
     # don't suppress it on busy pages.
@@ -160,23 +187,27 @@ def repair_page_model(
     ):
         summary["status"] = "too_many_blocks"
         summary["skip_reason"] = "max_regions_exceeded"
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
     provider_key = resolved_config.normalized_provider
     summary["provider"] = provider_key
     if resolved_config.provider.strip().lower() not in _SUPPORTED_PROVIDER_ALIASES:
         summary["status"] = "provider_pending"
         summary["skip_reason"] = "provider_not_implemented"
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
-    cached_repair = pipeline_cache.load_ai_repair(
-        page=baseline,
-        provider=provider_key,
-        model=resolved_config.resolved_model,
-        trigger_reasons=trigger_reasons,
-    )
+    cached_repair: tuple[dict[str, Any], str | None] | None = None
+    cached_model: str | None = None
+    for candidate_model in _repair_model_candidates(resolved_config):
+        cached_repair = pipeline_cache.load_ai_repair(
+            page=baseline,
+            provider=provider_key,
+            model=candidate_model,
+            trigger_reasons=trigger_reasons,
+        )
+        if cached_repair is not None:
+            cached_model = candidate_model
+            break
     if cached_repair is not None:
         repair_payload, response_id = cached_repair
         validation_error = _validate_repair_payload(repair_payload, baseline.blocks)
@@ -197,25 +228,30 @@ def repair_page_model(
                     "cache_hit": True,
                     "status": "cache_hit",
                     "response_id": response_id,
+                    "model_used": cached_model or resolved_config.resolved_model,
                     "repaired_problem_count": len(repaired.problems),
                     "ai_notes": list(repair_payload.get("notes") or []),
                     "problem_units_accepted": len(problem_unit_metadata),
                 }
             )
+            if cached_model and cached_model != resolved_config.resolved_model:
+                summary["model_fallback"] = {
+                    "from": resolved_config.resolved_model,
+                    "to": cached_model,
+                    "reason": "fallback_model_cache_hit",
+                }
             if problem_unit_warnings:
                 summary["problem_units_warnings"] = problem_unit_warnings
             repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
             repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
-            repaired.metadata["ai_fallback"] = summary
             _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
-            return repaired
+            return _attach_ai_fallback_summary(repaired, summary)
 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         summary["status"] = "missing_api_key"
         summary["skip_reason"] = "GEMINI_API_KEY not set"
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
     summary["attempted"] = True
     start_time = time.perf_counter()
@@ -233,15 +269,13 @@ def repair_page_model(
         summary["error"] = str(exc)
         if resolved_config.fail_on_error:
             raise
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
     validation_error = _validate_repair_payload(repair_payload, baseline.blocks)
     if validation_error:
         summary["status"] = "invalid_response"
         summary["error"] = validation_error
-        baseline.metadata["ai_fallback"] = summary
-        return baseline
+        return _attach_ai_fallback_summary(baseline, summary)
 
     problem_unit_metadata, problem_unit_warnings = _extract_problem_unit_metadata(
         repair_payload,
@@ -293,7 +327,6 @@ def repair_page_model(
         summary["problem_units_warnings"] = problem_unit_warnings
     repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
     repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
-    repaired.metadata["ai_fallback"] = summary
     _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
     _maybe_write_debug_artifacts(
         prepared_page=prepared_page,
@@ -302,7 +335,7 @@ def repair_page_model(
         summary=summary,
         config=replace(resolved_config, model=used_model),
     )
-    return repaired
+    return _attach_ai_fallback_summary(repaired, summary)
 
 
 def _select_repair_reasons(page: PageModel, config: AIFallbackConfig, *, ocr_mode: str) -> list[str]:
@@ -1002,5 +1035,6 @@ def _maybe_write_debug_artifacts(
         ),
         encoding="utf-8",
     )
+    summary["debug_path"] = str(debug_path)
     page.metadata.setdefault("ai_fallback", {})
     page.metadata["ai_fallback"]["debug_path"] = str(debug_path)

@@ -237,6 +237,16 @@ def _elapsed_ms(started_at: float) -> int:
     return int(round(max(0.0, time.perf_counter() - started_at) * 1000.0))
 
 
+def _is_ai_backend(backend_name: str | None) -> bool:
+    return (backend_name or "").strip().lower() in {
+        "gemini",
+        "google",
+        "claude",
+        "anthropic",
+        "openai",
+    }
+
+
 def resolve_block_ocr_worker_count(
     item_count: int,
     *,
@@ -349,15 +359,11 @@ def build_page_model(
     cache: PipelineCache | None = None,
 ) -> PageModel:
     recognition_started_at = time.perf_counter()
-    backend = create_ocr_backend(ocr_mode)
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
     segmentation_started_at = time.perf_counter()
     segmented_page = segment_page(prepared_page, page_id=prepared_page.page_id, subject=subject)
     segmentation_elapsed_ms = _elapsed_ms(segmentation_started_at)
     blocks = segmented_page.blocks
-    escalation_backend = _maybe_build_gemini_escalation(
-        ai_config=ai_config, primary_backend_name=backend.engine_name
-    )
     escalation_threshold = float(ai_config.threshold) if ai_config else 0.0
     page_segmenter = segmented_page.metadata.get("segmenter")
 
@@ -368,10 +374,20 @@ def build_page_model(
         and not _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter)
     )
     ocr_skipped_block_count = len(blocks) - ocr_eligible_block_count
+    backend = create_ocr_backend(ocr_mode) if ocr_eligible_block_count > 0 else None
+    backend_name = backend.engine_name if backend is not None else "none"
+    escalation_backend = (
+        _maybe_build_gemini_escalation(
+            ai_config=ai_config,
+            primary_backend_name=backend_name,
+        )
+        if backend is not None
+        else None
+    )
     block_worker_count = resolve_block_ocr_worker_count(
         ocr_eligible_block_count,
         ocr_mode=ocr_mode,
-        backend_name=backend.engine_name,
+        backend_name=backend_name,
     )
 
     def _process_block(block):
@@ -386,6 +402,8 @@ def build_page_model(
 
         if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
             return
+        if backend is None:
+            return
 
         crop = crop_block_image(prepared_page, block)
         cache_identity = _build_ocr_cache_identity(prepared_page, block)
@@ -394,6 +412,8 @@ def build_page_model(
             backend_name=backend.engine_name,
             cache_identity=cache_identity,
         )
+        block.metadata["ocr_stage"] = "primary_ocr"
+        block.metadata["ocr_primary_backend"] = backend.engine_name
         if cached_ocr is not None:
             ocr_result = cached_ocr
             block.metadata["ocr_cache_hit"] = True
@@ -415,6 +435,8 @@ def build_page_model(
         if escalation_backend is not None and _ocr_needs_escalation(
             ocr_result, threshold=escalation_threshold
         ):
+            block.metadata["ocr_escalation_attempted"] = True
+            block.metadata["ocr_escalation_backend"] = escalation_backend.engine_name
             escalated_cached = pipeline_cache.load_ocr_result(
                 crop,
                 backend_name="gemini_escalated",
@@ -501,14 +523,52 @@ def build_page_model(
             block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "gemini_no_text"
 
     block_ocr_started_at = time.perf_counter()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=block_worker_count) as executor:
-        list(executor.map(_process_block, blocks))
+    if block_worker_count <= 1:
+        for block in blocks:
+            _process_block(block)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=block_worker_count) as executor:
+            list(executor.map(_process_block, blocks))
     block_ocr_elapsed_ms = _elapsed_ms(block_ocr_started_at)
 
     ocr_cache_hit_count = sum(1 for block in blocks if block.metadata.get("ocr_cache_hit"))
     ocr_cache_miss_count = sum(1 for block in blocks if block.metadata.get("ocr_cache_miss"))
+    ocr_escalation_attempted_block_count = sum(
+        1 for block in blocks if block.metadata.get("ocr_escalation_attempted")
+    )
+    ocr_escalation_cache_hit_count = sum(
+        1 for block in blocks if block.metadata.get("ocr_escalation_cache_hit")
+    )
     ocr_escalated_block_count = sum(1 for block in blocks if block.metadata.get("ocr_escalated"))
     total_before_repair_ms = _elapsed_ms(recognition_started_at)
+    ai_stages = {
+        "ocr": {
+            "stage": "ocr",
+            "order": 1,
+            "label": "1단계 OCR 인식",
+            "status": "used" if ocr_eligible_block_count > 0 else "skipped",
+            "provider": backend_name,
+            "ai_powered": _is_ai_backend(backend_name),
+            "eligible_block_count": ocr_eligible_block_count,
+            "processed_block_count": ocr_cache_hit_count + ocr_cache_miss_count,
+            "api_call_block_count": ocr_cache_miss_count,
+            "cache_hit_count": ocr_cache_hit_count,
+            "cache_miss_count": ocr_cache_miss_count,
+            "skipped_block_count": ocr_skipped_block_count,
+        },
+        "ocr_escalation": {
+            "stage": "ocr_escalation",
+            "order": 2,
+            "label": "2단계 블록 보강",
+            "status": "used" if ocr_escalation_attempted_block_count > 0 else "skipped",
+            "provider": "gemini",
+            "ai_powered": True,
+            "enabled": escalation_backend is not None,
+            "attempted_block_count": ocr_escalation_attempted_block_count,
+            "applied_block_count": ocr_escalated_block_count,
+            "cache_hit_count": ocr_escalation_cache_hit_count,
+        },
+    }
 
     page = PageModel(
         page_id=prepared_page.page_id,
@@ -532,7 +592,10 @@ def build_page_model(
             "ocr_skipped_block_count": ocr_skipped_block_count,
             "ocr_cache_hit_count": ocr_cache_hit_count,
             "ocr_cache_miss_count": ocr_cache_miss_count,
+            "ocr_escalation_attempted_block_count": ocr_escalation_attempted_block_count,
+            "ocr_escalation_cache_hit_count": ocr_escalation_cache_hit_count,
             "ocr_escalated_block_count": ocr_escalated_block_count,
+            "ai_stages": ai_stages,
         },
     )
     return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config, cache=pipeline_cache)
