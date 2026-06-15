@@ -972,9 +972,17 @@ def _airun_hwp_env(target_dir: Path) -> dict[str, str] | None:
     shim_dir.mkdir(parents=True, exist_ok=True)
     shim_path = shim_dir / "libreoffice"
     if not shim_path.exists():
-        try:
-            shim_path.symlink_to(soffice)
-        except OSError:
+        soffice_path = Path(str(soffice))
+        if soffice_path.exists():
+            try:
+                shim_path.symlink_to(soffice)
+            except OSError:
+                shim_path.write_text(
+                    f"#!/bin/sh\nexec {json.dumps(str(soffice))} \"$@\"\n",
+                    encoding="utf-8",
+                )
+                shim_path.chmod(0o755)
+        else:
             shim_path.write_text(
                 f"#!/bin/sh\nexec {json.dumps(str(soffice))} \"$@\"\n",
                 encoding="utf-8",
