@@ -5,6 +5,7 @@ import base64
 import json
 import math
 import os
+import re
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -435,7 +436,18 @@ def _request_ai_repair_with_retry(
             )
         except Exception as exc:
             last_exc = exc
+            if not _is_retryable_ai_repair_error(exc):
+                raise
     raise RuntimeError(f"AI repair failed after retries: {last_exc}") from last_exc
+
+
+def _is_retryable_ai_repair_error(exc: Exception) -> bool:
+    message = str(exc)
+    match = re.search(r"HTTP\s+(\d{3})", message)
+    if not match:
+        return True
+    status_code = int(match.group(1))
+    return status_code in {408, 409, 425, 429} or status_code >= 500
 
 
 def _request_gemini_repair(

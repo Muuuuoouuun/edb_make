@@ -134,21 +134,34 @@ class TestPageRepairConfig(unittest.TestCase):
             ],
         )
         config = build_ai_fallback_config(mode="force", timeout_ms=1000)
+        sleep_calls = []
 
         with patch.object(page_repair, "_image_to_base64", return_value="encoded-image"):
             with patch.object(page_repair, "_post_json", side_effect=fake_post_json):
-                payload, response_id, used_model, attempts = page_repair._request_ai_repair_with_model_fallback(
-                    prepared_page=prepared_page,
-                    page=page,
-                    config=config,
-                    trigger_reasons=["forced"],
-                    api_key="test-key",
-                )
+                with patch.object(
+                    page_repair.time,
+                    "sleep",
+                    side_effect=lambda seconds: sleep_calls.append(seconds),
+                ):
+                    (
+                        payload,
+                        response_id,
+                        used_model,
+                        attempts,
+                    ) = page_repair._request_ai_repair_with_model_fallback(
+                        prepared_page=prepared_page,
+                        page=page,
+                        config=config,
+                        trigger_reasons=["forced"],
+                        api_key="test-key",
+                    )
 
         self.assertEqual(response_id, "fallback-response")
         self.assertEqual(payload["problem_start_block_ids"], ["block-1"])
         self.assertEqual(used_model, "gemini-2.5-pro")
         self.assertEqual(["error", "ok"], [attempt["status"] for attempt in attempts])
+        self.assertEqual([], sleep_calls)
+        self.assertEqual(1, sum("gemini-3.1-pro-preview" in url for url in urls))
         self.assertTrue(any("gemini-3.1-pro-preview" in url for url in urls))
         self.assertTrue(any("gemini-2.5-pro" in url for url in urls))
 

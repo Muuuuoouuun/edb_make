@@ -457,6 +457,75 @@ def test_block_worker_count_defaults_and_env_override(monkeypatch):
     )
 
 
+def test_gemini_ocr_model_not_found_falls_back_without_retry_sleep(monkeypatch):
+    import json
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    from PIL import Image
+
+    import ocr_backend
+
+    urls = []
+    sleep_calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            response_text = json.dumps(
+                {
+                    "text": "recognized",
+                    "block_type": "stem",
+                    "confidence": 0.96,
+                    "lines": ["recognized"],
+                }
+            )
+            return json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [{"text": response_text}],
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        urls.append(req.full_url)
+        if "gemini-3.1-pro-preview" in req.full_url:
+            raise HTTPError(
+                req.full_url,
+                404,
+                "model not found",
+                hdrs=None,
+                fp=BytesIO(b"model not found"),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(ocr_backend.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        ocr_backend.time,
+        "sleep",
+        lambda seconds: sleep_calls.append(seconds),
+    )
+
+    backend = ocr_backend.GeminiOCRBackend(api_key="test-key", max_retries=1)
+    result = backend.recognize(Image.new("RGB", (240, 120), "white"))
+
+    assert result.text == "recognized"
+    assert sleep_calls == []
+    assert sum("gemini-3.1-pro-preview" in url for url in urls) == 1
+    assert any("gemini-2.5-pro" in url for url in urls)
+    assert result.metadata["model"] == "gemini-2.5-pro"
+
+
 def test_page_model_records_recognition_timing_metadata_before_repair(
     monkeypatch,
     tmp_path,

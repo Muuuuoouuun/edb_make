@@ -6,6 +6,7 @@ import io
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -81,6 +82,13 @@ def _gemini_model_candidates(primary: str) -> list[str]:
     ):
         candidates.append(FALLBACK_GEMINI_OCR_MODEL)
     return list(dict.fromkeys(model for model in candidates if model))
+
+
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return True
+    status_code = int(exc.code)
+    return status_code in {408, 409, 425, 429} or status_code >= 500
 
 
 def _prep_crop_for_ocr(image: Image.Image) -> Image.Image:
@@ -446,6 +454,8 @@ class GeminiOCRBackend(OCRBackend):
                 break
             except Exception as exc:  # network / API errors → retry
                 last_exc = exc
+                if not _is_retryable_gemini_error(exc):
+                    break
 
         model_attempts: list[dict[str, str]] = []
         if response_data is None:
@@ -470,6 +480,8 @@ class GeminiOCRBackend(OCRBackend):
                         break
                     except Exception as exc:
                         last_exc = exc
+                        if not _is_retryable_gemini_error(exc):
+                            break
                 if response_data is not None:
                     model_attempts.append({"model": used_model, "status": "ok"})
                     break
