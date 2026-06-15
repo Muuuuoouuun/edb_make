@@ -1332,11 +1332,12 @@ def load_latest_session() -> dict[str, Any] | None:
     return load_generated_session()
 
 
-def load_session_history(path: Path = SESSION_HISTORY_JSON) -> list[dict[str, Any]]:
-    if not path.exists():
+def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
+    target = path or SESSION_HISTORY_JSON
+    if not target.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     if not isinstance(payload, list):
@@ -1344,20 +1345,22 @@ def load_session_history(path: Path = SESSION_HISTORY_JSON) -> list[dict[str, An
     return [entry for entry in payload if isinstance(entry, dict)]
 
 
-def save_session_history(history: list[dict[str, Any]], path: Path = SESSION_HISTORY_JSON) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_session_history(history: list[dict[str, Any]], path: Path | None = None) -> None:
+    target = path or SESSION_HISTORY_JSON
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def remember_session_history(
     session: dict[str, Any],
     *,
-    path: Path = SESSION_HISTORY_JSON,
+    path: Path | None = None,
     updated_at: str | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
-    history = _session_history_with_session(load_session_history(path), session, updated_at=updated_at, limit=limit)
-    save_session_history(history, path)
+    target = path or SESSION_HISTORY_JSON
+    history = _session_history_with_session(load_session_history(target), session, updated_at=updated_at, limit=limit)
+    save_session_history(history, target)
     return history
 
 
@@ -1369,16 +1372,67 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
             return
         resolved = decode_file_reference(str(value))
         if resolved and resolved.exists():
-            paths.add(str(resolved))
+            paths.add(str(resolved.resolve()))
 
     for key in (
         "edb_path",
+        "edbPath",
+        "edbFileUri",
+        "edb_file_uri",
         "pages_json_path",
+        "pagesJsonPath",
         "placements_json_path",
+        "placementsJsonPath",
         "classin_handoff_path",
+        "classinHandoffPath",
+        "classinHandoffUri",
+        "classin_handoff_uri",
         "classin_handoff_markdown_path",
+        "classinHandoffMarkdownPath",
+        "classinHandoffMarkdownUri",
+        "classin_handoff_markdown_uri",
     ):
         add_path(session.get(key))
+
+    for summary_key in ("publishSummary", "publish_summary"):
+        summary = session.get(summary_key)
+        if not isinstance(summary, dict):
+            continue
+        for key in (
+            "edbPath",
+            "edb_path",
+            "edbFileUri",
+            "edb_file_uri",
+            "classinHandoffPath",
+            "classin_handoff_path",
+            "classinHandoffUri",
+            "classin_handoff_uri",
+            "classinHandoffMarkdownPath",
+            "classin_handoff_markdown_path",
+            "classinHandoffMarkdownUri",
+            "classin_handoff_markdown_uri",
+        ):
+            add_path(summary.get(key))
+
+    for history_key in ("publishHistory", "publish_history"):
+        for summary in session.get(history_key, []) or []:
+            if not isinstance(summary, dict):
+                continue
+            for key in (
+                "edbPath",
+                "edb_path",
+                "edbFileUri",
+                "edb_file_uri",
+                "classinHandoffPath",
+                "classin_handoff_path",
+                "classinHandoffUri",
+                "classin_handoff_uri",
+                "classinHandoffMarkdownPath",
+                "classin_handoff_markdown_path",
+                "classinHandoffMarkdownUri",
+                "classin_handoff_markdown_uri",
+            ):
+                add_path(summary.get(key))
 
     for value in session.get("rendered_page_paths", []):
         add_path(value)
@@ -1393,6 +1447,18 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         for key in ("sourceImageUri", "sourceImagePath"):
             add_path(page.get(key))
 
+    return paths
+
+
+def collect_session_history_file_paths(history: list[dict[str, Any]]) -> set[str]:
+    paths: set[str] = set()
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        paths |= collect_session_file_paths(entry)
+        snapshot = entry.get("session")
+        if isinstance(snapshot, dict):
+            paths |= collect_session_file_paths(snapshot)
     return paths
 
 
@@ -1522,9 +1588,17 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
 
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten = json.loads(json.dumps(session))
-    rewritten["edb_file_uri"] = path_to_api_url(session.get("edb_path") or session.get("edb_file_uri"))
-    rewritten["classin_handoff_uri"] = path_to_api_url(session.get("classin_handoff_path"))
-    rewritten["classin_handoff_markdown_uri"] = path_to_api_url(session.get("classin_handoff_markdown_path"))
+    rewritten["edb_file_uri"] = path_to_api_url(
+        session.get("edb_path") or session.get("edbPath") or session.get("edb_file_uri") or session.get("edbFileUri")
+    )
+    rewritten["classin_handoff_uri"] = path_to_api_url(
+        session.get("classin_handoff_path") or session.get("classinHandoffPath")
+        or session.get("classin_handoff_uri") or session.get("classinHandoffUri")
+    )
+    rewritten["classin_handoff_markdown_uri"] = path_to_api_url(
+        session.get("classin_handoff_markdown_path") or session.get("classinHandoffMarkdownPath")
+        or session.get("classin_handoff_markdown_uri") or session.get("classinHandoffMarkdownUri")
+    )
     rewritten["rendered_page_file_uris"] = [path_to_api_url(value) for value in session.get("rendered_page_paths", [])]
 
     for problem in rewritten.get("problems", []):
@@ -2868,6 +2942,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         super().__init__(server_address, RequestHandlerClass)
         self.latest_session: dict[str, Any] | None = load_latest_session()
         self.allowed_files: set[str] = collect_session_file_paths(self.latest_session) if self.latest_session else set()
+        self.allowed_files |= collect_session_history_file_paths(load_session_history())
 
     def remember_session(self, session: dict[str, Any]) -> None:
         self.latest_session = session
@@ -3513,9 +3588,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "session": rewrite_session_for_http(restored)})
 
     def _handle_session_history(self) -> None:
+        history = load_session_history()
+        self.app_server.allowed_files |= collect_session_history_file_paths(history)
         self._send_json({
             "ok": True,
-            "history": _public_session_history(load_session_history()),
+            "history": _public_session_history(history),
         })
 
     def _handle_session_history_restore(self) -> None:
@@ -3544,18 +3621,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def _handle_session_clear(self) -> None:
         self.app_server.latest_session = None
         self.app_server.allowed_files = set()
-        try:
-            if LATEST_SESSION_JSON.exists():
-                LATEST_SESSION_JSON.unlink()
-        except OSError as exc:
-            self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
+        for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON):
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError as exc:
+                self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
         # also blank out the generated_session.js bridge so a refresh shows empty state
         try:
             GENERATED_SESSION_JS.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
         except OSError:
             pass
-        self._send_json({"ok": True})
+        self._send_json({"ok": True, "history": []})
 
     def _handle_open_folder(self) -> None:
         try:

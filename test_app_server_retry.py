@@ -1473,20 +1473,57 @@ class TestSessionHistory(unittest.TestCase):
             tmpdir = Path(raw_tmp)
             handoff_json = tmpdir / "classin_handoff.json"
             handoff_md = tmpdir / "classin_handoff.md"
+            publish_handoff_json = tmpdir / "publish_classin_handoff.json"
+            publish_handoff_md = tmpdir / "publish_classin_handoff.md"
             handoff_json.write_text("{}", encoding="utf-8")
             handoff_md.write_text("# check", encoding="utf-8")
+            publish_handoff_json.write_text("{}", encoding="utf-8")
+            publish_handoff_md.write_text("# publish check", encoding="utf-8")
             session = {
                 "classin_handoff_path": str(handoff_json),
-                "classin_handoff_markdown_path": str(handoff_md),
+                "classinHandoffMarkdownPath": str(handoff_md),
+                "publishSummary": {
+                    "classinHandoffPath": str(publish_handoff_json),
+                    "classinHandoffMarkdownUri": publish_handoff_md.resolve().as_uri(),
+                },
             }
 
             paths = app_server.collect_session_file_paths(session)
             rewritten = app_server.rewrite_session_for_http(session)
 
-        self.assertIn(str(handoff_json), paths)
-        self.assertIn(str(handoff_md), paths)
+        self.assertIn(str(handoff_json.resolve()), paths)
+        self.assertIn(str(handoff_md.resolve()), paths)
+        self.assertIn(str(publish_handoff_json.resolve()), paths)
+        self.assertIn(str(publish_handoff_md.resolve()), paths)
         self.assertIn("/api/file?path=", rewritten["classin_handoff_uri"])
         self.assertIn("/api/file?path=", rewritten["classin_handoff_markdown_uri"])
+
+    def test_session_history_endpoint_allows_handoff_files_from_recent_work(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            handoff_json = tmpdir / "classin_handoff.json"
+            handoff_md = tmpdir / "classin_handoff.md"
+            handoff_json.write_text("{}", encoding="utf-8")
+            handoff_md.write_text("# check", encoding="utf-8")
+            history = [{
+                "id": "recent",
+                "publishSummary": {
+                    "classinHandoffPath": str(handoff_json),
+                    "classinHandoffMarkdownPath": str(handoff_md),
+                },
+            }]
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {"allowed_files": set()})()
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            with patch.object(app_server, "load_session_history", return_value=history):
+                handler._handle_session_history()
+
+            self.assertIn(str(handoff_json.resolve()), handler.server.allowed_files)
+            self.assertIn(str(handoff_md.resolve()), handler.server.allowed_files)
+            self.assertEqual(1, len(responses))
+            self.assertTrue(responses[0][0]["ok"])
 
     def test_session_history_deduplicates_by_output_dir_and_keeps_latest_snapshot(self):
         older = {
@@ -1732,6 +1769,27 @@ class TestSystemOpenTargets(unittest.TestCase):
             self.assertEqual("과탐 양식", persisted[0]["sessionName"])
             self.assertEqual(["p1"], [problem["id"] for problem in persisted[0]["session"]["problems"]])
 
+    def test_session_history_helpers_use_current_default_path(self):
+        with TemporaryDirectory() as raw_tmp:
+            history_path = Path(raw_tmp) / "patched-history.json"
+            session = {
+                "session_name": "임시 런타임",
+                "generated_at": "2026-06-13T12:00:00+09:00",
+                "output_dir": "/tmp/session-patched",
+                "problems": [{"id": "p1"}],
+            }
+
+            with patch.object(app_server, "SESSION_HISTORY_JSON", history_path):
+                history = app_server.remember_session_history(
+                    session,
+                    updated_at="2026-06-13T12:00:00+09:00",
+                )
+                loaded = app_server.load_session_history()
+
+            self.assertTrue(history_path.exists())
+            self.assertEqual(history, loaded)
+            self.assertEqual("임시 런타임", loaded[0]["sessionName"])
+
     def test_latest_session_registers_history_entry(self):
         with TemporaryDirectory() as raw_tmp:
             latest_path = Path(raw_tmp) / "latest.json"
@@ -1757,6 +1815,38 @@ class TestSystemOpenTargets(unittest.TestCase):
 
             mock_history.assert_called_once_with(session)
             self.assertTrue(responses[0][0]["ok"])
+
+    def test_session_clear_removes_latest_session_and_history_files(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            latest_path = tmpdir / "latest.json"
+            history_path = tmpdir / "history.json"
+            generated_path = tmpdir / "generated_session.js"
+            latest_path.write_text('{"problems": [{"id": "p1"}]}', encoding="utf-8")
+            history_path.write_text('[{"id": "old"}]', encoding="utf-8")
+            generated_path.write_text("window.EDB_UI_SESSION = { problems: [] };\n", encoding="utf-8")
+
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "latest_session": {"problems": [{"id": "p1"}]},
+                "allowed_files": {"some-file"},
+            })()
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                handler._handle_session_clear()
+
+            self.assertFalse(latest_path.exists())
+            self.assertFalse(history_path.exists())
+            self.assertEqual("window.EDB_UI_SESSION = null;\n", generated_path.read_text(encoding="utf-8"))
+            self.assertIsNone(handler.server.latest_session)
+            self.assertEqual(set(), handler.server.allowed_files)
+            self.assertEqual({"ok": True, "history": []}, responses[0][0])
 
 
 class TestClassInManualReview(unittest.TestCase):

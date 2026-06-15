@@ -223,7 +223,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
         <span style={{marginLeft:4}}>{refreshing ? '불러오는 중…' : '새로고침'}</span>
       </button>
-      <button className="btn ghost" onClick={onReset} disabled={!canReset} title="세션, 더미, 업로드 대기열을 비웁니다">
+      <button className="btn ghost" onClick={onReset} disabled={!canReset} title="세션, 더미, 업로드 대기열, 최근 작업을 비웁니다">
         {Icon.reset}<span style={{marginLeft:4}}>초기화</span>
       </button>
       <button
@@ -4477,9 +4477,10 @@ async function fetchRuntimeDiagnostics(){
 
 async function clearSession(){
   const resp = await fetch('/api/session/latest', { method: 'DELETE' });
-  if (resp.status === 404) return; // already cleared
+  if (resp.status === 404) return { history: [] }; // already cleared
   const json = await resp.json();
   if (!resp.ok || !json.ok) throw new Error(json.error || `세션 초기화 실패 (${resp.status})`);
+  return json;
 }
 
 async function postMutate(action, args){
@@ -5039,21 +5040,22 @@ function App(){
       showToast('작업 중에는 초기화할 수 없습니다');
       return;
     }
-    if (!session && items.length === 0 && pendingFiles.length === 0) {
+    if (!session && items.length === 0 && pendingFiles.length === 0 && recentSessions.length === 0) {
       showToast('이미 빈 세션입니다');
       return;
     }
-    if (!window.confirm('세션을 초기화할까요? 업로드 대기열과 보드 자료가 모두 사라집니다.')) return;
+    if (!window.confirm('세션을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 모두 사라집니다.')) return;
     try {
-      if (session) {
-        await clearSession();
+      if (session || recentSessions.length) {
+        const result = await clearSession();
+        setRecentSessions(Array.isArray(result?.history) ? result.history : []);
       }
       setPendingFiles([]);
       hideMockItems('초기화 완료 · 빈 세션');
     } catch (e) {
       showToast('초기화 실패: ' + e.message);
     }
-  }, [loading, session, items.length, pendingFiles.length]);
+  }, [loading, session, items.length, pendingFiles.length, recentSessions.length]);
 
   const refreshSession = useCallback(async () => {
     setRefreshing(true);
@@ -5597,7 +5599,7 @@ function App(){
         onReset={resetSession}
         onRefresh={refreshSession}
         refreshing={refreshing}
-        canReset={(!!session || items.length > 0 || pendingFiles.length > 0) && !loading}
+        canReset={(!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading}
         view={view}
         setView={setView}
         reviewAvailable={reviewAvailable}
