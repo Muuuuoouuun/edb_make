@@ -526,7 +526,11 @@ def test_gemini_ocr_model_not_found_falls_back_without_retry_sleep(monkeypatch):
     )
 
     monkeypatch.delenv(ocr_backend.GEMINI_OCR_MODEL_ENV, raising=False)
-    backend = ocr_backend.GeminiOCRBackend(api_key="test-key", max_retries=1)
+    backend = ocr_backend.GeminiOCRBackend(
+        model="gemini-3.1-pro-preview",
+        api_key="test-key",
+        max_retries=1,
+    )
     result = backend.recognize(Image.new("RGB", (240, 120), "white"))
 
     assert result.text == "recognized"
@@ -574,12 +578,12 @@ def test_gemini_ocr_quota_error_does_not_retry_or_fallback(monkeypatch):
 
     assert result.text == ""
     assert sleep_calls == []
-    assert sum("gemini-3.1-pro-preview" in url for url in urls) == 1
+    assert sum("gemini-3.5-flash" in url for url in urls) == 1
     assert not any("gemini-2.5-pro" in url for url in urls)
     assert "RESOURCE_EXHAUSTED" in result.metadata["error"]
     assert result.metadata["model_attempts"] == [
         {
-            "model": "gemini-3.1-pro-preview",
+            "model": "gemini-3.5-flash",
             "status": "error",
             "error": (
                 'Gemini request failed with HTTP 429: {"error":{"status":"RESOURCE_EXHAUSTED",'
@@ -596,6 +600,7 @@ def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
     import ocr_backend
 
     urls: list[str] = []
+    payloads: list[dict] = []
 
     class FakeResponse:
         def __enter__(self):
@@ -629,6 +634,7 @@ def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
 
     def fake_urlopen(req, timeout):
         urls.append(req.full_url)
+        payloads.append(json.loads(req.data.decode("utf-8")))
         return FakeResponse()
 
     monkeypatch.setenv(ocr_backend.GEMINI_OCR_MODEL_ENV, "gemini-3.5-flash")
@@ -640,8 +646,85 @@ def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
     assert backend.model == "gemini-3.5-flash"
     assert result.text == "빠른 인식"
     assert result.metadata["model"] == "gemini-3.5-flash"
+    assert result.metadata["thinking_level"] == "low"
     assert any("gemini-3.5-flash" in url for url in urls)
     assert not any("gemini-2.5-pro" in url for url in urls)
+    assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+
+
+def test_default_gemini_ocr_model_is_flash_with_low_thinking(monkeypatch):
+    import ocr_backend
+
+    monkeypatch.delenv(ocr_backend.GEMINI_OCR_MODEL_ENV, raising=False)
+    monkeypatch.delenv(ocr_backend.GEMINI_OCR_THINKING_LEVEL_ENV, raising=False)
+    backend = ocr_backend.GeminiOCRBackend(api_key="test-key")
+
+    assert backend.model == "gemini-3.5-flash"
+    assert backend.thinking_level == "low"
+
+
+def test_gemini_ocr_flash_fallback_does_not_send_thinking_level_to_25(monkeypatch):
+    import json
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    from PIL import Image
+
+    import ocr_backend
+
+    urls: list[str] = []
+    payloads: list[dict] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            response_text = json.dumps(
+                {
+                    "text": "fallback ok",
+                    "block_type": "stem",
+                    "confidence": 0.88,
+                    "lines": ["fallback ok"],
+                }
+            )
+            return json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [{"text": response_text}],
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        urls.append(req.full_url)
+        payloads.append(json.loads(req.data.decode("utf-8")))
+        if "gemini-3.5-flash" in req.full_url:
+            raise HTTPError(req.full_url, 503, "temporary", hdrs=None, fp=BytesIO(b"temporary"))
+        return FakeResponse()
+
+    monkeypatch.delenv(ocr_backend.GEMINI_OCR_MODEL_ENV, raising=False)
+    monkeypatch.delenv(ocr_backend.GEMINI_OCR_THINKING_LEVEL_ENV, raising=False)
+    monkeypatch.setattr(ocr_backend.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ocr_backend.time, "sleep", lambda seconds: None)
+
+    backend = ocr_backend.GeminiOCRBackend(api_key="test-key", max_retries=0)
+    result = backend.recognize(Image.new("RGB", (240, 120), "white"))
+
+    assert result.text == "fallback ok"
+    assert result.metadata["model"] == "gemini-2.5-pro"
+    assert result.metadata["thinking_level"] == ""
+    assert any("gemini-3.5-flash" in url for url in urls)
+    assert any("gemini-2.5-pro" in url for url in urls)
+    assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert "thinkingConfig" not in payloads[1]["generationConfig"]
 
 
 def test_explicit_gemini_model_name_builds_matching_backend(monkeypatch):
@@ -652,6 +735,7 @@ def test_explicit_gemini_model_name_builds_matching_backend(monkeypatch):
 
     assert isinstance(backend, ocr_backend.GeminiOCRBackend)
     assert backend.model == "gemini-3.5-flash"
+    assert backend.thinking_level == "low"
 
 
 def test_page_model_records_recognition_timing_metadata_before_repair(

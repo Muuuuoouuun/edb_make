@@ -16,10 +16,12 @@ from PIL import Image
 from structured_schema import Box
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_GEMINI_OCR_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_GEMINI_OCR_MODEL = "gemini-3.5-flash"
 GEMINI_OCR_MODEL_ENV = "EDB_GEMINI_OCR_MODEL"
+GEMINI_OCR_THINKING_LEVEL_ENV = "EDB_GEMINI_OCR_THINKING_LEVEL"
+DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL = "low"
 FALLBACK_GEMINI_OCR_MODEL = "gemini-2.5-pro"
-DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview"}
+DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview", "gemini-3.1-pro-preview"}
 
 # Gemini's responseSchema follows an OpenAPI 3.0 subset: no `additionalProperties`,
 # no `$ref`, no `oneOf`. Keep the shape simple and rely on `required` instead.
@@ -79,6 +81,24 @@ def resolve_gemini_ocr_model(model: str | None = None) -> str:
         return requested
     env_model = os.environ.get(GEMINI_OCR_MODEL_ENV, "").strip()
     return env_model or DEFAULT_GEMINI_OCR_MODEL
+
+
+def resolve_gemini_ocr_thinking_level(model: str, thinking_level: str | None = None) -> str:
+    requested = (thinking_level or "").strip().lower()
+    if requested:
+        return requested
+    env_level = os.environ.get(GEMINI_OCR_THINKING_LEVEL_ENV, "").strip().lower()
+    if env_level:
+        return env_level
+    normalized_model = (model or "").strip().lower()
+    if normalized_model == "gemini-3.5-flash":
+        return DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL
+    return ""
+
+
+def _gemini_model_supports_thinking_level(model: str) -> bool:
+    normalized_model = (model or "").strip().lower()
+    return normalized_model.startswith("gemini-3")
 
 
 def _gemini_model_candidates(primary: str) -> list[str]:
@@ -425,8 +445,10 @@ class GeminiOCRBackend(OCRBackend):
         timeout_ms: int = 15000,
         max_tokens: int = 1024,
         max_retries: int = 1,
+        thinking_level: str | None = None,
     ) -> None:
         self.model = resolve_gemini_ocr_model(model)
+        self.thinking_level = resolve_gemini_ocr_thinking_level(self.model, thinking_level)
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY environment variable is required for GeminiOCRBackend")
@@ -491,9 +513,27 @@ class GeminiOCRBackend(OCRBackend):
         model_candidates = _gemini_model_candidates(self.model)
         used_model = model_candidates[0]
         url = f"{GEMINI_API_BASE}/{used_model}:generateContent?key={self.api_key}"
-
-        body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
+        thinking_levels_by_model: dict[str, str] = {}
+
+        def _body_for_model(model: str) -> bytes:
+            generation_config = dict(payload["generationConfig"])
+            generation_config.pop("thinkingConfig", None)
+            thinking_level = (
+                self.thinking_level
+                if model == self.model
+                else resolve_gemini_ocr_thinking_level(model)
+            )
+            if thinking_level and _gemini_model_supports_thinking_level(model):
+                generation_config["thinkingConfig"] = {
+                    "thinkingLevel": thinking_level,
+                }
+                thinking_levels_by_model[model] = thinking_level
+            else:
+                thinking_levels_by_model[model] = ""
+            model_payload = dict(payload)
+            model_payload["generationConfig"] = generation_config
+            return json.dumps(model_payload).encode("utf-8")
 
         last_exc: Exception | None = None
         response_data: dict[str, Any] | None = None
@@ -501,6 +541,7 @@ class GeminiOCRBackend(OCRBackend):
             if attempt > 0:
                 time.sleep(min(1.5 * attempt, 4.0))
             try:
+                body = _body_for_model(used_model)
                 req = urllib.request.Request(url, data=body, method="POST", headers=headers)
                 with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                     response_data = json.loads(resp.read().decode("utf-8"))
@@ -528,6 +569,7 @@ class GeminiOCRBackend(OCRBackend):
                     if attempt > 0:
                         time.sleep(min(1.5 * attempt, 4.0))
                     try:
+                        body = _body_for_model(used_model)
                         req = urllib.request.Request(url, data=body, method="POST", headers=headers)
                         with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                             response_data = json.loads(resp.read().decode("utf-8"))
@@ -641,7 +683,12 @@ class GeminiOCRBackend(OCRBackend):
                 text=raw_text,
                 confidence=confidence,
                 lines=lines,
-                extra={"block_type_hint": block_type_hint, "model": used_model, "model_attempts": model_attempts},
+                extra={
+                    "block_type_hint": block_type_hint,
+                    "model": used_model,
+                    "model_attempts": model_attempts,
+                    "thinking_level": thinking_levels_by_model.get(used_model, ""),
+                },
             ),
         )
 
