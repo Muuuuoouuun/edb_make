@@ -2442,6 +2442,7 @@ MANUAL_CROP_RATIO_KEYS = {
     "bottomRatio": ("bottomRatio", "bottom", "cropBottomRatio", "crop_bottom_ratio"),
 }
 MANUAL_CROP_EDGE_MAX = 0.45
+MANUAL_CROP_OUTSET_MAX = 0.60
 
 
 def _coerce_manual_crop_ratios(raw_crop: Any) -> dict[str, float]:
@@ -2457,7 +2458,7 @@ def _coerce_manual_crop_ratios(raw_crop: Any) -> dict[str, float]:
             value = float(raw_value if raw_value is not None else 0.0)
         except (TypeError, ValueError):
             value = 0.0
-        ratios[target_key] = max(0.0, min(MANUAL_CROP_EDGE_MAX, value))
+        ratios[target_key] = max(-MANUAL_CROP_OUTSET_MAX, min(MANUAL_CROP_EDGE_MAX, value))
     if ratios["leftRatio"] + ratios["rightRatio"] >= 0.92:
         raise ValueError("left/right crop is too large")
     if ratios["topRatio"] + ratios["bottomRatio"] >= 0.92:
@@ -2495,8 +2496,59 @@ def _bbox_with_manual_crop(base: Box, crop: dict[str, float]) -> Box:
     )
 
 
+def _manual_crop_from_bbox(base: Box, box: Box) -> dict[str, float]:
+    if base.width <= 0 or base.height <= 0:
+        return {"leftRatio": 0.0, "rightRatio": 0.0, "topRatio": 0.0, "bottomRatio": 0.0}
+    return _coerce_manual_crop_ratios({
+        "leftRatio": (box.left - base.left) / base.width,
+        "rightRatio": (base.right - box.right) / base.width,
+        "topRatio": (box.top - base.top) / base.height,
+        "bottomRatio": (base.bottom - box.bottom) / base.height,
+    })
+
+
+def _page_for_problem(session: dict[str, Any], problem: dict[str, Any]) -> dict[str, Any] | None:
+    page_id = str(problem.get("sourcePageId") or problem.get("source_page_id") or "")
+    if not page_id:
+        return None
+    try:
+        return _find_page(session, page_id)
+    except ValueError:
+        return None
+
+
+def _source_page_path_for_problem(session: dict[str, Any], problem: dict[str, Any]) -> Path | None:
+    page = _page_for_problem(session, problem)
+    if not page:
+        return None
+    return _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+
+
+def _coerce_crop_box(raw_box: Any, *, image_width: int, image_height: int) -> Box:
+    box = raw_box if isinstance(raw_box, dict) else {}
+    try:
+        left = float(box.get("left", box.get("x", 0.0)))
+        top = float(box.get("top", box.get("y", 0.0)))
+        width = float(box.get("width", box.get("w", 0.0)))
+        height = float(box.get("height", box.get("h", 0.0)))
+        right = box.get("right")
+        bottom = box.get("bottom")
+        if (width <= 0 or height <= 0) and right is not None and bottom is not None:
+            width = float(right) - left
+            height = float(bottom) - top
+    except (TypeError, ValueError):
+        raise ValueError("cropBox must include numeric left/top/width/height") from None
+    if width <= 0 or height <= 0:
+        raise ValueError("cropBox is empty")
+    left = max(0.0, min(float(image_width) - 1.0, left))
+    top = max(0.0, min(float(image_height) - 1.0, top))
+    right_edge = max(left + 1.0, min(float(image_width), left + width))
+    bottom_edge = max(top + 1.0, min(float(image_height), top + height))
+    return Box(left=left, top=top, width=right_edge - left, height=bottom_edge - top)
+
+
 def _manual_crop_is_empty(crop: dict[str, float]) -> bool:
-    return all(value <= 0.0001 for value in crop.values())
+    return all(abs(value) <= 0.0001 for value in crop.values())
 
 
 def _crop_image_by_ratios(source_path: Path, crop: dict[str, float], output_path: Path) -> tuple[int, int]:
@@ -2520,9 +2572,25 @@ def _crop_image_by_ratios(source_path: Path, crop: dict[str, float], output_path
         return cropped.size
 
 
+def _crop_image_by_bbox(source_path: Path, bbox: Box, output_path: Path) -> tuple[int, int]:
+    from PIL import Image
+
+    with Image.open(source_path) as image:
+        if image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+            image = image.convert("RGBA")
+        left = int(max(0, min(image.width - 1, round(bbox.left))))
+        top = int(max(0, min(image.height - 1, round(bbox.top))))
+        right = int(max(left + 1, min(image.width, round(bbox.right))))
+        bottom = int(max(top + 1, min(image.height, round(bbox.bottom))))
+        cropped = image.crop((left, top, right, bottom))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cropped.save(output_path)
+        return cropped.size
+
+
 def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dict[str, Any]:
     _index, problem = _find_problem(session, problem_id)
-    crop = _coerce_manual_crop_ratios(raw_crop)
+    crop_payload = raw_crop if isinstance(raw_crop, dict) else {}
     if "cropBaseBbox" not in problem:
         base_bbox = _bbox_from_problem(problem)
         problem["cropBaseBbox"] = {
@@ -2536,7 +2604,26 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     else:
         base_bbox = _bbox_from_problem(problem, prefer_crop_base=True)
 
-    next_bbox = _bbox_with_manual_crop(base_bbox, crop)
+    crop_box_payload = crop_payload.get("cropBox") or crop_payload.get("crop_box")
+    page_source_path = _source_page_path_for_problem(session, problem)
+    next_bbox: Box
+    crop: dict[str, float]
+    if crop_box_payload is not None:
+        if page_source_path is None or not page_source_path.exists():
+            raise FileNotFoundError(f"source page image missing for manual crop: {problem_id}")
+        from PIL import Image
+
+        with Image.open(page_source_path) as page_image:
+            next_bbox = _coerce_crop_box(
+                crop_box_payload,
+                image_width=page_image.width,
+                image_height=page_image.height,
+            )
+        crop = _manual_crop_from_bbox(base_bbox, next_bbox)
+    else:
+        crop = _coerce_manual_crop_ratios(crop_payload)
+        next_bbox = _bbox_with_manual_crop(base_bbox, crop)
+
     base_image_path = _resolve_session_path(problem.get("cropBaseImagePath") or problem.get("imagePath"))
     base_board_path = _resolve_session_path(
         problem.get("cropBaseBoardRenderPath")
@@ -2553,7 +2640,14 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     if _manual_crop_is_empty(crop):
         raw_uri = base_image_path.resolve().as_uri()
         board_uri = base_board_path.resolve().as_uri()
+    elif page_source_path is not None and page_source_path.exists():
+        raw_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop")
+        _crop_image_by_bbox(page_source_path, next_bbox, raw_crop_path)
+        raw_uri = raw_crop_path.resolve().as_uri()
+        board_uri = raw_uri
     else:
+        if any(value < -0.0001 for value in crop.values()):
+            raise FileNotFoundError(f"source page image missing for expanded manual crop: {problem_id}")
         raw_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop")
         _crop_image_by_ratios(base_image_path, crop, raw_crop_path)
         raw_uri = raw_crop_path.resolve().as_uri()
@@ -2704,6 +2798,39 @@ def _replace_page_problems(session: dict[str, Any], page_id: str, replacements: 
 
     session["problems"] = next_problems
     page["problemIds"] = [str(problem.get("id")) for problem in replacements if problem.get("id")]
+    _refresh_session_problem_counts(session)
+
+
+def _replace_single_problem(session: dict[str, Any], old_problem_id: str, replacements: list[dict[str, Any]]) -> None:
+    if not replacements:
+        return
+    _index, old_problem = _find_problem(session, old_problem_id)
+    page = _page_for_problem(session, old_problem)
+    replacement_ids = [str(problem.get("id")) for problem in replacements if problem.get("id")]
+    next_problems: list[dict[str, Any]] = []
+    inserted = False
+    for problem in session.get("problems", []) or []:
+        if isinstance(problem, dict) and str(problem.get("id")) == old_problem_id:
+            next_problems.extend(replacements)
+            inserted = True
+            continue
+        next_problems.append(problem)
+    if not inserted:
+        next_problems.extend(replacements)
+    session["problems"] = next_problems
+    if page is not None:
+        next_ids: list[str] = []
+        replaced = False
+        for raw_id in page.get("problemIds") or []:
+            current_id = str(raw_id)
+            if current_id == old_problem_id:
+                next_ids.extend(replacement_ids)
+                replaced = True
+            else:
+                next_ids.append(current_id)
+        if not replaced:
+            next_ids.extend(replacement_ids)
+        page["problemIds"] = next_ids
     _refresh_session_problem_counts(session)
 
 
@@ -2877,9 +3004,159 @@ def _normalized_retry_problem(
     return problem
 
 
+def _offset_retry_problem_to_source_page(problem: dict[str, Any], crop_box: Box) -> None:
+    raw_bbox = problem.get("bbox")
+    if isinstance(raw_bbox, dict):
+        try:
+            raw_bbox["left"] = float(raw_bbox.get("left") or 0.0) + crop_box.left
+            raw_bbox["top"] = float(raw_bbox.get("top") or 0.0) + crop_box.top
+            raw_bbox["width"] = float(raw_bbox.get("width") or 0.0)
+            raw_bbox["height"] = float(raw_bbox.get("height") or 0.0)
+        except (TypeError, ValueError):
+            pass
+
+
+def _retry_target_problem_ids(payload: dict[str, Any]) -> list[str]:
+    raw_problem_ids = payload.get("problemIds") or payload.get("problem_ids") or []
+    if payload.get("problemId") or payload.get("problem_id"):
+        raw_problem_ids = [payload.get("problemId") or payload.get("problem_id")]
+    return list(dict.fromkeys(str(pid) for pid in raw_problem_ids if pid))
+
+
+def _payload_crop_box_for_problem(payload: dict[str, Any], problem_id: str) -> Any:
+    crop_boxes = payload.get("cropBoxes") or payload.get("crop_boxes") or {}
+    if isinstance(crop_boxes, dict) and problem_id in crop_boxes:
+        return crop_boxes[problem_id]
+    return payload.get("cropBox") or payload.get("crop_box")
+
+
+def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    session_output_dir = session.get("output_dir")
+    if session_output_dir:
+        output_root = Path(session_output_dir).resolve() / "ai_retries"
+    else:
+        output_root = (RUNTIME_DIR / "ai_retries").resolve()
+    ai_config = session.get("ai_fallback") if isinstance(session.get("ai_fallback"), dict) else {}
+    summaries: list[dict[str, Any]] = []
+
+    for job_index, problem_id in enumerate(problem_ids, start=1):
+        try:
+            _problem_index, problem = _find_problem(session, problem_id)
+            page = _page_for_problem(session, problem)
+            if page is None:
+                raise FileNotFoundError(f"source page missing for partial retry: {problem_id}")
+            source_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+            if source_path is None or not source_path.exists():
+                raise FileNotFoundError(f"source page image missing for partial retry: {problem_id}")
+
+            from PIL import Image
+
+            raw_crop_box = _payload_crop_box_for_problem(payload, problem_id) or problem.get("bbox")
+            with Image.open(source_path) as source_image:
+                crop_box = _coerce_crop_box(
+                    raw_crop_box,
+                    image_width=source_image.width,
+                    image_height=source_image.height,
+                )
+            retry_dir = output_root / sanitize_output_dir_name(f"{problem_id}_{stamp}")
+            partial_source_path = retry_dir / "partial_source.png"
+            _crop_image_by_bbox(source_path, crop_box, partial_source_path)
+            result = run_problem_export(
+                partial_source_path,
+                output_dir=retry_dir,
+                subject_name=str(payload.get("subject") or "unknown"),
+                ocr=str(payload.get("ocr") or "auto"),
+                pdf_dpi=int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
+                detect_perspective=False,
+                skip_deskew=True,
+                skip_crop=True,
+                max_dimension=None,
+                export_edb=False,
+                edb_name="ai_retry.edb",
+                sync_ui=False,
+                record_mode=str(session.get("record_mode") or "image-only"),
+                text_confidence_threshold=float(session.get("text_confidence_threshold") or 0.78),
+                input_intent=str(payload.get("inputIntent") or payload.get("input_intent") or "single-problem"),
+                ai_fallback_enabled=True,
+                ai_fallback="force",
+                ai_fallback_provider=str(ai_config.get("provider") or "gemini"),
+                ai_fallback_model=str(ai_config.get("model") or ""),
+                ai_fallback_max_tokens=ai_config.get("max_tokens"),
+                ai_fallback_temperature=ai_config.get("temperature"),
+                ai_fallback_threshold=float(ai_config.get("threshold") or 0.72),
+                ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
+                ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 30000),
+                ai_fallback_save_debug=bool(ai_config.get("save_debug")),
+            )
+            retry_session = result.get("ui_session") or {}
+            retry_problems = [p for p in retry_session.get("problems", []) if isinstance(p, dict)]
+            if not retry_problems:
+                raise ValueError("partial AI retry produced no problems")
+
+            replacements: list[dict[str, Any]] = []
+            for index, retry_problem in enumerate(retry_problems, start=1):
+                normalized = _normalized_retry_problem(
+                    session,
+                    page,
+                    retry_problem,
+                    stamp=stamp,
+                    index=(job_index * 1000) + index,
+                    replacements_so_far=replacements,
+                )
+                _offset_retry_problem_to_source_page(normalized, crop_box)
+                normalized["aiRetry"]["partial"] = True
+                normalized["aiRetry"]["cropBox"] = {
+                    "left": crop_box.left,
+                    "top": crop_box.top,
+                    "width": crop_box.width,
+                    "height": crop_box.height,
+                }
+                replacements.append(normalized)
+            _replace_single_problem(session, problem_id, replacements)
+            summaries.append({
+                "problemId": problem_id,
+                "pageId": str(page.get("id") or ""),
+                "status": "applied",
+                "partial": True,
+                "replacedProblemCount": len(replacements),
+            })
+        except Exception as exc:  # noqa: BLE001 - record per-problem retry failure
+            try:
+                _idx, failed_problem = _find_problem(session, problem_id)
+                flags = list(failed_problem.get("riskFlags") or [])
+                flags.append("ai_partial_retry_failed")
+                failed_problem["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
+                failed_problem["reviewStatus"] = "check_needed"
+                failed_problem["aiRetry"] = {
+                    "status": "failed",
+                    "partial": True,
+                    "error": str(exc),
+                    "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                }
+            except Exception:
+                pass
+            summaries.append({
+                "problemId": problem_id,
+                "status": "failed",
+                "partial": True,
+                "error": str(exc),
+            })
+
+    session["ai_retry_summary"] = summaries
+    _refresh_session_problem_counts(session)
+    return session
+
+
 def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
+
+    if _coerce_bool(payload.get("partial") or payload.get("partialRetry") or payload.get("partial_retry")):
+        problem_ids = _retry_target_problem_ids(payload)
+        if not problem_ids:
+            raise ValueError("부분 재인식할 문항이 없습니다")
+        return _mutate_retry_ai_partial(session, payload, problem_ids)
 
     page_ids = _retry_target_page_ids(session, payload)
     if not page_ids:

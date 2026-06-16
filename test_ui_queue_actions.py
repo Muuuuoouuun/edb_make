@@ -41,6 +41,19 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("review?.kind === 'queue-recognition'", modal_source)
         self.assertIn("맞아요, 검수로 이동", modal_source)
 
+    def test_review_stage_exposes_crop_frame_and_partial_retry(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        self.assertIn("틀로 자르기", source)
+        self.assertIn("선택 영역 AI 재인식", source)
+        self.assertIn("partial: true", source)
+        self.assertIn("cropBoxes", source)
+        self.assertIn("MANUAL_CROP_OUTSET_MAX", source)
+        self.assertIn("인식 중단", source)
+        self.assertIn("crop-frame-handle", html)
+        self.assertIn("manual-crop-presets", html)
+
 
 if __name__ == "__main__":
     unittest.main()

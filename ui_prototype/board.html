@@ -935,6 +935,23 @@
     border-radius: 10px;
     background: var(--surface-2);
   }
+  .manual-crop-note{
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .manual-crop-presets{
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .manual-crop-presets .btn{
+    justify-content: center;
+    min-width: 0;
+    height: 28px;
+    padding: 0 7px;
+    font-size: 11px;
+  }
   .manual-crop-grid{
     display: grid;
     gap: 8px;
@@ -2510,6 +2527,44 @@
     background: rgba(246,211,101,.18);
     box-shadow: 0 0 0 2px var(--chalk-warm);
   }
+  .review-bbox.editing{
+    cursor: move;
+    border-color: var(--accent);
+    background: rgba(47,111,237,.10);
+    box-shadow: 0 0 0 2px rgba(47,111,237,.35), 0 0 0 9999px rgba(13,18,30,.16);
+    z-index: 9;
+  }
+  .crop-frame-label{
+    position: absolute;
+    right: 4px;
+    top: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(17,24,39,.82);
+    color: white;
+    font-size: 10.5px;
+    font-weight: 800;
+    pointer-events: none;
+    z-index: 3;
+  }
+  .crop-frame-handle{
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 2px solid white;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 1px 5px rgba(0,0,0,.28);
+    z-index: 4;
+  }
+  .crop-frame-handle.nw{ left: -7px; top: -7px; cursor: nwse-resize; }
+  .crop-frame-handle.n{ left: 50%; top: -7px; transform: translateX(-50%); cursor: ns-resize; }
+  .crop-frame-handle.ne{ right: -7px; top: -7px; cursor: nesw-resize; }
+  .crop-frame-handle.e{ right: -7px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+  .crop-frame-handle.se{ right: -7px; bottom: -7px; cursor: nwse-resize; }
+  .crop-frame-handle.s{ left: 50%; bottom: -7px; transform: translateX(-50%); cursor: ns-resize; }
+  .crop-frame-handle.sw{ left: -7px; bottom: -7px; cursor: nesw-resize; }
+  .crop-frame-handle.w{ left: -7px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
   .split-guide{
     position: absolute;
     left: 0; right: 0;

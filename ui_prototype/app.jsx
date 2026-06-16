@@ -65,6 +65,7 @@ const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
 const MANUAL_CROP_EDGE_MAX = 0.45;
+const MANUAL_CROP_OUTSET_MAX = 0.60;
 const MANUAL_CROP_EDGE_STEP = 0.01;
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
@@ -95,7 +96,7 @@ function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
 
 function normalizeManualCropEdgeRatio(value){
   const n = Number(value);
-  return Number.isFinite(n) ? Math.max(0, Math.min(MANUAL_CROP_EDGE_MAX, n)) : 0;
+  return Number.isFinite(n) ? Math.max(-MANUAL_CROP_OUTSET_MAX, Math.min(MANUAL_CROP_EDGE_MAX, n)) : 0;
 }
 
 function manualCropValue(rawCrop, camelKey, snakeKey, plainKey){
@@ -115,7 +116,7 @@ function normalizeManualCrop(rawCrop){
 
 function manualCropIsActive(crop){
   const normalized = normalizeManualCrop(crop);
-  return Object.values(normalized).some(value => value > 0.0001);
+  return Object.values(normalized).some(value => Math.abs(value) > 0.0001);
 }
 
 function manualCropEquals(a, b){
@@ -126,7 +127,10 @@ function manualCropEquals(a, b){
 }
 
 function manualCropPercent(value){
-  return `${Math.round(normalizeManualCropEdgeRatio(value) * 100)}%`;
+  const normalized = normalizeManualCropEdgeRatio(value);
+  if (normalized < -0.0001) return `+${Math.round(Math.abs(normalized) * 100)}%`;
+  if (normalized > 0.0001) return `-${Math.round(normalized * 100)}%`;
+  return '0%';
 }
 
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
@@ -306,14 +310,17 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   // horizontal guideline. The ratio is in (0, 1).
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitRatio, setSplitRatio] = useState(0.5);
+  const [boxEdit, setBoxEdit] = useState(null);
   const [reviewFilter, setReviewFilter] = useState('all');
   const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
   const splitDraggingRef = useRef(false);
   const splitBoxRef = useRef(null);
+  const boxEditDragRef = useRef(null);
 
   // Cancel split mode if the session changes underneath (e.g. after a mutation).
   useEffect(() => {
     setSplitTarget(null);
+    setBoxEdit(null);
     setSelectedIds(new Set());
     setReviewRiskFilter(null);
   }, [session]);
@@ -331,6 +338,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
 
   const onBoxClick = (probId, evt) => {
     if (splitTarget) return;  // ignore clicks while splitting
+    if (boxEdit) return;  // keep the crop frame stable while editing
     if (evt.shiftKey) {
       setSelectedIds(prev => {
         const next = new Set(prev);
@@ -346,6 +354,10 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
 
   const selectedList = Array.from(selectedIds);
   const selectedProblems = selectedList.map(id => problemsById.get(id)).filter(Boolean);
+  const selectedSingleProblem = selectedProblems.length === 1 ? selectedProblems[0] : null;
+  const selectedSinglePage = selectedSingleProblem
+    ? pages.find(page => page.id === selectedSingleProblem.sourcePageId)
+    : null;
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
   const statusCounts = useMemo(() => {
@@ -427,9 +439,91 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     .map(problem => problem.id), [session]);
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
+  const selectedCanBoxEdit = Boolean(
+    selectedSingleProblem?.bbox?.width
+    && selectedSingleProblem?.bbox?.height
+    && selectedSinglePage?.width
+    && selectedSinglePage?.height
+    && selectedSinglePage?.sourceImageUri
+  );
+
+  const clampReviewBox = useCallback((rawBox, page) => {
+    const pageWidth = Math.max(1, Number(page?.width) || 1);
+    const pageHeight = Math.max(1, Number(page?.height) || 1);
+    const minWidth = Math.min(pageWidth, Math.max(12, Math.min(36, pageWidth * 0.02)));
+    const minHeight = Math.min(pageHeight, Math.max(12, Math.min(36, pageHeight * 0.02)));
+    let left = Number(rawBox?.left);
+    let top = Number(rawBox?.top);
+    let width = Number(rawBox?.width);
+    let height = Number(rawBox?.height);
+    if (!Number.isFinite(left)) left = 0;
+    if (!Number.isFinite(top)) top = 0;
+    if (!Number.isFinite(width) || width <= 0) width = minWidth;
+    if (!Number.isFinite(height) || height <= 0) height = minHeight;
+    left = Math.max(0, Math.min(pageWidth - minWidth, left));
+    top = Math.max(0, Math.min(pageHeight - minHeight, top));
+    width = Math.max(minWidth, Math.min(pageWidth - left, width));
+    height = Math.max(minHeight, Math.min(pageHeight - top, height));
+    return { left, top, width, height };
+  }, []);
+
+  const beginBoxEdit = () => {
+    if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
+    setSplitTarget(null);
+    setBoxEdit({
+      problemId: selectedSingleProblem.id,
+      pageId: selectedSinglePage.id,
+      box: clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage),
+    });
+  };
+  const cancelBoxEdit = () => {
+    boxEditDragRef.current = null;
+    setBoxEdit(null);
+  };
+  const applyBoxEdit = async () => {
+    if (!boxEdit?.problemId || !boxEdit?.box) return;
+    await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
+    setBoxEdit(null);
+  };
+  const retryPartialAi = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
+    if (!problem?.id || !page?.id) return;
+    const retryBox = cropBox || problem.bbox;
+    await retryAiSession?.({
+      partial: true,
+      problemIds: [problem.id],
+      cropBoxes: { [problem.id]: retryBox },
+      inputIntent: 'single-problem',
+    });
+  };
+  const retryBoxEdit = async () => {
+    if (!boxEdit?.problemId || !boxEdit?.box) return;
+    const problem = problemsById.get(boxEdit.problemId);
+    const page = pages.find(item => item.id === (problem?.sourcePageId || boxEdit.pageId));
+    await retryPartialAi(problem, page, boxEdit.box);
+    setBoxEdit(null);
+  };
+  const beginBoxDrag = (evt, mode, page) => {
+    if (!boxEdit?.box || evt.button !== 0) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    const canvas = evt.currentTarget.closest?.('.review-page-canvas');
+    const rect = canvas?.getBoundingClientRect?.();
+    if (!rect?.width || !rect?.height) return;
+    boxEditDragRef.current = {
+      mode,
+      startX: evt.clientX,
+      startY: evt.clientY,
+      initialBox: { ...boxEdit.box },
+      pageWidth: Number(page?.width) || 1,
+      pageHeight: Number(page?.height) || 1,
+      scaleX: (Number(page?.width) || 1) / rect.width,
+      scaleY: (Number(page?.height) || 1) / rect.height,
+    };
+  };
 
   const beginSplit = () => {
     if (selectedList.length !== 1) return;
+    setBoxEdit(null);
     setSplitTarget(selectedList[0]);
     setSplitRatio(0.5);
   };
@@ -488,6 +582,51 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     };
   }, [splitTarget]);
 
+  useEffect(() => {
+    const onMove = (evt) => {
+      const drag = boxEditDragRef.current;
+      if (!drag) return;
+      const dx = (evt.clientX - drag.startX) * drag.scaleX;
+      const dy = (evt.clientY - drag.startY) * drag.scaleY;
+      const minWidth = Math.min(drag.pageWidth, Math.max(12, Math.min(36, drag.pageWidth * 0.02)));
+      const minHeight = Math.min(drag.pageHeight, Math.max(12, Math.min(36, drag.pageHeight * 0.02)));
+      const initial = drag.initialBox;
+      let left = initial.left;
+      let top = initial.top;
+      let right = initial.left + initial.width;
+      let bottom = initial.top + initial.height;
+
+      if (drag.mode === 'move') {
+        const nextLeft = Math.max(0, Math.min(drag.pageWidth - initial.width, initial.left + dx));
+        const nextTop = Math.max(0, Math.min(drag.pageHeight - initial.height, initial.top + dy));
+        left = nextLeft;
+        top = nextTop;
+        right = nextLeft + initial.width;
+        bottom = nextTop + initial.height;
+      } else {
+        if (drag.mode.includes('w')) left = Math.max(0, Math.min(right - minWidth, initial.left + dx));
+        if (drag.mode.includes('e')) right = Math.min(drag.pageWidth, Math.max(left + minWidth, initial.left + initial.width + dx));
+        if (drag.mode.includes('n')) top = Math.max(0, Math.min(bottom - minHeight, initial.top + dy));
+        if (drag.mode.includes('s')) bottom = Math.min(drag.pageHeight, Math.max(top + minHeight, initial.top + initial.height + dy));
+      }
+
+      const nextBox = clampReviewBox(
+        { left, top, width: right - left, height: bottom - top },
+        { width: drag.pageWidth, height: drag.pageHeight }
+      );
+      setBoxEdit(prev => prev ? { ...prev, box: nextBox } : prev);
+    };
+    const onUp = () => {
+      boxEditDragRef.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [clampReviewBox]);
+
   if (!pages.length) {
     return (
       <div className="col center">
@@ -529,7 +668,26 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const bulkRetryProblemCount = activeReviewFilter ? visibleReviewScope.problemCount : riskyCount;
   const showBulkRetry = reviewFilter !== 'normal' && reviewFilter !== 'supplemental' && bulkRetryProblemCount > 0 && bulkRetryPageIds.length > 0;
 
-  const actionBar = splitTarget ? (
+  const actionBar = boxEdit ? (
+    <div className="review-actionbar">
+      <span className="count-chip">틀 조정 중</span>
+      <span className="hint">모서리와 변을 끌어 문제 전체가 들어오게 맞춘 뒤 적용하거나, 이 영역만 AI로 다시 인식하세요.</span>
+      <div className="spacer" />
+      <button className="btn" type="button" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
+      <button className="btn" type="button" onClick={applyBoxEdit} disabled={mutating}>
+        선택 영역 적용
+      </button>
+      <button
+        className="btn primary"
+        type="button"
+        title={retryDisabledReason || '조정한 영역만 AI로 다시 인식'}
+        onClick={retryBoxEdit}
+        disabled={!aiAvailable || aiBusy || mutating}
+      >
+        선택 영역 AI 재인식
+      </button>
+    </div>
+  ) : splitTarget ? (
     <div className="review-actionbar">
       <span className="count-chip">가르기 중</span>
       <span className="hint">박스 안의 파란 선을 드래그해서 위치를 정한 다음 [가르기]를 눌러주세요.</span>
@@ -629,10 +787,30 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
         onClick={() => doRetryAi(selectedRetryPageIds)}
         disabled={!aiAvailable || aiBusy || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
       >
-        AI 재인식 {selectedList.length}
+        {selectedList.length === 1 ? '페이지 AI 재인식' : `AI 재인식 ${selectedList.length}`}
       </button>
       {selectedList.length === 1 && (
-        <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 가르기</button>
+        <>
+          <button
+            className="btn"
+            type="button"
+            onClick={beginBoxEdit}
+            disabled={mutating || !selectedCanBoxEdit}
+            title={selectedCanBoxEdit ? '원본 페이지 위에서 직접 자르기 틀을 조정' : '원본 페이지 이미지가 있어야 합니다'}
+          >
+            틀로 자르기
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => retryPartialAi()}
+            disabled={!aiAvailable || aiBusy || mutating || !selectedCanBoxEdit}
+            title={retryDisabledReason || '선택한 문제 영역만 AI로 다시 인식'}
+          >
+            선택 영역 AI 재인식
+          </button>
+          <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 가르기</button>
+        </>
       )}
       {selectedList.length >= 2 && (
         <button className="btn primary" onClick={doMerge} disabled={!sameSourcePage || mutating}>
@@ -867,7 +1045,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                     </div>
                   )}
                   {pageProblems.map(prob => {
-                    const bbox = prob.bbox || {};
+                    const isEditing = boxEdit?.problemId === prob.id;
+                    const bbox = isEditing ? boxEdit.box : (prob.bbox || {});
                     const w = page.width || 1;
                     const h = page.height || 1;
                     if (!bbox.width || !bbox.height) return null;
@@ -896,6 +1075,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                       isRisky ? 'risky' : '',
                       reviewStatusClass(status),
                       isSplitting ? 'splitting' : '',
+                      isEditing ? 'editing' : '',
                     ].filter(Boolean).join(' ');
                     return (
                       <div
@@ -908,7 +1088,14 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                           width: `${widthPct}%`,
                           height: `${heightPct}%`,
                         }}
-                        onClick={(evt) => onBoxClick(prob.id, evt)}
+                        onMouseDown={isEditing ? (evt) => beginBoxDrag(evt, 'move', page) : undefined}
+                        onClick={(evt) => {
+                          if (isEditing) {
+                            evt.stopPropagation();
+                            return;
+                          }
+                          onBoxClick(prob.id, evt);
+                        }}
                         title={tooltipParts.filter(Boolean).join(' · ')}
                       >
                         <div className="review-bbox-label">
@@ -916,6 +1103,21 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                           {isPassage && <span className="review-bbox-passage-tag">지문</span>}
                           {isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
+                        {isEditing && (
+                          <>
+                            <div className="crop-frame-label">틀 조정</div>
+                            {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
+                              <button
+                                key={mode}
+                                type="button"
+                                className={`crop-frame-handle ${mode}`}
+                                aria-label={`자르기 틀 ${mode}`}
+                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page)}
+                                onClick={(evt) => evt.stopPropagation()}
+                              />
+                            ))}
+                          </>
+                        )}
                         {isSplitting && (
                           <div
                             className="split-guide"
@@ -1966,6 +2168,14 @@ function SidePanel({
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
   };
+  const adjustCropDraft = (patch) => {
+    setCropDraft(prev => normalizeManualCrop({
+      ...prev,
+      ...Object.fromEntries(
+        Object.entries(patch).map(([key, delta]) => [key, (prev[key] || 0) + delta])
+      ),
+    }));
+  };
   const focusManualCrop = () => {
     setPreviewMode('raw');
     cropControlRef.current?.scrollIntoView({ block: 'nearest' });
@@ -2073,12 +2283,29 @@ function SidePanel({
                 </div>
 
                 <div className="manual-crop-control" ref={cropControlRef}>
+                  <div className="manual-crop-note">
+                    +값은 박스를 바깥으로 늘리고, -값은 안쪽으로 자릅니다.
+                  </div>
+                  <div className="manual-crop-presets">
+                    <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05, topRatio: -0.05, bottomRatio: -0.05 })}>
+                      사방 +5%
+                    </button>
+                    <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ topRatio: -0.05, bottomRatio: -0.05 })}>
+                      위아래 +5%
+                    </button>
+                    <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05 })}>
+                      좌우 +5%
+                    </button>
+                    <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: 0.05, rightRatio: 0.05, topRatio: 0.05, bottomRatio: 0.05 })}>
+                      사방 -5%
+                    </button>
+                  </div>
                   <div className="manual-crop-grid">
                     <label>
                       <span>왼쪽</span>
                       <input
                         type="range"
-                        min="0"
+                        min={-Math.round(MANUAL_CROP_OUTSET_MAX * 100)}
                         max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                         step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                         value={Math.round(cropDraft.leftRatio * 100)}
@@ -2090,7 +2317,7 @@ function SidePanel({
                       <span>오른쪽</span>
                       <input
                         type="range"
-                        min="0"
+                        min={-Math.round(MANUAL_CROP_OUTSET_MAX * 100)}
                         max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                         step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                         value={Math.round(cropDraft.rightRatio * 100)}
@@ -2102,7 +2329,7 @@ function SidePanel({
                       <span>위</span>
                       <input
                         type="range"
-                        min="0"
+                        min={-Math.round(MANUAL_CROP_OUTSET_MAX * 100)}
                         max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                         step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                         value={Math.round(cropDraft.topRatio * 100)}
@@ -2114,7 +2341,7 @@ function SidePanel({
                       <span>아래</span>
                       <input
                         type="range"
-                        min="0"
+                        min={-Math.round(MANUAL_CROP_OUTSET_MAX * 100)}
                         max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                         step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                         value={Math.round(cropDraft.bottomRatio * 100)}
@@ -2641,26 +2868,31 @@ function BackgroundJobsPanel({ jobs, onCancel, onDismiss }){
 
   return (
     <div className="bg-jobs" aria-live="polite">
-      {visibleJobs.map(job => (
-        <div key={job.id} className={`bg-job ${job.status}`}>
-          <div className="bg-job-mark">
-            {job.status === 'running' ? <span className="mini-spinner" /> : <span>{job.status === 'failed' ? '!' : Icon.check}</span>}
-          </div>
-          <div className="bg-job-main">
-            <div className="bg-job-title">
-              <strong>{job.label}</strong>
-              <span>{statusLabel(job.status)}</span>
+      {visibleJobs.map(job => {
+        const isRecognition = String(job.scope || '').includes('recognition');
+        return (
+          <div key={job.id} className={`bg-job ${job.status}`}>
+            <div className="bg-job-mark">
+              {job.status === 'running' ? <span className="mini-spinner" /> : <span>{job.status === 'failed' ? '!' : Icon.check}</span>}
             </div>
-            {job.hint && <div className="bg-job-hint">{job.hint}</div>}
-            {job.status === 'running' && <div className="bg-job-time">{elapsedLabel(job.startedAt)} 경과</div>}
+            <div className="bg-job-main">
+              <div className="bg-job-title">
+                <strong>{job.label}</strong>
+                <span>{statusLabel(job.status)}</span>
+              </div>
+              {job.hint && <div className="bg-job-hint">{job.hint}</div>}
+              {job.status === 'running' && <div className="bg-job-time">{elapsedLabel(job.startedAt)} 경과</div>}
+            </div>
+            {job.status === 'running' ? (
+              <button className="bg-job-action" type="button" onClick={() => onCancel?.(job.id)}>
+                {isRecognition ? '인식 중단' : '취소'}
+              </button>
+            ) : (
+              <button className="bg-job-action" type="button" onClick={() => onDismiss?.(job.id)}>닫기</button>
+            )}
           </div>
-          {job.status === 'running' ? (
-            <button className="bg-job-action" type="button" onClick={() => onCancel?.(job.id)}>취소</button>
-          ) : (
-            <button className="bg-job-action" type="button" onClick={() => onDismiss?.(job.id)}>닫기</button>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -4918,15 +5150,17 @@ function App(){
   }, []);
 
   const cancelBackgroundJob = useCallback((id) => {
+    const job = backgroundJobs.find(item => item.id === id);
+    const isRecognition = String(job?.scope || '').includes('recognition');
     const controller = jobControllersRef.current.get(id);
     if (controller) controller.abort();
     settleBackgroundJob(id, {
       status: 'canceled',
-      label: 'AI 인식 취소됨',
+      label: isRecognition ? 'AI 인식 취소됨' : '작업 취소됨',
       hint: '결과를 적용하지 않았습니다.',
     }, 2200);
-    showToast('AI 인식을 취소했어요');
-  }, [settleBackgroundJob]);
+    showToast(isRecognition ? 'AI 인식을 취소했어요' : '작업을 취소했어요');
+  }, [backgroundJobs, settleBackgroundJob]);
 
   useEffect(() => {
     return () => {
@@ -5061,11 +5295,22 @@ function App(){
       return;
     }
     const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
+    const problemIds = listUnique((args?.problemIds || args?.problem_ids || []).filter(Boolean));
+    const isPartialRetry = Boolean(args?.partial || args?.partialRetry || args?.partial_retry) && problemIds.length > 0;
+    const targetPageIds = isPartialRetry
+      ? listUnique(problemIds
+        .map(id => (session.problems || []).find(problem => problem?.id === id)?.sourcePageId)
+        .filter(Boolean))
+      : pageIds;
     const snapshotBefore = materializeSessionForItems(session, items, fileName) || cloneSession(session);
     const job = startBackgroundJob({
       scope: 'session-recognition',
-      label: pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`,
-      hint: '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
+      label: isPartialRetry
+        ? (problemIds.length === 1 ? '선택 영역 AI 재인식 중' : `${problemIds.length}개 선택 영역 AI 재인식 중`)
+        : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
+      hint: isPartialRetry
+        ? '선택한 박스만 다시 자릅니다. 완료되면 확인 팝업이 열립니다.'
+        : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
     });
     try {
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
@@ -5082,10 +5327,14 @@ function App(){
       setRecognitionReview({
         id: `review-${job.id}`,
         kind: 'retry-ai',
-        title: applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요',
-        subtitle: '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
+        title: isPartialRetry
+          ? (applied ? `${applied}개 선택 영역을 다시 인식했어요` : '부분 AI 인식 결과를 확인해 주세요')
+          : (applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요'),
+        subtitle: isPartialRetry
+          ? '선택한 영역에서 다시 찾은 문제 경계입니다. 맞으면 바로 칠판에 반영합니다.'
+          : '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
         session: next,
-        pageIds,
+        pageIds: targetPageIds,
         snapshotBefore,
         retrySummary: result.retry || [],
       });

@@ -126,6 +126,76 @@ class TestRetryAiResilience(unittest.TestCase):
             for page in session["pages"]:
                 self.assertNotIn("aiRetry", page)
 
+    def test_partial_retry_replaces_only_selected_problem_and_offsets_bbox(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page-1.png"
+            Image.new("RGB", (240, 180), "white").save(page_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1", "p2"],
+                }],
+                "problems": [
+                    {
+                        "id": "p1",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 20, "top": 30, "width": 80, "height": 90},
+                        "riskFlags": ["needs_review"],
+                    },
+                    {
+                        "id": "p2",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 120, "top": 30, "width": 80, "height": 90},
+                        "riskFlags": [],
+                    },
+                ],
+                "ai_fallback": {"provider": "gemini"},
+            }
+
+            def fake_partial_export(source_path, **kwargs):
+                self.assertEqual("partial_source.png", Path(source_path).name)
+                self.assertEqual("single-problem", kwargs["input_intent"])
+                return {
+                    "ui_session": {
+                        "pages": [{"id": "partial", "riskFlags": []}],
+                        "problems": [{
+                            "id": "partial-p1",
+                            "sourcePageId": "partial",
+                            "bbox": {"left": 2, "top": 3, "width": 40, "height": 50},
+                            "riskFlags": [],
+                        }],
+                    }
+                }
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_partial_export):
+                new_session = app_server._mutate_retry_ai(
+                    session,
+                    {
+                        "partial": True,
+                        "problemIds": ["p1"],
+                        "cropBox": {"left": 10, "top": 20, "width": 80, "height": 90},
+                    },
+                )
+
+            problem_ids = [problem["id"] for problem in new_session["problems"]]
+            self.assertNotIn("p1", problem_ids)
+            self.assertIn("p2", problem_ids)
+            replacement = next(problem for problem in new_session["problems"] if problem["id"] != "p2")
+            self.assertEqual("page-1", replacement["sourcePageId"])
+            self.assertEqual(12.0, replacement["bbox"]["left"])
+            self.assertEqual(23.0, replacement["bbox"]["top"])
+            self.assertEqual(40.0, replacement["bbox"]["width"])
+            self.assertEqual(50.0, replacement["bbox"]["height"])
+            self.assertTrue(replacement["aiRetry"]["partial"])
+            self.assertEqual([replacement["id"], "p2"], new_session["pages"][0]["problemIds"])
+            self.assertEqual("applied", new_session["ai_retry_summary"][0]["status"])
+            self.assertTrue(new_session["ai_retry_summary"][0]["partial"])
+
 
 class TestSessionExcludeMutation(unittest.TestCase):
     def _session(self) -> dict:
@@ -227,6 +297,89 @@ class TestSessionCropMutation(unittest.TestCase):
                 {"leftRatio": 0.0, "rightRatio": 0.0, "topRatio": 0.0, "bottomRatio": 0.0},
                 reset_problem["manualCrop"],
             )
+
+    def test_manual_crop_can_expand_from_source_page(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            problem_path = tmpdir / "problem.png"
+            Image.new("RGB", (300, 200), "white").save(page_path)
+            Image.new("RGB", (100, 80), "white").save(problem_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1"],
+                }],
+                "problems": [{
+                    "id": "p1",
+                    "sourcePageId": "page-1",
+                    "imagePath": problem_path.resolve().as_uri(),
+                    "boardRenderPath": problem_path.resolve().as_uri(),
+                    "bbox": {"left": 50, "top": 40, "width": 100, "height": 80},
+                }],
+            }
+
+            expanded_session = app_server._mutate_crop(
+                session,
+                "p1",
+                {"leftRatio": -0.1, "rightRatio": -0.2, "topRatio": -0.25, "bottomRatio": -0.05},
+            )
+
+            problem = expanded_session["problems"][0]
+            self.assertEqual(40.0, problem["bbox"]["left"])
+            self.assertEqual(20.0, problem["bbox"]["top"])
+            self.assertEqual(130.0, problem["bbox"]["width"])
+            self.assertEqual(104.0, problem["bbox"]["height"])
+            self.assertEqual(-0.1, problem["manualCrop"]["leftRatio"])
+            self.assertEqual(-0.2, problem["manualCrop"]["rightRatio"])
+            crop_path = app_server._resolve_session_path(problem["imagePath"])
+            self.assertIsNotNone(crop_path)
+            self.assertEqual((130, 104), Image.open(crop_path).size)
+
+    def test_manual_crop_accepts_absolute_crop_box(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            problem_path = tmpdir / "problem.png"
+            Image.new("RGB", (300, 200), "white").save(page_path)
+            Image.new("RGB", (100, 80), "white").save(problem_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1"],
+                }],
+                "problems": [{
+                    "id": "p1",
+                    "sourcePageId": "page-1",
+                    "imagePath": problem_path.resolve().as_uri(),
+                    "boardRenderPath": problem_path.resolve().as_uri(),
+                    "bbox": {"left": 50, "top": 40, "width": 100, "height": 80},
+                }],
+            }
+
+            cropped_session = app_server._mutate_crop(
+                session,
+                "p1",
+                {"cropBox": {"left": 35, "top": 30, "width": 150, "height": 120}},
+            )
+
+            problem = cropped_session["problems"][0]
+            self.assertEqual({"left": 35.0, "top": 30.0, "width": 150.0, "height": 120.0}, problem["bbox"])
+            self.assertAlmostEqual(-0.15, problem["manualCrop"]["leftRatio"])
+            self.assertAlmostEqual(-0.35, problem["manualCrop"]["rightRatio"])
+            self.assertAlmostEqual(-0.125, problem["manualCrop"]["topRatio"])
+            self.assertAlmostEqual(-0.375, problem["manualCrop"]["bottomRatio"])
+            crop_path = app_server._resolve_session_path(problem["imagePath"])
+            self.assertIsNotNone(crop_path)
+            self.assertEqual((150, 120), Image.open(crop_path).size)
 
 
 class TestExportErrorPayload(unittest.TestCase):
