@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import app_server
+from structured_schema import Box
 
 
 class TestStaticAssetCaching(unittest.TestCase):
@@ -252,6 +253,25 @@ class TestSessionExcludeMutation(unittest.TestCase):
 
 
 class TestSessionCropMutation(unittest.TestCase):
+    def test_bbox_crop_wraps_fractional_edges_outward(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source_path = tmpdir / "page.png"
+            output_path = tmpdir / "crop.png"
+            Image.new("RGB", (80, 60), "white").save(source_path)
+
+            size = app_server._crop_image_by_bbox(
+                source_path,
+                Box(10.2, 20.2, 20.1, 10.1),
+                output_path,
+            )
+
+            self.assertEqual((21, 11), size)
+            with Image.open(output_path) as crop:
+                self.assertEqual((21, 11), crop.size)
+
     def test_manual_crop_updates_bbox_image_and_can_reset(self):
         from PIL import Image
 

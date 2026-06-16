@@ -4747,6 +4747,70 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertLessEqual(entries[0].bounds.top, 78)
             self.assertGreaterEqual(entries[0].bounds.bottom, 174)
 
+    def test_problem_bounds_expand_when_edge_ink_would_be_clipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            page_image = Image.new("RGB", (600, 440), "white")
+            draw = ImageDraw.Draw(page_image)
+            draw.rectangle((68, 68, 92, 72), fill="black")
+            draw.rectangle((72, 300, 220, 303), fill="black")
+            page_image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=page_image,
+                original_size=(600, 440),
+            )
+            blocks = [
+                ContentBlock(
+                    block_id="p1-stem",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 100, 360, 60),
+                    reading_order=0,
+                    text="1. problem",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+                ContentBlock(
+                    block_id="p1-choice",
+                    block_type=BlockType.CHOICE,
+                    bbox=Box(72, 220, 330, 40),
+                    reading_order=1,
+                    text="⑤ choice",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+            ]
+            page = PageModel(
+                page_id="page-1",
+                width_px=600,
+                height_px=440,
+                subject=Subject.MATH,
+                source_path=str(source),
+                blocks=blocks,
+                problems=[
+                    ProblemUnit(
+                        unit_id="problem-1",
+                        subject=Subject.MATH,
+                        title="1.",
+                        stem_block_ids=["p1-stem"],
+                        choice_block_ids=["p1-choice"],
+                        metadata={"problem_number": 1, "column_index": 0, "question_band_index": 0},
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertLessEqual(entries[0].bounds.top, 44)
+            self.assertGreaterEqual(entries[0].bounds.bottom, 346)
+
     def test_choice_bottom_survives_near_next_problem_clamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

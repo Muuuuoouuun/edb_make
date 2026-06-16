@@ -6,6 +6,7 @@ import concurrent.futures
 import hashlib
 import io
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -65,17 +66,24 @@ MAX_HEIGHT_PAGES = 4.8
 PLACEMENT_SCALE_MIN = 0.6
 PLACEMENT_SCALE_MAX = 1.6
 MIN_PROBLEM_AREA_RATIO = 0.12
-DOCUMENT_BAND_TOP_PADDING_PX = 22.0
-DOCUMENT_BAND_BOTTOM_PADDING_PX = 14.0
+DOCUMENT_BAND_TOP_PADDING_PX = 32.0
+DOCUMENT_BAND_BOTTOM_PADDING_PX = 20.0
 DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX = 6.0
 V1_LAYOUT_MARGIN_X_PX = 24.0
 V1_LAYOUT_MARGIN_Y_PX = 24.0
 V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
 V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
-CHOICE_BOTTOM_SAFE_PADDING_PX = 32.0
-PROBLEM_CROP_TOP_SAFE_PADDING_PX = 14
-PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 32
+CHOICE_BOTTOM_SAFE_PADDING_PX = 44.0
+PROBLEM_CROP_TOP_SAFE_PADDING_PX = 30
+PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 52
+PROBLEM_EDGE_INK_SCAN_PX = 18
+PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
+PROBLEM_EDGE_INK_MIN_DARK_PIXELS = 6
+PROBLEM_EDGE_INK_MIN_DARK_RATIO = 0.0008
+PROBLEM_EDGE_TOP_EXTRA_PADDING_PX = 24.0
+PROBLEM_EDGE_BOTTOM_EXTRA_PADDING_PX = 32.0
+PROBLEM_CHOICE_EDGE_BOTTOM_EXTRA_PADDING_PX = 42.0
 PROCESSING_STEP_RAW = "raw"
 PROCESSING_STEP_ORIGINAL = "s1"
 PROCESSING_STEP_CHALK = "s2"
@@ -331,6 +339,64 @@ def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
     if right_trim - left_trim < width * 0.75:
         return image
     return image.crop((max(0, left_trim), 0, min(width, right_trim), height))
+
+
+def _integer_crop_rect_for_box(box: Box, *, image_width: int, image_height: int) -> tuple[int, int, int, int]:
+    left = int(max(0, min(image_width - 1, math.floor(box.left))))
+    top = int(max(0, min(image_height - 1, math.floor(box.top))))
+    right = int(max(left + 1, min(image_width, math.ceil(box.right))))
+    bottom = int(max(top + 1, min(image_height, math.ceil(box.bottom))))
+    return left, top, right, bottom
+
+
+def _edge_band_has_dark_content(image: Image.Image, box: Box, *, edge: str) -> bool:
+    if edge not in {"top", "bottom"}:
+        return False
+    left, top, right, bottom = _integer_crop_rect_for_box(
+        box,
+        image_width=image.width,
+        image_height=image.height,
+    )
+    crop_width = right - left
+    crop_height = bottom - top
+    if crop_width <= 8 or crop_height <= 8:
+        return False
+
+    band_height = max(2, min(PROBLEM_EDGE_INK_SCAN_PX, crop_height // 4))
+    if edge == "top":
+        band_box = (left, top, right, min(bottom, top + band_height))
+    else:
+        band_box = (left, max(top, bottom - band_height), right, bottom)
+    gray = image.crop(band_box).convert("L")
+    total_pixels = max(1, gray.width * gray.height)
+    min_dark_pixels = max(
+        PROBLEM_EDGE_INK_MIN_DARK_PIXELS,
+        int(round(total_pixels * PROBLEM_EDGE_INK_MIN_DARK_RATIO)),
+    )
+    if np is not None:
+        dark_pixels = int(np.count_nonzero(np.asarray(gray, dtype=np.uint8) <= PROBLEM_EDGE_INK_DARK_THRESHOLD))
+    else:
+        values = gray.get_flattened_data() if hasattr(gray, "get_flattened_data") else gray.getdata()
+        dark_pixels = sum(1 for value in values if int(value) <= PROBLEM_EDGE_INK_DARK_THRESHOLD)
+    return dark_pixels >= min_dark_pixels
+
+
+def _expand_box_for_edge_content(
+    image: Image.Image,
+    box: Box,
+    *,
+    top_extra_px: float = PROBLEM_EDGE_TOP_EXTRA_PADDING_PX,
+    bottom_extra_px: float = PROBLEM_EDGE_BOTTOM_EXTRA_PADDING_PX,
+) -> Box:
+    top = box.top
+    bottom = box.bottom
+    if top > 0.0 and _edge_band_has_dark_content(image, box, edge="top"):
+        top = max(0.0, top - float(top_extra_px))
+    if bottom < float(image.height) and _edge_band_has_dark_content(image, box, edge="bottom"):
+        bottom = min(float(image.height), bottom + float(bottom_extra_px))
+    if top == box.top and bottom == box.bottom:
+        return box
+    return Box.from_points(box.left, top, box.right, bottom)
 
 
 def _pad_problem_crop_edges(
@@ -801,11 +867,10 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         return crop.size
 
     crop = task.source_image.crop(
-        (
-            int(task.bounds.left),
-            int(task.bounds.top),
-            int(task.bounds.right),
-            int(task.bounds.bottom),
+        _integer_crop_rect_for_box(
+            task.bounds,
+            image_width=task.source_image.width,
+            image_height=task.source_image.height,
         )
     )
     crop = _trim_edge_vertical_guides(crop)
@@ -2270,6 +2335,22 @@ def build_problem_entries(
                         block_by_id,
                         min_bottom=min_bottom,
                     )
+                merged_box = _expand_box_for_edge_content(
+                    prepared_page.image,
+                    merged_box,
+                    bottom_extra_px=(
+                        PROBLEM_CHOICE_EDGE_BOTTOM_EXTRA_PADDING_PX
+                        if has_choice_blocks
+                        else PROBLEM_EDGE_BOTTOM_EXTRA_PADDING_PX
+                    ),
+                )
+                if has_document_band_metadata:
+                    merged_box = _clamp_box_to_next_problem(
+                        merged_box,
+                        next_problem,
+                        block_by_id,
+                        min_bottom=min_bottom,
+                    )
                 if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())
@@ -2645,11 +2726,13 @@ def recrop_problem(
     crop_path itself; the board renderer will composite onto the dark theme
     at EDB build time.
     """
-    left = int(max(0, min(page_image.width, bbox.left)))
-    top = int(max(0, min(page_image.height, bbox.top)))
-    right = int(max(left + 1, min(page_image.width, bbox.right)))
-    bottom = int(max(top + 1, min(page_image.height, bbox.bottom)))
-    crop = page_image.crop((left, top, right, bottom))
+    crop = page_image.crop(
+        _integer_crop_rect_for_box(
+            bbox,
+            image_width=page_image.width,
+            image_height=page_image.height,
+        )
+    )
     crop = _trim_edge_vertical_guides(crop)
     crop = _pad_problem_crop_edges(crop)
     crop_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4969,11 +5052,10 @@ def build_mixed_records(
                 text_record_count += 1
             else:
                 crop = entry.prepared_page.image.crop(
-                    (
-                        int(block.bbox.left),
-                        int(block.bbox.top),
-                        int(block.bbox.right),
-                        int(block.bbox.bottom),
+                    _integer_crop_rect_for_box(
+                        block.bbox,
+                        image_width=entry.prepared_page.image.width,
+                        image_height=entry.prepared_page.image.height,
                     )
                 )
                 crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"

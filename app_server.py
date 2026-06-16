@@ -7,6 +7,7 @@ import concurrent.futures
 import gzip
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import struct
@@ -2598,10 +2599,10 @@ def _crop_image_by_bbox(source_path: Path, bbox: Box, output_path: Path) -> tupl
     with Image.open(source_path) as image:
         if image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
             image = image.convert("RGBA")
-        left = int(max(0, min(image.width - 1, round(bbox.left))))
-        top = int(max(0, min(image.height - 1, round(bbox.top))))
-        right = int(max(left + 1, min(image.width, round(bbox.right))))
-        bottom = int(max(top + 1, min(image.height, round(bbox.bottom))))
+        left = int(max(0, min(image.width - 1, math.floor(bbox.left))))
+        top = int(max(0, min(image.height - 1, math.floor(bbox.top))))
+        right = int(max(left + 1, min(image.width, math.ceil(bbox.right))))
+        bottom = int(max(top + 1, min(image.height, math.ceil(bbox.bottom))))
         cropped = image.crop((left, top, right, bottom))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         cropped.save(output_path)
