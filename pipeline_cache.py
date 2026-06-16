@@ -219,6 +219,8 @@ class PipelineCache:
             )
             if result is not None:
                 return result
+            if str(cache_identity.get("version") or "") != "ocr_block_identity_v1":
+                return None
 
         path = self._ocr_cache_path(image, backend_name)
         return self._load_ocr_payload(path, cache_key_kind="image_hash")

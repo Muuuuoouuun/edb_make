@@ -210,7 +210,7 @@ def _build_ocr_cache_identity(
     source_path = metadata.get("original_source_path") or prepared_page.source_path
     bucket_size = 4
     return {
-        "version": "ocr_block_identity_v1",
+        "version": "ocr_block_identity_v2",
         "source": _file_identity(source_path),
         "page": {
             "id": prepared_page.page_id,

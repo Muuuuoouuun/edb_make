@@ -41,6 +41,26 @@ CHOICE_MARKER_RE = re.compile(
     r"[\u3131-\u314e][\.\)]"     # ㄱ) ㄴ) ㄷ) …
     r")\s*"
 )
+BARE_PROBLEM_NUMBER_RE = re.compile(r"^\s*(?P<number>[1-9１-９][0-9０-９]{0,2})\s*$")
+QUESTION_PROMPT_RE = re.compile(
+    r"(?:"
+    r"다음|아래|위\s*글|윗글|보기|빈칸|물음|구하여라|구하시오|고르|고른|적절|어색|옳은|"
+    r"아닌|알맞은|설명|크기|개수|값|몇\s*(?:개|도|cm)|[?？]|"
+    r"What|Which|Choose|Find|following|correct|incorrect|answer|blank"
+    r")",
+    re.IGNORECASE,
+)
+PAGE_CHROME_RE = re.compile(
+    r"(?:"
+    r"fillthevoid|exam4you|내신코치|윤자매|저작권|학교기출문제|"
+    r"중등\s*\d|중\s*\d|학년|단원평가|기본도형|문법\s*기출|Lesson"
+    r")",
+    re.IGNORECASE,
+)
+SHARED_INSTRUCTION_RE = re.compile(
+    r"^\s*(?:※|<\s*조\s*건\s*>|조건\b)|(?:읽고\s*,?\s*물음에\s*답)",
+    re.IGNORECASE,
+)
 
 
 def _matches_problem_marker(text: str | None) -> bool:
@@ -49,6 +69,74 @@ def _matches_problem_marker(text: str | None) -> bool:
 
 def _matches_choice_marker(text: str | None) -> bool:
     return bool(text and CHOICE_MARKER_RE.match(text))
+
+
+def _looks_like_question_prompt(text: str | None) -> bool:
+    return bool(text and QUESTION_PROMPT_RE.search(text))
+
+
+def _looks_like_page_chrome_text(text: str | None) -> bool:
+    if not text:
+        return False
+    compact = " ".join(text.split())
+    if not compact:
+        return False
+    if re.search(r"(?:https?://|www\.|[\w.-]+\.(?:com|co\.kr|net|org))", compact, re.IGNORECASE):
+        return True
+    if len(compact) <= 120 and PAGE_CHROME_RE.search(compact):
+        marker = PROBLEM_MARKER_RE.match(compact)
+        marker_body = compact[marker.end():] if marker else compact
+        if not marker or not _looks_like_question_prompt(marker_body):
+            return True
+    if len(compact) <= 90 and PAGE_CHROME_RE.search(compact) and not _looks_like_question_prompt(compact):
+        return True
+    return False
+
+
+def _looks_like_page_chrome_block(block: ContentBlock) -> bool:
+    if block.metadata.get("force_problem_start"):
+        return False
+    title_source = _problem_title_source(block)
+    if _looks_like_page_chrome_text(title_source):
+        return True
+    if block.block_type in {BlockType.FOOTNOTE, BlockType.DECORATION}:
+        return True
+    return False
+
+
+def _looks_like_shared_instruction_text(text: str | None) -> bool:
+    return bool(text and SHARED_INSTRUCTION_RE.search(text))
+
+
+def _extract_bare_problem_number(text: str | None) -> int | None:
+    if not text:
+        return None
+    match = BARE_PROBLEM_NUMBER_RE.match(text)
+    if not match:
+        return None
+    try:
+        return int(unicodedata.normalize("NFKC", match.group("number")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_ocr_heading_problem_number(line_text: str | None, next_line_text: str | None) -> int | None:
+    if not line_text:
+        return None
+    if _looks_like_page_chrome_text(line_text):
+        return None
+
+    bare_number = _extract_bare_problem_number(line_text)
+    if bare_number is not None:
+        return bare_number if _looks_like_question_prompt(next_line_text) else None
+
+    problem_number = extract_problem_number(line_text)
+    if problem_number is None:
+        return None
+    marker_removed = strip_problem_marker(line_text) or ""
+    if _looks_like_page_chrome_text(marker_removed):
+        return None
+    return problem_number
 
 
 SET_PROBLEM_HEADER_RE = re.compile(
@@ -111,8 +199,10 @@ def find_internal_problem_markers(text: str | None) -> list[int]:
     if not text:
         return []
     numbers: list[int] = []
-    for line in text.splitlines():
-        candidate = extract_problem_number(line)
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        next_line = lines[index + 1] if index + 1 < len(lines) else None
+        candidate = _extract_ocr_heading_problem_number(line, next_line)
         if candidate is not None:
             numbers.append(candidate)
     return numbers
@@ -197,7 +287,13 @@ def _extract_top_left_problem_number(block: ContentBlock) -> tuple[int | None, s
     fallback_candidates: list[tuple[float, int]] = []
 
     for index, line in enumerate(block.ocr_lines):
-        number = extract_problem_number(line.text)
+        # For OCR lines, only the leading visual line is trusted as a problem
+        # number source. Later lines often contain unit headers ("1. 기본도형")
+        # or condition lists ("1. There is...") that are not problem starts.
+        if index > 0:
+            continue
+        next_line_text = block.ocr_lines[index + 1].text if index + 1 < len(block.ocr_lines) else None
+        number = _extract_ocr_heading_problem_number(line.text, next_line_text)
         if number is None:
             continue
 
@@ -221,6 +317,12 @@ def _extract_top_left_problem_number(block: ContentBlock) -> tuple[int | None, s
 
 
 def extract_problem_number_from_block(block: ContentBlock) -> tuple[int | None, str | None]:
+    raw_metadata_number = block.metadata.get("problem_number")
+    if isinstance(raw_metadata_number, int) and raw_metadata_number >= 1:
+        return raw_metadata_number, str(block.metadata.get("problem_number_source") or "metadata")
+    if isinstance(raw_metadata_number, str) and raw_metadata_number.isdigit():
+        return int(raw_metadata_number), str(block.metadata.get("problem_number_source") or "metadata")
+
     top_left_number, source = _extract_top_left_problem_number(block)
     if top_left_number is not None:
         return top_left_number, source
@@ -312,6 +414,114 @@ def classify_block(block: ContentBlock) -> ContentBlock:
     if detect_problem_start(block):
         return replace(block, block_type=BlockType.TITLE)
     return block
+
+
+def _is_document_band_question_block(block: ContentBlock) -> bool:
+    if block.metadata.get("force_problem_start"):
+        return True
+    if block.metadata.get("segmenter") != "document-bands":
+        return False
+    if "question_band_index" not in block.metadata:
+        return False
+    if block.block_type in {
+        BlockType.CHOICE,
+        BlockType.IMAGE,
+        BlockType.DIAGRAM,
+        BlockType.TABLE,
+        BlockType.EXPLANATION,
+        BlockType.FOOTNOTE,
+        BlockType.DECORATION,
+    }:
+        return False
+    text = block.text or _problem_title_source(block)
+    if not text:
+        return False
+    if _looks_like_page_chrome_block(block):
+        return False
+    if _looks_like_shared_instruction_text(text):
+        return False
+    return _looks_like_question_prompt(text)
+
+
+def _apply_document_band_problem_start_hints(blocks: list[ContentBlock]) -> list[ContentBlock]:
+    if not any(block.metadata.get("segmenter") == "document-bands" for block in blocks):
+        return blocks
+
+    def next_same_column(start_index: int, column_index: int) -> ContentBlock | None:
+        for candidate in blocks[start_index + 1:]:
+            if int(candidate.metadata.get("column_index") or 0) != column_index:
+                continue
+            if _looks_like_page_chrome_block(candidate):
+                continue
+            return candidate
+        return None
+
+    def next_number_after(start_index: int, column_index: int) -> int | None:
+        for candidate in blocks[start_index + 1:]:
+            if int(candidate.metadata.get("column_index") or 0) != column_index:
+                continue
+            number, _ = extract_problem_number_from_block(candidate)
+            if number is not None:
+                return number
+        return None
+
+    hinted: list[ContentBlock] = []
+    previous_by_column: dict[int, ContentBlock] = {}
+    for index, block in enumerate(blocks):
+        column_index = int(block.metadata.get("column_index") or 0)
+        previous = previous_by_column.get(column_index)
+        updated = block
+        should_hint = (
+            not detect_problem_start(block)
+            and _is_document_band_question_block(block)
+        )
+        inferred_missing_number: int | None = None
+        inferred_start_source: str | None = None
+        inferred_number_source: str | None = None
+        internal_numbers = find_internal_problem_markers(block.text)
+        if not should_hint and not detect_problem_start(block) and internal_numbers:
+            previous_number = None
+            if previous is not None:
+                previous_number, _ = extract_problem_number_from_block(previous)
+            first_internal_number = internal_numbers[0]
+            if previous_number is None or first_internal_number > previous_number:
+                inferred_missing_number = first_internal_number
+                inferred_number_source = "ocr_internal_line"
+                inferred_start_source = "internal_problem_marker"
+                should_hint = True
+        if (
+            not should_hint
+            and not detect_problem_start(block)
+            and block.metadata.get("segmenter") == "document-bands"
+            and _looks_like_shared_instruction_text(block.text)
+        ):
+            following = next_same_column(index, column_index)
+            following_number = next_number_after(index, column_index)
+            if following is not None and detect_choice_block(following) and following_number is not None:
+                candidate_number = following_number - 1
+                if candidate_number >= 1:
+                    inferred_missing_number = candidate_number
+                    inferred_number_source = "inferred_before_next_number"
+                    inferred_start_source = "shared_material_before_choices"
+                    should_hint = True
+        if should_hint and previous is not None:
+            # When two bands overlap vertically, the later one is usually an
+            # OCR/visual split of the same problem, not a new question.
+            if block.bbox.top < previous.bbox.bottom + 16.0:
+                should_hint = False
+        if should_hint:
+            metadata = {**block.metadata, "force_problem_start": True}
+            if inferred_missing_number is not None:
+                metadata["problem_number"] = inferred_missing_number
+                metadata["problem_number_source"] = inferred_number_source or "inferred_problem_start"
+                metadata["problem_start_source"] = inferred_start_source or "inferred_problem_start"
+            else:
+                metadata["problem_start_source"] = "document_band_prompt"
+            updated = replace(block, metadata=metadata)
+        if not _looks_like_page_chrome_block(updated):
+            previous_by_column[column_index] = updated
+        hinted.append(updated)
+    return hinted
 
 
 def _build_grouping_diagnostics(
@@ -485,6 +695,7 @@ def group_problem_units(page: PageModel) -> PageModel:
     relabeled = relabel_reading_order(page)
     classified_blocks = [classify_block(block) for block in relabeled.blocks]
     classified_blocks = fill_choice_gaps(classified_blocks)
+    classified_blocks = _apply_document_band_problem_start_hints(classified_blocks)
     block_diagnostics = [_block_grouping_diagnostics(block) for block in classified_blocks]
     for block, diagnostic in zip(classified_blocks, block_diagnostics):
         block.metadata["problem_marker"] = bool(diagnostic.get("problem_marker"))
@@ -653,6 +864,8 @@ def group_problem_units(page: PageModel) -> PageModel:
     current: ProblemUnit | None = None
 
     for index, block in enumerate(classified_blocks, start=1):
+        if _looks_like_page_chrome_block(block):
+            continue
         if block.block_id in all_shared_ids:
             continue
 

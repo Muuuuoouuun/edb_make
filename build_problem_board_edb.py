@@ -1035,6 +1035,18 @@ def _problem_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock
     return (1, column_value, band_value, _problem_top_y(problem, block_by_id), problem.unit_id)
 
 
+def _problem_visual_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> tuple[object, ...]:
+    column_value = _problem_column_value(problem, block_by_id) or 0
+    band_value = _problem_band_value(problem, block_by_id)
+    return (
+        column_value,
+        band_value,
+        _problem_top_y(problem, block_by_id),
+        _problem_left_x(problem, block_by_id),
+        problem.unit_id,
+    )
+
+
 def _build_crop_next_problem_map(
     problems: list[ProblemUnit],
     block_by_id: dict[str, ContentBlock],
@@ -2172,7 +2184,15 @@ def build_problem_entries(
             page.problems = continuation_problems
             ordered_problems = continuation_problems
 
-        _fill_missing_problem_numbers(ordered_problems)
+        visual_ordered_problems = sorted(
+            ordered_problems,
+            key=lambda p: _problem_visual_order_key(p, block_by_id),
+        )
+        _fill_missing_problem_numbers(visual_ordered_problems)
+        ordered_problems = sorted(
+            visual_ordered_problems,
+            key=lambda p: _problem_order_key(p, block_by_id),
+        )
         next_problem_for_crop = _build_crop_next_problem_map(ordered_problems, block_by_id)
 
         all_assigned_ids: set[str] = set()

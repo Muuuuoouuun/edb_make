@@ -93,6 +93,26 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             markers = pages[0].metadata.get("pdf_problem_markers") or []
             self.assertEqual([1], [marker.get("number") for marker in markers])
 
+    def test_pdf_problem_markers_ignore_decimal_measurement_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "decimal_measurement.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=300, height=400)
+            page.insert_text((48, 120), "13. real problem stem", fontsize=14)
+            page.insert_text((180, 220), "3.4 ㎛", fontsize=12)
+            page.insert_text((48, 300), "14. next problem stem", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            pages = preprocess_module.render_pdf_pages(
+                pdf_path,
+                Path(temp_dir) / "rendered",
+                dpi=72,
+            )
+
+            markers = pages[0].metadata.get("pdf_problem_markers") or []
+            self.assertEqual([13, 14], [marker.get("number") for marker in markers])
+
     def test_pdf_marker_last_problem_excludes_isolated_footer_page_number(self):
         image = Image.new("RGB", (600, 800), "white")
         draw = ImageDraw.Draw(image)

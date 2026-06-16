@@ -145,6 +145,9 @@ def extract_pdf_problem_markers(page, scale):
             match = re.match(r"^([1-9][0-9]?)\.\s*", text)
             if not match:
                 continue
+            suffix = text[match.end():].lstrip()
+            if suffix[:1].isdigit():
+                continue
             bbox = line.get("bbox")
             if not bbox or len(bbox) != 4:
                 continue
@@ -2520,6 +2523,9 @@ def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]
                 continue
             match = re.match(r"^([1-9][0-9]?)\.\s*", text)
             if not match:
+                continue
+            suffix = text[match.end():].lstrip()
+            if suffix[:1].isdigit():
                 continue
             number = int(match.group(1))
             if not 1 <= number <= 99:

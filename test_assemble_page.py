@@ -1,6 +1,5 @@
-import sys
 import unittest
-from structured_schema import PageModel, ContentBlock, BlockType, Subject, Box, ProblemUnit
+from structured_schema import PageModel, ContentBlock, BlockType, Subject, Box, OcrLine
 from assemble_page import group_problem_units
 
 class TestAssemblePageKoreanEnhancements(unittest.TestCase):
@@ -271,6 +270,151 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
                 problem.metadata.get("passage_group_id"),
             )
             self.assertEqual(["range-header", "shared-material"], problem.metadata.get("shared_passage_block_ids"))
+
+    def test_document_band_skips_unit_header_and_reads_bare_problem_number(self):
+        blocks = [
+            ContentBlock(
+                block_id="unit-header",
+                block_type=BlockType.TITLE,
+                bbox=Box(0, 0, 500, 120),
+                reading_order=0,
+                text="중등 1학년\n1. 기본도형",
+                ocr_lines=[
+                    OcrLine("중등 1학년", Box(0, 0, 500, 60)),
+                    OcrLine("1. 기본도형", Box(0, 60, 500, 60)),
+                ],
+                metadata={"segmenter": "document-bands", "column_index": 1, "question_band_index": 1},
+            ),
+            ContentBlock(
+                block_id="q21",
+                block_type=BlockType.STEM,
+                bbox=Box(0, 180, 500, 180),
+                reading_order=1,
+                text="다음 그림과 같은 직육면체에서 평행한 면의 개수를 구하여라.",
+                metadata={"segmenter": "document-bands", "column_index": 1, "question_band_index": 2},
+            ),
+            ContentBlock(
+                block_id="q22",
+                block_type=BlockType.STEM,
+                bbox=Box(0, 460, 500, 180),
+                reading_order=2,
+                text="22\n다음 그림과 같은 직육면체에서 꼬인 위치에 있는 모서리의 개수를 구하여라.",
+                ocr_lines=[
+                    OcrLine("22", Box(0, 0, 500, 60)),
+                    OcrLine("다음 그림과 같은 직육면체에서 꼬인 위치에 있는 모서리의 개수를 구하여라.", Box(0, 60, 500, 120)),
+                ],
+                metadata={"segmenter": "document-bands", "column_index": 1, "question_band_index": 3},
+            ),
+        ]
+        page = PageModel("page-document-band-bare-number", 1000, 1000, Subject.MATH, blocks=blocks)
+
+        grouped = group_problem_units(page)
+
+        self.assertEqual(2, len(grouped.problems))
+        self.assertEqual("q21", grouped.problems[0].stem_block_ids[0])
+        self.assertEqual(22, grouped.problems[1].metadata.get("problem_number"))
+        self.assertEqual("ocr_top_left", grouped.problems[1].metadata.get("problem_number_source"))
+
+    def test_document_band_prompt_starts_unnumbered_math_questions(self):
+        blocks = [
+            ContentBlock(
+                block_id="q23",
+                block_type=BlockType.FORMULA,
+                bbox=Box(0, 0, 500, 160),
+                reading_order=0,
+                text="다음 그림에서 점 B, C는 선분 AD의 삼등분점이다. AD의 길이는 몇 cm인지 구하여라.",
+                metadata={"segmenter": "document-bands", "column_index": 1, "question_band_index": 1},
+            ),
+            ContentBlock(
+                block_id="q24",
+                block_type=BlockType.FORMULA,
+                bbox=Box(0, 320, 500, 160),
+                reading_order=1,
+                text="다음 그림과 같이 각 BOC = 50도일 때 각 AOD의 크기는 몇 도인지 구하여라.",
+                metadata={"segmenter": "document-bands", "column_index": 1, "question_band_index": 2},
+            ),
+            ContentBlock(
+                block_id="footer",
+                block_type=BlockType.TITLE,
+                bbox=Box(0, 900, 500, 80),
+                reading_order=2,
+                text="윤자매 놀이학습(fillthevoid82.com)",
+                metadata={"segmenter": "document-bands", "column_index": 1, "question_band_index": 3},
+            ),
+        ]
+        page = PageModel("page-document-band-prompts", 1000, 1000, Subject.MATH, blocks=blocks)
+
+        grouped = group_problem_units(page)
+
+        self.assertEqual(2, len(grouped.problems))
+        self.assertEqual(["q23"], grouped.problems[0].stem_block_ids)
+        self.assertEqual(["q24"], grouped.problems[1].stem_block_ids)
+
+    def test_shared_table_before_choices_infers_missing_problem_number(self):
+        blocks = [
+            ContentBlock(
+                block_id="shared-table",
+                block_type=BlockType.IMAGE,
+                bbox=Box(500, 0, 300, 160),
+                reading_order=0,
+                text="※ 다음 표를 보고 물음에 답하시오.\n| 이름 | Ted | Eric |",
+                metadata={"segmenter": "document-bands", "column_index": 2, "question_band_index": 1},
+            ),
+            ContentBlock(
+                block_id="q4-choices",
+                block_type=BlockType.CHOICE,
+                bbox=Box(500, 180, 300, 120),
+                reading_order=1,
+                text="① He's from Canada.\n② He isn't shy.\n③ He is tall.",
+                metadata={"segmenter": "document-bands", "column_index": 2, "question_band_index": 2},
+            ),
+            ContentBlock(
+                block_id="q5",
+                block_type=BlockType.TITLE,
+                bbox=Box(500, 340, 300, 160),
+                reading_order=2,
+                text="5. 다음은 Ted가 자신과 친구 Eric에 대해 쓴 글이다.",
+                metadata={"segmenter": "document-bands", "column_index": 2, "question_band_index": 3},
+            ),
+        ]
+        page = PageModel("page-shared-table-missing-number", 1000, 1000, Subject.ENGLISH, blocks=blocks)
+
+        grouped = group_problem_units(page)
+
+        self.assertEqual(2, len(grouped.problems))
+        self.assertEqual(4, grouped.problems[0].metadata.get("problem_number"))
+        self.assertEqual("inferred_before_next_number", grouped.problems[0].metadata.get("problem_number_source"))
+        self.assertEqual(["shared-table"], grouped.problems[0].figure_block_ids)
+        self.assertEqual(["q4-choices"], grouped.problems[0].choice_block_ids)
+        self.assertEqual(5, grouped.problems[1].metadata.get("problem_number"))
+
+    def test_unit_header_block_with_embedded_problem_number_is_preserved(self):
+        blocks = [
+            ContentBlock(
+                block_id="header-with-q24",
+                block_type=BlockType.STEM,
+                bbox=Box(500, 0, 300, 180),
+                reading_order=0,
+                text="기 단원평가\n위치관계\n윤자매놀이학습(fillthevoid82.com)\n24\n다음 그림에서 l//m일 때, 각 x의 크기는 몇 도인지 구하여라.",
+                metadata={"segmenter": "document-bands", "column_index": 2, "question_band_index": 1},
+            ),
+            ContentBlock(
+                block_id="q25",
+                block_type=BlockType.STEM,
+                bbox=Box(500, 360, 300, 180),
+                reading_order=1,
+                text="다음 그림과 같이 직사각형 모양의 종이를 접었다. 각 QPR의 크기는 몇 도인지 구하여라.",
+                metadata={"segmenter": "document-bands", "column_index": 2, "question_band_index": 2},
+            ),
+        ]
+        page = PageModel("page-header-with-embedded-number", 1000, 1000, Subject.MATH, blocks=blocks)
+
+        grouped = group_problem_units(page)
+
+        self.assertEqual(2, len(grouped.problems))
+        self.assertEqual(24, grouped.problems[0].metadata.get("problem_number"))
+        self.assertEqual("ocr_internal_line", grouped.problems[0].metadata.get("problem_number_source"))
+        self.assertEqual(["header-with-q24"], grouped.problems[0].stem_block_ids)
 
 if __name__ == "__main__":
     unittest.main()

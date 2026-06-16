@@ -478,6 +478,9 @@ class GeminiOCRBackend(OCRBackend):
         prompt = (
             "This is a cropped block from a Korean exam paper. "
             "Extract ALL visible text exactly as written — do not summarize, paraphrase, or skip anything. "
+            "Read the entire crop from top to bottom, including text above and below tables, diagrams, and figures. "
+            "If a table or diagram is followed by numbered questions or answer choices, include those lines too. "
+            "If multiple problem numbers are visible in one crop, include every problem number on its own line. "
             "Preserve Korean characters, math symbols, circled numbers ①②③④⑤, and ㄱ/ㄴ/ㄷ markers. "
             "Use \\n between visual lines. Keep digits, parentheses, and punctuation as-is. "
             "Classify the block by content:\n"
