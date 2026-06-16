@@ -36,7 +36,7 @@ Preserve the source content exactly:
 - Keep every Korean character, English word, number, equation, symbol, option label, diagram, table, graph, arrow, and relative layout unchanged.
 - Do not solve, explain, translate, summarize, replace, omit, or invent any text or mathematical content.
 - Do not add headers, page numbers, watermarks, decorations, extra marks, shadows, or decorative backgrounds.
-- If a PDF page number, footer marker, page-corner badge, or scanner overlay appears at the lower-right/lower-left edge, remove it.
+- If a PDF page number, header/footer marker, page-corner badge, website watermark, or scanner overlay appears at an outer edge, remove it unless it is part of the actual problem content.
 
 Improve only visual quality:
 - Reconstruct as a sharp, high-resolution asset at least 2x the source pixel detail while keeping the original aspect ratio and composition.
@@ -746,18 +746,19 @@ def _alpha_after_background_removal(
 
 
 def _remove_corner_page_artifacts(image: Any) -> int:
-    """Erase small page-number/footer marks glued to the lower page corners."""
+    """Erase small page-number/header/footer marks glued to safe page corners."""
     width, height = image.size
     if width < 80 or height < 80:
         return 0
 
     removed = 0
-    for side in ("right", "left"):
+    for side, vertical_edge in (("right", "bottom"), ("left", "bottom"), ("right", "top")):
         roi_width = max(40, int(round(width * 0.24)))
         roi_height = max(36, int(round(height * 0.22)))
         left = width - roi_width if side == "right" else 0
-        top = height - roi_height
-        roi = image.crop((left, top, left + roi_width, height))
+        top = height - roi_height if vertical_edge == "bottom" else 0
+        bottom = top + roi_height
+        roi = image.crop((left, top, left + roi_width, bottom))
         alpha = roi.getchannel("A")
         bbox = alpha.point(lambda px: 255 if px > 36 else 0).getbbox()
         if bbox is None:
@@ -770,8 +771,8 @@ def _remove_corner_page_artifacts(image: Any) -> int:
             continue
 
         touches_outer_edge = x1 >= roi_width - 3 if side == "right" else x0 <= 3
-        touches_bottom = y1 >= roi_height - 3
-        if not (touches_outer_edge or touches_bottom):
+        touches_vertical_edge = y1 >= roi_height - 3 if vertical_edge == "bottom" else y0 <= 3
+        if not (touches_outer_edge or touches_vertical_edge):
             continue
         if box_width > width * 0.20 or box_height > height * 0.20:
             continue

@@ -27,6 +27,7 @@ from build_problem_board_edb import (
     build_ui_session as build_problem_ui_session,
     build_image_only_records,
     run_problem_export,
+    _pad_problem_crop_edges,
     _pad_problem_crop_bottom,
     _hwp_conversion_has_pdf_problem_markers,
     _trim_edge_vertical_guides,
@@ -4679,6 +4680,72 @@ class TestEdbPublishFlow(unittest.TestCase):
 
         self.assertEqual(padded.size, (120, 98))
         self.assertEqual(padded.getpixel((12, 96)), (255, 255, 255))
+
+    def test_problem_crop_edge_padding_protects_top_and_bottom_content(self):
+        image = Image.new("RGB", (120, 80), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((12, 0, 28, 4), fill="black")
+        draw.rectangle((12, 76, 28, 79), fill="black")
+
+        padded = _pad_problem_crop_edges(image, top_padding_px=10, bottom_padding_px=14)
+
+        self.assertEqual(padded.size, (120, 104))
+        self.assertEqual(padded.getpixel((12, 0)), (255, 255, 255))
+        self.assertEqual(padded.getpixel((12, 9)), (255, 255, 255))
+        self.assertEqual(padded.getpixel((12, 10)), (0, 0, 0))
+        self.assertEqual(padded.getpixel((12, 89)), (0, 0, 0))
+        self.assertEqual(padded.getpixel((12, 90)), (255, 255, 255))
+
+    def test_document_band_problem_bounds_keep_top_and_bottom_margin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            Image.new("RGB", (600, 420), "white").save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=Image.open(source).convert("RGB"),
+                original_size=(600, 420),
+            )
+            blocks = [
+                ContentBlock(
+                    block_id="p1-stem",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 100, 360, 60),
+                    reading_order=0,
+                    text="1. problem",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+            ]
+            page = PageModel(
+                page_id="page-1",
+                width_px=600,
+                height_px=420,
+                subject=Subject.MATH,
+                source_path=str(source),
+                blocks=blocks,
+                problems=[
+                    ProblemUnit(
+                        unit_id="problem-1",
+                        subject=Subject.MATH,
+                        title="1.",
+                        stem_block_ids=["p1-stem"],
+                        metadata={"problem_number": 1, "column_index": 0, "question_band_index": 0},
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertLessEqual(entries[0].bounds.top, 78)
+            self.assertGreaterEqual(entries[0].bounds.bottom, 174)
 
     def test_choice_bottom_survives_near_next_problem_clamp(self):
         with tempfile.TemporaryDirectory() as tmp:

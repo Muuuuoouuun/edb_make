@@ -228,6 +228,29 @@ class TestImageReconstructionMutation(unittest.TestCase):
         self.assertEqual(cleaned.getpixel((112, 82))[3], 0)
         self.assertEqual(cleaned.getpixel((119, 89))[3], 0)
 
+    def test_clean_transparency_removes_upper_right_artifact_but_keeps_problem_number(self):
+        image = Image.new("RGBA", (140, 100), (18, 22, 26, 255))
+        pixels = image.load()
+        # Problem number/content near the upper-left must never be treated as a page marker.
+        for x in range(6, 18):
+            pixels[x, 8] = (248, 248, 246, 255)
+        for y in range(8, 22):
+            pixels[6, y] = (248, 248, 246, 255)
+        # Small header/page marker glued to the upper-right page edge.
+        for x in range(128, 140):
+            pixels[x, 0] = (248, 248, 246, 255)
+            pixels[x, 9] = (248, 248, 246, 255)
+        for y in range(0, 10):
+            pixels[128, y] = (248, 248, 246, 255)
+            pixels[139, y] = (248, 248, 246, 255)
+
+        cleaned, stats = clean_problem_image_transparency(image)
+
+        self.assertEqual(stats["removed_corner_artifacts"], 1)
+        self.assertGreater(cleaned.getpixel((6, 12))[3], 200)
+        self.assertEqual(cleaned.getpixel((134, 4))[3], 0)
+        self.assertEqual(cleaned.getpixel((139, 0))[3], 0)
+
     def test_publish_cutout_removes_dark_background_and_corner_page_badge(self):
         image = Image.new("RGBA", (120, 90), (18, 22, 26, 255))
         pixels = image.load()

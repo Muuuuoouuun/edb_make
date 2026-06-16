@@ -65,16 +65,17 @@ MAX_HEIGHT_PAGES = 4.8
 PLACEMENT_SCALE_MIN = 0.6
 PLACEMENT_SCALE_MAX = 1.6
 MIN_PROBLEM_AREA_RATIO = 0.12
-DOCUMENT_BAND_TOP_PADDING_PX = 14.0
-DOCUMENT_BAND_BOTTOM_PADDING_PX = 8.0
+DOCUMENT_BAND_TOP_PADDING_PX = 22.0
+DOCUMENT_BAND_BOTTOM_PADDING_PX = 14.0
 DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX = 6.0
 V1_LAYOUT_MARGIN_X_PX = 24.0
 V1_LAYOUT_MARGIN_Y_PX = 24.0
 V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
 V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
-CHOICE_BOTTOM_SAFE_PADDING_PX = 28.0
-PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 28
+CHOICE_BOTTOM_SAFE_PADDING_PX = 32.0
+PROBLEM_CROP_TOP_SAFE_PADDING_PX = 14
+PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 32
 PROCESSING_STEP_RAW = "raw"
 PROCESSING_STEP_ORIGINAL = "s1"
 PROCESSING_STEP_CHALK = "s2"
@@ -332,8 +333,13 @@ def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
     return image.crop((max(0, left_trim), 0, min(width, right_trim), height))
 
 
-def _pad_problem_crop_bottom(image: Image.Image, padding_px: int = PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX) -> Image.Image:
-    if padding_px <= 0 or image.width <= 0 or image.height <= 0:
+def _pad_problem_crop_edges(
+    image: Image.Image,
+    *,
+    top_padding_px: int = PROBLEM_CROP_TOP_SAFE_PADDING_PX,
+    bottom_padding_px: int = PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX,
+) -> Image.Image:
+    if (top_padding_px <= 0 and bottom_padding_px <= 0) or image.width <= 0 or image.height <= 0:
         return image
     if "A" in image.getbands():
         fill = (255, 255, 255, 0)
@@ -342,9 +348,15 @@ def _pad_problem_crop_bottom(image: Image.Image, padding_px: int = PROBLEM_CROP_
         fill = (255, 255, 255)
         mode = "RGB"
     converted = image.convert(mode)
-    padded = Image.new(mode, (converted.width, converted.height + padding_px), fill)
-    padded.paste(converted, (0, 0))
+    top_padding = max(0, int(top_padding_px))
+    bottom_padding = max(0, int(bottom_padding_px))
+    padded = Image.new(mode, (converted.width, converted.height + top_padding + bottom_padding), fill)
+    padded.paste(converted, (0, top_padding))
     return padded
+
+
+def _pad_problem_crop_bottom(image: Image.Image, padding_px: int = PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX) -> Image.Image:
+    return _pad_problem_crop_edges(image, top_padding_px=0, bottom_padding_px=padding_px)
 
 
 def _enhance_problem_crop(
@@ -797,7 +809,7 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         )
     )
     crop = _trim_edge_vertical_guides(crop)
-    crop = _pad_problem_crop_bottom(crop)
+    crop = _pad_problem_crop_edges(crop)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(task.crop_path)
     enhanced_crop = _enhance_problem_crop(crop)
@@ -2639,7 +2651,7 @@ def recrop_problem(
     bottom = int(max(top + 1, min(page_image.height, bbox.bottom)))
     crop = page_image.crop((left, top, right, bottom))
     crop = _trim_edge_vertical_guides(crop)
-    crop = _pad_problem_crop_bottom(crop)
+    crop = _pad_problem_crop_edges(crop)
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)
     return crop.size
