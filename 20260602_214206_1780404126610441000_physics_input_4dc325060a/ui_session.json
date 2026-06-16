@@ -1,0 +1,536 @@
+{
+  "session_name": "20260602_214206_1780404126610441000_physics_input_4dc325060a",
+  "generated_at": "2026-06-02T21:43:52+09:00",
+  "data_source": "question_export",
+  "output_dir": "/Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a",
+  "source_mode": "single",
+  "input_intent": "multi-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260602_214206_1780404126610441000_physics_input_4dc325060a.pdf"
+  ],
+  "source_page_count": 4,
+  "detected_problem_count": 9,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "pages_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/pages.json",
+  "placements_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/placements.json",
+  "board_render_dir": "/Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts",
+  "edb_path": "/Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/mvp_board.edb",
+  "edb_file_uri": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/mvp_board.edb",
+  "rendered_page_paths": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_004.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_004.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {}
+  },
+  "ai_fallback": null,
+  "ai_summary": null,
+  "warning_messages": [],
+  "problems": [
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-2",
+      "title": "그림과 같이 균일한 자기장에 의해 자기화된 상태에 있는 크기와\n모양이 같은 물체 A, B, C 중 2개를 꺼내어 하나는 수평면에 놓고\n다른 하나는 높이 h0에서 가만히 놓아 떨어뜨린다. 표는 두 물체가\n닿을 때까지 걸린 시간 T를 나타낸 것이다. A, B, C는 강자성체,\n상자성체, 반자성체를 순서 없이 나타낸 것이고, 균일한 자기장\n영역에서 B와 C가 자기화된 방향은 서로 같다.",
+      "problemNumber": 2,
+      "subject": "science",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_001_5110ac6c.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_001_5110ac6c.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1672.0,
+        "height": 2006.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-1",
+      "title": "2026학년도 대학\n과학탐구\n제 4 교시",
+      "problemNumber": 3,
+      "subject": "science",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_002_eebf3d43.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_002_eebf3d43.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 16.0,
+        "width": 776.0,
+        "height": 1021.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-3",
+      "title": "그림은 보어의 수소 원자 모형에서 양자수 n에 따른 전자의 궤도\n일부와 전자의 전이 a~d를, 표는 n에 따른 에너지 준위를 나타낸\n것이다. b, c에서 방출되는 빛의 진동수는 각각 fb, fc이다.",
+      "problemNumber": 4,
+      "subject": "science",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_003_fc842536.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_003_fc842536.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001",
+      "startYPages": 2.4,
+      "snappedNextStartYPages": 3.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 754.0,
+        "top": 1027.0,
+        "width": 859.0,
+        "height": 782.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-4",
+      "title": "그림은 매질 A에서 주기가 T_0인 물결파가\nA에서 매질 B로 굴절하여 진행하는 모습을\n나타낸 것이다. 실선은 물결파의 마루이고,\nA에서 실선과 경계면이 이루는 각은 60°이다.",
+      "problemNumber": 5,
+      "subject": "science",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_004_15439b4f.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_004_15439b4f.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001",
+      "startYPages": 3.6,
+      "snappedNextStartYPages": 4.8,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 754.0,
+        "top": 1771.0,
+        "width": 859.0,
+        "height": 555.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002-problem-2",
+      "title": "그림 (가)와 같이 높이가 각각 4h, h인 지점에 가만히 놓은 물체\nA, B가 빗면을 내려와 시간 t=0일 때 벽과 충돌을 시작하였다.\n그림 (나)는 물체가 벽과 충돌하는 동안 A, B의 속력을 시간에\n따라 나타낸 것이다. A, B의 질량은 각각 2m, m이다.",
+      "problemNumber": 7,
+      "subject": "korean",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_005_2ac42d29.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_005_2ac42d29.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": true,
+      "readingHeavy": true,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002",
+      "startYPages": 4.8,
+      "snappedNextStartYPages": 6.0,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1636.0,
+        "height": 2328.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002-problem-3",
+      "title": "그림과 같이 마찰이 없는 수평면에서 운동량의 크기가 p로\n같고 질량이 각각 4m, 2m, 3m인 물체 A, B, C가 x축을 따라\n등속도 운동을 하고 있다. A와 B가 충돌한 후, B와 C가 충돌한다.\nD는 A, C가 받는 충격량의 크기가 각각 3 1",
+      "problemNumber": 10,
+      "subject": "korean",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_006_8772c61e.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_006_8772c61e.png",
+      "actualHeightPages": 0.8739007764071091,
+      "overflowAllowed": true,
+      "readingHeavy": true,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002",
+      "startYPages": 6.0,
+      "snappedNextStartYPages": 7.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 813.0,
+        "top": 813.0,
+        "width": 823.0,
+        "height": 1470.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003-problem-2",
+      "title": "그림과 같이 xy 평면에 가늘고 무한히 긴 직선 도선 A, B, C가\n고정되어 있다. B에는 세기가 I0인 전류가 화살표 방향으로 흐르고,\nA와 C에는 각각 세기가 I인 전류가 흐른다. 표는 xy 평면의 점\np, q, r에서 A, B, C의 전류에 의한 자기장의 세기를 나타낸 것이다.\n...",
+      "problemNumber": 15,
+      "subject": "science",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_007_a4efeb09.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_007_a4efeb09.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003",
+      "startYPages": 7.2,
+      "snappedNextStartYPages": 8.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1635.0,
+        "height": 1483.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003-problem-3",
+      "title": "그림은 열기관에서 일정량의 이상 기체가 상태 A→B→C→\nD→A를 따라 순환하는 동안 기체의 부피와 절대 온도를 나타낸\n것이다. A→B 과정과 C→D 과정은 부피가 일정한 과정이고,\nB→C 과정과 D→A 과정은 등온 과정이다. 표는 각 과정에서\n기체가 흡수 또는 방출하는 열량을 나타낸 것이다.",
+      "problemNumber": 16,
+      "subject": "science",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_008_31e906e7.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_008_31e906e7.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003",
+      "startYPages": 8.4,
+      "snappedNextStartYPages": 9.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 1445.0,
+        "width": 1635.0,
+        "height": 878.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-004-problem-2",
+      "title": "그림 (가)와 같이 x축상에서 점전하 A, B, C가 각각 x=-d,\nx=d, x=x_C에 고정되어 있다. 그림 (나)는 (가)에서 C의 위치를\nx=-x_C로 옮겨 고정한 것이다. A와 B는 전하량의 크기가 같다.\n그림 (다)는 (가), (나)에서 양(+)전하 P의 위치를 x축상에서 옮기며\n고정할 때, 0 ≤ x < d인 구간에서 P에 작용하는 전기력 F_P를 각각\n나타낸 것이다. 전기력의 방향은 +x 방향이 양(+)이다.",
+      "problemNumber": 20,
+      "subject": "korean",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_crops/problem_009_e21e0f2a.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_004.png",
+      "sourceFileName": "20260602_214206_1780404126610441000_physics_input_4dc325060a_page_004.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260602_214206_1780404126610441000_physics_input_4dc325060a/problem_cutouts/problem_009_e21e0f2a.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": true,
+      "readingHeavy": true,
+      "sourcePageId": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-004",
+      "startYPages": 9.6,
+      "snappedNextStartYPages": 10.8,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 996.0,
+        "width": 1636.0,
+        "height": 1247.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    }
+  ],
+  "pages": [
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_001.png",
+      "width": 1672,
+      "height": 2400,
+      "problemIds": [
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-2",
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-1",
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-3",
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-001-problem-4"
+      ],
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 0.52,
+      "riskTier": "yellow",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002",
+      "pageNumber": 2,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_002.png",
+      "width": 1636,
+      "height": 2400,
+      "problemIds": [
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002-problem-2",
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-002-problem-3"
+      ],
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 0.52,
+      "riskTier": "yellow",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003",
+      "pageNumber": 3,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_003.png",
+      "width": 1635,
+      "height": 2400,
+      "problemIds": [
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003-problem-2",
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-003-problem-3"
+      ],
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 0.52,
+      "riskTier": "yellow",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-004",
+      "pageNumber": 4,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_004.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/rendered/20260602_214206_1780404126610441000_physics_input_4dc325060a_page_004.png",
+      "width": 1636,
+      "height": 2400,
+      "problemIds": [
+        "20260602_214206_1780404126610441000_physics_input_4dc325060a-page-004-problem-2"
+      ],
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 0.52,
+      "riskTier": "yellow",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "disabled"
+    }
+  ]
+}

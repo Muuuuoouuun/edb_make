@@ -1,0 +1,288 @@
+{
+  "session_name": "14_image_math_position",
+  "generated_at": "2026-06-16T12:03:04+09:00",
+  "data_source": "question_export",
+  "output_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position",
+  "source_mode": "single",
+  "input_intent": "multi-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "/Users/clmagi/Downloads/문제 예씨/img.jpg"
+  ],
+  "source_page_count": 1,
+  "detected_problem_count": 2,
+  "core_problem_count": 2,
+  "supplemental_item_count": 0,
+  "duplicate_problem_number_groups": [],
+  "duplicateProblemNumberGroups": [],
+  "duplicate_problem_number_group_count": 0,
+  "duplicateProblemNumberGroupCount": 0,
+  "blocking_duplicate_problem_number_groups": [],
+  "blockingDuplicateProblemNumberGroups": [],
+  "blocking_duplicate_problem_number_group_count": 0,
+  "blockingDuplicateProblemNumberGroupCount": 0,
+  "source_problem_overlap_groups": [
+    {
+      "sourcePageId": "img-page-001",
+      "source_page_id": "img-page-001",
+      "problemIds": [
+        "img-page-001-problem-1",
+        "img-page-001-problem-2"
+      ],
+      "problem_ids": [
+        "img-page-001-problem-1",
+        "img-page-001-problem-2"
+      ],
+      "problemTitles": [
+        "중등 1학년\n1. 기본도형",
+        "윤자매 놀이 학습"
+      ],
+      "overlapAreaRatio": 1.0,
+      "overlap_area_ratio": 1.0,
+      "intersectionOverUnion": 0.378036,
+      "intersection_over_union": 0.378036,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 847.0,
+        "height": 1852.0
+      },
+      "nextBbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1734.0,
+        "height": 2393.0
+      },
+      "next_bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1734.0,
+        "height": 2393.0
+      },
+      "message": "두 문항의 원본 인식 영역이 크게 겹칩니다. 긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+    }
+  ],
+  "sourceProblemOverlapGroups": [
+    {
+      "sourcePageId": "img-page-001",
+      "source_page_id": "img-page-001",
+      "problemIds": [
+        "img-page-001-problem-1",
+        "img-page-001-problem-2"
+      ],
+      "problem_ids": [
+        "img-page-001-problem-1",
+        "img-page-001-problem-2"
+      ],
+      "problemTitles": [
+        "중등 1학년\n1. 기본도형",
+        "윤자매 놀이 학습"
+      ],
+      "overlapAreaRatio": 1.0,
+      "overlap_area_ratio": 1.0,
+      "intersectionOverUnion": 0.378036,
+      "intersection_over_union": 0.378036,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 847.0,
+        "height": 1852.0
+      },
+      "nextBbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1734.0,
+        "height": 2393.0
+      },
+      "next_bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1734.0,
+        "height": 2393.0
+      },
+      "message": "두 문항의 원본 인식 영역이 크게 겹칩니다. 긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+    }
+  ],
+  "source_problem_overlap_group_count": 1,
+  "sourceProblemOverlapGroupCount": 1,
+  "passage_group_source_reuse_groups": [],
+  "passageGroupSourceReuseGroups": [],
+  "passage_group_source_reuse_group_count": 0,
+  "passageGroupSourceReuseGroupCount": 0,
+  "passage_groups": [],
+  "passageGroups": [],
+  "passage_group_count": 0,
+  "passageGroupCount": 0,
+  "passage_problem_count": 0,
+  "passageProblemCount": 0,
+  "cross_page_passage_group_count": 0,
+  "crossPagePassageGroupCount": 0,
+  "passage_review_items": [],
+  "passageReviewItems": [],
+  "passage_review_item_count": 0,
+  "passageReviewItemCount": 0,
+  "cross_page_passage_review_item_count": 0,
+  "crossPagePassageReviewItemCount": 0,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "board_theme": "charcoal",
+  "crop_format": "v2",
+  "pages_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/pages.json",
+  "placements_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/placements.json",
+  "board_render_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/problem_cutouts",
+  "edb_path": null,
+  "edb_file_uri": null,
+  "rendered_page_paths": [
+    "/Users/clmagi/Downloads/문제 예씨/.pipeline_cache/normalized/img-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///Users/clmagi/Downloads/%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6%20%E1%84%8B%E1%85%A8%E1%84%8A%E1%85%B5/.pipeline_cache/normalized/img-page-001.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "english",
+      "korean"
+    ],
+    "metadata": {
+      "placement_mode": "one-problem-per-page"
+    }
+  },
+  "ai_fallback": null,
+  "ai_summary": null,
+  "warning_messages": [],
+  "problems": [
+    {
+      "id": "img-page-001-problem-1",
+      "title": "중등 1학년\n1. 기본도형",
+      "problemNumber": 1,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/problem_crops/problem_001_94f5792e.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6%20%E1%84%8B%E1%85%A8%E1%84%8A%E1%85%B5/.pipeline_cache/normalized/img-page-001.png",
+      "sourceFileName": "img-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/problem_cutouts/problem_001_94f5792e.png",
+      "actualHeightPages": 1.0859730921364203,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "img-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 847.0,
+        "height": 1852.0
+      },
+      "riskFlags": [
+        "source_problem_bbox_overlap"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "img-page-001-problem-2",
+      "title": "윤자매 놀이 학습",
+      "problemNumber": 2,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/problem_crops/problem_002_c505ec99.png",
+      "sourceImagePath": "file:///Users/clmagi/Downloads/%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6%20%E1%84%8B%E1%85%A8%E1%84%8A%E1%85%B5/.pipeline_cache/normalized/img-page-001.png",
+      "sourceFileName": "img-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/tmp/training_eval/14_image_math_position/problem_cutouts/problem_002_c505ec99.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "img-page-001",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1734.0,
+        "height": 2393.0
+      },
+      "riskFlags": [
+        "source_problem_bbox_overlap"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    }
+  ],
+  "pages": [
+    {
+      "id": "img-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///Users/clmagi/Downloads/%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6%20%E1%84%8B%E1%85%A8%E1%84%8A%E1%85%B5/.pipeline_cache/normalized/img-page-001.png",
+      "sourceImagePath": "/Users/clmagi/Downloads/문제 예씨/.pipeline_cache/normalized/img-page-001.png",
+      "width": 1734,
+      "height": 2400,
+      "problemIds": [
+        "img-page-001-problem-1",
+        "img-page-001-problem-2"
+      ],
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "riskScore": 0.0,
+      "riskTier": "green",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "disabled"
+    }
+  ],
+  "timing_ms": {
+    "source_build": 10192,
+    "problem_assets": 399,
+    "records": 82,
+    "page_segmentation_sum": 57,
+    "page_block_ocr_sum": 9960,
+    "page_total_before_repair_sum": 10017,
+    "page_ai_repair_sum": 0,
+    "ui_session": 0,
+    "total": 10676
+  }
+}

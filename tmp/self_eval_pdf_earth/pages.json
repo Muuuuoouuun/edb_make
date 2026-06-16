@@ -1,0 +1,3622 @@
+[
+  {
+    "page_id": "earth_input-page-001",
+    "width_px": 1995,
+    "height_px": 2810,
+    "subject": "science",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-001.png",
+    "blocks": [
+      {
+        "block_id": "earth_input-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 404.98693739149303,
+          "width": 997.5,
+          "height": 661.2866056315104
+        },
+        "reading_order": 0,
+        "text": "1.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 1,
+          "problem_number": 1,
+          "problem_number_source": "text_prefix",
+          "display_title": "1.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "1. 그림은 대서양의 해수 순환을 모식적으로",
+          "segmentation_mode": "document",
+          "page_area_px": 5605950,
+          "block_area_ratio": 0.117667,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-001-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1060.6535430230035,
+          "width": 997.5,
+          "height": 830.6201695421005
+        },
+        "reading_order": 1,
+        "text": "2.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 2,
+          "problem_number": 2,
+          "problem_number_source": "text_prefix",
+          "display_title": "2.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "2. 그림은 어느 뇌우의 생성과 소멸 과정에서 나타나는 공기의",
+          "segmentation_mode": "document",
+          "page_area_px": 5605950,
+          "block_area_ratio": 0.147797,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-001-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1885.6537125651041,
+          "width": 997.5,
+          "height": 924.3462874348959
+        },
+        "reading_order": 2,
+        "text": "3.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 3,
+          "problem_number": 3,
+          "problem_number_source": "text_prefix",
+          "display_title": "3.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "3. 그림은 위도에 따른 연평균 강수량과 증발량을 순서 없이",
+          "segmentation_mode": "document",
+          "page_area_px": 5605950,
+          "block_area_ratio": 0.164474,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-001-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 997.5,
+          "top": 404.98693739149303,
+          "width": 997.5,
+          "height": 1276.4533333333334
+        },
+        "reading_order": 3,
+        "text": "4.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 4,
+          "problem_number": 4,
+          "problem_number_source": "text_prefix",
+          "display_title": "4.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "4. 다음은 어느 지질 구조의 형성 과정을 알아보기 위한 탐구이다.",
+          "segmentation_mode": "document",
+          "page_area_px": 5605950,
+          "block_area_ratio": 0.227127,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-001-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 997.5,
+          "top": 1675.8202707248265,
+          "width": 997.5,
+          "height": 1134.1797292751735
+        },
+        "reading_order": 4,
+        "text": "5.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 5,
+          "problem_number": 5,
+          "problem_number_source": "text_prefix",
+          "display_title": "5.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "5. 그림 (가)는 깊이에 따른 지하 온도 분포와 암석의 용융 곡선을,",
+          "segmentation_mode": "document",
+          "page_area_px": 5605950,
+          "block_area_ratio": 0.201811,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "earth_input-page-001-problem-1",
+        "subject": "science",
+        "title": "1.",
+        "stem_block_ids": [
+          "earth_input-page-001-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 1,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-001-problem-2",
+        "subject": "science",
+        "title": "2.",
+        "stem_block_ids": [
+          "earth_input-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 2,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-001-problem-3",
+        "subject": "science",
+        "title": "3.",
+        "stem_block_ids": [
+          "earth_input-page-001-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 3,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-001-problem-4",
+        "subject": "science",
+        "title": "4.",
+        "stem_block_ids": [
+          "earth_input-page-001-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 4,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-001-problem-5",
+        "subject": "science",
+        "title": "5.",
+        "stem_block_ids": [
+          "earth_input-page-001-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 5,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 1,
+          "text": "1. 그림은 대서양의 해수 순환을 모식적으로",
+          "bbox": {
+            "left": 14.166670905219178,
+            "top": 421.84693739149304,
+            "right": 622.7525160047743,
+            "bottom": 458.78863525390625,
+            "width": 608.5858450995552,
+            "height": 36.94169786241321
+          }
+        },
+        {
+          "number": 2,
+          "text": "2. 그림은 어느 뇌우의 생성과 소멸 과정에서 나타나는 공기의",
+          "bbox": {
+            "left": 14.166670905219178,
+            "top": 1077.5135430230034,
+            "right": 907.8795199924045,
+            "bottom": 1114.4552408854165,
+            "width": 893.7128490871853,
+            "height": 36.94169786241309
+          }
+        },
+        {
+          "number": 3,
+          "text": "3. 그림은 위도에 따른 연평균 강수량과 증발량을 순서 없이",
+          "bbox": {
+            "left": 14.166670905219178,
+            "top": 1902.513712565104,
+            "right": 908.0291408962673,
+            "bottom": 1939.455410427517,
+            "width": 893.8624699910481,
+            "height": 36.94169786241309
+          }
+        },
+        {
+          "number": 4,
+          "text": "4. 다음은 어느 지질 구조의 형성 과정을 알아보기 위한 탐구이다.",
+          "bbox": {
+            "left": 982.6666598849827,
+            "top": 421.84693739149304,
+            "right": 1864.5061577690972,
+            "bottom": 458.78863525390625,
+            "width": 881.8394978841145,
+            "height": 36.94169786241321
+          }
+        },
+        {
+          "number": 5,
+          "text": "5. 그림 (가)는 깊이에 따른 지하 온도 분포와 암석의 용융 곡선을,",
+          "bbox": {
+            "left": 982.6666598849827,
+            "top": 1692.6802707248264,
+            "right": 1864.6322970920137,
+            "bottom": 1729.6219685872395,
+            "width": 881.965637207031,
+            "height": 36.94169786241309
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을",
+          "bbox": {
+            "left": 304.17277018229163,
+            "top": 926.4565361870659,
+            "right": 852.759297688802,
+            "bottom": 959.1356913248698,
+            "width": 548.5865275065104,
+            "height": 32.67915513780383
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 1815.4802110460068,
+            "right": 1126.2969970703125,
+            "bottom": 1848.159450954861,
+            "width": 822.1303304036459,
+            "height": 32.67923990885424
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 2596.3136461046006,
+            "right": 1138.132815890842,
+            "bottom": 2628.9928860134546,
+            "width": 833.9661492241754,
+            "height": 32.679239908854015
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? [3점]",
+          "bbox": {
+            "left": 275.5189259847005,
+            "top": 2642.633056640625,
+            "right": 497.53918117947046,
+            "bottom": 2675.312296549479,
+            "width": 222.02025519476996,
+            "height": 32.679239908854015
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 1515.1468912760415,
+            "right": 2106.4509073893228,
+            "bottom": 1547.8261311848958,
+            "width": 833.7842305501301,
+            "height": 32.67923990885424
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 2595.1468573676216,
+            "right": 2106.4509073893228,
+            "bottom": 2627.8260972764756,
+            "width": 833.7842305501301,
+            "height": 32.679239908854015
+          }
+        }
+      ],
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 230,
+        "top": 298,
+        "right": 2225,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "tmp_test_inputs/earth_input.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/rendered/earth_input_page_001.png",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-001.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 5,
+      "column_count": 2,
+      "document_split_block_count": 5,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 5605950,
+      "block_count": 5,
+      "text_block_count": 5,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 2,
+      "large_block_ratio": 0.4,
+      "max_block_area_ratio": 0.227127,
+      "mean_block_area_ratio": 0.171775,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 5605950,
+        "block_count": 5,
+        "text_block_count": 5,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 2,
+        "large_block_ratio": 0.4,
+        "max_block_area_ratio": 0.227127,
+        "mean_block_area_ratio": 0.171775,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "noop",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 4,
+        "block_ocr": 0,
+        "total_before_repair": 5
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 5,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalated_block_count": 0,
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 5,
+        "problem_count": 5,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 5,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 5
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 5,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "1.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 1,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              1
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "2.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 2,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              2
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "3.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 3,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              3
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "4.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 4,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              4
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "5.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 5,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              5
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 5,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 5,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 5
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 5
+      },
+      "difficulty_profile": {
+        "page_id": "earth_input-page-001",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.34,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 5,
+            "large_block_count": 2,
+            "large_block_ratio": 0.4,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 5,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.227127,
+            "pdf_text_marker_count": 5,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "noop",
+            "text_block_count": 5,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 5
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 5,
+            "block_count": 5,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 5,
+            "problem_number_source_counts": {
+              "text_prefix": 5
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "earth_input-page-001",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": "ai_repair",
+        "quality_status": "failed",
+        "recommended_action": "ai_repair",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "earth_input-page-001",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.34,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "ocr_disabled",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 5,
+              "large_block_count": 2,
+              "large_block_ratio": 0.4,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 5,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.227127,
+              "pdf_text_marker_count": 5,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "noop",
+              "text_block_count": 5,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 5
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": false
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 5,
+              "block_count": 5,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 5,
+              "problem_number_source_counts": {
+                "text_prefix": 5
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "noop",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 5,
+        "baseline_block_count": 5
+      },
+      "recognition_page_worker_count": 2
+    }
+  },
+  {
+    "page_id": "earth_input-page-002",
+    "width_px": 1914,
+    "height_px": 2807,
+    "subject": "science",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-002.png",
+    "blocks": [
+      {
+        "block_id": "earth_input-page-002-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 130.50496451822914,
+          "width": 957.0,
+          "height": 997.1140067816839
+        },
+        "reading_order": 0,
+        "text": "6.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 6,
+          "problem_number": 6,
+          "problem_number_source": "text_prefix",
+          "display_title": "6.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "6. 그림 (가)는 태평양 어느 지역에서 판 경계를 가로지르는 A-B",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.177612,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-002-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1122.004971299913,
+          "width": 957.0,
+          "height": 898.1139660915801
+        },
+        "reading_order": 1,
+        "text": "7.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 7,
+          "problem_number": 7,
+          "problem_number_source": "text_prefix",
+          "display_title": "7.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "7. 그림 (가)와 (나)는 어느 날 같은 시각의 지상 일기도와 적외 영상을",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.159978,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-002-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 2014.504937391493,
+          "width": 957.0,
+          "height": 792.4950626085069
+        },
+        "reading_order": 2,
+        "text": "8.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 8,
+          "problem_number": 8,
+          "problem_number_source": "text_prefix",
+          "display_title": "8.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "8. 그림은 지질 시대에 일어난 주요 사건을 시간 순서대로 나타낸",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.141164,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-002-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 130.50496451822914,
+          "width": 957.0,
+          "height": 1090.6139321831597
+        },
+        "reading_order": 3,
+        "text": "9.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 9,
+          "problem_number": 9,
+          "problem_number_source": "text_prefix",
+          "display_title": "9.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "9. 그림 (가)는 서로 다른 해에 우리나라에 영향을 준 태풍 A와 B의",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.194267,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-002-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 1215.5048967013888,
+          "width": 957.0,
+          "height": 730.2786457248264
+        },
+        "reading_order": 4,
+        "text": "10.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 10,
+          "problem_number": 10,
+          "problem_number_source": "text_prefix",
+          "display_title": "10.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "10. 그림은 은하 A와 B를 구성하는",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.130082,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-002-block-006",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 1940.1695424262152,
+          "width": 957.0,
+          "height": 866.8304575737848
+        },
+        "reading_order": 5,
+        "text": "11.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 11,
+          "problem_number": 11,
+          "problem_number_source": "text_prefix",
+          "display_title": "11.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "11. 표는 주계열성 X가 중심별인",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.154405,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "earth_input-page-002-problem-1",
+        "subject": "science",
+        "title": "6.",
+        "stem_block_ids": [
+          "earth_input-page-002-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 6,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-002-problem-2",
+        "subject": "science",
+        "title": "7.",
+        "stem_block_ids": [
+          "earth_input-page-002-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 7,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-002-problem-3",
+        "subject": "science",
+        "title": "8.",
+        "stem_block_ids": [
+          "earth_input-page-002-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 8,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-002-problem-4",
+        "subject": "science",
+        "title": "9.",
+        "stem_block_ids": [
+          "earth_input-page-002-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 9,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-002-problem-5",
+        "subject": "science",
+        "title": "10.",
+        "stem_block_ids": [
+          "earth_input-page-002-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 10,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-002-problem-6",
+        "subject": "science",
+        "title": "11.",
+        "stem_block_ids": [
+          "earth_input-page-002-block-006"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 11,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 6,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 6,
+          "text": "6. 그림 (가)는 태평양 어느 지역에서 판 경계를 가로지르는 A-B",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 147.34696451822913,
+            "right": 895.25732421875,
+            "bottom": 184.2886199951172,
+            "width": 882.0906533135308,
+            "height": 36.94165547688806
+          }
+        },
+        {
+          "number": 7,
+          "text": "7. 그림 (가)와 (나)는 어느 날 같은 시각의 지상 일기도와 적외 영상을",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 1138.846971299913,
+            "right": 895.7400953504773,
+            "bottom": 1175.7886691623264,
+            "width": 882.5734244452581,
+            "height": 36.94169786241332
+          }
+        },
+        {
+          "number": 8,
+          "text": "8. 그림은 지질 시대에 일어난 주요 사건을 시간 순서대로 나타낸",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 2031.3469373914932,
+            "right": 907.1134880913628,
+            "bottom": 2068.2886352539062,
+            "width": 893.9468171861436,
+            "height": 36.94169786241309
+          }
+        },
+        {
+          "number": 9,
+          "text": "9. 그림 (가)는 서로 다른 해에 우리나라에 영향을 준 태풍 A와 B의",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 147.34696451822913,
+            "right": 1863.5137871636284,
+            "bottom": 184.2886199951172,
+            "width": 881.8471272786458,
+            "height": 36.94165547688806
+          }
+        },
+        {
+          "number": 10,
+          "text": "10. 그림은 은하 A와 B를 구성하는",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 1232.346896701389,
+            "right": 1526.7840169270833,
+            "bottom": 1269.288594563802,
+            "width": 545.1173570421006,
+            "height": 36.94169786241309
+          }
+        },
+        {
+          "number": 11,
+          "text": "11. 표는 주계열성 X가 중심별인",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 1957.0115424262153,
+            "right": 1465.9436645507812,
+            "bottom": 1993.955274793837,
+            "width": 484.2770046657986,
+            "height": 36.94373236762158
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 998.3135647243923,
+            "right": 1138.1327311197915,
+            "bottom": 1030.992719862196,
+            "width": 833.9660644531249,
+            "height": 32.67915513780372
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? (단, 해수에서 음파의 속력은 ms이다.)",
+          "bbox": {
+            "left": 275.51884121365015,
+            "top": 1040.8459133572048,
+            "right": 1019.5162455240885,
+            "bottom": 1076.6732957628037,
+            "width": 743.9974043104384,
+            "height": 35.82738240559888
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 1901.3136121961804,
+            "right": 1138.1327311197915,
+            "bottom": 1933.9928521050347,
+            "width": 833.9660644531249,
+            "height": 32.67923990885424
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "A, B, C 기간에 대한 설명으로 옳은 것만을 <보기>에서 있는",
+          "bbox": {
+            "left": 305.66666920979816,
+            "top": 2594.8449028862847,
+            "right": 1138.28370836046,
+            "bottom": 2630.4928249782984,
+            "width": 832.6170391506619,
+            "height": 35.64792209201369
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "대로 고른 것은? [3점]",
+          "bbox": {
+            "left": 275.4815843370226,
+            "top": 2643.494160970052,
+            "right": 569.1819508870442,
+            "bottom": 2676.1734008789062,
+            "width": 293.7003665500216,
+            "height": 32.67923990885447
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 1092.8136189778645,
+            "right": 2106.4509073893228,
+            "bottom": 1125.4927741156685,
+            "width": 833.7842305501301,
+            "height": 32.679155137803946
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? [3점]",
+          "bbox": {
+            "left": 1244.019063313802,
+            "top": 1138.4941948784722,
+            "right": 1466.0391913519966,
+            "bottom": 1171.173350016276,
+            "width": 222.02012803819457,
+            "height": 32.67915513780372
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6519266764321,
+            "top": 1828.4803602430554,
+            "right": 2106.435987684462,
+            "bottom": 1861.1596001519097,
+            "width": 833.7840610080298,
+            "height": 32.67923990885424
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.661421034071,
+            "top": 2553.128899468316,
+            "right": 2106.4454820421006,
+            "bottom": 2585.80813937717,
+            "width": 833.7840610080295,
+            "height": 32.679239908854015
+          }
+        }
+      ],
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 231,
+        "top": 301,
+        "right": 2145,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "tmp_test_inputs/earth_input.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/rendered/earth_input_page_002.png",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-002.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 6,
+      "column_count": 2,
+      "document_split_block_count": 6,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 5372598,
+      "block_count": 6,
+      "text_block_count": 6,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 1,
+      "large_block_ratio": 0.166667,
+      "max_block_area_ratio": 0.194267,
+      "mean_block_area_ratio": 0.159585,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 5372598,
+        "block_count": 6,
+        "text_block_count": 6,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 1,
+        "large_block_ratio": 0.166667,
+        "max_block_area_ratio": 0.194267,
+        "mean_block_area_ratio": 0.159585,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "noop",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 4,
+        "block_ocr": 0,
+        "total_before_repair": 4
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 6,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalated_block_count": 0,
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 6,
+        "problem_count": 6,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 6,
+          "problem_marker_block_count": 6,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 6
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 6,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 6,
+          "problem_number_block_count": 6,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 6
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "6.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 6,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              6
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "7.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 7,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              7
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "8.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 8,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              8
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "9.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 9,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              9
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "10.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 10,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              10
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "11.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 11,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              11
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 6,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 6,
+        "problem_number_block_count": 6,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 6,
+        "problem_marker_block_count": 6,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 6
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 6
+      },
+      "difficulty_profile": {
+        "page_id": "earth_input-page-002",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.34,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 6,
+            "large_block_count": 1,
+            "large_block_ratio": 0.166667,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 6,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.194267,
+            "pdf_text_marker_count": 6,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "noop",
+            "text_block_count": 6,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 6
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 6,
+            "block_count": 6,
+            "problem_marker_count": 6,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 6,
+            "problem_number_source_counts": {
+              "text_prefix": 6
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "earth_input-page-002",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": "ai_repair",
+        "quality_status": "failed",
+        "recommended_action": "ai_repair",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "earth_input-page-002",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.34,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "ocr_disabled",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 6,
+              "large_block_count": 1,
+              "large_block_ratio": 0.166667,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 6,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.194267,
+              "pdf_text_marker_count": 6,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "noop",
+              "text_block_count": 6,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 6
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": false
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 6,
+              "block_count": 6,
+              "problem_marker_count": 6,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 6,
+              "problem_number_source_counts": {
+                "text_prefix": 6
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "noop",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 6,
+        "baseline_block_count": 6
+      },
+      "recognition_page_worker_count": 2
+    }
+  },
+  {
+    "page_id": "earth_input-page-003",
+    "width_px": 1914,
+    "height_px": 2809,
+    "subject": "science",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-003.png",
+    "blocks": [
+      {
+        "block_id": "earth_input-page-003-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 132.49296451822914,
+          "width": 957.0,
+          "height": 656.2846395399306
+        },
+        "reading_order": 0,
+        "text": "12.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 12,
+          "problem_number": 12,
+          "problem_number_source": "text_prefix",
+          "display_title": "12.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "12. 표는 중심핵에서 핵융합 반응이",
+          "segmentation_mode": "document",
+          "page_area_px": 5376426,
+          "block_area_ratio": 0.116818,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-003-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 783.1596040581596,
+          "width": 957.0,
+          "height": 842.618020345052
+        },
+        "reading_order": 1,
+        "text": "13.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 13,
+          "problem_number": 13,
+          "problem_number_source": "text_prefix",
+          "display_title": "13.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "13. 그림은 빅뱅 우주론에 따라 우주가 팽창",
+          "segmentation_mode": "document",
+          "page_area_px": 5376426,
+          "block_area_ratio": 0.149985,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-003-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1620.1596244032116,
+          "width": 957.0,
+          "height": 1188.8403755967884
+        },
+        "reading_order": 2,
+        "text": "14.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 14,
+          "problem_number": 14,
+          "problem_number_source": "text_prefix",
+          "display_title": "14.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "14. 그림은 지구의 자전축 경사각과 세차 운동에 의한 자전축 경사",
+          "segmentation_mode": "document",
+          "page_area_px": 5376426,
+          "block_area_ratio": 0.211613,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-003-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 132.49296451822914,
+          "width": 957.0,
+          "height": 1691.9512112630207
+        },
+        "reading_order": 3,
+        "text": "15.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 15,
+          "problem_number": 15,
+          "problem_number_source": "text_prefix",
+          "display_title": "15.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "15. 그림 (가)는 동태평양 적도 부근 해역에서 관측한 표층 수온",
+          "segmentation_mode": "document",
+          "page_area_px": 5376426,
+          "block_area_ratio": 0.301166,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-003-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 1818.82617578125,
+          "width": 957.0,
+          "height": 990.17382421875
+        },
+        "reading_order": 4,
+        "text": "16.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 16,
+          "problem_number": 16,
+          "problem_number_source": "text_prefix",
+          "display_title": "16.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "16. 그림은 표준 우주 모형에 따라 팽창하는 우주에서 우주의 팽창",
+          "segmentation_mode": "document",
+          "page_area_px": 5376426,
+          "block_area_ratio": 0.17625,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "earth_input-page-003-problem-1",
+        "subject": "science",
+        "title": "12.",
+        "stem_block_ids": [
+          "earth_input-page-003-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 12,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-003-problem-2",
+        "subject": "science",
+        "title": "13.",
+        "stem_block_ids": [
+          "earth_input-page-003-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 13,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-003-problem-3",
+        "subject": "science",
+        "title": "14.",
+        "stem_block_ids": [
+          "earth_input-page-003-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 14,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-003-problem-4",
+        "subject": "science",
+        "title": "15.",
+        "stem_block_ids": [
+          "earth_input-page-003-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 15,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-003-problem-5",
+        "subject": "science",
+        "title": "16.",
+        "stem_block_ids": [
+          "earth_input-page-003-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 16,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 12,
+          "text": "12. 표는 중심핵에서 핵융합 반응이",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 149.34696451822913,
+            "right": 552.8055928548176,
+            "bottom": 186.2886199951172,
+            "width": 539.6389219495984,
+            "height": 36.94165547688806
+          }
+        },
+        {
+          "number": 13,
+          "text": "13. 그림은 빅뱅 우주론에 따라 우주가 팽창",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 800.0136040581597,
+            "right": 548.6960618760851,
+            "bottom": 836.9553019205728,
+            "width": 535.529390970866,
+            "height": 36.94169786241309
+          }
+        },
+        {
+          "number": 14,
+          "text": "14. 그림은 지구의 자전축 경사각과 세차 운동에 의한 자전축 경사",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 1637.0136244032117,
+            "right": 907.02490234375,
+            "bottom": 1673.955322265625,
+            "width": 893.8582314385308,
+            "height": 36.94169786241332
+          }
+        },
+        {
+          "number": 15,
+          "text": "15. 그림 (가)는 동태평양 적도 부근 해역에서 관측한 표층 수온",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 149.34696451822913,
+            "right": 1875.6901312934028,
+            "bottom": 186.2886199951172,
+            "width": 894.0234714084202,
+            "height": 36.94165547688806
+          }
+        },
+        {
+          "number": 16,
+          "text": "16. 그림은 표준 우주 모형에 따라 팽창하는 우주에서 우주의 팽창",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 1835.68017578125,
+            "right": 1875.525675455729,
+            "bottom": 1872.621873643663,
+            "width": 893.8590155707464,
+            "height": 36.94169786241309
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을",
+          "bbox": {
+            "left": 304.24067179361975,
+            "top": 608.6468590630425,
+            "right": 783.8540818956163,
+            "bottom": 641.3260142008463,
+            "width": 479.6134101019966,
+            "height": 32.67915513780383
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16615804036456,
+            "top": 1398.1302897135415,
+            "right": 1138.1322224934895,
+            "bottom": 1430.8095296223958,
+            "width": 833.966064453125,
+            "height": 32.67923990885424
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? [3점]",
+          "bbox": {
+            "left": 275.5183325873481,
+            "top": 1444.2899915907117,
+            "right": 497.53858778211804,
+            "bottom": 1476.969231499566,
+            "width": 222.02025519476996,
+            "height": 32.67923990885424
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 2503.1468709309893,
+            "right": 1138.1327311197915,
+            "bottom": 2535.8261108398438,
+            "width": 833.9660644531249,
+            "height": 32.67923990885447
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? (단, 지구의 자전축 경사각과 세차 운동 이외의 요인은",
+          "bbox": {
+            "left": 275.51884121365015,
+            "top": 2549.4664510091143,
+            "right": 1126.2279086642795,
+            "bottom": 2582.1456909179688,
+            "width": 850.7090674506294,
+            "height": 32.67923990885447
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 1255.813937717014,
+            "right": 2106.4509073893228,
+            "bottom": 1288.4930928548176,
+            "width": 833.7842305501301,
+            "height": 32.67915513780372
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 2554.4801500108506,
+            "right": 2106.4509073893228,
+            "bottom": 2587.1593899197046,
+            "width": 833.7842305501301,
+            "height": 32.679239908854015
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? [3점]",
+          "bbox": {
+            "left": 1244.019063313802,
+            "top": 2600.6400214301216,
+            "right": 1466.0391913519966,
+            "bottom": 2633.3192613389756,
+            "width": 222.02012803819457,
+            "height": 32.679239908854015
+          }
+        }
+      ],
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 231,
+        "top": 299,
+        "right": 2145,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "tmp_test_inputs/earth_input.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/rendered/earth_input_page_003.png",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-003.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 5,
+      "column_count": 2,
+      "document_split_block_count": 5,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 5376426,
+      "block_count": 5,
+      "text_block_count": 5,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 2,
+      "large_block_ratio": 0.4,
+      "max_block_area_ratio": 0.301166,
+      "mean_block_area_ratio": 0.191167,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 5376426,
+        "block_count": 5,
+        "text_block_count": 5,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 2,
+        "large_block_ratio": 0.4,
+        "max_block_area_ratio": 0.301166,
+        "mean_block_area_ratio": 0.191167,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "noop",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 4,
+        "block_ocr": 0,
+        "total_before_repair": 5
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 5,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalated_block_count": 0,
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 5,
+        "problem_count": 5,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 5,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 5
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 5,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "12.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 12,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              12
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "13.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 13,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              13
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "14.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 14,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              14
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "15.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 15,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              15
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "16.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 16,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              16
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 5,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 5,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 5
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 5
+      },
+      "difficulty_profile": {
+        "page_id": "earth_input-page-003",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.34,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 5,
+            "large_block_count": 2,
+            "large_block_ratio": 0.4,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 5,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.301166,
+            "pdf_text_marker_count": 5,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "noop",
+            "text_block_count": 5,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 5
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 5,
+            "block_count": 5,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 5,
+            "problem_number_source_counts": {
+              "text_prefix": 5
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "earth_input-page-003",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": "ai_repair",
+        "quality_status": "failed",
+        "recommended_action": "ai_repair",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "earth_input-page-003",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.34,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "ocr_disabled",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 5,
+              "large_block_count": 2,
+              "large_block_ratio": 0.4,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 5,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.301166,
+              "pdf_text_marker_count": 5,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "noop",
+              "text_block_count": 5,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 5
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": false
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 5,
+              "block_count": 5,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 5,
+              "problem_number_source_counts": {
+                "text_prefix": 5
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "noop",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 5,
+        "baseline_block_count": 5
+      },
+      "recognition_page_worker_count": 2
+    }
+  },
+  {
+    "page_id": "earth_input-page-004",
+    "width_px": 1914,
+    "height_px": 2807,
+    "subject": "science",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-004.png",
+    "blocks": [
+      {
+        "block_id": "earth_input-page-004-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 130.50496451822914,
+          "width": 957.0,
+          "height": 1416.1139118381075
+        },
+        "reading_order": 0,
+        "text": "17.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 17,
+          "problem_number": 17,
+          "problem_number_source": "text_prefix",
+          "display_title": "17.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "17. 그림은 지괴 A와 B의 시기별 고지자기극의 위치와 이로부터",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.252247,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-004-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1541.0048763563366,
+          "width": 957.0,
+          "height": 1265.9951236436634
+        },
+        "reading_order": 1,
+        "text": "18.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 18,
+          "problem_number": 18,
+          "problem_number_source": "text_prefix",
+          "display_title": "18.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "18. 그림 (가)는 어느 외계 행성계에서 중심별과 행성이 공통 질량",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.225507,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-004-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 130.50496451822914,
+          "width": 957.0,
+          "height": 929.9473604600694
+        },
+        "reading_order": 2,
+        "text": "19.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 19,
+          "problem_number": 19,
+          "problem_number_source": "text_prefix",
+          "display_title": "19.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "19. 표는 별 (가), (나), (다)의 물리량을 나타낸 것이다. (가), (나), (다)",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.165648,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "earth_input-page-004-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 957.0,
+          "top": 1054.8383249782985,
+          "width": 957.0,
+          "height": 1752.1616750217015
+        },
+        "reading_order": 3,
+        "text": "20.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 20,
+          "problem_number": 20,
+          "problem_number_source": "text_prefix",
+          "display_title": "20.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "20. 그림 (가)는 어느 지역의 지질 단면을, (나)는 시간에 따른 방사성",
+          "segmentation_mode": "document",
+          "page_area_px": 5372598,
+          "block_area_ratio": 0.312106,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "earth_input-page-004-problem-1",
+        "subject": "science",
+        "title": "17.",
+        "stem_block_ids": [
+          "earth_input-page-004-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 17,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-004-problem-2",
+        "subject": "science",
+        "title": "18.",
+        "stem_block_ids": [
+          "earth_input-page-004-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 18,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-004-problem-3",
+        "subject": "science",
+        "title": "19.",
+        "stem_block_ids": [
+          "earth_input-page-004-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 19,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "earth_input-page-004-problem-4",
+        "subject": "science",
+        "title": "20.",
+        "stem_block_ids": [
+          "earth_input-page-004-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 20,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 200,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 17,
+          "text": "17. 그림은 지괴 A와 B의 시기별 고지자기극의 위치와 이로부터",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 147.34696451822913,
+            "right": 907.1201850043403,
+            "bottom": 184.2886199951172,
+            "width": 893.9535140991211,
+            "height": 36.94165547688806
+          }
+        },
+        {
+          "number": 18,
+          "text": "18. 그림 (가)는 어느 외계 행성계에서 중심별과 행성이 공통 질량",
+          "bbox": {
+            "left": 13.166670905219178,
+            "top": 1557.8468763563367,
+            "right": 907.1762186686196,
+            "bottom": 1594.78857421875,
+            "width": 894.0095477634004,
+            "height": 36.94169786241332
+          }
+        },
+        {
+          "number": 19,
+          "text": "19. 표는 별 (가), (나), (다)의 물리량을 나타낸 것이다. (가), (나), (다)",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 147.34696451822913,
+            "right": 1864.0024074978296,
+            "bottom": 184.2886199951172,
+            "width": 882.335747612847,
+            "height": 36.94165547688806
+          }
+        },
+        {
+          "number": 20,
+          "text": "20. 그림 (가)는 어느 지역의 지질 단면을, (나)는 시간에 따른 방사성",
+          "bbox": {
+            "left": 981.6666598849827,
+            "top": 1071.6803249782986,
+            "right": 1875.6236707899307,
+            "bottom": 1108.6220228407117,
+            "width": 893.957010904948,
+            "height": 36.94169786241309
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 1003.81351047092,
+            "right": 1138.1327311197915,
+            "bottom": 1036.4926656087239,
+            "width": 833.9660644531249,
+            "height": 32.67915513780383
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? (단, 고지자기극은 고지자기 방향으로 추정한 지리상",
+          "bbox": {
+            "left": 275.51884121365015,
+            "top": 1050.1329210069443,
+            "right": 1138.3026123046875,
+            "bottom": 1082.8120761447483,
+            "width": 862.7837710910374,
+            "height": 32.679155137803946
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 304.16666666666663,
+            "top": 2493.480258517795,
+            "right": 1138.1327311197915,
+            "bottom": 2526.1594984266494,
+            "width": 833.9660644531249,
+            "height": 32.67923990885447
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? (단, 중심별의 시선 속도 변화는 행성과의 공통 질량",
+          "bbox": {
+            "left": 275.51884121365015,
+            "top": 2539.7996690538193,
+            "right": 1138.2904900444878,
+            "bottom": 2572.4789089626734,
+            "width": 862.7716488308376,
+            "height": 32.679239908854015
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 791.8136596679688,
+            "right": 2094.767591688368,
+            "bottom": 824.4928148057726,
+            "width": 822.1009148491755,
+            "height": 32.67915513780383
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이 자료에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로",
+          "bbox": {
+            "left": 1272.6666768391926,
+            "top": 2038.6469523111978,
+            "right": 2105.7825724283853,
+            "bottom": 2071.3261922200522,
+            "width": 833.1158955891926,
+            "height": 32.67923990885447
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "고른 것은? (단, X의 자원소는 X가, Y의 자원소는 Y가 붕괴하여",
+          "bbox": {
+            "left": 1243.9887152777778,
+            "top": 2082.0115831163193,
+            "right": 2106.630113389757,
+            "bottom": 2117.6595052083335,
+            "width": 862.641398111979,
+            "height": 35.64792209201414
+          }
+        }
+      ],
+      "deskewed": false,
+      "deskew_skipped_reason": "pdf_text_layer",
+      "margin_crop_box": {
+        "left": 231,
+        "top": 301,
+        "right": 2145,
+        "bottom": 3108
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "tmp_test_inputs/earth_input.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/rendered/earth_input_page_004.png",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/earth_input-page-004.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 4,
+      "column_count": 2,
+      "document_split_block_count": 4,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 5372598,
+      "block_count": 4,
+      "text_block_count": 4,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 3,
+      "large_block_ratio": 0.75,
+      "max_block_area_ratio": 0.312106,
+      "mean_block_area_ratio": 0.238877,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 5372598,
+        "block_count": 4,
+        "text_block_count": 4,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 3,
+        "large_block_ratio": 0.75,
+        "max_block_area_ratio": 0.312106,
+        "mean_block_area_ratio": 0.238877,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "noop",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 5,
+        "block_ocr": 0,
+        "total_before_repair": 5
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 4,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalated_block_count": 0,
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 4,
+        "problem_count": 4,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 4,
+          "problem_marker_block_count": 4,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 4
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 4,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 4,
+          "problem_number_block_count": 4,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 4
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "17.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 17,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              17
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "18.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 18,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              18
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "19.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 19,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              19
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "20.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 20,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              20
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 4,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 4,
+        "problem_number_block_count": 4,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 4,
+        "problem_marker_block_count": 4,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 4
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 4
+      },
+      "difficulty_profile": {
+        "page_id": "earth_input-page-004",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.34,
+        "grouping_risk": 0.94,
+        "overall_risk": 0.94,
+        "tier": "red",
+        "reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 4,
+            "large_block_count": 3,
+            "large_block_ratio": 0.75,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 4,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.312106,
+            "pdf_text_marker_count": 4,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "noop",
+            "text_block_count": 4,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 4
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 4,
+            "block_count": 4,
+            "problem_marker_count": 4,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 4,
+            "problem_number_source_counts": {
+              "text_prefix": 4
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "earth_input-page-004",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": "ai_repair",
+        "quality_status": "failed",
+        "recommended_action": "ai_repair",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "profile": {
+          "page_id": "earth_input-page-004",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.34,
+          "grouping_risk": 0.94,
+          "overall_risk": 0.94,
+          "tier": "red",
+          "reasons": [
+            "ocr_disabled",
+            "fallback_grouping",
+            "problem_per_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 4,
+              "large_block_count": 3,
+              "large_block_ratio": 0.75,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 4,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.312106,
+              "pdf_text_marker_count": 4,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "noop",
+              "text_block_count": 4,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 4
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": false
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 4,
+              "block_count": 4,
+              "problem_marker_count": 4,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 4,
+              "problem_number_source_counts": {
+                "text_prefix": 4
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "noop",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "ocr_disabled",
+          "fallback_grouping",
+          "problem_per_block"
+        ],
+        "baseline_problem_count": 4,
+        "baseline_block_count": 4
+      },
+      "recognition_page_worker_count": 2
+    }
+  }
+]

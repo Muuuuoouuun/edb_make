@@ -1,0 +1,3594 @@
+[
+  {
+    "page_id": "01 물리학Ⅰ_문제지-page-001",
+    "width_px": 1601,
+    "height_px": 2300,
+    "subject": "unknown",
+    "source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-001.png",
+    "blocks": [
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 369.07754991319445,
+          "width": 800.5,
+          "height": 623.266720920139
+        },
+        "reading_order": 0,
+        "text": "1.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 1,
+          "problem_number": 1,
+          "problem_number_source": "text_prefix",
+          "display_title": "1.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "1. 그림은 전자기파를 일상생활에서 이용하는 예이다.",
+          "segmentation_mode": "document",
+          "page_area_px": 3682300,
+          "block_area_ratio": 0.135493,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-001-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 987.7442708333335,
+          "width": 800.5,
+          "height": 629.9332519531249
+        },
+        "reading_order": 1,
+        "text": "2.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 2,
+          "problem_number": 2,
+          "problem_number_source": "text_prefix",
+          "display_title": "2.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "2. 다음은 핵반응에 대한 설명이다.",
+          "segmentation_mode": "document",
+          "page_area_px": 3682300,
+          "block_area_ratio": 0.136942,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-001-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1613.0775227864585,
+          "width": 800.5,
+          "height": 686.9224772135415
+        },
+        "reading_order": 2,
+        "text": "3.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 3,
+          "problem_number": 3,
+          "problem_number_source": "text_prefix",
+          "display_title": "3.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "3. 그림은 보어의 수소 원자 모형에서",
+          "segmentation_mode": "document",
+          "page_area_px": 3682300,
+          "block_area_ratio": 0.149331,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-001-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 800.5,
+          "top": 369.07754991319445,
+          "width": 800.5,
+          "height": 496.0649793836805
+        },
+        "reading_order": 3,
+        "text": "4.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 4,
+          "problem_number": 4,
+          "problem_number_source": "text_prefix",
+          "display_title": "4.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "4. 그림은 빛과 물질의 이중성에 대해 학생 A, B, C가 대화하는",
+          "segmentation_mode": "document",
+          "page_area_px": 3682300,
+          "block_area_ratio": 0.10784,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-001-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 800.5,
+          "top": 860.542529296875,
+          "width": 800.5,
+          "height": 729.1350477430556
+        },
+        "reading_order": 4,
+        "text": "5.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 5,
+          "problem_number": 5,
+          "problem_number_source": "text_prefix",
+          "display_title": "5.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "5. 그림은 실 p로 연결된 물체 A와 자석 B가 정지해",
+          "segmentation_mode": "document",
+          "page_area_px": 3682300,
+          "block_area_ratio": 0.158508,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-001-block-006",
+        "block_type": "title",
+        "bbox": {
+          "left": 800.5,
+          "top": 1585.0775770399307,
+          "width": 800.5,
+          "height": 714.9224229600693
+        },
+        "reading_order": 5,
+        "text": "6.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 6,
+          "problem_number": 6,
+          "problem_number_source": "text_prefix",
+          "display_title": "6.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "6. 그림 (가)는 수평면에서 물체가 벽을 향해 등속도 운동하는 모습을",
+          "segmentation_mode": "document",
+          "page_area_px": 3682300,
+          "block_area_ratio": 0.155418,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-001-problem-1",
+        "subject": "unknown",
+        "title": "1.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-001-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 1,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-001-problem-2",
+        "subject": "unknown",
+        "title": "2.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 2,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-001-problem-3",
+        "subject": "unknown",
+        "title": "3.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-001-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 3,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-001-problem-4",
+        "subject": "unknown",
+        "title": "4.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-001-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 4,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-001-problem-5",
+        "subject": "unknown",
+        "title": "5.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-001-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 5,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-001-problem-6",
+        "subject": "unknown",
+        "title": "6.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-001-block-006"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 6,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 6,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 160,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 1,
+          "text": "1. 그림은 전자기파를 일상생활에서 이용하는 예이다.",
+          "bbox": {
+            "left": 13.333336724175354,
+            "top": 382.87754991319446,
+            "right": 588.5828179253473,
+            "bottom": 412.430908203125,
+            "width": 575.2494812011719,
+            "height": 29.553358289930543
+          }
+        },
+        {
+          "number": 2,
+          "text": "2. 다음은 핵반응에 대한 설명이다.",
+          "bbox": {
+            "left": 13.333336724175354,
+            "top": 1001.5442708333335,
+            "right": 393.67097981770837,
+            "bottom": 1031.097629123264,
+            "width": 380.337643093533,
+            "height": 29.55335828993043
+          }
+        },
+        {
+          "number": 3,
+          "text": "3. 그림은 보어의 수소 원자 모형에서",
+          "bbox": {
+            "left": 13.333336724175354,
+            "top": 1626.8775227864585,
+            "right": 441.84297688802087,
+            "bottom": 1656.430881076389,
+            "width": 428.5096401638455,
+            "height": 29.55335828993043
+          }
+        },
+        {
+          "number": 4,
+          "text": "4. 그림은 빛과 물질의 이중성에 대해 학생 A, B, C가 대화하는",
+          "bbox": {
+            "left": 788.1333279079862,
+            "top": 382.87754991319446,
+            "right": 1503.0408257378474,
+            "bottom": 412.430908203125,
+            "width": 714.9074978298612,
+            "height": 29.553358289930543
+          }
+        },
+        {
+          "number": 5,
+          "text": "5. 그림은 실 p로 연결된 물체 A와 자석 B가 정지해",
+          "bbox": {
+            "left": 788.1333279079862,
+            "top": 874.342529296875,
+            "right": 1330.1074761284724,
+            "bottom": 903.8975151909722,
+            "width": 541.9741482204862,
+            "height": 29.55498589409717
+          }
+        },
+        {
+          "number": 6,
+          "text": "6. 그림 (가)는 수평면에서 물체가 벽을 향해 등속도 운동하는 모습을",
+          "bbox": {
+            "left": 788.1333279079862,
+            "top": 1598.8775770399307,
+            "right": 1503.3351508246528,
+            "bottom": 1628.430935329861,
+            "width": 715.2018229166666,
+            "height": 29.55335828993043
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 818.9175075954862,
+            "right": 900.8315022786459,
+            "bottom": 845.0608317057292,
+            "width": 657.4981689453125,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 1467.1842447916667,
+            "right": 900.8315022786459,
+            "bottom": 1493.32763671875,
+            "width": 657.4981689453125,
+            "height": 26.143391927083258
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을",
+          "bbox": {
+            "left": 243.32716200086807,
+            "top": 1989.5775010850696,
+            "right": 623.7890625,
+            "bottom": 2015.7208930121528,
+            "width": 380.46190049913196,
+            "height": 26.143391927083258
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "제시한 내용이 옳은 학생만을 있는 대로 고른 것은? [3점]",
+          "bbox": {
+            "left": 1018.1333414713542,
+            "top": 880.6509060329862,
+            "right": 1631.51123046875,
+            "bottom": 906.7942301432292,
+            "width": 613.3778889973958,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서",
+          "bbox": {
+            "left": 1018.1412082248264,
+            "top": 1269.5875379774307,
+            "right": 1511.9805230034724,
+            "bottom": 1295.730929904514,
+            "width": 493.839314778646,
+            "height": 26.143391927083258
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "있는 대로 고른 것은? (단, 중력 가속도는 ms이고, 실의 질량과",
+          "bbox": {
+            "left": 995.2231174045139,
+            "top": 1304.9754503038196,
+            "right": 1675.7198079427085,
+            "bottom": 1336.394314236111,
+            "width": 680.4966905381946,
+            "height": 31.418863932291515
+          }
+        }
+      ],
+      "margin_crop_box": {
+        "left": 182,
+        "top": 193,
+        "right": 1783,
+        "bottom": 2493
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/01 물리학Ⅰ_문제지.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/rendered/01 물리학Ⅰ_문제지_page_001.png",
+      "normalized_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-001.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 6,
+      "column_count": 2,
+      "document_split_block_count": 6,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3682300,
+      "block_count": 6,
+      "text_block_count": 6,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 0,
+      "large_block_ratio": 0.0,
+      "max_block_area_ratio": 0.158508,
+      "mean_block_area_ratio": 0.140589,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3682300,
+        "block_count": 6,
+        "text_block_count": 6,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 0,
+        "large_block_ratio": 0.0,
+        "max_block_area_ratio": 0.158508,
+        "mean_block_area_ratio": 0.140589,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 3,
+        "block_ocr": 0,
+        "total_before_repair": 3
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 6,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "skipped",
+          "provider": "none",
+          "ai_powered": false,
+          "eligible_block_count": 0,
+          "processed_block_count": 0,
+          "api_call_block_count": 0,
+          "cache_hit_count": 0,
+          "cache_miss_count": 0,
+          "skipped_block_count": 6
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "disabled",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": false,
+          "attempted": false,
+          "applied": false,
+          "cache_hit": false,
+          "route": "local_only",
+          "route_tier": "green"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 6,
+        "problem_count": 6,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 6,
+          "problem_marker_block_count": 6,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 6
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 6,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 6,
+          "problem_number_block_count": 6,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 6
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "1.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 1,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              1
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "2.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 2,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              2
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "3.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 3,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              3
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "4.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 4,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              4
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "5.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 5,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              5
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "6.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 6,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              6
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 6,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 6,
+        "problem_number_block_count": 6,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 6,
+        "problem_marker_block_count": 6,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 6
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 6
+      },
+      "difficulty_profile": {
+        "page_id": "01 물리학Ⅰ_문제지-page-001",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.0,
+        "overall_risk": 0.12,
+        "tier": "green",
+        "reasons": [],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 6,
+            "large_block_count": 0,
+            "large_block_ratio": 0.0,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 6,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.158508,
+            "pdf_text_marker_count": 6,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 6,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 6
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": true
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 6,
+            "block_count": 6,
+            "problem_marker_count": 6,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "text_prefix": 6
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "01 물리학Ⅰ_문제지-page-001",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "quality_status": "trusted",
+        "recommended_action": "skip_ai",
+        "trigger_reasons": [],
+        "profile": {
+          "page_id": "01 물리학Ⅰ_문제지-page-001",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.0,
+          "overall_risk": 0.12,
+          "tier": "green",
+          "reasons": [],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 6,
+              "large_block_count": 0,
+              "large_block_ratio": 0.0,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 6,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.158508,
+              "pdf_text_marker_count": 6,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 6,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 6
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": true
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 6,
+              "block_count": 6,
+              "problem_marker_count": 6,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 0,
+              "problem_number_source_counts": {
+                "text_prefix": 6
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "green",
+        "trigger_reasons": [],
+        "baseline_problem_count": 6,
+        "baseline_block_count": 6,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 2
+    }
+  },
+  {
+    "page_id": "01 물리학Ⅰ_문제지-page-002",
+    "width_px": 1537,
+    "height_px": 2255,
+    "subject": "unknown",
+    "source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-002.png",
+    "blocks": [
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-002-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 107.14757161458337,
+          "width": 768.5,
+          "height": 654.2433441840278
+        },
+        "reading_order": 0,
+        "text": "7.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 7,
+          "problem_number": 7,
+          "problem_number_source": "text_prefix",
+          "display_title": "7.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "7. 그림 (가)는 자석의 S극을",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.145065,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-002-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 756.8809157986112,
+          "width": 768.5,
+          "height": 653.9749251302084
+        },
+        "reading_order": 1,
+        "text": "8.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 8,
+          "problem_number": 8,
+          "problem_number_source": "text_prefix",
+          "display_title": "8.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "8. 그림 (가)는 진동수가 일정한 물결파가",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.145006,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-002-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1406.3458409288196,
+          "width": 768.5,
+          "height": 848.6541590711804
+        },
+        "reading_order": 2,
+        "text": "9.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 9,
+          "problem_number": 9,
+          "problem_number_source": "text_prefix",
+          "display_title": "9.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "9. 그림과 같이 관찰자 A에 대해",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.188172,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 2,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-002-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 107.14757161458337,
+          "width": 768.5,
+          "height": 1197.5749142795141
+        },
+        "reading_order": 3,
+        "text": "10.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 10,
+          "problem_number": 10,
+          "problem_number_source": "text_prefix",
+          "display_title": "10.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "10. 그림 (가)는 마찰이 없는 수평면에서 물체 A가 정지해 있는 물체",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.265538,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-002-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 1300.2124858940974,
+          "width": 768.5,
+          "height": 954.7875141059026
+        },
+        "reading_order": 4,
+        "text": "11.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 11,
+          "problem_number": 11,
+          "problem_number_source": "text_prefix",
+          "display_title": "11.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "11. 그림 (가)와 같이 평면의 원점 O로부터 같은 거리에 있는",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.211705,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-002-problem-1",
+        "subject": "unknown",
+        "title": "7.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-002-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 7,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-002-problem-2",
+        "subject": "unknown",
+        "title": "8.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-002-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 8,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-002-problem-3",
+        "subject": "unknown",
+        "title": "9.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-002-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 9,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-002-problem-4",
+        "subject": "unknown",
+        "title": "10.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-002-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 10,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-002-problem-5",
+        "subject": "unknown",
+        "title": "11.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-002-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 11,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 160,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 7,
+          "text": "7. 그림 (가)는 자석의 S극을",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 120.67757161458337,
+            "right": 324.4366590711806,
+            "bottom": 150.23089599609375,
+            "width": 312.10332234700525,
+            "height": 29.55332438151038
+          }
+        },
+        {
+          "number": 8,
+          "text": "8. 그림 (가)는 진동수가 일정한 물결파가",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 770.4109157986112,
+            "right": 472.45756022135424,
+            "bottom": 799.9642740885417,
+            "width": 460.1242234971789,
+            "height": 29.553358289930543
+          }
+        },
+        {
+          "number": 9,
+          "text": "9. 그림과 같이 관찰자 A에 대해",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 1419.8758409288196,
+            "right": 377.89175754123266,
+            "bottom": 1449.4309624565974,
+            "width": 365.5584208170573,
+            "height": 29.55512152777783
+          }
+        },
+        {
+          "number": 10,
+          "text": "10. 그림 (가)는 마찰이 없는 수평면에서 물체 A가 정지해 있는 물체",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 120.67757161458337,
+            "right": 1502.580105251736,
+            "bottom": 150.23089599609375,
+            "width": 715.4467773437499,
+            "height": 29.55332438151038
+          }
+        },
+        {
+          "number": 11,
+          "text": "11. 그림 (가)와 같이 평면의 원점 O로부터 같은 거리에 있는",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 1313.7424858940974,
+            "right": 1502.174289279514,
+            "bottom": 1343.297607421875,
+            "width": 715.0409613715277,
+            "height": 29.5551215277776
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 635.0508626302084,
+            "right": 900.8315022786459,
+            "bottom": 661.1941867404514,
+            "width": 657.4981689453125,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.34009806315106,
+            "top": 1321.8486870659722,
+            "right": 900.9715440538195,
+            "bottom": 1347.9920789930557,
+            "width": 657.6314459906685,
+            "height": 26.143391927083485
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 1934.117431640625,
+            "right": 900.8315022786459,
+            "bottom": 1960.2608235677085,
+            "width": 657.4981689453125,
+            "height": 26.143391927083485
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 1018.1333414713542,
+            "top": 829.1841634114584,
+            "right": 1675.6195746527778,
+            "bottom": 855.3274875217014,
+            "width": 657.4862331814236,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 1018.1333414713542,
+            "top": 2030.7840983072917,
+            "right": 1675.621609157986,
+            "bottom": 2056.927490234375,
+            "width": 657.4882676866318,
+            "height": 26.143391927083258
+          }
+        }
+      ],
+      "margin_crop_box": {
+        "left": 183,
+        "top": 238,
+        "right": 1720,
+        "bottom": 2493
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/01 물리학Ⅰ_문제지.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/rendered/01 물리학Ⅰ_문제지_page_002.png",
+      "normalized_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-002.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 5,
+      "column_count": 2,
+      "document_split_block_count": 5,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3465935,
+      "block_count": 5,
+      "text_block_count": 5,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 3,
+      "large_block_ratio": 0.6,
+      "max_block_area_ratio": 0.265538,
+      "mean_block_area_ratio": 0.191097,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3465935,
+        "block_count": 5,
+        "text_block_count": 5,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 3,
+        "large_block_ratio": 0.6,
+        "max_block_area_ratio": 0.265538,
+        "mean_block_area_ratio": 0.191097,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 3,
+        "block_ocr": 0,
+        "total_before_repair": 4
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 5,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "skipped",
+          "provider": "none",
+          "ai_powered": false,
+          "eligible_block_count": 0,
+          "processed_block_count": 0,
+          "api_call_block_count": 0,
+          "cache_hit_count": 0,
+          "cache_miss_count": 0,
+          "skipped_block_count": 5
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "disabled",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": false,
+          "attempted": false,
+          "applied": false,
+          "cache_hit": false,
+          "route": "local_only",
+          "route_tier": "green"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 5,
+        "problem_count": 5,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 5,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 5
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 5,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "7.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 7,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              7
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "8.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 8,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              8
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "9.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 9,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              9
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "10.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 10,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              10
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "11.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 11,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              11
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 5,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 5,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 5
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 5
+      },
+      "difficulty_profile": {
+        "page_id": "01 물리학Ⅰ_문제지-page-002",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.0,
+        "overall_risk": 0.12,
+        "tier": "green",
+        "reasons": [],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 5,
+            "large_block_count": 3,
+            "large_block_ratio": 0.6,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 5,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.265538,
+            "pdf_text_marker_count": 5,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 5,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 5
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": true
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 5,
+            "block_count": 5,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "text_prefix": 5
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "01 물리학Ⅰ_문제지-page-002",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "quality_status": "trusted",
+        "recommended_action": "skip_ai",
+        "trigger_reasons": [],
+        "profile": {
+          "page_id": "01 물리학Ⅰ_문제지-page-002",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.0,
+          "overall_risk": 0.12,
+          "tier": "green",
+          "reasons": [],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 5,
+              "large_block_count": 3,
+              "large_block_ratio": 0.6,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 5,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.265538,
+              "pdf_text_marker_count": 5,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 5,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 5
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": true
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 5,
+              "block_count": 5,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 0,
+              "problem_number_source_counts": {
+                "text_prefix": 5
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "green",
+        "trigger_reasons": [],
+        "baseline_problem_count": 5,
+        "baseline_block_count": 5,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 2
+    }
+  },
+  {
+    "page_id": "01 물리학Ⅰ_문제지-page-003",
+    "width_px": 1537,
+    "height_px": 2256,
+    "subject": "unknown",
+    "source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-003.png",
+    "blocks": [
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-003-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 108.13977446831598,
+          "width": 768.5,
+          "height": 1055.3137645941842
+        },
+        "reading_order": 0,
+        "text": "12.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 12,
+          "problem_number": 12,
+          "problem_number_source": "text_prefix",
+          "display_title": "12.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "12. 다음은 p-n 접합 다이오드의 특성을 알아보는 실험이다.",
+          "segmentation_mode": "document",
+          "page_area_px": 3467472,
+          "block_area_ratio": 0.23389,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-003-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1158.9415390625,
+          "width": 768.5,
+          "height": 1097.0584609375
+        },
+        "reading_order": 1,
+        "text": "13.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 13,
+          "problem_number": 13,
+          "problem_number_source": "text_prefix",
+          "display_title": "13.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "13. 그림 (가)는 점전하 A, B를 축상에 고정하고 음()전하 P를",
+          "segmentation_mode": "document",
+          "page_area_px": 3467472,
+          "block_area_ratio": 0.243142,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-003-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 108.14157161458337,
+          "width": 768.5,
+          "height": 654.9122549913195
+        },
+        "reading_order": 2,
+        "text": "14.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 14,
+          "problem_number": 14,
+          "problem_number_source": "text_prefix",
+          "display_title": "14.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "14. 그림은 동일한 단색광 P, Q,",
+          "segmentation_mode": "document",
+          "page_area_px": 3467472,
+          "block_area_ratio": 0.145149,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-003-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 758.5418266059029,
+          "width": 768.5,
+          "height": 865.9767081163194
+        },
+        "reading_order": 3,
+        "text": "15.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 15,
+          "problem_number": 15,
+          "problem_number_source": "text_prefix",
+          "display_title": "15.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "15. 그림은 열기관에서 일정량의 이상 기체가 상태 A →B →C →",
+          "segmentation_mode": "document",
+          "page_area_px": 3467472,
+          "block_area_ratio": 0.191927,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-003-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 1620.0065347222223,
+          "width": 768.5,
+          "height": 635.9934652777777
+        },
+        "reading_order": 4,
+        "text": "16.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "pdf_problem_number": 16,
+          "problem_number": 16,
+          "problem_number_source": "text_prefix",
+          "display_title": "16.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "16. 그림과 같이 직선 경로에서 물체 A가 속력 로 을 지나는",
+          "segmentation_mode": "document",
+          "page_area_px": 3467472,
+          "block_area_ratio": 0.140956,
+          "large_block": false,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-003-problem-1",
+        "subject": "unknown",
+        "title": "12.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-003-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 12,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-003-problem-2",
+        "subject": "unknown",
+        "title": "13.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-003-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 13,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-003-problem-3",
+        "subject": "unknown",
+        "title": "14.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-003-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 14,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-003-problem-4",
+        "subject": "unknown",
+        "title": "15.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-003-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 15,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-003-problem-5",
+        "subject": "unknown",
+        "title": "16.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-003-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 16,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 160,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 12,
+          "text": "12. 다음은 p-n 접합 다이오드의 특성을 알아보는 실험이다.",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 121.67577446831598,
+            "right": 670.1053331163195,
+            "bottom": 151.23089599609375,
+            "width": 657.771996392144,
+            "height": 29.55512152777777
+          }
+        },
+        {
+          "number": 13,
+          "text": "13. 그림 (가)는 점전하 A, B를 축상에 고정하고 음()전하 P를",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 1172.4775390625,
+            "right": 727.5098470052084,
+            "bottom": 1202.0308973524307,
+            "width": 715.176510281033,
+            "height": 29.553358289930657
+          }
+        },
+        {
+          "number": 14,
+          "text": "14. 그림은 동일한 단색광 P, Q,",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 121.67757161458337,
+            "right": 1142.9962293836807,
+            "bottom": 151.23089599609375,
+            "width": 355.86290147569446,
+            "height": 29.55332438151038
+          }
+        },
+        {
+          "number": 15,
+          "text": "15. 그림은 열기관에서 일정량의 이상 기체가 상태 A →B →C →",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 772.0778266059028,
+            "right": 1492.744357638889,
+            "bottom": 801.6311848958335,
+            "width": 705.6110297309027,
+            "height": 29.553358289930657
+          }
+        },
+        {
+          "number": 16,
+          "text": "16. 그림과 같이 직선 경로에서 물체 A가 속력 로 을 지나는",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 1633.5425347222224,
+            "right": 1502.3123643663196,
+            "bottom": 1663.0975206163196,
+            "width": 715.1790364583334,
+            "height": 29.55498589409717
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 924.3842230902778,
+            "right": 900.8315022786459,
+            "bottom": 950.5275472005209,
+            "width": 657.4981689453125,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 1962.6509602864585,
+            "right": 910.5013020833334,
+            "bottom": 1988.7943522135417,
+            "width": 667.16796875,
+            "height": 26.143391927083258
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른",
+          "bbox": {
+            "left": 1018.1336127387153,
+            "top": 597.9874674479167,
+            "right": 1685.1561143663196,
+            "bottom": 624.1307915581598,
+            "width": 667.0225016276042,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 1018.1333414713542,
+            "top": 1496.517605251736,
+            "right": 1675.769992404514,
+            "bottom": 1522.6609971788196,
+            "width": 657.6366509331597,
+            "height": 26.143391927083485
+          }
+        }
+      ],
+      "margin_crop_box": {
+        "left": 183,
+        "top": 237,
+        "right": 1720,
+        "bottom": 2493
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/01 물리학Ⅰ_문제지.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/rendered/01 물리학Ⅰ_문제지_page_003.png",
+      "normalized_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-003.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 5,
+      "column_count": 2,
+      "document_split_block_count": 5,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3467472,
+      "block_count": 5,
+      "text_block_count": 5,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 3,
+      "large_block_ratio": 0.6,
+      "max_block_area_ratio": 0.243142,
+      "mean_block_area_ratio": 0.191013,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3467472,
+        "block_count": 5,
+        "text_block_count": 5,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 3,
+        "large_block_ratio": 0.6,
+        "max_block_area_ratio": 0.243142,
+        "mean_block_area_ratio": 0.191013,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 3,
+        "block_ocr": 0,
+        "total_before_repair": 3
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 5,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "skipped",
+          "provider": "none",
+          "ai_powered": false,
+          "eligible_block_count": 0,
+          "processed_block_count": 0,
+          "api_call_block_count": 0,
+          "cache_hit_count": 0,
+          "cache_miss_count": 0,
+          "skipped_block_count": 5
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "disabled",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": false,
+          "attempted": false,
+          "applied": false,
+          "cache_hit": false,
+          "route": "local_only",
+          "route_tier": "green"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 5,
+        "problem_count": 5,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 5,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 5
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 5,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "12.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 12,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              12
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "13.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 13,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              13
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "14.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 14,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              14
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "15.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 15,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              15
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "16.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 16,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              16
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 5,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 5,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 5
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 5
+      },
+      "difficulty_profile": {
+        "page_id": "01 물리학Ⅰ_문제지-page-003",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.0,
+        "overall_risk": 0.12,
+        "tier": "green",
+        "reasons": [],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 5,
+            "large_block_count": 3,
+            "large_block_ratio": 0.6,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 5,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.243142,
+            "pdf_text_marker_count": 5,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 5,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 5
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": true
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 5,
+            "block_count": 5,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "text_prefix": 5
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "01 물리학Ⅰ_문제지-page-003",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "quality_status": "trusted",
+        "recommended_action": "skip_ai",
+        "trigger_reasons": [],
+        "profile": {
+          "page_id": "01 물리학Ⅰ_문제지-page-003",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.0,
+          "overall_risk": 0.12,
+          "tier": "green",
+          "reasons": [],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 5,
+              "large_block_count": 3,
+              "large_block_ratio": 0.6,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 5,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.243142,
+              "pdf_text_marker_count": 5,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 5,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 5
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": true
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 5,
+              "block_count": 5,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 0,
+              "problem_number_source_counts": {
+                "text_prefix": 5
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "green",
+        "trigger_reasons": [],
+        "baseline_problem_count": 5,
+        "baseline_block_count": 5,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 2
+    }
+  },
+  {
+    "page_id": "01 물리학Ⅰ_문제지-page-004",
+    "width_px": 1537,
+    "height_px": 2255,
+    "subject": "unknown",
+    "source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-004.png",
+    "blocks": [
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-004-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 107.14757161458337,
+          "width": 768.5,
+          "height": 1203.0416297743056
+        },
+        "reading_order": 0,
+        "text": "17.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 17,
+          "problem_number": 17,
+          "problem_number_source": "text_prefix",
+          "display_title": "17.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "17. 그림과 같이 평면에 가늘고 무한히 긴 직선 도선 A, B, C가",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.26675,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-004-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 1305.679201388889,
+          "width": 768.5,
+          "height": 949.3207986111111
+        },
+        "reading_order": 1,
+        "text": "18.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 18,
+          "problem_number": 18,
+          "problem_number_source": "text_prefix",
+          "display_title": "18.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "18. 그림 (가)는 물체 A, B, C를 실 p, q로 연결하고 A에 수평 방향으로",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.210492,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-004-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 107.14757161458337,
+          "width": 768.5,
+          "height": 1025.1766395399306
+        },
+        "reading_order": 2,
+        "text": "19.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "pdf_problem_number": 19,
+          "problem_number": 19,
+          "problem_number_source": "text_prefix",
+          "display_title": "19.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "19. 그림과 같이 한 변의 길이가 인 정사각형 금속 고리가 평면에서",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.227312,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "01 물리학Ⅰ_문제지-page-004-block-004",
+        "block_type": "title",
+        "bbox": {
+          "left": 768.5,
+          "top": 1127.814211154514,
+          "width": 768.5,
+          "height": 1127.185788845486
+        },
+        "reading_order": 3,
+        "text": "20.",
+        "style": null,
+        "confidence": 1.0,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "pdf-text-markers",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "pdf_problem_number": 20,
+          "problem_number": 20,
+          "problem_number_source": "text_prefix",
+          "display_title": "20.",
+          "force_problem_start": true,
+          "force_image_record": true,
+          "marker_kind": "number",
+          "marker_text": "20. 그림 (가)와 같이 높이 인 평면에서 용수철 P에 연결된 물체 A에",
+          "segmentation_mode": "document",
+          "page_area_px": 3465935,
+          "block_area_ratio": 0.24993,
+          "large_block": true,
+          "ocr_backend": "pdf_text_marker",
+          "ocr_skipped": true,
+          "ocr_skipped_reason": "trusted_pdf_text_marker",
+          "ocr_empty_text": false,
+          "ocr_text_length": 3,
+          "ocr_line_count": 0,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-004-problem-1",
+        "subject": "unknown",
+        "title": "17.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-004-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 17,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-004-problem-2",
+        "subject": "unknown",
+        "title": "18.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-004-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 18,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-004-problem-3",
+        "subject": "unknown",
+        "title": "19.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-004-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 19,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "01 물리학Ⅰ_문제지-page-004-problem-4",
+        "subject": "unknown",
+        "title": "20.",
+        "stem_block_ids": [
+          "01 물리학Ⅰ_문제지-page-004-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 20,
+          "problem_number_source": "text_prefix",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "pdf",
+      "dpi": 160,
+      "pdf_page_width_pt": 842.0,
+      "pdf_page_height_pt": 1191.0,
+      "pdf_problem_markers": [
+        {
+          "number": 17,
+          "text": "17. 그림과 같이 평면에 가늘고 무한히 긴 직선 도선 A, B, C가",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 120.67757161458337,
+            "right": 727.6433783637153,
+            "bottom": 150.23089599609375,
+            "width": 715.31004163954,
+            "height": 29.55332438151038
+          }
+        },
+        {
+          "number": 18,
+          "text": "18. 그림 (가)는 물체 A, B, C를 실 p, q로 연결하고 A에 수평 방향으로",
+          "bbox": {
+            "left": 12.333336724175354,
+            "top": 1319.209201388889,
+            "right": 718.0622829861112,
+            "bottom": 1348.764187282986,
+            "width": 705.7289462619358,
+            "height": 29.55498589409717
+          }
+        },
+        {
+          "number": 19,
+          "text": "19. 그림과 같이 한 변의 길이가 인 정사각형 금속 고리가 평면에서",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 120.67757161458337,
+            "right": 1493.0130479600696,
+            "bottom": 150.23089599609375,
+            "width": 705.8797200520834,
+            "height": 29.55332438151038
+          }
+        },
+        {
+          "number": 20,
+          "text": "20. 그림 (가)와 같이 높이 인 평면에서 용수철 P에 연결된 물체 A에",
+          "bbox": {
+            "left": 787.1333279079862,
+            "top": 1141.344211154514,
+            "right": 1492.877685546875,
+            "bottom": 1170.8975694444446,
+            "width": 705.7443576388888,
+            "height": 29.553358289930657
+          }
+        }
+      ],
+      "pdf_text_stem_markers": [
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 785.0508626302084,
+            "right": 900.8315022786459,
+            "bottom": 811.1941867404514,
+            "width": 657.4981689453125,
+            "height": 26.143324110243043
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?",
+          "bbox": {
+            "left": 243.33333333333334,
+            "top": 2001.9841851128474,
+            "right": 900.8315022786459,
+            "bottom": 2028.1275770399307,
+            "width": 657.4981689453125,
+            "height": 26.143391927083258
+          }
+        },
+        {
+          "marker_kind": "text_stem",
+          "text": "이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른",
+          "bbox": {
+            "left": 1018.1333414713542,
+            "top": 842.2508409288195,
+            "right": 1685.1558430989585,
+            "bottom": 868.3941650390625,
+            "width": 667.0225016276042,
+            "height": 26.143324110243043
+          }
+        }
+      ],
+      "margin_crop_box": {
+        "left": 183,
+        "top": 238,
+        "right": 1720,
+        "bottom": 2493
+      },
+      "margin_cropped": true,
+      "source_pdf_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/01 물리학Ⅰ_문제지.pdf",
+      "document_like": true,
+      "original_source_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/rendered/01 물리학Ⅰ_문제지_page_004.png",
+      "normalized_path": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/01 물리학Ⅰ_문제지-page-004.png",
+      "segmenter": "pdf-text-markers",
+      "pdf_text_marker_count": 4,
+      "column_count": 2,
+      "document_split_block_count": 4,
+      "document_split_applied": true,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 3465935,
+      "block_count": 4,
+      "text_block_count": 4,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 4,
+      "large_block_ratio": 1.0,
+      "max_block_area_ratio": 0.26675,
+      "mean_block_area_ratio": 0.238621,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "pdf-text-markers",
+        "segmentation_mode": "document",
+        "page_area_px": 3465935,
+        "block_count": 4,
+        "text_block_count": 4,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 4,
+        "large_block_ratio": 1.0,
+        "max_block_area_ratio": 0.26675,
+        "mean_block_area_ratio": 0.238621,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Library/CloudStorage/GoogleDrive-seoulmentoss@gmail.com/내 드라이브/ai-proj/문제/수업 자료 샘플/고3 시험지/4교시2_과학탐구/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 4,
+        "block_ocr": 0,
+        "total_before_repair": 4
+      },
+      "ocr_block_worker_count": 1,
+      "ocr_eligible_block_count": 0,
+      "ocr_skipped_block_count": 4,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "skipped",
+          "provider": "none",
+          "ai_powered": false,
+          "eligible_block_count": 0,
+          "processed_block_count": 0,
+          "api_call_block_count": 0,
+          "cache_hit_count": 0,
+          "cache_miss_count": 0,
+          "skipped_block_count": 4
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "disabled",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": false,
+          "attempted": false,
+          "applied": false,
+          "cache_hit": false,
+          "route": "local_only",
+          "route_tier": "green"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 4,
+        "problem_count": 4,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 4,
+          "problem_marker_block_count": 4,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 4
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 4,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 4,
+          "problem_number_block_count": 4,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "text_prefix": 4
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "17.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 17,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              17
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "18.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 18,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              18
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "19.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 19,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              19
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "20.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 20,
+            "problem_number_source": "text_prefix",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              20
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "text_prefix"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 4,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 4,
+        "problem_number_block_count": 4,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 4,
+        "problem_marker_block_count": 4,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 4
+      },
+      "problem_number_source_counts": {
+        "text_prefix": 4
+      },
+      "difficulty_profile": {
+        "page_id": "01 물리학Ⅰ_문제지-page-004",
+        "segmentation_risk": 0.12,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.0,
+        "overall_risk": 0.12,
+        "tier": "green",
+        "reasons": [],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "pdf-text-markers",
+            "segmentation_mode": "document",
+            "block_count": 4,
+            "large_block_count": 4,
+            "large_block_ratio": 1.0,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 4,
+            "document_split_applied": true,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.26675,
+            "pdf_text_marker_count": 4,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 4,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 1.0,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "pdf_text_marker": 4
+            },
+            "backend_latency_ms_avg": null,
+            "all_text_from_trusted_pdf_markers": true
+          },
+          "grouping": {
+            "segmenter": "pdf-text-markers",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 4,
+            "block_count": 4,
+            "problem_marker_count": 4,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "text_prefix": 4
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "01 물리학Ⅰ_문제지-page-004",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "quality_status": "trusted",
+        "recommended_action": "skip_ai",
+        "trigger_reasons": [],
+        "profile": {
+          "page_id": "01 물리학Ⅰ_문제지-page-004",
+          "segmentation_risk": 0.12,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.0,
+          "overall_risk": 0.12,
+          "tier": "green",
+          "reasons": [],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "pdf-text-markers",
+              "segmentation_mode": "document",
+              "block_count": 4,
+              "large_block_count": 4,
+              "large_block_ratio": 1.0,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 4,
+              "document_split_applied": true,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.26675,
+              "pdf_text_marker_count": 4,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 4,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 1.0,
+              "recognized_line_count": 0,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "pdf_text_marker": 4
+              },
+              "backend_latency_ms_avg": null,
+              "all_text_from_trusted_pdf_markers": true
+            },
+            "grouping": {
+              "segmenter": "pdf-text-markers",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 4,
+              "block_count": 4,
+              "problem_marker_count": 4,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 0,
+              "problem_number_source_counts": {
+                "text_prefix": 4
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "green",
+        "trigger_reasons": [],
+        "baseline_problem_count": 4,
+        "baseline_block_count": 4,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 2
+    }
+  }
+]

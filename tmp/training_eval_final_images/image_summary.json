@@ -1,0 +1,144 @@
+[
+  {
+    "label": "image_english_grammar",
+    "expected": 5,
+    "count": 5,
+    "delta": 0,
+    "nums": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "elapsed_ms": 10478,
+    "timing_ms": {
+      "source_build": 10228,
+      "problem_assets": 176,
+      "records": 70,
+      "page_segmentation_sum": 16,
+      "page_block_ocr_sum": 10172,
+      "page_total_before_repair_sum": 10189,
+      "page_ai_repair_sum": 0,
+      "ui_session": 1,
+      "total": 10478
+    },
+    "ocr_summary": {
+      "resolved_backend": "gemini",
+      "backend_counts": {
+        "gemini": 10
+      },
+      "block_count": 10,
+      "empty_text_block_count": 0,
+      "populated_text_block_count": 10,
+      "no_ocr_fallback_active": false
+    }
+  },
+  {
+    "label": "image_math_position",
+    "expected": 5,
+    "count": 4,
+    "delta": -1,
+    "nums": [
+      21,
+      22,
+      23,
+      24
+    ],
+    "elapsed_ms": 9487,
+    "timing_ms": {
+      "source_build": 9234,
+      "problem_assets": 190,
+      "records": 54,
+      "page_segmentation_sum": 53,
+      "page_block_ocr_sum": 9000,
+      "page_total_before_repair_sum": 9053,
+      "page_ai_repair_sum": 0,
+      "ui_session": 1,
+      "total": 9486
+    },
+    "ocr_summary": {
+      "resolved_backend": "gemini",
+      "backend_counts": {
+        "gemini": 11
+      },
+      "block_count": 11,
+      "empty_text_block_count": 0,
+      "populated_text_block_count": 11,
+      "no_ocr_fallback_active": false
+    }
+  },
+  {
+    "label": "image_english_midterm",
+    "expected": 6,
+    "count": 6,
+    "delta": 0,
+    "nums": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "elapsed_ms": 289,
+    "timing_ms": {
+      "source_build": 53,
+      "problem_assets": 155,
+      "records": 77,
+      "page_segmentation_sum": 22,
+      "page_block_ocr_sum": 3,
+      "page_total_before_repair_sum": 26,
+      "page_ai_repair_sum": 0,
+      "ui_session": 1,
+      "total": 288
+    },
+    "ocr_summary": {
+      "resolved_backend": "gemini",
+      "backend_counts": {
+        "gemini": 8
+      },
+      "block_count": 8,
+      "empty_text_block_count": 0,
+      "populated_text_block_count": 8,
+      "no_ocr_fallback_active": false
+    }
+  },
+  {
+    "label": "image_math_lines",
+    "expected": 7,
+    "count": 7,
+    "delta": 0,
+    "nums": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "elapsed_ms": 15398,
+    "timing_ms": {
+      "source_build": 15119,
+      "problem_assets": 201,
+      "records": 71,
+      "page_segmentation_sum": 64,
+      "page_block_ocr_sum": 14870,
+      "page_total_before_repair_sum": 14934,
+      "page_ai_repair_sum": 0,
+      "ui_session": 3,
+      "total": 15397
+    },
+    "ocr_summary": {
+      "resolved_backend": "gemini",
+      "backend_counts": {
+        "gemini": 15
+      },
+      "block_count": 15,
+      "empty_text_block_count": 1,
+      "populated_text_block_count": 14,
+      "no_ocr_fallback_active": false
+    }
+  }
+]

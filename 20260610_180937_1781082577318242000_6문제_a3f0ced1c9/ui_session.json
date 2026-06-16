@@ -1,0 +1,338 @@
+{
+  "session_name": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9",
+  "generated_at": "2026-06-10T18:28:15+09:00",
+  "data_source": "question_export",
+  "output_dir": "/Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6문제_a3f0ced1c9",
+  "source_mode": "single",
+  "input_intent": "multi-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260610_180937_1781082577318242000_6문제_a3f0ced1c9.png"
+  ],
+  "source_page_count": 1,
+  "detected_problem_count": 6,
+  "export_mode": "question",
+  "record_mode": "mixed",
+  "pages_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6문제_a3f0ced1c9/pages.json",
+  "placements_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6문제_a3f0ced1c9/placements.json",
+  "board_render_dir": "/Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6문제_a3f0ced1c9/problem_cutouts",
+  "edb_path": null,
+  "edb_file_uri": null,
+  "rendered_page_paths": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {}
+  },
+  "ai_fallback": null,
+  "ai_summary": null,
+  "warning_messages": [],
+  "problems": [
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-1",
+      "title": "문항 01 · 20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_001_45d282ad.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_001_45d282ad.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "mixed",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 57.0,
+        "width": 408.0,
+        "height": 320.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-2",
+      "title": "문항 02 · 20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_002_78a0226f.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_002_78a0226f.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "mixed",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 401.0,
+        "width": 408.0,
+        "height": 310.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-3",
+      "title": "문항 03 · 20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_003_393cb08a.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_003_393cb08a.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "startYPages": 2.4,
+      "snappedNextStartYPages": 3.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "mixed",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 719.0,
+        "width": 408.0,
+        "height": 328.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-4",
+      "title": "문항 04 · 20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_004_b7434a96.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_004_b7434a96.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "startYPages": 3.6,
+      "snappedNextStartYPages": 4.8,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "mixed",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 392.0,
+        "top": 56.0,
+        "width": 408.0,
+        "height": 312.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-5",
+      "title": "문항 05 · 20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_005_493960f7.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_005_493960f7.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "startYPages": 4.8,
+      "snappedNextStartYPages": 6.0,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "mixed",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 392.0,
+        "top": 433.0,
+        "width": 408.0,
+        "height": 319.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    },
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-6",
+      "title": "문항 06 · 20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "problemNumber": null,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_006_5a8f054f.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_006_5a8f054f.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "startYPages": 6.0,
+      "snappedNextStartYPages": 7.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "recordMode": "mixed",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 392.0,
+        "top": 746.0,
+        "width": 408.0,
+        "height": 322.0
+      },
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    }
+  ],
+  "pages": [
+    {
+      "id": "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001.png",
+      "width": 800,
+      "height": 1132,
+      "problemIds": [
+        "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-1",
+        "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-2",
+        "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-3",
+        "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-4",
+        "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-5",
+        "20260610_180937_1781082577318242000_6문제_a3f0ced1c9-page-001-problem-6"
+      ],
+      "riskFlags": [
+        "ocr_disabled",
+        "no_problem_markers",
+        "fallback_grouping",
+        "problem_per_block"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 1.0,
+      "riskTier": "red",
+      "parseConfidence": 0.0,
+      "confidence": {
+        "overall": 0.0,
+        "segmentation": 1.0,
+        "ocr": 0.66,
+        "grouping": 0.0
+      },
+      "aiStatus": "disabled"
+    }
+  ]
+}

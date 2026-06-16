@@ -1,0 +1,294 @@
+[
+  {
+    "page_id": "dummy-page-001",
+    "width_px": 1000,
+    "height_px": 1000,
+    "subject": "unknown",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/.pipeline_cache/normalized/dummy-page-001.png",
+    "blocks": [
+      {
+        "block_id": "dummy-page-001-block-001",
+        "block_type": "image",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 1000.0,
+          "height": 1000.0
+        },
+        "reading_order": 0,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "fallback_reason": "empty_document_segmentation",
+          "segmentation_mode": "document",
+          "page_area_px": 1000000,
+          "block_area_ratio": 1.0,
+          "large_block": true,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "dummy-page-001-problem-1",
+        "subject": "unknown",
+        "title": "문항 1",
+        "stem_block_ids": [
+          "dummy-page-001-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_source": "user_intent",
+          "grouping_reason": [
+            "single-problem"
+          ],
+          "force_full_page_bounds": true,
+          "input_intent": "single-problem",
+          "problem_number": 1,
+          "problem_number_source": "user_intent"
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "deskewed": true,
+      "margin_crop_box": {
+        "left": 0,
+        "top": 0,
+        "right": 1000,
+        "bottom": 1000
+      },
+      "margin_cropped": true,
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/dummy.jpg",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/.pipeline_cache/normalized/dummy-page-001.png",
+      "segmenter": "document-bands",
+      "content_box": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1000.0,
+        "height": 1000.0
+      },
+      "column_count": 1,
+      "document_band_split_count": 0,
+      "document_column_balance_split_count": 0,
+      "document_continuation_merge_count": 0,
+      "document_grid_row_alignment_count": 0,
+      "document_row_band_count": 0,
+      "document_split_block_count": 1,
+      "document_split_applied": false,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 1000000,
+      "block_count": 1,
+      "text_block_count": 0,
+      "image_block_count": 1,
+      "large_block_threshold": 0.18,
+      "large_block_count": 1,
+      "large_block_ratio": 1.0,
+      "max_block_area_ratio": 1.0,
+      "mean_block_area_ratio": 1.0,
+      "fallback_reasons": [
+        "empty_document_segmentation"
+      ],
+      "fallback_reason": "empty_document_segmentation",
+      "fallback_reason_count": 1,
+      "has_fallback_reason": true,
+      "segmentation_stats": {
+        "segmenter": "document-bands",
+        "segmentation_mode": "document",
+        "page_area_px": 1000000,
+        "block_count": 1,
+        "text_block_count": 0,
+        "image_block_count": 1,
+        "large_block_threshold": 0.18,
+        "large_block_count": 1,
+        "large_block_ratio": 1.0,
+        "max_block_area_ratio": 1.0,
+        "mean_block_area_ratio": 1.0,
+        "fallback_reasons": [
+          "empty_document_segmentation"
+        ]
+      },
+      "ocr_mode": "noop",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/.pipeline_cache/normalized/.pipeline_cache",
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": false,
+        "has_band_metadata": false,
+        "block_count": 1,
+        "problem_count": 1,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 1,
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 1,
+          "problem_count": 1
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 0,
+          "problem_number_block_count": 0,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {},
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "empty_document_segmentation",
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": null
+      },
+      "grouping_source": "user_intent",
+      "grouping_mode": "single_page",
+      "marker_counts": {
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 0,
+        "problem_number_block_count": 0,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 1,
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 1,
+        "problem_count": 1
+      },
+      "problem_number_source_counts": {},
+      "difficulty_profile": {
+        "page_id": "dummy-page-001",
+        "segmentation_risk": 1.0,
+        "ocr_risk": 0.34,
+        "grouping_risk": 1.0,
+        "overall_risk": 1.0,
+        "tier": "red",
+        "reasons": [
+          "sparse_segmentation",
+          "large_block_dominance",
+          "empty_document_segmentation",
+          "ocr_disabled",
+          "fallback_grouping",
+          "full_page_image"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmentation_mode": "document",
+            "block_count": 1,
+            "large_block_count": 1,
+            "large_block_ratio": 1.0,
+            "fallback_reasons": [
+              "empty_document_segmentation"
+            ],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 1,
+            "document_split_applied": false,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 1.0
+          },
+          "ocr": {
+            "ocr_mode": "noop",
+            "text_block_count": 0,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": null,
+            "recognized_line_count": 0,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "none": 1
+            },
+            "backend_latency_ms_avg": null
+          },
+          "grouping": {
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 1,
+            "block_count": 1,
+            "problem_marker_count": 0,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 1,
+            "problem_number_source_counts": {},
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "noop",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "sparse_segmentation",
+          "large_block_dominance",
+          "empty_document_segmentation",
+          "ocr_disabled",
+          "fallback_grouping",
+          "full_page_image"
+        ],
+        "baseline_problem_count": 1,
+        "baseline_block_count": 1
+      },
+      "input_intent": "single-problem",
+      "forced_single_problem": true
+    }
+  }
+]

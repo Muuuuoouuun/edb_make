@@ -1,0 +1,436 @@
+{
+  "session_name": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9",
+  "generated_at": "2026-06-15T17:26:59+09:00",
+  "data_source": "question_export",
+  "output_dir": "/Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9",
+  "source_mode": "single",
+  "input_intent": "multi-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9.png"
+  ],
+  "source_page_count": 1,
+  "detected_problem_count": 3,
+  "core_problem_count": 3,
+  "supplemental_item_count": 0,
+  "duplicate_problem_number_groups": [],
+  "duplicateProblemNumberGroups": [],
+  "duplicate_problem_number_group_count": 0,
+  "duplicateProblemNumberGroupCount": 0,
+  "blocking_duplicate_problem_number_groups": [],
+  "blockingDuplicateProblemNumberGroups": [],
+  "blocking_duplicate_problem_number_group_count": 0,
+  "blockingDuplicateProblemNumberGroupCount": 0,
+  "source_problem_overlap_groups": [
+    {
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "source_page_id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "problemIds": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-1"
+      ],
+      "problem_ids": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-1"
+      ],
+      "problemTitles": [
+        "그림과 같이 $\\angle A=90^{\\circ}$인 직각삼각형 $ABC$에서\n$\\overline{AD}\\perp \\overline{BC}$, $\\overline{AC}\\perp \\overline{DE}$이다. $\\overline{BC}=12$, $\\angle B=60^{\\circ}$일 때,\n$\\overline{CE}$의 길이는?\n① $\\frac{\\sqrt{3}}{2}$\n② $\\frac{3\\sqrt{3}}{2}$\n③ $\\frac{5\\sqrt{3}}{2}$\n④ $\\frac{7\\sqrt{3}}{2}$\n⑤ $\\frac{9\\sqrt{3}}{2}$",
+        "그림과 같이 반지름의 길이가 1인 사분원을 이용\n하여 $\\sin 48^{\\circ}+\\cos 42^{\\circ}$ 를 계산하면?\n① $1.338$\n② $1.412$\n③ $1.486$\n④ $1.78$\n⑤ $1.854$"
+      ],
+      "overlapAreaRatio": 1.0,
+      "overlap_area_ratio": 1.0,
+      "intersectionOverUnion": 0.15361,
+      "intersection_over_union": 0.15361,
+      "bbox": {
+        "left": 0.0,
+        "top": 4.0,
+        "width": 726.0,
+        "height": 1008.0
+      },
+      "nextBbox": {
+        "left": 0.0,
+        "top": 6.0,
+        "width": 371.0,
+        "height": 303.0
+      },
+      "next_bbox": {
+        "left": 0.0,
+        "top": 6.0,
+        "width": 371.0,
+        "height": 303.0
+      },
+      "message": "두 문항의 원본 인식 영역이 크게 겹칩니다. 긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+    },
+    {
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "source_page_id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "problemIds": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-3"
+      ],
+      "problem_ids": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-3"
+      ],
+      "problemTitles": [
+        "그림과 같이 $\\angle A=90^{\\circ}$인 직각삼각형 $ABC$에서\n$\\overline{AD}\\perp \\overline{BC}$, $\\overline{AC}\\perp \\overline{DE}$이다. $\\overline{BC}=12$, $\\angle B=60^{\\circ}$일 때,\n$\\overline{CE}$의 길이는?\n① $\\frac{\\sqrt{3}}{2}$\n② $\\frac{3\\sqrt{3}}{2}$\n③ $\\frac{5\\sqrt{3}}{2}$\n④ $\\frac{7\\sqrt{3}}{2}$\n⑤ $\\frac{9\\sqrt{3}}{2}$",
+        "바다 위의 $A$ 지점에 떠 있는 배를 $B$, $C$ 지점에\n있는 두 개의 등대에서 관찰하고 있다. 두 등대 사이\n의 거리는 $100\\text{m}$이고, $\\angle ABC=75^{\\circ}$, $\\angle ACB=60^{\\circ}$일\n때, 배의 위치와 등대 $B$ 사이의 거리는?"
+      ],
+      "overlapAreaRatio": 1.0,
+      "overlap_area_ratio": 1.0,
+      "intersectionOverUnion": 0.319894,
+      "intersection_over_union": 0.319894,
+      "bbox": {
+        "left": 0.0,
+        "top": 4.0,
+        "width": 726.0,
+        "height": 1008.0
+      },
+      "nextBbox": {
+        "left": 355.0,
+        "top": 381.0,
+        "width": 371.0,
+        "height": 631.0
+      },
+      "next_bbox": {
+        "left": 355.0,
+        "top": 381.0,
+        "width": 371.0,
+        "height": 631.0
+      },
+      "message": "두 문항의 원본 인식 영역이 크게 겹칩니다. 긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+    }
+  ],
+  "sourceProblemOverlapGroups": [
+    {
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "source_page_id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "problemIds": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-1"
+      ],
+      "problem_ids": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-1"
+      ],
+      "problemTitles": [
+        "그림과 같이 $\\angle A=90^{\\circ}$인 직각삼각형 $ABC$에서\n$\\overline{AD}\\perp \\overline{BC}$, $\\overline{AC}\\perp \\overline{DE}$이다. $\\overline{BC}=12$, $\\angle B=60^{\\circ}$일 때,\n$\\overline{CE}$의 길이는?\n① $\\frac{\\sqrt{3}}{2}$\n② $\\frac{3\\sqrt{3}}{2}$\n③ $\\frac{5\\sqrt{3}}{2}$\n④ $\\frac{7\\sqrt{3}}{2}$\n⑤ $\\frac{9\\sqrt{3}}{2}$",
+        "그림과 같이 반지름의 길이가 1인 사분원을 이용\n하여 $\\sin 48^{\\circ}+\\cos 42^{\\circ}$ 를 계산하면?\n① $1.338$\n② $1.412$\n③ $1.486$\n④ $1.78$\n⑤ $1.854$"
+      ],
+      "overlapAreaRatio": 1.0,
+      "overlap_area_ratio": 1.0,
+      "intersectionOverUnion": 0.15361,
+      "intersection_over_union": 0.15361,
+      "bbox": {
+        "left": 0.0,
+        "top": 4.0,
+        "width": 726.0,
+        "height": 1008.0
+      },
+      "nextBbox": {
+        "left": 0.0,
+        "top": 6.0,
+        "width": 371.0,
+        "height": 303.0
+      },
+      "next_bbox": {
+        "left": 0.0,
+        "top": 6.0,
+        "width": 371.0,
+        "height": 303.0
+      },
+      "message": "두 문항의 원본 인식 영역이 크게 겹칩니다. 긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+    },
+    {
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "source_page_id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "problemIds": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-3"
+      ],
+      "problem_ids": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-3"
+      ],
+      "problemTitles": [
+        "그림과 같이 $\\angle A=90^{\\circ}$인 직각삼각형 $ABC$에서\n$\\overline{AD}\\perp \\overline{BC}$, $\\overline{AC}\\perp \\overline{DE}$이다. $\\overline{BC}=12$, $\\angle B=60^{\\circ}$일 때,\n$\\overline{CE}$의 길이는?\n① $\\frac{\\sqrt{3}}{2}$\n② $\\frac{3\\sqrt{3}}{2}$\n③ $\\frac{5\\sqrt{3}}{2}$\n④ $\\frac{7\\sqrt{3}}{2}$\n⑤ $\\frac{9\\sqrt{3}}{2}$",
+        "바다 위의 $A$ 지점에 떠 있는 배를 $B$, $C$ 지점에\n있는 두 개의 등대에서 관찰하고 있다. 두 등대 사이\n의 거리는 $100\\text{m}$이고, $\\angle ABC=75^{\\circ}$, $\\angle ACB=60^{\\circ}$일\n때, 배의 위치와 등대 $B$ 사이의 거리는?"
+      ],
+      "overlapAreaRatio": 1.0,
+      "overlap_area_ratio": 1.0,
+      "intersectionOverUnion": 0.319894,
+      "intersection_over_union": 0.319894,
+      "bbox": {
+        "left": 0.0,
+        "top": 4.0,
+        "width": 726.0,
+        "height": 1008.0
+      },
+      "nextBbox": {
+        "left": 355.0,
+        "top": 381.0,
+        "width": 371.0,
+        "height": 631.0
+      },
+      "next_bbox": {
+        "left": 355.0,
+        "top": 381.0,
+        "width": 371.0,
+        "height": 631.0
+      },
+      "message": "두 문항의 원본 인식 영역이 크게 겹칩니다. 긴 지문 병합/하위 문항 분리 결과가 EDB에 중복 등록되지 않는지 확인해 주세요."
+    }
+  ],
+  "source_problem_overlap_group_count": 2,
+  "sourceProblemOverlapGroupCount": 2,
+  "passage_group_source_reuse_groups": [],
+  "passageGroupSourceReuseGroups": [],
+  "passage_group_source_reuse_group_count": 0,
+  "passageGroupSourceReuseGroupCount": 0,
+  "passage_groups": [],
+  "passageGroups": [],
+  "passage_group_count": 0,
+  "passageGroupCount": 0,
+  "passage_problem_count": 0,
+  "passageProblemCount": 0,
+  "cross_page_passage_group_count": 0,
+  "crossPagePassageGroupCount": 0,
+  "passage_review_items": [],
+  "passageReviewItems": [],
+  "passage_review_item_count": 0,
+  "passageReviewItemCount": 0,
+  "cross_page_passage_review_item_count": 0,
+  "crossPagePassageReviewItemCount": 0,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "board_theme": "charcoal",
+  "crop_format": "v1",
+  "pages_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9/pages.json",
+  "placements_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9/placements.json",
+  "board_render_dir": "/Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9/problem_cutouts",
+  "edb_path": null,
+  "edb_file_uri": null,
+  "rendered_page_paths": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {
+      "placement_mode": "one-problem-per-page"
+    }
+  },
+  "ai_fallback": {
+    "enabled": true,
+    "mode": "auto",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "prompt": "",
+    "max_tokens": 4096,
+    "temperature": null,
+    "threshold": 0.72,
+    "max_regions": 48,
+    "timeout_ms": 30000,
+    "save_debug": false,
+    "fail_on_error": false
+  },
+  "ai_summary": {
+    "requested": true,
+    "mode": "auto",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "attempted_page_count": 1,
+    "applied_page_count": 0,
+    "ai_cache_hit_count": 0,
+    "ocr_cache_hit_count": 0,
+    "ocr_cache_miss_count": 6,
+    "status_counts": {
+      "error": 1
+    },
+    "route_counts": {
+      "ai_patch": 1
+    },
+    "route_tier_counts": {
+      "yellow": 1
+    },
+    "model_fallbacks": []
+  },
+  "warning_messages": [],
+  "problems": [
+    {
+      "id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-1",
+      "title": "그림과 같이 반지름의 길이가 1인 사분원을 이용\n하여 $\\sin 48^{\\circ}+\\cos 42^{\\circ}$ 를 계산하면?\n① $1.338$\n② $1.412$\n③ $1.486$\n④ $1.78$\n⑤ $1.854$",
+      "problemNumber": 7,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_001_c18d69f9.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_001_c18d69f9.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 6.0,
+        "width": 371.0,
+        "height": 303.0
+      },
+      "riskFlags": [
+        "source_problem_bbox_overlap"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "error"
+    },
+    {
+      "id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+      "title": "그림과 같이 $\\angle A=90^{\\circ}$인 직각삼각형 $ABC$에서\n$\\overline{AD}\\perp \\overline{BC}$, $\\overline{AC}\\perp \\overline{DE}$이다. $\\overline{BC}=12$, $\\angle B=60^{\\circ}$일 때,\n$\\overline{CE}$의 길이는?\n① $\\frac{\\sqrt{3}}{2}$\n② $\\frac{3\\sqrt{3}}{2}$\n③ $\\frac{5\\sqrt{3}}{2}$\n④ $\\frac{7\\sqrt{3}}{2}$\n⑤ $\\frac{9\\sqrt{3}}{2}$",
+      "problemNumber": 8,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_002_524f1df2.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_002_524f1df2.png",
+      "actualHeightPages": 0.72,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "startYPages": 1.2,
+      "snappedNextStartYPages": 2.4,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 4.0,
+        "width": 726.0,
+        "height": 1008.0
+      },
+      "riskFlags": [
+        "source_problem_bbox_overlap"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "error"
+    },
+    {
+      "id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-3",
+      "title": "바다 위의 $A$ 지점에 떠 있는 배를 $B$, $C$ 지점에\n있는 두 개의 등대에서 관찰하고 있다. 두 등대 사이\n의 거리는 $100\\text{m}$이고, $\\angle ABC=75^{\\circ}$, $\\angle ACB=60^{\\circ}$일\n때, 배의 위치와 등대 $B$ 사이의 거리는?",
+      "problemNumber": 11,
+      "subject": "math",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_crops/problem_003_d3d97fa9.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceFileName": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9/problem_cutouts/problem_003_d3d97fa9.png",
+      "actualHeightPages": 0.9185925604004699,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "startYPages": 2.4,
+      "snappedNextStartYPages": 3.6,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 355.0,
+        "top": 381.0,
+        "width": 371.0,
+        "height": 631.0
+      },
+      "riskFlags": [
+        "source_problem_bbox_overlap"
+      ],
+      "reviewStatus": "check_needed",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "error"
+    }
+  ],
+  "pages": [
+    {
+      "id": "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6%E1%84%86%E1%85%AE%E1%86%AB%E1%84%8C%E1%85%A6_a3f0ced1c9-page-001.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001.png",
+      "width": 726,
+      "height": 1012,
+      "problemIds": [
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-1",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-2",
+        "6d785eccec4f9bfe43517a07f1ea0d65c1053f46_6문제_a3f0ced1c9-page-001-problem-3"
+      ],
+      "riskFlags": [
+        "fallback_grouping"
+      ],
+      "reviewStatus": "check_needed",
+      "riskScore": 0.52,
+      "riskTier": "yellow",
+      "parseConfidence": 0.48,
+      "confidence": {
+        "overall": 0.48,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 0.48
+      },
+      "aiStatus": "error"
+    }
+  ]
+}

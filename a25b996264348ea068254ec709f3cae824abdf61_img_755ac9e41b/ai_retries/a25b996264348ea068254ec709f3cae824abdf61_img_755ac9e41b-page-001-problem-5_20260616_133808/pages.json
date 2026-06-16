@@ -1,0 +1,532 @@
+[
+  {
+    "page_id": "partial_source-page-001",
+    "width_px": 853,
+    "height_px": 1488,
+    "subject": "unknown",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png",
+    "blocks": [
+      {
+        "block_id": "partial_source-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 820.0,
+          "height": 502.0
+        },
+        "reading_order": 0,
+        "text": "25\n다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
+        "style": {
+          "font_size": 175.7,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": true
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "25",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 820.0,
+              "height": 100.4
+            }
+          },
+          {
+            "text": "다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 100.4,
+              "width": 820.0,
+              "height": 100.4
+            }
+          },
+          {
+            "text": "에 오도록 선분 PQ를 접는 선으로 하여 접었다.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 200.8,
+              "width": 820.0,
+              "height": 100.4
+            }
+          },
+          {
+            "text": "∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 301.20000000000005,
+              "width": 820.0,
+              "height": 100.4
+            }
+          },
+          {
+            "text": "여라.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 401.6,
+              "width": 820.0,
+              "height": 100.4
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 1269264,
+          "block_area_ratio": 0.324314,
+          "large_block": true,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2731,
+          "ocr_line_count": 5,
+          "ocr_empty_text": false,
+          "ocr_text_length": 100,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 25,
+          "problem_number_source": "ocr_top_left",
+          "grouping_source": "ai_fallback",
+          "grouping_reason": [
+            "forced",
+            "large_block_dominance"
+          ],
+          "display_title": "25",
+          "force_problem_start": true,
+          "ai_grouping_role": "problem_start"
+        }
+      },
+      {
+        "block_id": "partial_source-page-001-block-002",
+        "block_type": "stem",
+        "bbox": {
+          "left": 0.0,
+          "top": 1363.0,
+          "width": 853.0,
+          "height": 117.0
+        },
+        "reading_order": 1,
+        "text": "lthevoid82.com)\n8",
+        "style": {
+          "font_size": 40.949999999999996,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "lthevoid82.com)",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 853.0,
+              "height": 58.5
+            }
+          },
+          {
+            "text": "8",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 58.5,
+              "width": 853.0,
+              "height": 58.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 1269264,
+          "block_area_ratio": 0.078629,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2223,
+          "ocr_line_count": 2,
+          "ocr_empty_text": false,
+          "ocr_text_length": 17,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "grouping_source": "ai_fallback",
+          "grouping_reason": [
+            "forced",
+            "large_block_dominance"
+          ]
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "partial_source-page-001-problem-1",
+        "subject": "unknown",
+        "title": "문항 1",
+        "stem_block_ids": [
+          "partial_source-page-001-block-001",
+          "partial_source-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_source": "user_intent",
+          "grouping_reason": [
+            "single-problem"
+          ],
+          "force_full_page_bounds": true,
+          "input_intent": "single-problem",
+          "problem_number": 1,
+          "problem_number_source": "user_intent"
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/partial_source.png",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png",
+      "segmenter": "document-bands",
+      "content_box": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 853.0,
+        "height": 1488.0
+      },
+      "column_count": 1,
+      "document_band_split_count": 0,
+      "document_column_balance_split_count": 0,
+      "document_continuation_merge_count": 0,
+      "document_grid_row_alignment_count": 0,
+      "document_terminal_tail_extension_count": 0,
+      "document_row_band_count": 2,
+      "document_split_block_count": 2,
+      "document_split_applied": false,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 1269264,
+      "block_count": 2,
+      "text_block_count": 0,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 1,
+      "large_block_ratio": 0.5,
+      "max_block_area_ratio": 0.324314,
+      "mean_block_area_ratio": 0.201471,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "document-bands",
+        "segmentation_mode": "document",
+        "page_area_px": 1269264,
+        "block_count": 2,
+        "text_block_count": 0,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 1,
+        "large_block_ratio": 0.5,
+        "max_block_area_ratio": 0.324314,
+        "mean_block_area_ratio": 0.201471,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 19,
+        "block_ocr": 2763,
+        "total_before_repair": 2782
+      },
+      "ocr_block_worker_count": 3,
+      "ocr_eligible_block_count": 2,
+      "ocr_skipped_block_count": 0,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 2,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "used",
+          "provider": "gemini",
+          "ai_powered": true,
+          "eligible_block_count": 2,
+          "processed_block_count": 2,
+          "api_call_block_count": 2,
+          "cache_hit_count": 0,
+          "cache_miss_count": 2,
+          "skipped_block_count": 0
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "applied",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": true,
+          "attempted": true,
+          "applied": true,
+          "cache_hit": false,
+          "route": "ai_patch",
+          "route_tier": "yellow"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 2,
+        "problem_count": 1,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 2,
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 1
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 1,
+          "problem_number_block_count": 1,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "ocr_top_left": 1
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "25\n다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
+            "display_title_marker_source": "25",
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": 25,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": true,
+            "internal_problem_markers": [
+              25
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "lthevoid82.com)\n8",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "ocr_top_left"
+      },
+      "grouping_source": "user_intent",
+      "grouping_mode": "single_page",
+      "marker_counts": {
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 1,
+        "problem_number_block_count": 1,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 2,
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 1
+      },
+      "problem_number_source_counts": {
+        "ocr_top_left": 1
+      },
+      "difficulty_profile": {
+        "page_id": "partial_source-page-001",
+        "segmentation_risk": 0.4,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.0,
+        "overall_risk": 0.4,
+        "tier": "yellow",
+        "reasons": [
+          "large_block_dominance"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "document-bands",
+            "segmentation_mode": "document",
+            "block_count": 2,
+            "large_block_count": 1,
+            "large_block_ratio": 0.5,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 2,
+            "document_split_applied": false,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.324314,
+            "pdf_text_marker_count": 0,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 2,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 0.94,
+            "recognized_line_count": 7,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 2,
+            "backend_counts": {
+              "gemini": 2
+            },
+            "backend_latency_ms_avg": 2477.0,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "document-bands",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 1,
+            "block_count": 2,
+            "problem_marker_count": 1,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "ocr_top_left": 1
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": true,
+        "mode": "force",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": true,
+        "applied": true,
+        "cache_hit": false,
+        "status": "applied",
+        "route": "ai_patch",
+        "route_tier": "yellow",
+        "trigger_reasons": [
+          "forced",
+          "large_block_dominance"
+        ],
+        "baseline_problem_count": 1,
+        "baseline_block_count": 2,
+        "latency_ms": 13128,
+        "response_id": "NNMwaq-RA7uc1e8P1u7B4QY",
+        "model_used": "gemini-3.1-pro-preview",
+        "model_attempts": [
+          {
+            "model": "gemini-3.1-pro-preview",
+            "status": "ok"
+          }
+        ],
+        "repaired_problem_count": 1,
+        "ai_notes": [],
+        "problem_units_accepted": 1,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 1,
+      "input_intent": "single-problem",
+      "forced_single_problem": true
+    }
+  }
+]

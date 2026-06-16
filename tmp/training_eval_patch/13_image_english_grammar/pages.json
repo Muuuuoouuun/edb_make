@@ -1,0 +1,1808 @@
+[
+  {
+    "page_id": "1 (1)-page-001",
+    "width_px": 686,
+    "height_px": 955,
+    "subject": "korean",
+    "source_path": "/Users/clmagi/Downloads/문제 예씨/.pipeline_cache/normalized/1 (1)-page-001.png",
+    "blocks": [
+      {
+        "block_id": "1 (1)-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 334.0,
+          "height": 142.0
+        },
+        "reading_order": 0,
+        "text": "Lesson 중1 문법 기출\n1. 수의 일치/시제의 일치",
+        "style": {
+          "font_size": 49.699999999999996,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "Lesson 중1 문법 기출",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 71.0
+            }
+          },
+          {
+            "text": "1. 수의 일치/시제의 일치",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 71.0,
+              "width": 334.0,
+              "height": 71.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.072395,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2198,
+          "ocr_line_count": 2,
+          "ocr_empty_text": false,
+          "ocr_text_length": 31,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-002",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 97.0,
+          "width": 334.0,
+          "height": 264.0
+        },
+        "reading_order": 1,
+        "text": "1. 다음 글에서 밑줄 친 ⓐ~ⓔ의 표현 중 문법적으로\n어색한 것은?1)\nAli is my new friend. My nickname is Little Deer.\nHis nickname is Big Bear. We are different. I ⓐtalk\nand talk from morning to evening. He ⓑreads and\nreads all day long. We are very different. I only\nhave one brother. He ⓒhas two sisters and two\nbrothers. He ⓓhave a big family. We ⓔdon't have\nmuch in common, but we are good friends.",
+        "style": {
+          "font_size": 92.39999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "1. 다음 글에서 밑줄 친 ⓐ~ⓔ의 표현 중 문법적으로",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "어색한 것은?1)",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 29.333333333333332,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "Ali is my new friend. My nickname is Little Deer.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 58.666666666666664,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "His nickname is Big Bear. We are different. I ⓐtalk",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 88.0,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "and talk from morning to evening. He ⓑreads and",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 117.33333333333333,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "reads all day long. We are very different. I only",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 146.66666666666666,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "have one brother. He ⓒhas two sisters and two",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 176.0,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "brothers. He ⓓhave a big family. We ⓔdon't have",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 205.33333333333331,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          },
+          {
+            "text": "much in common, but we are good friends.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 234.66666666666666,
+              "width": 334.0,
+              "height": 29.333333333333332
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.134593,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 3137,
+          "ocr_line_count": 9,
+          "ocr_empty_text": false,
+          "ocr_text_length": 375,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 1,
+          "problem_number_source": "ocr_top_left"
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 331.0,
+          "width": 334.0,
+          "height": 207.0
+        },
+        "reading_order": 2,
+        "text": "2. 다음 그림을 보고 <조건>에 맞게 방을 묘사하는\n문장을 쓰시오.2)",
+        "style": {
+          "font_size": 72.44999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "2. 다음 그림을 보고 <조건>에 맞게 방을 묘사하는",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 103.5
+            }
+          },
+          {
+            "text": "문장을 쓰시오.2)",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 103.5,
+              "width": 334.0,
+              "height": 103.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.105533,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2096,
+          "ocr_line_count": 2,
+          "ocr_empty_text": false,
+          "ocr_text_length": 40,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 2,
+          "problem_number_source": "ocr_top_left"
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-004",
+        "block_type": "stem",
+        "bbox": {
+          "left": 0.0,
+          "top": 549.0,
+          "width": 334.0,
+          "height": 193.0
+        },
+        "reading_order": 3,
+        "text": "<조 건>\n1. There is~, There are ~를 이용하여 쓰시오.\n2. (2), (3)은 장소를 나타내는 말을 반드시 쓰시오.\n(장소를 나타내는 말 예시: on the bed)\n\n(1)_________________________________ a ball on the bed.\n(2)_________________________________________________.\n(3)_________________________________________________.",
+        "style": {
+          "font_size": 67.55,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "<조 건>",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 24.125
+            }
+          },
+          {
+            "text": "1. There is~, There are ~를 이용하여 쓰시오.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 24.125,
+              "width": 334.0,
+              "height": 24.125
+            }
+          },
+          {
+            "text": "2. (2), (3)은 장소를 나타내는 말을 반드시 쓰시오.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 48.25,
+              "width": 334.0,
+              "height": 24.125
+            }
+          },
+          {
+            "text": "(장소를 나타내는 말 예시: on the bed)",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 72.375,
+              "width": 334.0,
+              "height": 24.125
+            }
+          },
+          {
+            "text": "(1)_________________________________ a ball on the bed.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 120.625,
+              "width": 334.0,
+              "height": 24.125
+            }
+          },
+          {
+            "text": "(2)_________________________________________________.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 144.75,
+              "width": 334.0,
+              "height": 24.125
+            }
+          },
+          {
+            "text": "(3)_________________________________________________.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 168.875,
+              "width": 334.0,
+              "height": 24.125
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 4,
+          "source_band_index": 4,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.098396,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2325,
+          "ocr_line_count": 7,
+          "ocr_empty_text": false,
+          "ocr_text_length": 269,
+          "internal_problem_markers": [
+            1,
+            2
+          ],
+          "internal_problem_marker_count": 2,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-005",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 705.0,
+          "width": 334.0,
+          "height": 238.0
+        },
+        "reading_order": 4,
+        "text": "3. 다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 어색한 것은?3)\nHere we ⓐare in the mountains. Look! Sophia is ⓑtaking pictures of flowers. She ⓒlove flowers. Oh, no, Sophia! ⓓWatch out for bees! Stay ⓔcalm and never wave your arms.\n① ⓐ\n② ⓑ\n③ ⓒ\n④ ⓓ\n⑤ ⓔ",
+        "style": {
+          "font_size": 83.3,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.95,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "3. 다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 어색한 것",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          },
+          {
+            "text": "은?3)",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 34.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          },
+          {
+            "text": "Here we ⓐare in the mountains. Look! Sophia is",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 68.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          },
+          {
+            "text": "ⓑtaking pictures of flowers. She ⓒlove flowers. Oh,",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 102.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          },
+          {
+            "text": "no, Sophia! ⓓWatch out for bees! Stay ⓔcalm and",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 136.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          },
+          {
+            "text": "never wave your arms.",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 170.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          },
+          {
+            "text": "① ⓐ\n② ⓑ\n③ ⓒ\n④ ⓓ\n⑤ ⓔ",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 204.0,
+              "width": 334.0,
+              "height": 34.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 5,
+          "source_band_index": 5,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.121338,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2515,
+          "ocr_line_count": 7,
+          "ocr_empty_text": false,
+          "ocr_text_length": 222,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 3,
+          "problem_number_source": "ocr_top_left"
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-006",
+        "block_type": "title",
+        "bbox": {
+          "left": 352.0,
+          "top": 0.0,
+          "width": 334.0,
+          "height": 155.0
+        },
+        "reading_order": 5,
+        "text": "4. 다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 적절한 것으\n로 짝지어진 것은?4)\n[March 27] Sketch Day",
+        "style": {
+          "font_size": 54.25,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.95,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "4. 다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 적절한 것으",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 51.666666666666664
+            }
+          },
+          {
+            "text": "로 짝지어진 것은?4)",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 51.666666666666664,
+              "width": 334.0,
+              "height": 51.666666666666664
+            }
+          },
+          {
+            "text": "[March 27] Sketch Day",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 103.33333333333333,
+              "width": 334.0,
+              "height": 51.666666666666664
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.079022,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2125,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 66,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 4,
+          "problem_number_source": "ocr_top_left"
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-007",
+        "block_type": "stem",
+        "bbox": {
+          "left": 352.0,
+          "top": 109.0,
+          "width": 334.0,
+          "height": 147.0
+        },
+        "reading_order": 6,
+        "text": "다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 바른 것-\n로 짝지어진 것은?4)\n[March 27] Sketch Day\nEverything ⓐis going well. The white wall is\nready. We already have a rough sketch from our\nlast meeting. Look! Jimin is ⓑcopies the sketch\nonto the wall. She can draw really well.\n[April 3] Painting Day",
+        "style": {
+          "font_size": 51.449999999999996,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.92,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 바른 것-",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "로 짝지어진 것은?4)",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 18.375,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "[March 27] Sketch Day",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 36.75,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "Everything ⓐis going well. The white wall is",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 55.125,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "ready. We already have a rough sketch from our",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 73.5,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "last meeting. Look! Jimin is ⓑcopies the sketch",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 91.875,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "onto the wall. She can draw really well.",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 110.25,
+              "width": 334.0,
+              "height": 18.375
+            }
+          },
+          {
+            "text": "[April 3] Painting Day",
+            "confidence": 0.92,
+            "bbox": {
+              "left": 0.0,
+              "top": 128.625,
+              "width": 334.0,
+              "height": 18.375
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.074944,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2524,
+          "ocr_line_count": 8,
+          "ocr_empty_text": false,
+          "ocr_text_length": 266,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-008",
+        "block_type": "stem",
+        "bbox": {
+          "left": 352.0,
+          "top": 214.0,
+          "width": 334.0,
+          "height": 190.0
+        },
+        "reading_order": 7,
+        "text": "onto the wall. She can draw really well.\n\n[April 3] Painting Day\nToday ⓒare the big day. We are all here for our\nwall painting. We are drawing school superheroes.\nThe school cooks ⓓare holding big magic spoons.\nThe gym teacher is ⓔfly over the school building.",
+        "style": {
+          "font_size": 66.5,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.95,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "onto the wall. She can draw really well.",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 27.142857142857142
+            }
+          },
+          {
+            "text": "[April 3] Painting Day",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 54.285714285714285,
+              "width": 334.0,
+              "height": 27.142857142857142
+            }
+          },
+          {
+            "text": "Today ⓒare the big day. We are all here for our",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 81.42857142857143,
+              "width": 334.0,
+              "height": 27.142857142857142
+            }
+          },
+          {
+            "text": "wall painting. We are drawing school superheroes.",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 108.57142857142857,
+              "width": 334.0,
+              "height": 27.142857142857142
+            }
+          },
+          {
+            "text": "The school cooks ⓓare holding big magic spoons.",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 135.71428571428572,
+              "width": 334.0,
+              "height": 27.142857142857142
+            }
+          },
+          {
+            "text": "The gym teacher is ⓔfly over the school building.",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 162.85714285714286,
+              "width": 334.0,
+              "height": 27.142857142857142
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.096866,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2698,
+          "ocr_line_count": 6,
+          "ocr_empty_text": false,
+          "ocr_text_length": 260,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-009",
+        "block_type": "title",
+        "bbox": {
+          "left": 352.0,
+          "top": 442.0,
+          "width": 334.0,
+          "height": 419.0
+        },
+        "reading_order": 8,
+        "text": "5. 다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 적절한 것\n은?5)\nⓐBecky and I am best friends.\n\nMy name is Bomi Lee.\nHer name is Becky Kelly.\nⓑOur names both starts with a B.\n\nI love ice cream very much.\nShe loves chocolate so much.\nⓒWe both loves sweet things.\n\nI like the clear, blue sky.\nⓓShe like the deep, blue sea.\nBlue is our favorite color.\n\nWe have so much in common,\nand ⓔwe are good friends.",
+        "style": {
+          "font_size": 146.64999999999998,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "5. 다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 적절한 것",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "은?5)",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 23.27777777777778,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "ⓐBecky and I am best friends.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 46.55555555555556,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "My name is Bomi Lee.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 93.11111111111111,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "Her name is Becky Kelly.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 116.38888888888889,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "ⓑOur names both starts with a B.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 139.66666666666669,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "I love ice cream very much.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 186.22222222222223,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "She loves chocolate so much.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 209.5,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "ⓒWe both loves sweet things.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 232.77777777777777,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "I like the clear, blue sky.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 279.33333333333337,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "ⓓShe like the deep, blue sea.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 302.61111111111114,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "Blue is our favorite color.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 325.8888888888889,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "We have so much in common,",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 372.44444444444446,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          },
+          {
+            "text": "and ⓔwe are good friends.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 395.72222222222223,
+              "width": 334.0,
+              "height": 23.27777777777778
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 4,
+          "source_band_index": 4,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.213616,
+          "large_block": true,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2977,
+          "ocr_line_count": 14,
+          "ocr_empty_text": false,
+          "ocr_text_length": 372,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 5,
+          "problem_number_source": "ocr_top_left"
+        }
+      },
+      {
+        "block_id": "1 (1)-page-001-block-010",
+        "block_type": "image",
+        "bbox": {
+          "left": 352.0,
+          "top": 858.0,
+          "width": 334.0,
+          "height": 97.0
+        },
+        "reading_order": 9,
+        "text": "EXAM4YOU",
+        "style": {
+          "font_size": 33.949999999999996,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "EXAM4YOU",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 334.0,
+              "height": 97.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 5,
+          "source_band_index": 5,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 655130,
+          "block_area_ratio": 0.049453,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 1750,
+          "ocr_line_count": 1,
+          "ocr_empty_text": false,
+          "ocr_text_length": 8,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "1 (1)-page-001-problem-1",
+        "subject": "korean",
+        "title": "Lesson 중1 문법 기출\n1. 수의 일치/시제의 일치",
+        "stem_block_ids": [
+          "1 (1)-page-001-block-001"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 6
+        }
+      },
+      {
+        "unit_id": "1 (1)-page-001-problem-2",
+        "subject": "korean",
+        "title": "다음 글에서 밑줄 친 ⓐ~ⓔ의 표현 중 문법적으로\n어색한 것은?1)\nAli is my new friend. My nickname is Little Deer.\nHis nickname is Big Bear. We are different. I ⓐtalk\nand talk from morning to evening. He ⓑreads and\nreads all day long. We are very different. I only\nhave one brother. He ⓒhas two sisters and two\nbrothers. He ⓓhave a big family. We ⓔdon't have\nmuch in common, but we are good friends.",
+        "stem_block_ids": [
+          "1 (1)-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 1,
+          "problem_number_source": "ocr_top_left",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "1 (1)-page-001-problem-3",
+        "subject": "korean",
+        "title": "다음 그림을 보고 <조건>에 맞게 방을 묘사하는\n문장을 쓰시오.2)",
+        "stem_block_ids": [
+          "1 (1)-page-001-block-003",
+          "1 (1)-page-001-block-004"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 2,
+          "problem_number_source": "ocr_top_left",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "1 (1)-page-001-problem-4",
+        "subject": "korean",
+        "title": "다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 어색한 것은?3)\nHere we ⓐare in the mountains. Look! Sophia is ⓑtaking pictures of flowers. She ⓒlove flowers. Oh, no, Sophia! ⓓWatch out for bees! Stay ⓔcalm and never wave your arms.\n① ⓐ\n② ⓑ\n③ ⓒ\n④ ⓓ\n⑤ ⓔ",
+        "stem_block_ids": [
+          "1 (1)-page-001-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 3,
+          "problem_number_source": "ocr_top_left",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "1 (1)-page-001-problem-5",
+        "subject": "korean",
+        "title": "다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 적절한 것으\n로 짝지어진 것은?4)\n[March 27] Sketch Day",
+        "stem_block_ids": [
+          "1 (1)-page-001-block-006",
+          "1 (1)-page-001-block-007",
+          "1 (1)-page-001-block-008"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 4,
+          "problem_number_source": "ocr_top_left",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "1 (1)-page-001-problem-6",
+        "subject": "korean",
+        "title": "다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 적절한 것\n은?5)\nⓐBecky and I am best friends.\n\nMy name is Bomi Lee.\nHer name is Becky Kelly.\nⓑOur names both starts with a B.\n\nI love ice cream very much.\nShe loves chocolate so much.\nⓒWe both loves sweet things.\n\nI like the clear, blue sky.\nⓓShe like the deep, blue sea.\nBlue is our favorite color.\n\nWe have so much in common,\nand ⓔwe are good friends.",
+        "stem_block_ids": [
+          "1 (1)-page-001-block-009"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "problem_number": 5,
+          "problem_number_source": "ocr_top_left",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 6,
+          "marker_conflict": false,
+          "problem_marker": true,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 1,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "perspective_corrected": false,
+      "margin_crop_box": {
+        "left": 41,
+        "top": 37,
+        "right": 727,
+        "bottom": 992
+      },
+      "margin_cropped": true,
+      "original_source_path": "/Users/clmagi/Downloads/문제 예씨/1 (1).webp",
+      "normalized_path": "/Users/clmagi/Downloads/문제 예씨/.pipeline_cache/normalized/1 (1)-page-001.png",
+      "segmenter": "document-bands",
+      "content_box": {
+        "left": 1.0,
+        "top": 2.0,
+        "width": 685.0,
+        "height": 952.0
+      },
+      "column_count": 2,
+      "document_band_split_count": 0,
+      "document_column_balance_split_count": 0,
+      "document_continuation_merge_count": 0,
+      "document_grid_row_alignment_count": 0,
+      "document_terminal_tail_extension_count": 0,
+      "document_row_band_count": 10,
+      "document_split_block_count": 10,
+      "document_split_applied": false,
+      "content_box_area_ratio": 0.995405,
+      "segmentation_mode": "document",
+      "page_area_px": 655130,
+      "block_count": 10,
+      "text_block_count": 0,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 1,
+      "large_block_ratio": 0.1,
+      "max_block_area_ratio": 0.213616,
+      "mean_block_area_ratio": 0.104616,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "document-bands",
+        "segmentation_mode": "document",
+        "page_area_px": 655130,
+        "block_count": 10,
+        "text_block_count": 0,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 1,
+        "large_block_ratio": 0.1,
+        "max_block_area_ratio": 0.213616,
+        "mean_block_area_ratio": 0.104616,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Downloads/문제 예씨/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 55,
+        "block_ocr": 38,
+        "total_before_repair": 93
+      },
+      "ocr_block_worker_count": 3,
+      "ocr_eligible_block_count": 10,
+      "ocr_skipped_block_count": 0,
+      "ocr_cache_hit_count": 10,
+      "ocr_cache_miss_count": 0,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "used",
+          "provider": "gemini",
+          "ai_powered": true,
+          "eligible_block_count": 10,
+          "processed_block_count": 10,
+          "api_call_block_count": 0,
+          "cache_hit_count": 10,
+          "cache_miss_count": 0,
+          "skipped_block_count": 0
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "disabled",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": false,
+          "attempted": false,
+          "applied": false,
+          "cache_hit": false,
+          "route": "local_only",
+          "route_tier": "red"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 10,
+        "problem_count": 6,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 10,
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 0,
+          "problem_count": 6
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 5,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 0,
+          "problem_number_block_count": 5,
+          "excess_problem_marker_block_count": 1,
+          "excess_problem_marker_total": 1
+        },
+        "excess_problem_marker_block_count": 1,
+        "excess_problem_marker_total": 1,
+        "problem_number_source_counts": {
+          "ocr_top_left": 5
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "Lesson 중1 문법 기출\n1. 수의 일치/시제의 일치",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              1
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "1. 다음 글에서 밑줄 친 ⓐ~ⓔ의 표현 중 문법적으로\n어색한 것은?1)\nAli is my new friend. My nickname is Little Deer.\nHis nickname is Big Bear. We are different. I ⓐtalk\nand talk from morning to evening. He ⓑreads and\nreads all day long. We are very different. I only\nhave one brother. He ⓒhas two sisters and two\nbrothers. He ⓓhave a big family. We ⓔdon't have\nmuch in common, but we are good friends.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 1,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              1
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "2. 다음 그림을 보고 <조건>에 맞게 방을 묘사하는\n문장을 쓰시오.2)",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 2,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              2
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "<조 건>\n1. There is~, There are ~를 이용하여 쓰시오.\n2. (2), (3)은 장소를 나타내는 말을 반드시 쓰시오.\n(장소를 나타내는 말 예시: on the bed)\n\n(1)_________________________________ a ball on the bed.\n(2)_________________________________________________.\n(3)_________________________________________________.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              1,
+              2
+            ],
+            "internal_problem_marker_count": 2,
+            "excess_problem_marker_count": 1
+          },
+          {
+            "raw_text_marker_source": "3. 다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 어색한 것은?3)\nHere we ⓐare in the mountains. Look! Sophia is ⓑtaking pictures of flowers. She ⓒlove flowers. Oh, no, Sophia! ⓓWatch out for bees! Stay ⓔcalm and never wave your arms.\n① ⓐ\n② ⓑ\n③ ⓒ\n④ ⓓ\n⑤ ⓔ",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 3,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              3
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "4. 다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 적절한 것으\n로 짝지어진 것은?4)\n[March 27] Sketch Day",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 4,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              4
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "다음 밑줄 친 ⓐ~ⓔ중, 어법상 쓰임이 바른 것-\n로 짝지어진 것은?4)\n[March 27] Sketch Day\nEverything ⓐis going well. The white wall is\nready. We already have a rough sketch from our\nlast meeting. Look! Jimin is ⓑcopies the sketch\nonto the wall. She can draw really well.\n[April 3] Painting Day",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "onto the wall. She can draw really well.\n\n[April 3] Painting Day\nToday ⓒare the big day. We are all here for our\nwall painting. We are drawing school superheroes.\nThe school cooks ⓓare holding big magic spoons.\nThe gym teacher is ⓔfly over the school building.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "5. 다음 글의 밑줄 친 ⓐ~ⓔ 중 어법상 적절한 것\n은?5)\nⓐBecky and I am best friends.\n\nMy name is Bomi Lee.\nHer name is Becky Kelly.\nⓑOur names both starts with a B.\n\nI love ice cream very much.\nShe loves chocolate so much.\nⓒWe both loves sweet things.\n\nI like the clear, blue sky.\nⓓShe like the deep, blue sea.\nBlue is our favorite color.\n\nWe have so much in common,\nand ⓔwe are good friends.",
+            "display_title_marker_source": null,
+            "problem_marker": true,
+            "choice_marker": false,
+            "problem_number": 5,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              5
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "EXAM4YOU",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "ocr_top_left"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 0,
+        "problem_number_block_count": 5,
+        "excess_problem_marker_block_count": 1,
+        "excess_problem_marker_total": 1
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 10,
+        "problem_marker_block_count": 5,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 0,
+        "problem_count": 6
+      },
+      "problem_number_source_counts": {
+        "ocr_top_left": 5
+      },
+      "difficulty_profile": {
+        "page_id": "1 (1)-page-001",
+        "segmentation_risk": 0.0,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.7,
+        "overall_risk": 0.7,
+        "tier": "red",
+        "reasons": [
+          "merged_problem_block"
+        ],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "document-bands",
+            "segmentation_mode": "document",
+            "block_count": 10,
+            "large_block_count": 1,
+            "large_block_ratio": 0.1,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 0.995405,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 10,
+            "document_split_applied": false,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.213616,
+            "pdf_text_marker_count": 0,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 9,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 0.9544444444444444,
+            "recognized_line_count": 59,
+            "ocr_cache_hit_count": 10,
+            "ocr_cache_miss_count": 0,
+            "backend_counts": {
+              "gemini": 10
+            },
+            "backend_latency_ms_avg": 2434.5,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "document-bands",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 6,
+            "block_count": 10,
+            "problem_marker_count": 5,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "ocr_top_left": 5
+            },
+            "excess_problem_marker_block_count": 1,
+            "excess_problem_marker_total": 1
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "1 (1)-page-001",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": "ai_repair",
+        "quality_status": "failed",
+        "recommended_action": "ai_repair",
+        "trigger_reasons": [
+          "merged_problem_block"
+        ],
+        "profile": {
+          "page_id": "1 (1)-page-001",
+          "segmentation_risk": 0.0,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.7,
+          "overall_risk": 0.7,
+          "tier": "red",
+          "reasons": [
+            "merged_problem_block"
+          ],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "document-bands",
+              "segmentation_mode": "document",
+              "block_count": 10,
+              "large_block_count": 1,
+              "large_block_ratio": 0.1,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 0.995405,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 10,
+              "document_split_applied": false,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.213616,
+              "pdf_text_marker_count": 0,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 9,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 0.9544444444444444,
+              "recognized_line_count": 59,
+              "ocr_cache_hit_count": 10,
+              "ocr_cache_miss_count": 0,
+              "backend_counts": {
+                "gemini": 10
+              },
+              "backend_latency_ms_avg": 2434.5,
+              "all_text_from_trusted_pdf_markers": false
+            },
+            "grouping": {
+              "segmenter": "document-bands",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 6,
+              "block_count": 10,
+              "problem_marker_count": 5,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 0,
+              "problem_number_source_counts": {
+                "ocr_top_left": 5
+              },
+              "excess_problem_marker_block_count": 1,
+              "excess_problem_marker_total": 1
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": false,
+        "mode": "off",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "disabled",
+        "route": "local_only",
+        "route_tier": "red",
+        "trigger_reasons": [
+          "merged_problem_block"
+        ],
+        "baseline_problem_count": 6,
+        "baseline_block_count": 10,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 1
+    }
+  }
+]

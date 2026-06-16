@@ -1,0 +1,254 @@
+{
+  "session_name": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808",
+  "generated_at": "2026-06-16T13:38:24+09:00",
+  "data_source": "question_export",
+  "output_dir": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808",
+  "source_mode": "single",
+  "input_intent": "single-problem",
+  "input_notes": "",
+  "input_file_count": 1,
+  "input_files": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/partial_source.png"
+  ],
+  "source_page_count": 1,
+  "detected_problem_count": 1,
+  "core_problem_count": 1,
+  "supplemental_item_count": 0,
+  "duplicate_problem_number_groups": [],
+  "duplicateProblemNumberGroups": [],
+  "duplicate_problem_number_group_count": 0,
+  "duplicateProblemNumberGroupCount": 0,
+  "blocking_duplicate_problem_number_groups": [],
+  "blockingDuplicateProblemNumberGroups": [],
+  "blocking_duplicate_problem_number_group_count": 0,
+  "blockingDuplicateProblemNumberGroupCount": 0,
+  "source_problem_overlap_groups": [],
+  "sourceProblemOverlapGroups": [],
+  "source_problem_overlap_group_count": 0,
+  "sourceProblemOverlapGroupCount": 0,
+  "passage_group_source_reuse_groups": [],
+  "passageGroupSourceReuseGroups": [],
+  "passage_group_source_reuse_group_count": 0,
+  "passageGroupSourceReuseGroupCount": 0,
+  "passage_groups": [],
+  "passageGroups": [],
+  "passage_group_count": 0,
+  "passageGroupCount": 0,
+  "passage_problem_count": 0,
+  "passageProblemCount": 0,
+  "cross_page_passage_group_count": 0,
+  "crossPagePassageGroupCount": 0,
+  "passage_review_items": [],
+  "passageReviewItems": [],
+  "passage_review_item_count": 0,
+  "passageReviewItemCount": 0,
+  "cross_page_passage_review_item_count": 0,
+  "crossPagePassageReviewItemCount": 0,
+  "export_mode": "question",
+  "record_mode": "image-only",
+  "board_theme": "charcoal",
+  "crop_format": "v2",
+  "pages_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/pages.json",
+  "placements_json_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/placements.json",
+  "board_render_dir": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/problem_cutouts",
+  "edb_path": null,
+  "edb_file_uri": null,
+  "rendered_page_paths": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png"
+  ],
+  "rendered_page_file_uris": [
+    "file:///Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png"
+  ],
+  "template": {
+    "name": "academy-default",
+    "board_page_count": 50,
+    "base_slot_height_pages": 1.2,
+    "fixed_left_zone_ratio": 0.3333333333333333,
+    "preserve_right_writing_zone": true,
+    "default_overflow_subjects": [
+      "korean",
+      "english"
+    ],
+    "metadata": {
+      "placement_mode": "one-problem-per-page"
+    }
+  },
+  "ai_fallback": {
+    "enabled": true,
+    "mode": "force",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "prompt": "",
+    "max_tokens": 4096,
+    "temperature": null,
+    "threshold": 0.72,
+    "max_regions": 48,
+    "timeout_ms": 30000,
+    "save_debug": false,
+    "fail_on_error": false
+  },
+  "ai_summary": {
+    "requested": true,
+    "mode": "force",
+    "provider": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "attempted_page_count": 1,
+    "applied_page_count": 1,
+    "ai_cache_hit_count": 0,
+    "ocr_cache_hit_count": 0,
+    "ocr_cache_miss_count": 2,
+    "status_counts": {
+      "applied": 1
+    },
+    "route_counts": {},
+    "route_tier_counts": {},
+    "model_fallbacks": [],
+    "stages": [
+      {
+        "stage": "ocr",
+        "order": 1,
+        "label": "1단계 OCR 인식",
+        "provider": "gemini",
+        "page_count": 1,
+        "used_page_count": 1,
+        "status_counts": {
+          "used": 1
+        },
+        "eligible_block_count": 2,
+        "processed_block_count": 2,
+        "api_call_block_count": 2,
+        "cache_hit_count": 0,
+        "cache_miss_count": 2,
+        "skipped_block_count": 0,
+        "attempted_block_count": 0,
+        "applied_block_count": 0,
+        "attempted_page_count": 0,
+        "applied_page_count": 0
+      },
+      {
+        "stage": "ocr_escalation",
+        "order": 2,
+        "label": "2단계 블록 보강",
+        "provider": "gemini",
+        "page_count": 1,
+        "used_page_count": 0,
+        "status_counts": {
+          "skipped": 1
+        },
+        "eligible_block_count": 0,
+        "processed_block_count": 0,
+        "api_call_block_count": 0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 0,
+        "skipped_block_count": 0,
+        "attempted_block_count": 0,
+        "applied_block_count": 0,
+        "attempted_page_count": 0,
+        "applied_page_count": 0
+      },
+      {
+        "stage": "page_repair",
+        "order": 3,
+        "label": "3단계 문항 경계 보정",
+        "provider": "gemini",
+        "page_count": 1,
+        "used_page_count": 1,
+        "status_counts": {
+          "applied": 1
+        },
+        "eligible_block_count": 0,
+        "processed_block_count": 0,
+        "api_call_block_count": 0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 0,
+        "skipped_block_count": 0,
+        "attempted_block_count": 0,
+        "applied_block_count": 0,
+        "attempted_page_count": 1,
+        "applied_page_count": 1
+      }
+    ]
+  },
+  "warning_messages": [],
+  "problems": [
+    {
+      "id": "partial_source-page-001-problem-1",
+      "title": "문항 1",
+      "problemNumber": 1,
+      "subject": "unknown",
+      "imagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/problem_crops/problem_001_fdea67ca.png",
+      "sourceImagePath": "file:///Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png",
+      "sourceFileName": "partial_source-page-001.png",
+      "boardRenderPath": "file:///Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/problem_cutouts/problem_001_fdea67ca.png",
+      "actualHeightPages": 0.8695504732383545,
+      "overflowAllowed": false,
+      "readingHeavy": false,
+      "sourcePageId": "partial_source-page-001",
+      "startYPages": 0.0,
+      "snappedNextStartYPages": 1.2,
+      "overflowAmountPages": 0.0,
+      "overflowViolation": false,
+      "slotSpanCount": 1,
+      "placementXRatio": 0.0,
+      "placementYRatio": 0.0,
+      "placementScaleRatio": 1.0,
+      "step": "raw",
+      "processingStep": "raw",
+      "recordMode": "image-only",
+      "textRecordCount": 0,
+      "imageRecordCount": 1,
+      "bbox": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 853.0,
+        "height": 1488.0
+      },
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "applied"
+    }
+  ],
+  "pages": [
+    {
+      "id": "partial_source-page-001",
+      "pageNumber": 1,
+      "sourceImageUri": "file:///Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png",
+      "sourceImagePath": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/ai_retries/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5_20260616_133808/.pipeline_cache/normalized/partial_source-page-001.png",
+      "width": 853,
+      "height": 1488,
+      "problemIds": [
+        "partial_source-page-001-problem-1"
+      ],
+      "riskFlags": [],
+      "reviewStatus": "normal",
+      "riskScore": 0.0,
+      "riskTier": "green",
+      "parseConfidence": 1.0,
+      "confidence": {
+        "overall": 1.0,
+        "segmentation": 1.0,
+        "ocr": 1.0,
+        "grouping": 1.0
+      },
+      "aiStatus": "applied"
+    }
+  ],
+  "timing_ms": {
+    "source_build": 15930,
+    "problem_assets": 176,
+    "records": 21,
+    "page_segmentation_sum": 19,
+    "page_block_ocr_sum": 2763,
+    "page_total_before_repair_sum": 2782,
+    "page_ai_repair_sum": 13128,
+    "ui_session": 0,
+    "total": 16130
+  }
+}

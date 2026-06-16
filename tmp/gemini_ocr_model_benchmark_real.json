@@ -1,0 +1,930 @@
+{
+  "models": [
+    "gemini-3.1-pro-preview",
+    "gemini-3.5-flash"
+  ],
+  "source_count": 3,
+  "synthetic": false,
+  "sample_count": 12,
+  "env_key_source": "user_settings",
+  "summary": {
+    "gemini-3.1-pro-preview": {
+      "call_count": 12,
+      "error_count": 1,
+      "nonempty_count": 11,
+      "empty_count": 1,
+      "avg_latency_ms": 4784.8,
+      "median_latency_ms": 4157.5,
+      "p95_latency_ms": 10781.0,
+      "avg_quality_score": 0.8369,
+      "avg_similarity_to_expected": null,
+      "avg_text_length": 95.5,
+      "avg_line_count": 6.7
+    },
+    "gemini-3.5-flash": {
+      "call_count": 12,
+      "error_count": 12,
+      "nonempty_count": 0,
+      "empty_count": 12,
+      "avg_latency_ms": 6056.3,
+      "median_latency_ms": 5926.0,
+      "p95_latency_ms": 6681.0,
+      "avg_quality_score": 0.0,
+      "avg_similarity_to_expected": null,
+      "avg_text_length": 0,
+      "avg_line_count": 0
+    }
+  },
+  "samples": [
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 289.4,
+        "width": 627.5,
+        "height": 858.7
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 1145.3,
+        "width": 627.5,
+        "height": 654.7
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-003",
+      "bbox": {
+        "left": 627.5,
+        "top": 289.4,
+        "width": 627.5,
+        "height": 514.2
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-004",
+      "bbox": {
+        "left": 627.5,
+        "top": 800.7,
+        "width": 627.5,
+        "height": 562.2
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 261.4,
+        "width": 639.5,
+        "height": 421.7
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 680.3,
+        "width": 639.5,
+        "height": 529.9
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-003",
+      "bbox": {
+        "left": 0.0,
+        "top": 1207.4,
+        "width": 639.5,
+        "height": 592.6
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-004",
+      "bbox": {
+        "left": 639.5,
+        "top": 261.4,
+        "width": 639.5,
+        "height": 814.7
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 1.0,
+        "width": 394.0,
+        "height": 150.0
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 151.0,
+        "width": 394.0,
+        "height": 248.0
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-003",
+      "bbox": {
+        "left": 0.0,
+        "top": 399.0,
+        "width": 394.0,
+        "height": 234.0
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-004",
+      "bbox": {
+        "left": 412.0,
+        "top": 1.0,
+        "width": 416.0,
+        "height": 150.0
+      }
+    }
+  ],
+  "results": [
+    {
+      "sample_index": 1,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 289.4,
+        "width": 627.5,
+        "height": 858.7
+      },
+      "crop_size": [
+        627,
+        859
+      ],
+      "latency_ms": 4589,
+      "backend_latency_ms": 4588,
+      "text": "① A\n② B\n③ C\n④ A, C\n⑤ B, C",
+      "text_length": 25,
+      "line_count": 5,
+      "confidence": 0.99,
+      "block_type_hint": "choice",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.858,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "① A ② B ③ C ④ A, C ⑤ B, C"
+    },
+    {
+      "sample_index": 1,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 289.4,
+        "width": 627.5,
+        "height": 858.7
+      },
+      "crop_size": [
+        627,
+        859
+      ],
+      "latency_ms": 6547,
+      "backend_latency_ms": 6546,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 2,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 1145.3,
+        "width": 627.5,
+        "height": 654.7
+      },
+      "crop_size": [
+        627,
+        655
+      ],
+      "latency_ms": 6283,
+      "backend_latency_ms": 6282,
+      "text": "A, B, C로 옳은 것은?\n$\\underline{\\mathrm{A}}$\n$\\underline{\\mathrm{B}}$\n$\\underline{\\mathrm{C}}$\n① 강자성체\n상자성체\n반자성체\n② 강자성체\n반자성체\n상자성체\n③ 상자성체\n강자성체\n반자성체\n④ 반자성체\n강자성체\n상자성체\n⑤ 반자성체\n상자성체\n강자성체",
+      "text_length": 175,
+      "line_count": 19,
+      "confidence": 0.99,
+      "block_type_hint": "choice",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.9955,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "A, B, C로 옳은 것은? $\\underline{\\mathrm{A}}$ $\\underline{\\mathrm{B}}$ $\\underline{\\mathrm{C}}$ ① 강자성체 상자성체 반자성체 ② 강자성체 반자성체 상자성체 ③ 상자성체 강자성체 반자성체 ④ 반자성체 강자성체 상자성체 ⑤"
+    },
+    {
+      "sample_index": 2,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 1145.3,
+        "width": 627.5,
+        "height": 654.7
+      },
+      "crop_size": [
+        627,
+        655
+      ],
+      "latency_ms": 5729,
+      "backend_latency_ms": 5729,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 3,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-003",
+      "bbox": {
+        "left": 627.5,
+        "top": 289.4,
+        "width": 627.5,
+        "height": 514.2
+      },
+      "crop_size": [
+        628,
+        514
+      ],
+      "latency_ms": 5977,
+      "backend_latency_ms": 5977,
+      "text": "1. 다음은 어느 자율 주행 자동차에 이용되는 파동에 대한 설명이다.\nⓐ 파장이 1550 nm인 적외선은 자동차 주변의\n3차원 공간 정보를 얻는 데 이용된다. ⓑ 진동수가\n52 kHz인 초음파는 가까이 있는 물체와의 거리를\n측정하는 데 이용된다. ⓒ 파장이 400~700 nm인\n가시광선은 신호등이나 표지판, 차선 등을 인식\n하는 데 이용된다.\n이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른 것은?\n<보 기>\nㄱ. 공기 중에서의 속력은 ⓐ가 ⓑ보다 크다.\nㄴ. ⓑ는 진공에서도 진행한다.\nㄷ. 진동수는 ⓒ가 ⓐ보다 크다.\n① ㄱ\n② ㄴ\n③ ㄱ, ㄷ\n④ ㄴ, ㄷ\n⑤ ㄱ, ㄴ, ㄷ",
+      "text_length": 331,
+      "line_count": 17,
+      "confidence": 0.99,
+      "block_type_hint": "stem",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.9955,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "1. 다음은 어느 자율 주행 자동차에 이용되는 파동에 대한 설명이다. ⓐ 파장이 1550 nm인 적외선은 자동차 주변의 3차원 공간 정보를 얻는 데 이용된다. ⓑ 진동수가 52 kHz인 초음파는 가까이 있는 물체와의 거리를 측정하는 데 이용된다. ⓒ 파장이 400~700 nm인 가시광선"
+    },
+    {
+      "sample_index": 3,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-003",
+      "bbox": {
+        "left": 627.5,
+        "top": 289.4,
+        "width": 627.5,
+        "height": 514.2
+      },
+      "crop_size": [
+        628,
+        514
+      ],
+      "latency_ms": 6681,
+      "backend_latency_ms": 6681,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 4,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-004",
+      "bbox": {
+        "left": 627.5,
+        "top": 800.7,
+        "width": 627.5,
+        "height": 562.2
+      },
+      "crop_size": [
+        628,
+        562
+      ],
+      "latency_ms": 4438,
+      "backend_latency_ms": 4438,
+      "text": "그림은 보어의 수소 원자 모형에서 양자수 $n$에 따른 전자의 궤도\n일부와 전자의 전이 a~d를, 표는 $n$에 따른 에너지 준위를 나타낸\n것이다. b, c에서 방출되는 빛의 진동수는 각각 $f_{\\text{b}}$, $f_{\\text{c}}$이다.\n이에 대한 설명으로 옳은 것만을 <보기>에서 있는 대로 고른\n것은? [3점]",
+      "text_length": 182,
+      "line_count": 5,
+      "confidence": 0.99,
+      "block_type_hint": "stem",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.9455,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "그림은 보어의 수소 원자 모형에서 양자수 $n$에 따른 전자의 궤도 일부와 전자의 전이 a~d를, 표는 $n$에 따른 에너지 준위를 나타낸 것이다. b, c에서 방출되는 빛의 진동수는 각각 $f_{\\text{b}}$, $f_{\\text{c}}$이다. 이에 대한 설명으로 옳은 것만을 <보"
+    },
+    {
+      "sample_index": 4,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/physics_input.pdf",
+      "page_id": "physics_input-page-001",
+      "page_number": 1,
+      "block_id": "physics_input-page-001-block-004",
+      "bbox": {
+        "left": 627.5,
+        "top": 800.7,
+        "width": 627.5,
+        "height": 562.2
+      },
+      "crop_size": [
+        628,
+        562
+      ],
+      "latency_ms": 6426,
+      "backend_latency_ms": 6426,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 5,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 261.4,
+        "width": 639.5,
+        "height": 421.7
+      },
+      "crop_size": [
+        639,
+        422
+      ],
+      "latency_ms": 3866,
+      "backend_latency_ms": 3866,
+      "text": "① ㄱ\n② ㄴ\n③ ㄱ, ㄷ\n④ ㄴ, ㄷ\n⑤ ㄱ, ㄴ, ㄷ",
+      "text_length": 31,
+      "line_count": 5,
+      "confidence": 0.99,
+      "block_type_hint": "choice",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.873,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "① ㄱ ② ㄴ ③ ㄱ, ㄷ ④ ㄴ, ㄷ ⑤ ㄱ, ㄴ, ㄷ"
+    },
+    {
+      "sample_index": 5,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 261.4,
+        "width": 639.5,
+        "height": 421.7
+      },
+      "crop_size": [
+        639,
+        422
+      ],
+      "latency_ms": 6454,
+      "backend_latency_ms": 6454,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 6,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 680.3,
+        "width": 639.5,
+        "height": 529.9
+      },
+      "crop_size": [
+        639,
+        530
+      ],
+      "latency_ms": 3279,
+      "backend_latency_ms": 3279,
+      "text": "① ㄱ\n② ㄷ\n③ ㄱ, ㄴ\n④ ㄴ, ㄷ\n⑤ ㄱ, ㄴ, ㄷ",
+      "text_length": 31,
+      "line_count": 5,
+      "confidence": 0.99,
+      "block_type_hint": "choice",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.873,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "① ㄱ ② ㄷ ③ ㄱ, ㄴ ④ ㄴ, ㄷ ⑤ ㄱ, ㄴ, ㄷ"
+    },
+    {
+      "sample_index": 6,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 680.3,
+        "width": 639.5,
+        "height": 529.9
+      },
+      "crop_size": [
+        639,
+        530
+      ],
+      "latency_ms": 5771,
+      "backend_latency_ms": 5771,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 7,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-003",
+      "bbox": {
+        "left": 0.0,
+        "top": 1207.4,
+        "width": 639.5,
+        "height": 592.6
+      },
+      "crop_size": [
+        639,
+        593
+      ],
+      "latency_ms": 2794,
+      "backend_latency_ms": 2793,
+      "text": "① ㄱ\n② ㄴ\n③ ㄷ\n④ ㄱ, ㄴ\n⑤ ㄱ, ㄷ",
+      "text_length": 25,
+      "line_count": 5,
+      "confidence": 0.99,
+      "block_type_hint": "choice",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.858,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "① ㄱ ② ㄴ ③ ㄷ ④ ㄱ, ㄴ ⑤ ㄱ, ㄷ"
+    },
+    {
+      "sample_index": 7,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-003",
+      "bbox": {
+        "left": 0.0,
+        "top": 1207.4,
+        "width": 639.5,
+        "height": 592.6
+      },
+      "crop_size": [
+        639,
+        593
+      ],
+      "latency_ms": 5757,
+      "backend_latency_ms": 5757,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 8,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-004",
+      "bbox": {
+        "left": 639.5,
+        "top": 261.4,
+        "width": 639.5,
+        "height": 814.7
+      },
+      "crop_size": [
+        640,
+        815
+      ],
+      "latency_ms": 10781,
+      "backend_latency_ms": 10780,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 8,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/tmp_test_inputs/earth_input.pdf",
+      "page_id": "earth_input-page-001",
+      "page_number": 1,
+      "block_id": "earth_input-page-001-block-004",
+      "bbox": {
+        "left": 639.5,
+        "top": 261.4,
+        "width": 639.5,
+        "height": 814.7
+      },
+      "crop_size": [
+        640,
+        815
+      ],
+      "latency_ms": 5869,
+      "backend_latency_ms": 5868,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 9,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 1.0,
+        "width": 394.0,
+        "height": 150.0
+      },
+      "crop_size": [
+        394,
+        150
+      ],
+      "latency_ms": 3833,
+      "backend_latency_ms": 3833,
+      "text": "5장 복소수문제\n고난\n01\n실수가 아닌 복소수 $z$에 대하여 $\\frac{z^{3}}{z-1}$이 실수일 때, $z+\\bar{z}$의",
+      "text_length": 75,
+      "line_count": 4,
+      "confidence": 0.9,
+      "block_type_hint": "stem",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.8925,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "5장 복소수문제 고난 01 실수가 아닌 복소수 $z$에 대하여 $\\frac{z^{3}}{z-1}$이 실수일 때, $z+\\bar{z}$의"
+    },
+    {
+      "sample_index": 9,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-001",
+      "bbox": {
+        "left": 0.0,
+        "top": 1.0,
+        "width": 394.0,
+        "height": 150.0
+      },
+      "crop_size": [
+        394,
+        150
+      ],
+      "latency_ms": 5845,
+      "backend_latency_ms": 5844,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 10,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 151.0,
+        "width": 394.0,
+        "height": 248.0
+      },
+      "crop_size": [
+        394,
+        248
+      ],
+      "latency_ms": 4348,
+      "backend_latency_ms": 4347,
+      "text": "의 허수 부분이 같다고 한다. $z$의 실수 부분을 $p$\n라 할 때, $10p$의 값은?\n① $4$ ② $5$ ③ $6$ ④ $7$ ⑤ $8$",
+      "text_length": 80,
+      "line_count": 3,
+      "confidence": 0.99,
+      "block_type_hint": "stem",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.9455,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "의 허수 부분이 같다고 한다. $z$의 실수 부분을 $p$ 라 할 때, $10p$의 값은? ① $4$ ② $5$ ③ $6$ ④ $7$ ⑤ $8$"
+    },
+    {
+      "sample_index": 10,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-002",
+      "bbox": {
+        "left": 0.0,
+        "top": 151.0,
+        "width": 394.0,
+        "height": 248.0
+      },
+      "crop_size": [
+        394,
+        248
+      ],
+      "latency_ms": 6199,
+      "backend_latency_ms": 6199,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 11,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-003",
+      "bbox": {
+        "left": 0.0,
+        "top": 399.0,
+        "width": 394.0,
+        "height": 234.0
+      },
+      "crop_size": [
+        394,
+        234
+      ],
+      "latency_ms": 3967,
+      "backend_latency_ms": 3967,
+      "text": "02\n복소수 $z$가 $z^{2}-iz+1=0$을 만족하고\n$\\frac{1}{z^{3}}(1+z+z^{2}+\\cdots+z^{5}+z^{6})=a+bi$라 할 때,\n$a^{2}+b^{2}$의 값은?\n① $13$\n② $16$\n③ $19$\n④ $22$\n⑤ $25$",
+      "text_length": 145,
+      "line_count": 9,
+      "confidence": 0.99,
+      "block_type_hint": "stem",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.9955,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "02 복소수 $z$가 $z^{2}-iz+1=0$을 만족하고 $\\frac{1}{z^{3}}(1+z+z^{2}+\\cdots+z^{5}+z^{6})=a+bi$라 할 때, $a^{2}+b^{2}$의 값은? ① $13$ ② $16$ ③ $19$ ④ $22$ ⑤ $25$"
+    },
+    {
+      "sample_index": 11,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-003",
+      "bbox": {
+        "left": 0.0,
+        "top": 399.0,
+        "width": 394.0,
+        "height": 234.0
+      },
+      "crop_size": [
+        394,
+        234
+      ],
+      "latency_ms": 5983,
+      "backend_latency_ms": 5983,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Unterminated string starting at: line 2 column 11 (char 12)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    },
+    {
+      "sample_index": 12,
+      "model": "gemini-3.1-pro-preview",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-004",
+      "bbox": {
+        "left": 412.0,
+        "top": 1.0,
+        "width": 416.0,
+        "height": 150.0
+      },
+      "crop_size": [
+        416,
+        150
+      ],
+      "latency_ms": 3262,
+      "backend_latency_ms": 3261,
+      "text": "문제\n05\n복소수 $z=a^{3}+(i-6)a^{2}+(i+11)a-4-2i$에 대",
+      "text_length": 46,
+      "line_count": 3,
+      "confidence": 0.99,
+      "block_type_hint": "stem",
+      "model_used": "gemini-3.1-pro-preview",
+      "error": null,
+      "quality_score": 0.8105,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": "문제 05 복소수 $z=a^{3}+(i-6)a^{2}+(i+11)a-4-2i$에 대"
+    },
+    {
+      "sample_index": 12,
+      "model": "gemini-3.5-flash",
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95.png",
+      "page_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001",
+      "page_number": 1,
+      "block_id": "20260410_133532_1775795732449871000_고1 복소수 4문제_457d773b95-page-001-block-004",
+      "bbox": {
+        "left": 412.0,
+        "top": 1.0,
+        "width": 416.0,
+        "height": 150.0
+      },
+      "crop_size": [
+        416,
+        150
+      ],
+      "latency_ms": 5415,
+      "backend_latency_ms": 5415,
+      "text": "",
+      "text_length": 0,
+      "line_count": 0,
+      "confidence": null,
+      "block_type_hint": null,
+      "model_used": null,
+      "error": "json decode failed: Expecting ',' delimiter: line 4 column 20 (char 115)",
+      "quality_score": 0.0,
+      "expected_text": "",
+      "similarity_to_expected": null,
+      "text_preview": ""
+    }
+  ]
+}

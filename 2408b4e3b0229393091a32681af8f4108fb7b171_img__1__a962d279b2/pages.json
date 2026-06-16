@@ -1,0 +1,1942 @@
+[
+  {
+    "page_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001",
+    "width_px": 1741,
+    "height_px": 2400,
+    "subject": "korean",
+    "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001.png",
+    "blocks": [
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-001",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 0.0,
+          "width": 832.0,
+          "height": 183.0
+        },
+        "reading_order": 0,
+        "text": "중등 1학년\n1. 기본도형",
+        "style": {
+          "font_size": 64.05,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.95,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "중등 1학년",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 832.0,
+              "height": 91.5
+            }
+          },
+          {
+            "text": "1. 기본도형",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 91.5,
+              "width": 832.0,
+              "height": 91.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.036439,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2310,
+          "ocr_line_count": 2,
+          "ocr_empty_text": false,
+          "ocr_text_length": 14,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-002",
+        "block_type": "formula",
+        "bbox": {
+          "left": 0.0,
+          "top": 214.0,
+          "width": 819.0,
+          "height": 454.0
+        },
+        "reading_order": 1,
+        "text": "다음 그림에서 두 점 M, N은 각각 \\overline{\\mathrm{AB}}, \\overline{\\mathrm{BC}}의 중점이\n고, \\overline{\\mathrm{MP}}=2 \\overline{\\mathrm{PN}}이다. \\overline{\\mathrm{AB}}=a, \\overline{\\mathrm{BC}}=b\\text{일 때, } \\overline{\\mathrm{PC}}\\text{의 길}\n이를 a, b를 사용하여 나타낸 것은?",
+        "style": {
+          "font_size": 158.89999999999998,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": true
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "다음 그림에서 두 점 M, N은 각각 \\overline{\\mathrm{AB}}, \\overline{\\mathrm{BC}}의 중점이",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 819.0,
+              "height": 151.33333333333334
+            }
+          },
+          {
+            "text": "고, \\overline{\\mathrm{MP}}=2 \\overline{\\mathrm{PN}}이다. \\overline{\\mathrm{AB}}=a, \\overline{\\mathrm{BC}}=b\\text{일 때, } \\overline{\\mathrm{PC}}\\text{의 길}",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 151.33333333333334,
+              "width": 819.0,
+              "height": 151.33333333333334
+            }
+          },
+          {
+            "text": "이를 a, b를 사용하여 나타낸 것은?",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 302.6666666666667,
+              "width": 819.0,
+              "height": 151.33333333333334
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.088988,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2748,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 244,
+          "force_problem_start": true,
+          "problem_start_source": "document_band_prompt",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-003",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 692.0,
+          "width": 826.0,
+          "height": 267.0
+        },
+        "reading_order": 2,
+        "text": "22\n다음 그림과 같은 오각기둥에서 교선의 개수를 a, 교점\n의 개수를 b라 할 때, 2a+b의 값을 구하여라.",
+        "style": {
+          "font_size": 93.44999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "22",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 826.0,
+              "height": 89.0
+            }
+          },
+          {
+            "text": "다음 그림과 같은 오각기둥에서 교선의 개수를 a, 교점",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 89.0,
+              "width": 826.0,
+              "height": 89.0
+            }
+          },
+          {
+            "text": "의 개수를 b라 할 때, 2a+b의 값을 구하여라.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 178.0,
+              "width": 826.0,
+              "height": 89.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.052781,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2301,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 62,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false,
+          "problem_number": 22,
+          "problem_number_source": "ocr_top_left"
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-004",
+        "block_type": "image",
+        "bbox": {
+          "left": 278.0,
+          "top": 962.0,
+          "width": 271.0,
+          "height": 187.0
+        },
+        "reading_order": 3,
+        "text": null,
+        "style": null,
+        "confidence": null,
+        "asset": null,
+        "ocr_lines": [],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 4,
+          "source_band_index": 4,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.012128,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2844,
+          "ocr_line_count": 0,
+          "ocr_empty_text": true,
+          "ocr_text_length": 0,
+          "fallback_reason": "vision_figure_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-005",
+        "block_type": "formula",
+        "bbox": {
+          "left": 0.0,
+          "top": 1285.0,
+          "width": 791.0,
+          "height": 271.0
+        },
+        "reading_order": 4,
+        "text": "다음 그림에서 점 B, C는 \\overline{\\text{AD}}의 삼등분점이다.\n\\overline{\\text{AC}}=6\\text{cm}일 때, \\overline{\\text{AD}}의 길이는 몇 \\text{cm}인지 구하여라.",
+        "style": {
+          "font_size": 94.85,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": true
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "다음 그림에서 점 B, C는 \\overline{\\text{AD}}의 삼등분점이다.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 791.0,
+              "height": 135.5
+            }
+          },
+          {
+            "text": "\\overline{\\text{AC}}=6\\text{cm}일 때, \\overline{\\text{AD}}의 길이는 몇 \\text{cm}인지 구하여라.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 135.5,
+              "width": 791.0,
+              "height": 135.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 5,
+          "source_band_index": 5,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.051302,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2616,
+          "ocr_line_count": 2,
+          "ocr_empty_text": false,
+          "ocr_text_length": 127,
+          "force_problem_start": true,
+          "problem_start_source": "document_band_prompt",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-006",
+        "block_type": "formula",
+        "bbox": {
+          "left": 0.0,
+          "top": 1811.0,
+          "width": 778.0,
+          "height": 204.0
+        },
+        "reading_order": 5,
+        "text": "다음 그림과 같이 ∠BOC = 50° 이고 ∠AOB와\n∠COD가 모두 직각일 때, 색칠한 부분인 ∠AOD의\n크기는 몇 도인지 구하여라.",
+        "style": {
+          "font_size": 71.39999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": true
+        },
+        "confidence": 0.99,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "다음 그림과 같이 ∠BOC = 50° 이고 ∠AOB와",
+            "confidence": 0.99,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 778.0,
+              "height": 68.0
+            }
+          },
+          {
+            "text": "∠COD가 모두 직각일 때, 색칠한 부분인 ∠AOD의",
+            "confidence": 0.99,
+            "bbox": {
+              "left": 0.0,
+              "top": 68.0,
+              "width": 778.0,
+              "height": 68.0
+            }
+          },
+          {
+            "text": "크기는 몇 도인지 구하여라.",
+            "confidence": 0.99,
+            "bbox": {
+              "left": 0.0,
+              "top": 136.0,
+              "width": 778.0,
+              "height": 68.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 6,
+          "source_band_index": 6,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.037984,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2820,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 75,
+          "force_problem_start": true,
+          "problem_start_source": "document_band_prompt",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-007",
+        "block_type": "image",
+        "bbox": {
+          "left": 299.0,
+          "top": 2092.0,
+          "width": 298.0,
+          "height": 133.0
+        },
+        "reading_order": 6,
+        "text": "50°\nO\nD",
+        "style": {
+          "font_size": 46.55,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "50°",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 298.0,
+              "height": 44.333333333333336
+            }
+          },
+          {
+            "text": "O",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 44.333333333333336,
+              "width": 298.0,
+              "height": 44.333333333333336
+            }
+          },
+          {
+            "text": "D",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 88.66666666666667,
+              "width": 298.0,
+              "height": 44.333333333333336
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 7,
+          "source_band_index": 7,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.009485,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2166,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 7,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-008",
+        "block_type": "title",
+        "bbox": {
+          "left": 0.0,
+          "top": 2257.0,
+          "width": 832.0,
+          "height": 131.0
+        },
+        "reading_order": 7,
+        "text": "윤자매 놀이학습",
+        "style": {
+          "font_size": 45.849999999999994,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.99,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "윤자매 놀이학습",
+            "confidence": 0.99,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 832.0,
+              "height": 131.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 1,
+          "question_band_index": 8,
+          "source_band_index": 8,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.026085,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 1975,
+          "ocr_line_count": 1,
+          "ocr_empty_text": false,
+          "ocr_text_length": 8,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-009",
+        "block_type": "title",
+        "bbox": {
+          "left": 902.0,
+          "top": 0.0,
+          "width": 839.0,
+          "height": 254.0
+        },
+        "reading_order": 8,
+        "text": "기 단원평가\n점,선,면,각\n윤자매 놀이학습(fillthevoid82.com)\n25",
+        "style": {
+          "font_size": 88.89999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "기 단원평가",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 839.0,
+              "height": 63.5
+            }
+          },
+          {
+            "text": "점,선,면,각",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 63.5,
+              "width": 839.0,
+              "height": 63.5
+            }
+          },
+          {
+            "text": "윤자매 놀이학습(fillthevoid82.com)",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 127.0,
+              "width": 839.0,
+              "height": 63.5
+            }
+          },
+          {
+            "text": "25",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 190.5,
+              "width": 839.0,
+              "height": 63.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 1,
+          "source_band_index": 1,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.051002,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2395,
+          "ocr_line_count": 4,
+          "ocr_empty_text": false,
+          "ocr_text_length": 45,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-010",
+        "block_type": "stem",
+        "bbox": {
+          "left": 902.0,
+          "top": 209.0,
+          "width": 746.0,
+          "height": 154.0
+        },
+        "reading_order": 9,
+        "text": "다음 그림과 같이 세 직선이 한 점에서 만날 때,\n\\angle y - \\angle x의 크기는 몇 도인지 구하여라.",
+        "style": {
+          "font_size": 53.9,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.99,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "다음 그림과 같이 세 직선이 한 점에서 만날 때,",
+            "confidence": 0.99,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 746.0,
+              "height": 77.0
+            }
+          },
+          {
+            "text": "\\angle y - \\angle x의 크기는 몇 도인지 구하여라.",
+            "confidence": 0.99,
+            "bbox": {
+              "left": 0.0,
+              "top": 77.0,
+              "width": 746.0,
+              "height": 77.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 2,
+          "source_band_index": 2,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.027495,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2658,
+          "ocr_line_count": 2,
+          "ocr_empty_text": false,
+          "ocr_text_length": 64,
+          "force_problem_start": true,
+          "problem_start_source": "document_band_prompt",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-011",
+        "block_type": "image",
+        "bbox": {
+          "left": 1095.0,
+          "top": 426.0,
+          "width": 388.0,
+          "height": 126.0
+        },
+        "reading_order": 10,
+        "text": "x\ny\n85°\n35°",
+        "style": {
+          "font_size": 44.099999999999994,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "x",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 388.0,
+              "height": 31.5
+            }
+          },
+          {
+            "text": "y",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 31.5,
+              "width": 388.0,
+              "height": 31.5
+            }
+          },
+          {
+            "text": "85°",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 63.0,
+              "width": 388.0,
+              "height": 31.5
+            }
+          },
+          {
+            "text": "35°",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 94.5,
+              "width": 388.0,
+              "height": 31.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 3,
+          "source_band_index": 3,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.0117,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2269,
+          "ocr_line_count": 4,
+          "ocr_empty_text": false,
+          "ocr_text_length": 11,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-012",
+        "block_type": "stem",
+        "bbox": {
+          "left": 902.0,
+          "top": 744.0,
+          "width": 806.0,
+          "height": 294.0
+        },
+        "reading_order": 11,
+        "text": "아래 그림과 같이 직선 l 위에 네 점 A, B, C, D가 있\n을 때, 다음 |보기| 중 BC를 포함하는 것은 모두 몇 개\n인지 구하여라.",
+        "style": {
+          "font_size": 102.89999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.95,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "아래 그림과 같이 직선 l 위에 네 점 A, B, C, D가 있",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 806.0,
+              "height": 98.0
+            }
+          },
+          {
+            "text": "을 때, 다음 |보기| 중 BC를 포함하는 것은 모두 몇 개",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 98.0,
+              "width": 806.0,
+              "height": 98.0
+            }
+          },
+          {
+            "text": "인지 구하여라.",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 196.0,
+              "width": 806.0,
+              "height": 98.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 4,
+          "source_band_index": 4,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.056712,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2634,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 78,
+          "force_problem_start": true,
+          "problem_start_source": "document_band_prompt",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-013",
+        "block_type": "choice",
+        "bbox": {
+          "left": 902.0,
+          "top": 1040.0,
+          "width": 801.0,
+          "height": 247.0
+        },
+        "reading_order": 12,
+        "text": "|보기|\n\\vec{AD}, \\vec{BD}, \\overline{CA}, \\vec{DB}, \\overleftrightarrow{AB}\n\\overline{DB}, \\overline{AC}, \\overline{AD}, \\vec{CA}, \\overline{DA}",
+        "style": {
+          "font_size": 86.44999999999999,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.95,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "|보기|",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 801.0,
+              "height": 82.33333333333333
+            }
+          },
+          {
+            "text": "\\vec{AD}, \\vec{BD}, \\overline{CA}, \\vec{DB}, \\overleftrightarrow{AB}",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 82.33333333333333,
+              "width": 801.0,
+              "height": 82.33333333333333
+            }
+          },
+          {
+            "text": "\\overline{DB}, \\overline{AC}, \\overline{AD}, \\vec{CA}, \\overline{DA}",
+            "confidence": 0.95,
+            "bbox": {
+              "left": 0.0,
+              "top": 164.66666666666666,
+              "width": 801.0,
+              "height": 82.33333333333333
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 5,
+          "source_band_index": 5,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.04735,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2352,
+          "ocr_line_count": 3,
+          "ocr_empty_text": false,
+          "ocr_text_length": 142,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-014",
+        "block_type": "stem",
+        "bbox": {
+          "left": 902.0,
+          "top": 1808.0,
+          "width": 806.0,
+          "height": 346.0
+        },
+        "reading_order": 13,
+        "text": "다음 그림과 같이 직선 l 위에 있는 네 점 A, B, C, D\n중 두 점을 이어 만들 수 있는 서로 다른 직선의 개수를\nx, 점 C를 지나는 반직선의 개수를 y, 선분의 개수를 z\n라 할 때, x + y + z의 값을 구하여라.",
+        "style": {
+          "font_size": 121.1,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.98,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "다음 그림과 같이 직선 l 위에 있는 네 점 A, B, C, D",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 806.0,
+              "height": 86.5
+            }
+          },
+          {
+            "text": "중 두 점을 이어 만들 수 있는 서로 다른 직선의 개수를",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 86.5,
+              "width": 806.0,
+              "height": 86.5
+            }
+          },
+          {
+            "text": "x, 점 C를 지나는 반직선의 개수를 y, 선분의 개수를 z",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 173.0,
+              "width": 806.0,
+              "height": 86.5
+            }
+          },
+          {
+            "text": "라 할 때, x + y + z의 값을 구하여라.",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 259.5,
+              "width": 806.0,
+              "height": 86.5
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 6,
+          "source_band_index": 6,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.066742,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2408,
+          "ocr_line_count": 4,
+          "ocr_empty_text": false,
+          "ocr_text_length": 128,
+          "force_problem_start": true,
+          "problem_start_source": "document_band_prompt",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      },
+      {
+        "block_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-015",
+        "block_type": "explanation",
+        "bbox": {
+          "left": 902.0,
+          "top": 2262.0,
+          "width": 839.0,
+          "height": 126.0
+        },
+        "reading_order": 14,
+        "text": "hevoid82.com)",
+        "style": {
+          "font_size": 44.099999999999994,
+          "weight": null,
+          "italic": false,
+          "color": null,
+          "align": null,
+          "math_like": false
+        },
+        "confidence": 0.9,
+        "asset": null,
+        "ocr_lines": [
+          {
+            "text": "hevoid82.com)",
+            "confidence": 0.9,
+            "bbox": {
+              "left": 0.0,
+              "top": 0.0,
+              "width": 839.0,
+              "height": 126.0
+            }
+          }
+        ],
+        "labels": [],
+        "children": [],
+        "metadata": {
+          "segmenter": "document-bands",
+          "column_index": 2,
+          "question_band_index": 7,
+          "source_band_index": 7,
+          "split_from_band": false,
+          "band_split_index": 1,
+          "band_split_count": 1,
+          "grid_balance_split": false,
+          "segmentation_mode": "document",
+          "page_area_px": 4178400,
+          "block_area_ratio": 0.0253,
+          "large_block": false,
+          "ocr_stage": "primary_ocr",
+          "ocr_primary_backend": "gemini",
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
+          "ocr_backend": "gemini",
+          "ocr_latency_ms": 2633,
+          "ocr_line_count": 1,
+          "ocr_empty_text": false,
+          "ocr_text_length": 13,
+          "block_type_source": "vision_hint",
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_conflict": false
+        }
+      }
+    ],
+    "problems": [
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-1",
+        "subject": "korean",
+        "title": "다음 그림에서 두 점 M, N은 각각 \\overline{\\mathrm{AB}}, \\overline{\\mathrm{BC}}의 중점이\n고, \\overline{\\mathrm{MP}}=2 \\overline{\\mathrm{PN}}이다. \\overline{\\mathrm{AB}}=a, \\overline{\\mathrm{BC}}=b\\text{일 때, } \\overline{\\mathrm{PC}}\\text{의 길}\n이를 a, b를 사용하여 나타낸 것은?",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-002"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 1,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 21
+        }
+      },
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-2",
+        "subject": "korean",
+        "title": "22\n다음 그림과 같은 오각기둥에서 교선의 개수를 a, 교점\n의 개수를 b라 할 때, 2a+b의 값을 구하여라.",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-003"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-004"
+        ],
+        "metadata": {
+          "problem_number": 22,
+          "problem_number_source": "ocr_top_left",
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 2,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          }
+        }
+      },
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-3",
+        "subject": "korean",
+        "title": "다음 그림에서 점 B, C는 \\overline{\\text{AD}}의 삼등분점이다.\n\\overline{\\text{AC}}=6\\text{cm}일 때, \\overline{\\text{AD}}의 길이는 몇 \\text{cm}인지 구하여라.",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-005"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 3,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 23
+        }
+      },
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-4",
+        "subject": "korean",
+        "title": "다음 그림과 같이 ∠BOC = 50° 이고 ∠AOB와\n∠COD가 모두 직각일 때, 색칠한 부분인 ∠AOD의\n크기는 몇 도인지 구하여라.",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-006"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-007"
+        ],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 4,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 24
+        }
+      },
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-5",
+        "subject": "korean",
+        "title": "다음 그림과 같이 세 직선이 한 점에서 만날 때,\n\\angle y - \\angle x의 크기는 몇 도인지 구하여라.",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-010"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-011"
+        ],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 5,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 25
+        }
+      },
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-6",
+        "subject": "korean",
+        "title": "아래 그림과 같이 직선 l 위에 네 점 A, B, C, D가 있\n을 때, 다음 |보기| 중 BC를 포함하는 것은 모두 몇 개\n인지 구하여라.",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-012"
+        ],
+        "choice_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-013"
+        ],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 6,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 26
+        }
+      },
+      {
+        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-7",
+        "subject": "korean",
+        "title": "다음 그림과 같이 직선 l 위에 있는 네 점 A, B, C, D\n중 두 점을 이어 만들 수 있는 서로 다른 직선의 개수를\nx, 점 C를 지나는 반직선의 개수를 y, 선분의 개수를 z\n라 할 때, x + y + z의 값을 구하여라.",
+        "stem_block_ids": [
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-014"
+        ],
+        "choice_block_ids": [],
+        "explanation_block_ids": [],
+        "figure_block_ids": [],
+        "metadata": {
+          "grouping_mode": "marker",
+          "grouping_source": "marker_grouping",
+          "grouping_index": 7,
+          "marker_conflict": false,
+          "problem_marker": false,
+          "choice_marker": false,
+          "problem_number_source": null,
+          "marker_counts": {
+            "problem_marker": 0,
+            "choice_marker": 0,
+            "marker_conflict": 0
+          },
+          "problem_number": 27
+        }
+      }
+    ],
+    "metadata": {
+      "source_type": "image",
+      "perspective_corrected": false,
+      "deskewed": true,
+      "margin_crop_box": {
+        "left": 60,
+        "top": 124,
+        "right": 2956,
+        "bottom": 4116
+      },
+      "margin_cropped": true,
+      "resized_to_max_dimension": 2400,
+      "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2.jpg",
+      "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001.png",
+      "segmenter": "document-bands",
+      "content_box": {
+        "left": 0.0,
+        "top": 0.0,
+        "width": 1741.0,
+        "height": 2400.0
+      },
+      "column_count": 2,
+      "document_band_split_count": 0,
+      "document_column_balance_split_count": 0,
+      "document_continuation_merge_count": 0,
+      "document_grid_row_alignment_count": 0,
+      "document_terminal_tail_extension_count": 0,
+      "document_row_band_count": 15,
+      "document_split_block_count": 15,
+      "document_split_applied": false,
+      "content_box_area_ratio": 1.0,
+      "segmentation_mode": "document",
+      "page_area_px": 4178400,
+      "block_count": 15,
+      "text_block_count": 0,
+      "image_block_count": 0,
+      "large_block_threshold": 0.18,
+      "large_block_count": 0,
+      "large_block_ratio": 0.0,
+      "max_block_area_ratio": 0.088988,
+      "mean_block_area_ratio": 0.0401,
+      "fallback_reasons": [],
+      "fallback_reason": null,
+      "fallback_reason_count": 0,
+      "has_fallback_reason": false,
+      "segmentation_stats": {
+        "segmenter": "document-bands",
+        "segmentation_mode": "document",
+        "page_area_px": 4178400,
+        "block_count": 15,
+        "text_block_count": 0,
+        "image_block_count": 0,
+        "large_block_threshold": 0.18,
+        "large_block_count": 0,
+        "large_block_ratio": 0.0,
+        "max_block_area_ratio": 0.088988,
+        "mean_block_area_ratio": 0.0401,
+        "fallback_reasons": []
+      },
+      "ocr_mode": "auto",
+      "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/.pipeline_cache",
+      "recognition_timing_ms": {
+        "segmentation": 73,
+        "block_ocr": 13345,
+        "total_before_repair": 13418
+      },
+      "ocr_block_worker_count": 3,
+      "ocr_eligible_block_count": 15,
+      "ocr_skipped_block_count": 0,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 15,
+      "ocr_escalation_attempted_block_count": 0,
+      "ocr_escalation_cache_hit_count": 0,
+      "ocr_escalated_block_count": 0,
+      "ai_stages": {
+        "ocr": {
+          "stage": "ocr",
+          "order": 1,
+          "label": "1단계 OCR 인식",
+          "status": "used",
+          "provider": "gemini",
+          "ai_powered": true,
+          "eligible_block_count": 15,
+          "processed_block_count": 15,
+          "api_call_block_count": 15,
+          "cache_hit_count": 0,
+          "cache_miss_count": 15,
+          "skipped_block_count": 0
+        },
+        "ocr_escalation": {
+          "stage": "ocr_escalation",
+          "order": 2,
+          "label": "2단계 블록 보강",
+          "status": "skipped",
+          "provider": "gemini",
+          "ai_powered": true,
+          "enabled": false,
+          "attempted_block_count": 0,
+          "applied_block_count": 0,
+          "cache_hit_count": 0
+        },
+        "page_repair": {
+          "stage": "page_repair",
+          "order": 3,
+          "label": "3단계 문항 경계 보정",
+          "status": "not_needed",
+          "provider": "gemini",
+          "model": "gemini-3.1-pro-preview",
+          "model_used": "gemini-3.1-pro-preview",
+          "enabled": true,
+          "attempted": false,
+          "applied": false,
+          "cache_hit": false,
+          "route": "local_only",
+          "route_tier": "green"
+        }
+      },
+      "grouping_diagnostics": {
+        "grouping_mode": "marker",
+        "grouping_source": "marker_grouping",
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "has_text_markers": true,
+        "has_band_metadata": true,
+        "block_count": 15,
+        "problem_count": 7,
+        "fallback_grouping": false,
+        "fallback_grouping_stats": {
+          "used": false,
+          "trigger_reasons": [
+            "text_markers_detected"
+          ],
+          "block_count": 15,
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "fallback_reason_block_count": 1,
+          "problem_count": 7
+        },
+        "marker_counts": {
+          "problem_marker_block_count": 0,
+          "choice_marker_block_count": 0,
+          "marker_conflict_block_count": 0,
+          "forced_problem_start_block_count": 6,
+          "problem_number_block_count": 1,
+          "excess_problem_marker_block_count": 0,
+          "excess_problem_marker_total": 0
+        },
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0,
+        "problem_number_source_counts": {
+          "ocr_top_left": 1
+        },
+        "block_diagnostics": [
+          {
+            "raw_text_marker_source": "중등 1학년\n1. 기본도형",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "다음 그림에서 두 점 M, N은 각각 \\overline{\\mathrm{AB}}, \\overline{\\mathrm{BC}}의 중점이\n고, \\overline{\\mathrm{MP}}=2 \\overline{\\mathrm{PN}}이다. \\overline{\\mathrm{AB}}=a, \\overline{\\mathrm{BC}}=b\\text{일 때, } \\overline{\\mathrm{PC}}\\text{의 길}\n이를 a, b를 사용하여 나타낸 것은?",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "22\n다음 그림과 같은 오각기둥에서 교선의 개수를 a, 교점\n의 개수를 b라 할 때, 2a+b의 값을 구하여라.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": 22,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [
+              22
+            ],
+            "internal_problem_marker_count": 1,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": null,
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": "vision_figure_hint",
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "다음 그림에서 점 B, C는 \\overline{\\text{AD}}의 삼등분점이다.\n\\overline{\\text{AC}}=6\\text{cm}일 때, \\overline{\\text{AD}}의 길이는 몇 \\text{cm}인지 구하여라.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "다음 그림과 같이 ∠BOC = 50° 이고 ∠AOB와\n∠COD가 모두 직각일 때, 색칠한 부분인 ∠AOD의\n크기는 몇 도인지 구하여라.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "50°\nO\nD",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "윤자매 놀이학습",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "기 단원평가\n점,선,면,각\n윤자매 놀이학습(fillthevoid82.com)\n25",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "다음 그림과 같이 세 직선이 한 점에서 만날 때,\n\\angle y - \\angle x의 크기는 몇 도인지 구하여라.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "x\ny\n85°\n35°",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "아래 그림과 같이 직선 l 위에 네 점 A, B, C, D가 있\n을 때, 다음 |보기| 중 BC를 포함하는 것은 모두 몇 개\n인지 구하여라.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "|보기|\n\\vec{AD}, \\vec{BD}, \\overline{CA}, \\vec{DB}, \\overleftrightarrow{AB}\n\\overline{DB}, \\overline{AC}, \\overline{AD}, \\vec{CA}, \\overline{DA}",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "다음 그림과 같이 직선 l 위에 있는 네 점 A, B, C, D\n중 두 점을 이어 만들 수 있는 서로 다른 직선의 개수를\nx, 점 C를 지나는 반직선의 개수를 y, 선분의 개수를 z\n라 할 때, x + y + z의 값을 구하여라.",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": true,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          },
+          {
+            "raw_text_marker_source": "hevoid82.com)",
+            "display_title_marker_source": null,
+            "problem_marker": false,
+            "choice_marker": false,
+            "problem_number": null,
+            "problem_number_source": null,
+            "force_problem_start": false,
+            "marker_conflict": false,
+            "fallback_reason": null,
+            "display_title_present": false,
+            "internal_problem_markers": [],
+            "internal_problem_marker_count": 0,
+            "excess_problem_marker_count": 0
+          }
+        ],
+        "problem_number_source": "ocr_top_left"
+      },
+      "grouping_source": "marker_grouping",
+      "grouping_mode": "marker",
+      "marker_counts": {
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "forced_problem_start_block_count": 6,
+        "problem_number_block_count": 1,
+        "excess_problem_marker_block_count": 0,
+        "excess_problem_marker_total": 0
+      },
+      "fallback_grouping_stats": {
+        "used": false,
+        "trigger_reasons": [
+          "text_markers_detected"
+        ],
+        "block_count": 15,
+        "problem_marker_block_count": 0,
+        "choice_marker_block_count": 0,
+        "marker_conflict_block_count": 0,
+        "fallback_reason_block_count": 1,
+        "problem_count": 7
+      },
+      "problem_number_source_counts": {
+        "ocr_top_left": 1
+      },
+      "difficulty_profile": {
+        "page_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001",
+        "segmentation_risk": 0.0,
+        "ocr_risk": 0.0,
+        "grouping_risk": 0.0,
+        "overall_risk": 0.0,
+        "tier": "green",
+        "reasons": [],
+        "diagnostics": {
+          "segmentation": {
+            "segmenter": "document-bands",
+            "segmentation_mode": "document",
+            "block_count": 15,
+            "large_block_count": 0,
+            "large_block_ratio": 0.0,
+            "fallback_reasons": [],
+            "content_box_area_ratio": 1.0,
+            "board_region_area_ratio": 0.0,
+            "document_split_block_count": 15,
+            "document_split_applied": false,
+            "candidate_count": 0,
+            "expanded_candidate_count": 0,
+            "merged_candidate_count": 0,
+            "max_block_area_ratio": 0.088988,
+            "pdf_text_marker_count": 0,
+            "pdf_text_markers_reliable": null
+          },
+          "ocr": {
+            "ocr_mode": "auto",
+            "text_block_count": 12,
+            "empty_text_block_count": 0,
+            "empty_text_ratio": 0.0,
+            "low_confidence_block_count": 0,
+            "low_confidence_ratio": 0.0,
+            "avg_confidence": 0.9616666666666666,
+            "recognized_line_count": 38,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 15,
+            "backend_counts": {
+              "gemini": 15
+            },
+            "backend_latency_ms_avg": 2475.266666666667,
+            "all_text_from_trusted_pdf_markers": false
+          },
+          "grouping": {
+            "segmenter": "document-bands",
+            "grouping_source": "marker_grouping",
+            "grouping_mode": "marker",
+            "problem_count": 7,
+            "block_count": 15,
+            "problem_marker_count": 7,
+            "choice_marker_count": 0,
+            "marker_conflict_count": 0,
+            "fallback_grouping_problem_count": 0,
+            "problem_number_source_counts": {
+              "ocr_top_left": 1
+            },
+            "excess_problem_marker_block_count": 0,
+            "excess_problem_marker_total": 0
+          }
+        }
+      },
+      "route_decision": {
+        "page_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001",
+        "route": "local_only",
+        "should_use_ai": false,
+        "next_best_action": null,
+        "quality_status": "trusted",
+        "recommended_action": "skip_ai",
+        "trigger_reasons": [],
+        "profile": {
+          "page_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001",
+          "segmentation_risk": 0.0,
+          "ocr_risk": 0.0,
+          "grouping_risk": 0.0,
+          "overall_risk": 0.0,
+          "tier": "green",
+          "reasons": [],
+          "diagnostics": {
+            "segmentation": {
+              "segmenter": "document-bands",
+              "segmentation_mode": "document",
+              "block_count": 15,
+              "large_block_count": 0,
+              "large_block_ratio": 0.0,
+              "fallback_reasons": [],
+              "content_box_area_ratio": 1.0,
+              "board_region_area_ratio": 0.0,
+              "document_split_block_count": 15,
+              "document_split_applied": false,
+              "candidate_count": 0,
+              "expanded_candidate_count": 0,
+              "merged_candidate_count": 0,
+              "max_block_area_ratio": 0.088988,
+              "pdf_text_marker_count": 0,
+              "pdf_text_markers_reliable": null
+            },
+            "ocr": {
+              "ocr_mode": "auto",
+              "text_block_count": 12,
+              "empty_text_block_count": 0,
+              "empty_text_ratio": 0.0,
+              "low_confidence_block_count": 0,
+              "low_confidence_ratio": 0.0,
+              "avg_confidence": 0.9616666666666666,
+              "recognized_line_count": 38,
+              "ocr_cache_hit_count": 0,
+              "ocr_cache_miss_count": 15,
+              "backend_counts": {
+                "gemini": 15
+              },
+              "backend_latency_ms_avg": 2475.266666666667,
+              "all_text_from_trusted_pdf_markers": false
+            },
+            "grouping": {
+              "segmenter": "document-bands",
+              "grouping_source": "marker_grouping",
+              "grouping_mode": "marker",
+              "problem_count": 7,
+              "block_count": 15,
+              "problem_marker_count": 7,
+              "choice_marker_count": 0,
+              "marker_conflict_count": 0,
+              "fallback_grouping_problem_count": 0,
+              "problem_number_source_counts": {
+                "ocr_top_left": 1
+              },
+              "excess_problem_marker_block_count": 0,
+              "excess_problem_marker_total": 0
+            }
+          }
+        }
+      },
+      "ai_fallback": {
+        "enabled": true,
+        "mode": "auto",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "max_tokens": 4096,
+        "ocr_mode": "auto",
+        "attempted": false,
+        "applied": false,
+        "cache_hit": false,
+        "status": "not_needed",
+        "route": "local_only",
+        "route_tier": "green",
+        "trigger_reasons": [],
+        "baseline_problem_count": 7,
+        "baseline_block_count": 15,
+        "stage": "page_repair",
+        "stage_label": "3단계 문항 경계 보정"
+      },
+      "recognition_page_worker_count": 1
+    }
+  }
+]
