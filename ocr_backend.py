@@ -17,6 +17,7 @@ from structured_schema import Box
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_OCR_MODEL = "gemini-3.1-pro-preview"
+GEMINI_OCR_MODEL_ENV = "EDB_GEMINI_OCR_MODEL"
 FALLBACK_GEMINI_OCR_MODEL = "gemini-2.5-pro"
 DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview"}
 
@@ -72,7 +73,16 @@ _OCR_UPSCALE_CAP = 3.0
 _OCR_CROP_PADDING_PX = 6
 
 
+def resolve_gemini_ocr_model(model: str | None = None) -> str:
+    requested = (model or "").strip()
+    if requested:
+        return requested
+    env_model = os.environ.get(GEMINI_OCR_MODEL_ENV, "").strip()
+    return env_model or DEFAULT_GEMINI_OCR_MODEL
+
+
 def _gemini_model_candidates(primary: str) -> list[str]:
+    primary = resolve_gemini_ocr_model(primary)
     candidates = [primary]
     if (
         primary == DEFAULT_GEMINI_OCR_MODEL
@@ -85,10 +95,53 @@ def _gemini_model_candidates(primary: str) -> list[str]:
 
 
 def _is_retryable_gemini_error(exc: Exception) -> bool:
+    if _is_fatal_gemini_error(exc):
+        return False
     if not isinstance(exc, urllib.error.HTTPError):
         return True
     status_code = int(exc.code)
     return status_code in {408, 409, 425, 429} or status_code >= 500
+
+
+def _format_gemini_error(exc: Exception) -> str:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return str(exc)
+    body = getattr(exc, "_edb_response_body", None)
+    if body is None:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        try:
+            setattr(exc, "_edb_response_body", body)
+        except Exception:
+            pass
+    if body:
+        return f"Gemini request failed with HTTP {exc.code}: {body}"
+    return str(exc)
+
+
+def _is_fatal_gemini_error(exc: Exception) -> bool:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return False
+    status_code = int(exc.code)
+    message = _format_gemini_error(exc).lower()
+    if status_code in {400, 401, 403}:
+        return True
+    if status_code == 429 and any(
+        marker in message
+        for marker in (
+            "api_key_invalid",
+            "api key not found",
+            "billing",
+            "credits are depleted",
+            "prepayment",
+            "quota",
+            "resource_exhausted",
+        )
+    ):
+        return True
+    return False
 
 
 def _prep_crop_for_ocr(image: Image.Image) -> Image.Image:
@@ -367,13 +420,13 @@ class GeminiOCRBackend(OCRBackend):
     def __init__(
         self,
         *,
-        model: str = DEFAULT_GEMINI_OCR_MODEL,
+        model: str | None = None,
         api_key: str | None = None,
         timeout_ms: int = 15000,
         max_tokens: int = 1024,
         max_retries: int = 1,
     ) -> None:
-        self.model = model
+        self.model = resolve_gemini_ocr_model(model)
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY environment variable is required for GeminiOCRBackend")
@@ -463,10 +516,11 @@ class GeminiOCRBackend(OCRBackend):
                 {
                     "model": used_model,
                     "status": "error",
-                    "error": str(last_exc) if last_exc else "no response",
+                    "error": _format_gemini_error(last_exc) if last_exc else "no response",
                 }
             )
-            for fallback_model in model_candidates[1:]:
+            fallback_models = [] if last_exc and _is_fatal_gemini_error(last_exc) else model_candidates[1:]
+            for fallback_model in fallback_models:
                 used_model = fallback_model
                 url = f"{GEMINI_API_BASE}/{used_model}:generateContent?key={self.api_key}"
                 last_exc = None
@@ -489,7 +543,7 @@ class GeminiOCRBackend(OCRBackend):
                     {
                         "model": used_model,
                         "status": "error",
-                        "error": str(last_exc) if last_exc else "no response",
+                        "error": _format_gemini_error(last_exc) if last_exc else "no response",
                     }
                 )
         else:
@@ -507,7 +561,7 @@ class GeminiOCRBackend(OCRBackend):
                     text="",
                     confidence=None,
                     lines=[],
-                    error=str(last_exc) if last_exc else "no response",
+                    error=_format_gemini_error(last_exc) if last_exc else "no response",
                     extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
                 ),
             )
@@ -628,7 +682,8 @@ def _tesseract_binary_available() -> bool:
 
 
 def build_ocr_backend(name: str = "auto") -> OCRBackend:
-    normalized = name.lower()
+    raw_name = (name or "auto").strip()
+    normalized = raw_name.lower()
     if normalized in {"none", "noop"}:
         return NoOcrBackend()
     if normalized in {"paddle", "paddleocr"}:
@@ -639,6 +694,8 @@ def build_ocr_backend(name: str = "auto") -> OCRBackend:
         # 'claude'/'anthropic' kept as aliases for transitional configs; both
         # resolve to the Gemini backend now.
         return GeminiOCRBackend()
+    if normalized.startswith("gemini-"):
+        return GeminiOCRBackend(model=raw_name)
 
     # --- auto selection: Korean exam pages with diagrams and math need a
     # vision-language model to read reliably, so prefer Gemini when an API

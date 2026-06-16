@@ -443,6 +443,8 @@ def _request_ai_repair_with_model_fallback(
         except Exception as exc:
             last_exc = exc
             attempts.append({"model": model, "status": "error", "error": str(exc)})
+            if _is_fatal_ai_repair_error(exc):
+                break
     raise RuntimeError(f"AI repair failed after model fallback: {last_exc}") from last_exc
 
 
@@ -475,12 +477,36 @@ def _request_ai_repair_with_retry(
 
 
 def _is_retryable_ai_repair_error(exc: Exception) -> bool:
+    if _is_fatal_ai_repair_error(exc):
+        return False
     message = str(exc)
     match = re.search(r"HTTP\s+(\d{3})", message)
     if not match:
         return True
     status_code = int(match.group(1))
     return status_code in {408, 409, 425, 429} or status_code >= 500
+
+
+def _is_fatal_ai_repair_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    match = re.search(r"http\s+(\d{3})", message)
+    status_code = int(match.group(1)) if match else None
+    if status_code in {400, 401, 403}:
+        return True
+    if status_code == 429 and any(
+        marker in message
+        for marker in (
+            "api_key_invalid",
+            "api key not found",
+            "billing",
+            "credits are depleted",
+            "prepayment",
+            "quota",
+            "resource_exhausted",
+        )
+    ):
+        return True
+    return False
 
 
 def _request_gemini_repair(

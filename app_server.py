@@ -3879,7 +3879,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def _handle_latest_session(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
         if session is None:
-            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            self._send_json({"ok": True, "session": None})
             return
         _refresh_session_problem_counts(session)
         self.app_server.latest_session = session

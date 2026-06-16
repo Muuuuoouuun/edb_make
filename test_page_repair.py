@@ -165,6 +165,61 @@ class TestPageRepairConfig(unittest.TestCase):
         self.assertTrue(any("gemini-3.1-pro-preview" in url for url in urls))
         self.assertTrue(any("gemini-2.5-pro" in url for url in urls))
 
+    def test_quota_exhausted_error_does_not_retry_or_fallback(self):
+        urls = []
+        sleep_calls = []
+
+        def fake_post_json(url, payload, *, headers, timeout_ms):
+            urls.append(url)
+            raise RuntimeError(
+                'Gemini request failed with HTTP 429: {"error":{"status":"RESOURCE_EXHAUSTED",'
+                '"message":"Your prepayment credits are depleted."}}'
+            )
+
+        prepared_page = PreparedPage(
+            page_id="page-1",
+            source_path="sample.png",
+            page_number=1,
+            image=Image.new("RGB", (100, 120), "white"),
+            original_size=(100, 120),
+        )
+        page = PageModel(
+            page_id="page-1",
+            width_px=100,
+            height_px=120,
+            subject=Subject.SCIENCE,
+            blocks=[
+                ContentBlock(
+                    block_id="block-1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=0, top=0, width=80, height=40),
+                    reading_order=0,
+                    text="1. 문제",
+                )
+            ],
+        )
+        config = build_ai_fallback_config(mode="force", timeout_ms=1000)
+
+        with patch.object(page_repair, "_image_to_base64", return_value="encoded-image"):
+            with patch.object(page_repair, "_post_json", side_effect=fake_post_json):
+                with patch.object(
+                    page_repair.time,
+                    "sleep",
+                    side_effect=lambda seconds: sleep_calls.append(seconds),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "RESOURCE_EXHAUSTED"):
+                        page_repair._request_ai_repair_with_model_fallback(
+                            prepared_page=prepared_page,
+                            page=page,
+                            config=config,
+                            trigger_reasons=["forced"],
+                            api_key="test-key",
+                        )
+
+        self.assertEqual([], sleep_calls)
+        self.assertEqual(1, sum("gemini-3.1-pro-preview" in url for url in urls))
+        self.assertFalse(any("gemini-2.5-pro" in url for url in urls))
+
     def test_repair_uses_fallback_model_cache_before_api_key_check(self):
         repair_payload = {
             "problem_start_block_ids": ["block-1"],

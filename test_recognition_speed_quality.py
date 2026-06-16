@@ -525,6 +525,7 @@ def test_gemini_ocr_model_not_found_falls_back_without_retry_sleep(monkeypatch):
         lambda seconds: sleep_calls.append(seconds),
     )
 
+    monkeypatch.delenv(ocr_backend.GEMINI_OCR_MODEL_ENV, raising=False)
     backend = ocr_backend.GeminiOCRBackend(api_key="test-key", max_retries=1)
     result = backend.recognize(Image.new("RGB", (240, 120), "white"))
 
@@ -533,6 +534,124 @@ def test_gemini_ocr_model_not_found_falls_back_without_retry_sleep(monkeypatch):
     assert sum("gemini-3.1-pro-preview" in url for url in urls) == 1
     assert any("gemini-2.5-pro" in url for url in urls)
     assert result.metadata["model"] == "gemini-2.5-pro"
+
+
+def test_gemini_ocr_quota_error_does_not_retry_or_fallback(monkeypatch):
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    from PIL import Image
+
+    import ocr_backend
+
+    urls = []
+    sleep_calls = []
+    error_body = (
+        b'{"error":{"status":"RESOURCE_EXHAUSTED",'
+        b'"message":"Your prepayment credits are depleted."}}'
+    )
+
+    def fake_urlopen(req, timeout):
+        urls.append(req.full_url)
+        raise HTTPError(
+            req.full_url,
+            429,
+            "quota exhausted",
+            hdrs=None,
+            fp=BytesIO(error_body),
+        )
+
+    monkeypatch.setattr(ocr_backend.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        ocr_backend.time,
+        "sleep",
+        lambda seconds: sleep_calls.append(seconds),
+    )
+
+    monkeypatch.delenv(ocr_backend.GEMINI_OCR_MODEL_ENV, raising=False)
+    backend = ocr_backend.GeminiOCRBackend(api_key="test-key", max_retries=1)
+    result = backend.recognize(Image.new("RGB", (240, 120), "white"))
+
+    assert result.text == ""
+    assert sleep_calls == []
+    assert sum("gemini-3.1-pro-preview" in url for url in urls) == 1
+    assert not any("gemini-2.5-pro" in url for url in urls)
+    assert "RESOURCE_EXHAUSTED" in result.metadata["error"]
+    assert result.metadata["model_attempts"] == [
+        {
+            "model": "gemini-3.1-pro-preview",
+            "status": "error",
+            "error": (
+                'Gemini request failed with HTTP 429: {"error":{"status":"RESOURCE_EXHAUSTED",'
+                '"message":"Your prepayment credits are depleted."}}'
+            ),
+        }
+    ]
+
+
+def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
+    import json
+    from PIL import Image
+
+    import ocr_backend
+
+    urls: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            response_text = json.dumps(
+                {
+                    "text": "빠른 인식",
+                    "block_type": "stem",
+                    "confidence": 0.91,
+                    "lines": ["빠른 인식"],
+                },
+                ensure_ascii=False,
+            )
+            return json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [{"text": response_text}],
+                            }
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        urls.append(req.full_url)
+        return FakeResponse()
+
+    monkeypatch.setenv(ocr_backend.GEMINI_OCR_MODEL_ENV, "gemini-3.5-flash")
+    monkeypatch.setattr(ocr_backend.urllib.request, "urlopen", fake_urlopen)
+
+    backend = ocr_backend.GeminiOCRBackend(api_key="test-key", max_retries=0)
+    result = backend.recognize(Image.new("RGB", (240, 120), "white"))
+
+    assert backend.model == "gemini-3.5-flash"
+    assert result.text == "빠른 인식"
+    assert result.metadata["model"] == "gemini-3.5-flash"
+    assert any("gemini-3.5-flash" in url for url in urls)
+    assert not any("gemini-2.5-pro" in url for url in urls)
+
+
+def test_explicit_gemini_model_name_builds_matching_backend(monkeypatch):
+    import ocr_backend
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    backend = ocr_backend.create_ocr_backend("gemini-3.5-flash")
+
+    assert isinstance(backend, ocr_backend.GeminiOCRBackend)
+    assert backend.model == "gemini-3.5-flash"
 
 
 def test_page_model_records_recognition_timing_metadata_before_repair(

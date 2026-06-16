@@ -1864,6 +1864,24 @@ class TestSystemOpenTargets(unittest.TestCase):
             mock_history.assert_called_once_with(session)
             self.assertTrue(responses[0][0]["ok"])
 
+    def test_latest_session_empty_state_returns_ok_null(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = type("FakeServer", (), {
+            "latest_session": None,
+            "allowed_files": set(),
+        })()
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        with (
+            patch.object(app_server, "load_latest_session", return_value=None),
+            patch.object(app_server, "remember_session_history") as mock_history,
+        ):
+            handler._handle_latest_session()
+
+        mock_history.assert_not_called()
+        self.assertEqual([({"ok": True, "session": None}, {})], responses)
+
     def test_session_clear_removes_latest_session_and_history_files(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
