@@ -202,6 +202,14 @@ def _normalization_identity(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _page_metadata_for_output(metadata: dict[str, Any]) -> dict[str, Any]:
+    output_metadata = dict(metadata)
+    pdf_text_lines = output_metadata.pop("pdf_text_lines", None)
+    if isinstance(pdf_text_lines, list):
+        output_metadata["pdf_text_line_count"] = len(pdf_text_lines)
+    return output_metadata
+
+
 def _build_ocr_cache_identity(
     prepared_page: PreparedPage,
     block: ContentBlock,
@@ -578,7 +586,7 @@ def build_page_model(
         source_path=prepared_page.source_path,
         blocks=blocks,
         metadata={
-            **dict(prepared_page.metadata),
+            **_page_metadata_for_output(dict(prepared_page.metadata)),
             **dict(segmented_page.metadata),
             "ocr_mode": ocr_mode,
             "pipeline_cache_dir": str(pipeline_cache.root_dir),

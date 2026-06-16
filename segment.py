@@ -63,6 +63,7 @@ SEGMENTATION_MODE_DOCUMENT = "document"
 LARGE_BLOCK_AREA_RATIO = 0.18
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX = 3.0
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO = 0.001
+PDF_CHOICE_MARKERS = ("①", "②", "③", "④", "⑤")
 
 
 def _pil_to_gray_array(image: Image.Image):
@@ -700,6 +701,68 @@ def _column_bounds_from_marker_columns(
     return [(0.0, split_x), (split_x, float(page_width))]
 
 
+def _marker_center_x(marker: dict[str, Any]) -> float | None:
+    box = _marker_bbox(marker)
+    if box is None:
+        return None
+    return (box.left + box.right) / 2.0
+
+
+def _detect_pdf_visual_column_boxes(image: Image.Image) -> list[Box]:
+    mask = _dark_mask(image, threshold=220)
+    content_box = _find_document_content_box(mask, image.width, image.height)
+    columns = _detect_document_columns(mask, content_box, SegmentOptions())
+    if len(columns) != 2:
+        full_page_split_x = _detect_document_separator_split_x(
+            _column_dark_projection(mask),
+            image.width,
+            image.height,
+        )
+        if full_page_split_x is None:
+            return []
+        return [
+            Box.from_points(0.0, 0.0, float(full_page_split_x), float(image.height)),
+            Box.from_points(float(full_page_split_x), 0.0, float(image.width), float(image.height)),
+        ]
+    if any(column.width < float(image.width) * 0.2 for column in columns):
+        return []
+    return sorted(columns, key=lambda column: column.left)
+
+
+def _assign_pdf_marker_columns(
+    image: Image.Image,
+    markers: list[dict[str, Any]],
+) -> tuple[list[tuple[int, list[dict[str, Any]], tuple[float, float]]], int, bool]:
+    visual_columns = _detect_pdf_visual_column_boxes(image)
+    if len(visual_columns) == 2:
+        boundary_x = (visual_columns[0].right + visual_columns[1].left) / 2.0
+        grouped: list[list[dict[str, Any]]] = [[], []]
+        for marker in markers:
+            center_x = _marker_center_x(marker)
+            if center_x is None:
+                continue
+            column_index = 0 if center_x < boundary_x else 1
+            grouped[column_index].append(marker)
+        entries = [
+            (
+                index + 1,
+                column_markers,
+                (visual_columns[index].left, visual_columns[index].right),
+            )
+            for index, column_markers in enumerate(grouped)
+            if column_markers
+        ]
+        if entries:
+            return entries, len(visual_columns), True
+
+    marker_columns = _cluster_pdf_marker_columns(markers, image.width)
+    column_bounds = _column_bounds_from_marker_columns(marker_columns, image.width)
+    return [
+        (index + 1, column_markers, column_bounds[index])
+        for index, column_markers in enumerate(marker_columns)
+    ], len(marker_columns), False
+
+
 def _trim_isolated_pdf_footer_bottom(
     image: Image.Image,
     *,
@@ -764,10 +827,85 @@ def _trim_isolated_pdf_footer_bottom(
     return bottom
 
 
+def _text_contains_choice_marker(text: Any) -> bool:
+    return any(marker in str(text or "") for marker in PDF_CHOICE_MARKERS)
+
+
+def _pdf_text_lines_in_region(
+    text_lines: list[dict[str, Any]],
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+) -> list[tuple[Box, dict[str, Any]]]:
+    lines: list[tuple[Box, dict[str, Any]]] = []
+    for line in text_lines:
+        if not isinstance(line, dict):
+            continue
+        line_box = _marker_bbox(line)
+        if line_box is None:
+            continue
+        center_x = (line_box.left + line_box.right) / 2.0
+        if center_x < left - 6.0 or center_x > right + 6.0:
+            continue
+        if line_box.bottom < top - 2.0 or line_box.top > bottom + 2.0:
+            continue
+        lines.append((line_box, line))
+    return sorted(lines, key=lambda item: (item[0].top, item[0].left))
+
+
+def _trim_pdf_problem_bottom_to_last_choice(
+    image: Image.Image,
+    text_lines: list[dict[str, Any]],
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+) -> tuple[float, bool]:
+    region_lines = _pdf_text_lines_in_region(
+        text_lines,
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+    )
+    if not region_lines:
+        return bottom, False
+
+    choice_indexes = [
+        index
+        for index, (_line_box, line) in enumerate(region_lines)
+        if _text_contains_choice_marker(line.get("text"))
+    ]
+    if not choice_indexes:
+        return bottom, False
+
+    last_choice_index = choice_indexes[-1]
+    last_choice_bottom = region_lines[last_choice_index][0].bottom
+    line_heights = [line_box.height for line_box, _line in region_lines if line_box.height > 0]
+    median_line_height = sorted(line_heights)[len(line_heights) // 2] if line_heights else 18.0
+    continuation_gap = max(18.0, min(72.0, max(median_line_height * 2.2, float(image.height) * 0.018)))
+    for next_line_box, _next_line in region_lines[last_choice_index + 1 :]:
+        gap = next_line_box.top - last_choice_bottom
+        if gap > continuation_gap:
+            break
+        last_choice_bottom = max(last_choice_bottom, next_line_box.bottom)
+
+    padding = max(18.0, float(image.height) * 0.012)
+    trimmed_bottom = min(bottom, max(top + 40.0, last_choice_bottom + padding))
+    if bottom - trimmed_bottom < max(24.0, float(image.height) * 0.012):
+        return bottom, False
+    return trimmed_bottom, True
+
+
 def _segment_pdf_problem_markers(
     image: Image.Image,
     page_id: str,
     markers: list[dict[str, Any]],
+    *,
+    text_lines: list[dict[str, Any]] | None = None,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
     cleaned_markers: list[dict[str, Any]] = []
     ignored_tiny_markers: list[dict[str, Any]] = []
@@ -791,14 +929,18 @@ def _segment_pdf_problem_markers(
 
     ignored_tiny_marker_ids = {id(marker) for marker in ignored_tiny_markers}
     column_reference_markers = cleaned_markers + ignored_tiny_markers
-    columns = _cluster_pdf_marker_columns(column_reference_markers, image.width)
-    if not columns:
+    column_entries, detected_column_count, visual_column_bounds_used = _assign_pdf_marker_columns(
+        image,
+        column_reference_markers,
+    )
+    if not column_entries:
         return None
-    column_bounds = _column_bounds_from_marker_columns(columns, image.width)
     page_area = _page_area_px(image.width, image.height)
+    usable_text_lines = text_lines if isinstance(text_lines, list) else []
     blocks: list[ContentBlock] = []
+    choice_bottom_trim_count = 0
 
-    for column_index, column_markers in enumerate(columns, start=1):
+    for column_index, column_markers, (left_bound, right_bound) in column_entries:
         usable_column_markers = [
             marker
             for marker in column_markers
@@ -810,7 +952,6 @@ def _segment_pdf_problem_markers(
             usable_column_markers,
             key=lambda marker: (_marker_bbox(marker).top if _marker_bbox(marker) else 0.0),
         )
-        left_bound, right_bound = column_bounds[column_index - 1]
         for marker_index, marker in enumerate(sorted_markers, start=1):
             marker_box = _marker_bbox(marker)
             if marker_box is None:
@@ -820,7 +961,8 @@ def _segment_pdf_problem_markers(
                 if marker_index < len(sorted_markers)
                 else None
             )
-            top = max(0.0, marker_box.top - max(10.0, image.height * 0.006))
+            marker_padding_y = max(10.0, image.height * 0.006)
+            top = max(0.0, marker_box.top - marker_padding_y)
             bottom = (
                 max(top + 40.0, next_marker_box.top - max(8.0, image.height * 0.004))
                 if next_marker_box is not None
@@ -833,6 +975,18 @@ def _segment_pdf_problem_markers(
                 top=top,
                 bottom=bottom,
             )
+            choice_trimmed = False
+            if usable_text_lines:
+                bottom, choice_trimmed = _trim_pdf_problem_bottom_to_last_choice(
+                    image,
+                    usable_text_lines,
+                    left=left_bound,
+                    right=right_bound,
+                    top=top,
+                    bottom=bottom,
+                )
+                if choice_trimmed:
+                    choice_bottom_trim_count += 1
             box = Box.from_points(left_bound, top, right_bound, min(float(image.height), bottom))
             raw_number = marker.get("number")
             number = int(raw_number) if isinstance(raw_number, int) else None
@@ -860,6 +1014,8 @@ def _segment_pdf_problem_markers(
                     "force_image_record": True,
                     "marker_kind": str(marker.get("marker_kind") or "number"),
                     "marker_text": marker_text,
+                    "visual_column_bounds_used": visual_column_bounds_used,
+                    "choice_bottom_trimmed": choice_trimmed,
                 },
                 segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
                 block_area=box.area,
@@ -897,7 +1053,9 @@ def _segment_pdf_problem_markers(
     metadata: dict[str, Any] = {
         "segmenter": "pdf-text-markers",
         "pdf_text_marker_count": len(cleaned_markers),
-        "column_count": len(columns),
+        "column_count": detected_column_count,
+        "visual_column_bounds_used": visual_column_bounds_used,
+        "pdf_choice_bottom_trim_count": choice_bottom_trim_count,
         "document_split_block_count": len(blocks),
         "document_split_applied": True,
         "content_box_area_ratio": 1.0,
@@ -2140,7 +2298,13 @@ def segment_page(
         marker_result = None
         raw_markers = source_metadata.get("pdf_problem_markers")
         if isinstance(raw_markers, list):
-            marker_result = _segment_pdf_problem_markers(image, page_id, raw_markers)
+            raw_text_lines = source_metadata.get("pdf_text_lines")
+            marker_result = _segment_pdf_problem_markers(
+                image,
+                page_id,
+                raw_markers,
+                text_lines=raw_text_lines if isinstance(raw_text_lines, list) else None,
+            )
         if marker_result is not None:
             blocks, metadata = marker_result
         else:

@@ -170,6 +170,48 @@ def extract_pdf_problem_markers(page, scale):
     return markers
 
 
+def extract_pdf_text_lines(page, scale):
+    lines = []
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return lines
+    line_index = 0
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            text = "".join(
+                str(span.get("text") or "")
+                for span in line.get("spans") or []
+                if isinstance(span, dict)
+            ).strip()
+            if not text:
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            left, top, right, bottom = [float(value) * scale for value in bbox]
+            lines.append(
+                {
+                    "line_index": line_index,
+                    "text": text[:400],
+                    "bbox": {
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                        "width": max(0.0, right - left),
+                        "height": max(0.0, bottom - top),
+                    },
+                }
+            )
+            line_index += 1
+    return lines
+
+
 source_path = Path(sys.argv[1])
 target_dir = Path(sys.argv[2])
 dpi = int(sys.argv[3])
@@ -198,6 +240,7 @@ try:
                     "pdf_page_width_pt": float(page.rect.width),
                     "pdf_page_height_pt": float(page.rect.height),
                     "pdf_problem_markers": extract_pdf_problem_markers(page, scale),
+                    "pdf_text_lines": extract_pdf_text_lines(page, scale),
                 },
             }
         )
@@ -327,6 +370,7 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                         "pdf_page_height_pt": float(page.rect.height),
                         "pdf_problem_markers": _extract_pdf_problem_markers(page, scale),
                         "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale),
+                        "pdf_text_lines": _extract_pdf_text_lines(page, scale),
                     },
                 )
             )
@@ -2619,6 +2663,50 @@ def _extract_pdf_text_stem_markers(page: Any, scale: float) -> list[dict[str, An
     return markers
 
 
+def _extract_pdf_text_lines(page: Any, scale: float) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return lines
+
+    line_index = 0
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            text = "".join(
+                str(span.get("text") or "")
+                for span in line.get("spans") or []
+                if isinstance(span, dict)
+            ).strip()
+            if not text:
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            left, top, right, bottom = [float(value) * scale for value in bbox]
+            lines.append(
+                {
+                    "line_index": line_index,
+                    "text": text[:400],
+                    "bbox": {
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                        "width": max(0.0, right - left),
+                        "height": max(0.0, bottom - top),
+                    },
+                }
+            )
+            line_index += 1
+
+    return lines
+
+
 def load_image(source: str | Path) -> Image.Image:
     return Image.open(source).convert("RGB")
 
@@ -2649,14 +2737,15 @@ def crop_uniform_margin(image: Image.Image, background_threshold: int = 245, pad
     return cropped
 
 
-def _transform_pdf_problem_markers(
+def _transform_pdf_bbox_list(
     metadata: dict[str, Any],
+    key: str,
     *,
     offset_x: float = 0.0,
     offset_y: float = 0.0,
     scale: float = 1.0,
 ) -> None:
-    markers = metadata.get("pdf_problem_markers")
+    markers = metadata.get(key)
     if not isinstance(markers, list):
         return
 
@@ -2684,7 +2773,28 @@ def _transform_pdf_problem_markers(
             "height": max(0.0, bottom - top),
         }
         transformed.append(updated)
-    metadata["pdf_problem_markers"] = transformed
+    metadata[key] = transformed
+
+
+def _transform_pdf_text_geometry(
+    metadata: dict[str, Any],
+    *,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    scale: float = 1.0,
+) -> None:
+    for key in ("pdf_problem_markers", "pdf_text_stem_markers", "pdf_text_lines"):
+        _transform_pdf_bbox_list(metadata, key, offset_x=offset_x, offset_y=offset_y, scale=scale)
+
+
+def _transform_pdf_problem_markers(
+    metadata: dict[str, Any],
+    *,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    scale: float = 1.0,
+) -> None:
+    _transform_pdf_bbox_list(metadata, "pdf_problem_markers", offset_x=offset_x, offset_y=offset_y, scale=scale)
 
 
 def _deskew_skip_reason_for_text_markers(metadata: dict[str, Any]) -> str | None:
@@ -2948,7 +3058,7 @@ def normalize_image(
             "right": crop_box[2],
             "bottom": crop_box[3],
         }
-        _transform_pdf_problem_markers(metadata, offset_x=float(crop_box[0]), offset_y=float(crop_box[1]))
+        _transform_pdf_text_geometry(metadata, offset_x=float(crop_box[0]), offset_y=float(crop_box[1]))
         metadata["margin_cropped"] = True
 
     if max_dimension:
@@ -2957,7 +3067,7 @@ def normalize_image(
         if scale < 1.0:
             new_size = (int(round(width * scale)), int(round(height * scale)))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
-            _transform_pdf_problem_markers(metadata, scale=scale)
+            _transform_pdf_text_geometry(metadata, scale=scale)
             metadata["resized_to_max_dimension"] = max_dimension
 
     resolved_page_id = page_id or f"{source_path.stem}-page-{page_index + 1:03d}"

@@ -35,6 +35,7 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             )[0]
             self.assertFalse(prepared.metadata.get("deskewed"))
             self.assertEqual("pdf_text_layer", prepared.metadata.get("deskew_skipped_reason"))
+            self.assertGreater(len(prepared.metadata.get("pdf_text_lines") or []), 0)
             segmented = segment_page(prepared, page_id=prepared.page_id, subject=Subject.MATH)
 
             self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
@@ -181,6 +182,111 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
         self.assertEqual(2, len(segmented.blocks))
         self.assertGreater(segmented.blocks[-1].bbox.bottom, 780)
+
+    def test_single_right_column_pdf_marker_does_not_include_left_passage(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((300, 72, 300, 728), fill=(20, 20, 20), width=2)
+        for y in range(110, 520, 30):
+            draw.text((58, y), "left passage text", fill=(20, 20, 20))
+        draw.text((330, 120), "4. problem stem", fill=(20, 20, 20))
+        draw.text((342, 190), "① a        ② b", fill=(20, 20, 20))
+        draw.text((342, 222), "③ c        ④ d", fill=(20, 20, 20))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 4,
+                            "text": "4. problem stem",
+                            "bbox": {"left": 330, "top": 116, "right": 430, "bottom": 134},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "4. problem stem",
+                            "bbox": {"left": 330, "top": 116, "right": 430, "bottom": 134},
+                        },
+                        {
+                            "text": "① a        ② b",
+                            "bbox": {"left": 342, "top": 186, "right": 430, "bottom": 204},
+                        },
+                        {
+                            "text": "③ c        ④ d",
+                            "bbox": {"left": 342, "top": 218, "right": 430, "bottom": 236},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-right-column.pdf"
+
+        segmented = segment_page(Source(image), page_id="right-column-page", subject=Subject.KOREAN)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertEqual(2, block.metadata.get("column_index"))
+        self.assertTrue(block.metadata.get("visual_column_bounds_used"))
+        self.assertGreater(block.bbox.left, 285)
+        self.assertLess(block.bbox.width, 315)
+
+    def test_pdf_marker_terminal_problem_stops_after_last_choice_text_line(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((60, 120), "13. problem stem", fill=(20, 20, 20))
+        draw.text((72, 190), "① a        ② b", fill=(20, 20, 20))
+        draw.text((72, 222), "③ c        ④ d", fill=(20, 20, 20))
+        draw.text((92, 254), "continued choice text", fill=(20, 20, 20))
+        for y in range(430, 720, 30):
+            draw.text((58, y), "following passage should not be included", fill=(20, 20, 20))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 13,
+                            "text": "13. problem stem",
+                            "bbox": {"left": 60, "top": 116, "right": 170, "bottom": 134},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "13. problem stem",
+                            "bbox": {"left": 60, "top": 116, "right": 170, "bottom": 134},
+                        },
+                        {
+                            "text": "① a        ② b",
+                            "bbox": {"left": 72, "top": 186, "right": 180, "bottom": 204},
+                        },
+                        {
+                            "text": "③ c        ④ d",
+                            "bbox": {"left": 72, "top": 218, "right": 180, "bottom": 236},
+                        },
+                        {
+                            "text": "continued choice text",
+                            "bbox": {"left": 92, "top": 250, "right": 230, "bottom": 268},
+                        },
+                        {
+                            "text": "following passage should not be included",
+                            "bbox": {"left": 58, "top": 426, "right": 360, "bottom": 444},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-terminal-choice.pdf"
+
+        segmented = segment_page(Source(image), page_id="terminal-choice-page", subject=Subject.KOREAN)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
+        self.assertGreater(block.bbox.bottom, 280)
+        self.assertLess(block.bbox.bottom, 330)
 
     def test_pdf_text_stem_markers_segment_without_problem_numbers(self):
         image = Image.new("RGB", (600, 800), "white")
