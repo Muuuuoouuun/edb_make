@@ -66,7 +66,7 @@ MAX_HEIGHT_PAGES = 4.8
 PLACEMENT_SCALE_MIN = 0.6
 PLACEMENT_SCALE_MAX = 1.6
 MIN_PROBLEM_AREA_RATIO = 0.12
-DOCUMENT_BAND_TOP_PADDING_PX = 32.0
+DOCUMENT_BAND_TOP_PADDING_PX = 44.0
 DOCUMENT_BAND_BOTTOM_PADDING_PX = 20.0
 DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX = 6.0
 V1_LAYOUT_MARGIN_X_PX = 24.0
@@ -75,15 +75,25 @@ V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
 V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 CHOICE_BOTTOM_SAFE_PADDING_PX = 44.0
-PROBLEM_CROP_TOP_SAFE_PADDING_PX = 30
+PROBLEM_CROP_TOP_SAFE_PADDING_PX = 36
 PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 52
 PROBLEM_EDGE_INK_SCAN_PX = 18
 PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
 PROBLEM_EDGE_INK_MIN_DARK_PIXELS = 6
 PROBLEM_EDGE_INK_MIN_DARK_RATIO = 0.0008
-PROBLEM_EDGE_TOP_EXTRA_PADDING_PX = 24.0
+PROBLEM_EDGE_TOP_EXTRA_PADDING_PX = 34.0
 PROBLEM_EDGE_BOTTOM_EXTRA_PADDING_PX = 32.0
 PROBLEM_CHOICE_EDGE_BOTTOM_EXTRA_PADDING_PX = 42.0
+PAGE_FOOTER_CHROME_BAND_RATIO = 0.86
+PAGE_FOOTER_CHROME_TEXT_MARKERS = ("fillthevoid", "윤자매")
+PAGE_FOOTER_CHROME_LINE_MIN_WIDTH_RATIO = 0.55
+PAGE_FOOTER_CHROME_LINE_MAX_HEIGHT_PX = 14.0
+PAGE_FOOTER_CHROME_SCAN_PX = 180
+PAGE_FOOTER_CHROME_LINE_DARK_THRESHOLD = 96
+PAGE_FOOTER_CHROME_LINE_MIN_DARK_RATIO = 0.52
+PAGE_FOOTER_CHROME_MIN_GAP_FROM_CONTENT_PX = 18.0
+PAGE_FOOTER_CHROME_TRIM_ABOVE_LINE_PX = 36.0
+PAGE_FOOTER_CHROME_CONTENT_PADDING_PX = 14.0
 PROCESSING_STEP_RAW = "raw"
 PROCESSING_STEP_ORIGINAL = "s1"
 PROCESSING_STEP_CHALK = "s2"
@@ -397,6 +407,59 @@ def _expand_box_for_edge_content(
     if top == box.top and bottom == box.bottom:
         return box
     return Box.from_points(box.left, top, box.right, bottom)
+
+
+def _trim_box_bottom_page_chrome(
+    image: Image.Image,
+    box: Box,
+    *,
+    content_bottom: float,
+) -> Box:
+    left, top, right, bottom = _integer_crop_rect_for_box(
+        box,
+        image_width=image.width,
+        image_height=image.height,
+    )
+    crop_width = right - left
+    crop_height = bottom - top
+    if crop_width <= 24 or crop_height <= 48:
+        return box
+
+    scan_height = min(crop_height, max(48, min(PAGE_FOOTER_CHROME_SCAN_PX, int(round(image.height * 0.22)))))
+    scan_top = bottom - scan_height
+    if scan_top < int(float(image.height) * PAGE_FOOTER_CHROME_BAND_RATIO):
+        scan_top = int(float(image.height) * PAGE_FOOTER_CHROME_BAND_RATIO)
+    if scan_top >= bottom - 2:
+        return box
+
+    gray = image.crop((left, scan_top, right, bottom)).convert("L")
+    if np is not None:
+        rows = np.asarray(gray, dtype=np.uint8)
+        dark_counts = np.count_nonzero(rows <= PAGE_FOOTER_CHROME_LINE_DARK_THRESHOLD, axis=1)
+    else:
+        dark_counts_list: list[int] = []
+        pixels = gray.load()
+        for y in range(gray.height):
+            dark_counts_list.append(
+                sum(1 for x in range(gray.width) if int(pixels[x, y]) <= PAGE_FOOTER_CHROME_LINE_DARK_THRESHOLD)
+            )
+        dark_counts = dark_counts_list
+
+    min_dark_count = max(12, int(round(crop_width * PAGE_FOOTER_CHROME_LINE_MIN_DARK_RATIO)))
+    candidate_rows = [index for index, count in enumerate(dark_counts) if int(count) >= min_dark_count]
+    if not candidate_rows:
+        return box
+
+    line_y = float(scan_top + max(candidate_rows))
+    if line_y <= content_bottom + PAGE_FOOTER_CHROME_MIN_GAP_FROM_CONTENT_PX:
+        return box
+
+    target_bottom = line_y - PAGE_FOOTER_CHROME_TRIM_ABOVE_LINE_PX
+    safe_bottom = content_bottom + PAGE_FOOTER_CHROME_CONTENT_PADDING_PX
+    trimmed_bottom = max(safe_bottom, target_bottom)
+    if trimmed_bottom >= box.bottom - 4.0 or trimmed_bottom <= box.top + 1.0:
+        return box
+    return Box.from_points(box.left, box.top, box.right, trimmed_bottom)
 
 
 def _pad_problem_crop_edges(
@@ -1083,6 +1146,31 @@ def _problem_column_value(problem: ProblemUnit, block_by_id: dict[str, ContentBl
 
 def _block_column_value(block: ContentBlock) -> int | None:
     return _coerce_int(block.metadata.get("column_index"))
+
+
+def _is_page_footer_chrome_block(page: PageModel, block: ContentBlock) -> bool:
+    center_y = (block.bbox.top + block.bbox.bottom) / 2.0
+    if center_y < float(page.height_px) * PAGE_FOOTER_CHROME_BAND_RATIO:
+        return False
+
+    normalized_text = re.sub(r"\s+", "", str(block.text or "")).lower()
+    if any(marker.lower() in normalized_text for marker in PAGE_FOOTER_CHROME_TEXT_MARKERS):
+        return True
+    if re.fullmatch(r"\d+[/／]\d+", normalized_text):
+        return True
+
+    max_line_height = max(PAGE_FOOTER_CHROME_LINE_MAX_HEIGHT_PX, float(page.height_px) * 0.012)
+    if (
+        block.bbox.width >= float(page.width_px) * PAGE_FOOTER_CHROME_LINE_MIN_WIDTH_RATIO
+        and block.bbox.height <= max_line_height
+    ):
+        return True
+    return False
+
+
+def _filter_page_footer_chrome_blocks(page: PageModel, blocks: list[ContentBlock]) -> list[ContentBlock]:
+    filtered = [block for block in blocks if not _is_page_footer_chrome_block(page, block)]
+    return filtered if filtered else blocks
 
 
 def _problem_band_value(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> int:
@@ -2286,6 +2374,7 @@ def build_problem_entries(
                 page, problem, next_problem, block_by_id, other_problem_block_ids
             )
             blocks = gap_filled if gap_filled else own_blocks
+            blocks = _filter_page_footer_chrome_blocks(page, blocks)
             raw_problem_number = problem.metadata.get("problem_number")
             if isinstance(raw_problem_number, int):
                 problem_number = raw_problem_number
@@ -2315,7 +2404,11 @@ def build_problem_entries(
                     if has_document_band_metadata
                     else PROBLEM_PADDING_PX
                 )
-                content_bottom = max(box.bottom for box in boxes)
+                content_bottom = (
+                    max(block.bbox.bottom for block in blocks)
+                    if blocks
+                    else max(box.bottom for box in boxes)
+                )
                 min_bottom = (
                     min(float(page.height_px), content_bottom + float(bottom_padding_px))
                     if has_choice_blocks
@@ -2351,6 +2444,11 @@ def build_problem_entries(
                         block_by_id,
                         min_bottom=min_bottom,
                     )
+                merged_box = _trim_box_bottom_page_chrome(
+                    prepared_page.image,
+                    merged_box,
+                    content_bottom=content_bottom,
+                )
                 if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())

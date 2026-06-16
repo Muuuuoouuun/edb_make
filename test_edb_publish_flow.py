@@ -4811,6 +4811,77 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertLessEqual(entries[0].bounds.top, 44)
             self.assertGreaterEqual(entries[0].bounds.bottom, 346)
 
+    def test_footer_chrome_is_removed_from_last_problem_crop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            page_image = Image.new("RGB", (600, 520), "white")
+            draw = ImageDraw.Draw(page_image)
+            draw.text((72, 102), "27 problem", fill="black")
+            draw.line((28, 480, 572, 480), fill="black", width=3)
+            draw.text((360, 454), "윤자매 놀이학습(fillthevoid82.com)", fill="black")
+            page_image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=page_image,
+                original_size=(600, 520),
+            )
+            blocks = [
+                ContentBlock(
+                    block_id="p1-stem",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 100, 360, 120),
+                    reading_order=0,
+                    text="27 problem",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+                ContentBlock(
+                    block_id="footer-watermark",
+                    block_type=BlockType.NOTE,
+                    bbox=Box(350, 450, 220, 24),
+                    reading_order=1,
+                    text="윤자매 놀이학습(fillthevoid82.com)",
+                    metadata={"column_index": 0, "question_band_index": 0},
+                ),
+            ]
+            page = PageModel(
+                page_id="page-1",
+                width_px=600,
+                height_px=520,
+                subject=Subject.MATH,
+                source_path=str(source),
+                blocks=blocks,
+                problems=[
+                    ProblemUnit(
+                        unit_id="problem-1",
+                        subject=Subject.MATH,
+                        title="27",
+                        stem_block_ids=["p1-stem"],
+                        metadata={
+                            "problem_number": 27,
+                            "column_index": 0,
+                            "question_band_index": 0,
+                            "grouping_source": "ai_fallback",
+                            "bbox_px": {"left": 40, "top": 80, "width": 520, "height": 420},
+                        },
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertLess(entries[0].bounds.bottom, 450)
+            self.assertGreater(entries[0].bounds.bottom, 230)
+            self.assertNotIn("footer-watermark", {block.block_id for block in entries[0].blocks})
+
     def test_choice_bottom_survives_near_next_problem_clamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
