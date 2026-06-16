@@ -541,6 +541,25 @@
       0 0 0 1px rgba(246,211,101,.45),
       0 0 24px rgba(246,211,101,.18);
   }
+  .stage-tile.drop-before,
+  .stage-tile.drop-after{
+    border-color: rgba(158,201,240,.72);
+  }
+  .stage-tile.drop-before::before,
+  .stage-tile.drop-after::after{
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--chalk-blue);
+    box-shadow: 0 0 0 4px rgba(158,201,240,.12);
+    z-index: 5;
+    pointer-events: none;
+  }
+  .stage-tile.drop-before::before{ top: -2px; }
+  .stage-tile.drop-after::after{ bottom: -2px; }
   .stage-tile.drop-target{
     border-color: var(--chalk-blue);
     box-shadow:

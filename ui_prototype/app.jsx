@@ -64,6 +64,11 @@ const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
+const ADJACENT_RETRY_PADDING_RATIO = 0.16;
+const ADJACENT_RETRY_MIN_PADDING_PX = 28;
+const BOARD_DRAG_REORDER_THRESHOLD_PX = 28;
+const BOARD_DRAG_AUTOSCROLL_EDGE_PX = 58;
+const BOARD_DRAG_AUTOSCROLL_MAX_PX = 22;
 const MANUAL_CROP_EDGE_MAX = 0.45;
 const MANUAL_CROP_OUTSET_MAX = 0.60;
 const MANUAL_CROP_EDGE_STEP = 0.01;
@@ -131,6 +136,53 @@ function manualCropPercent(value){
   if (normalized < -0.0001) return `+${Math.round(Math.abs(normalized) * 100)}%`;
   if (normalized > 0.0001) return `-${Math.round(normalized * 100)}%`;
   return '0%';
+}
+
+function finiteNumber(value, fallback = 0){
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function expandBoxWithinPage(rawBox, page, ratio = ADJACENT_RETRY_PADDING_RATIO){
+  if (!rawBox || !page) return rawBox || null;
+  const pageWidth = Math.max(1, finiteNumber(page.width, 1));
+  const pageHeight = Math.max(1, finiteNumber(page.height, 1));
+  const left = finiteNumber(rawBox.left, 0);
+  const top = finiteNumber(rawBox.top, 0);
+  const width = Math.max(1, finiteNumber(rawBox.width, 1));
+  const height = Math.max(1, finiteNumber(rawBox.height, 1));
+  const padX = Math.max(ADJACENT_RETRY_MIN_PADDING_PX, width * ratio);
+  const padY = Math.max(ADJACENT_RETRY_MIN_PADDING_PX, height * ratio);
+  const nextLeft = Math.max(0, left - padX);
+  const nextTop = Math.max(0, top - padY);
+  const nextRight = Math.min(pageWidth, left + width + padX);
+  const nextBottom = Math.min(pageHeight, top + height + padY);
+  return {
+    left: nextLeft,
+    top: nextTop,
+    width: Math.max(1, nextRight - nextLeft),
+    height: Math.max(1, nextBottom - nextTop),
+  };
+}
+
+function replacementSourceIdFor(problem){
+  const retry = problem?.aiRetry || problem?.ai_retry || {};
+  return String(
+    retry.replacesProblemId
+    || retry.replaces_problem_id
+    || problem?.replacesProblemId
+    || problem?.replaces_problem_id
+    || ''
+  ).trim();
+}
+
+function resetItemPlacement(item){
+  return {
+    ...item,
+    placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
+    placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
+    placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
+  };
 }
 
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
@@ -487,7 +539,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   };
   const retryPartialAi = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
     if (!problem?.id || !page?.id) return;
-    const retryBox = cropBox || problem.bbox;
+    const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
     await retryAiSession?.({
       partial: true,
       problemIds: [problem.id],
@@ -671,20 +723,20 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const actionBar = boxEdit ? (
     <div className="review-actionbar">
       <span className="count-chip">틀 조정 중</span>
-      <span className="hint">모서리와 변을 끌어 문제 전체가 들어오게 맞춘 뒤 적용하거나, 이 영역만 AI로 다시 인식하세요.</span>
+      <span className="hint">모서리와 변을 끌어 문제 전체가 들어오게 맞춘 뒤 자르거나, 주변 여백까지 포함해 다시 인식하세요.</span>
       <div className="spacer" />
       <button className="btn" type="button" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
       <button className="btn" type="button" onClick={applyBoxEdit} disabled={mutating}>
-        선택 영역 적용
+        자르기 적용
       </button>
       <button
         className="btn primary"
         type="button"
-        title={retryDisabledReason || '조정한 영역만 AI로 다시 인식'}
+        title={retryDisabledReason || '조정한 영역 주변까지 AI로 다시 인식'}
         onClick={retryBoxEdit}
         disabled={!aiAvailable || aiBusy || mutating}
       >
-        선택 영역 AI 재인식
+        주변 영역 AI 재인식
       </button>
     </div>
   ) : splitTarget ? (
@@ -757,7 +809,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           onClick={() => doRetryAi(bulkRetryPageIds)}
           disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
         >
-          AI 재인식 {bulkRetryProblemCount}
+          페이지 전체 AI 재인식 {bulkRetryProblemCount}
         </button>
       )}
     </div>
@@ -766,7 +818,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       <span className="count-chip">{selectedList.length}개 선택됨</span>
       <span className="hint">
         {selectedList.length === 1
-          ? '한 박스를 두 문제로 가르거나, 이 박스를 제외할 수 있어요.'
+          ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
           : sameSourcePage
             ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
             : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
@@ -780,36 +832,38 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       >
         확인 완료 {selectedList.length}
       </button>
-      <button
-        className="btn primary"
-        type="button"
-        title={retryDisabledReason || `${selectedRetryPageIds.length}개 페이지 재인식`}
-        onClick={() => doRetryAi(selectedRetryPageIds)}
-        disabled={!aiAvailable || aiBusy || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
-      >
-        {selectedList.length === 1 ? '페이지 AI 재인식' : `AI 재인식 ${selectedList.length}`}
-      </button>
+      {selectedList.length >= 2 && (
+        <button
+          className="btn"
+          type="button"
+          title={retryDisabledReason || `${selectedRetryPageIds.length}개 페이지 전체 재인식`}
+          onClick={() => doRetryAi(selectedRetryPageIds)}
+          disabled={!aiAvailable || aiBusy || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
+        >
+          페이지 전체 AI 재인식 {selectedList.length}
+        </button>
+      )}
       {selectedList.length === 1 && (
         <>
+          <button
+            className="btn primary"
+            type="button"
+            onClick={() => retryPartialAi()}
+            disabled={!aiAvailable || aiBusy || mutating || !selectedCanBoxEdit}
+            title={retryDisabledReason || '선택한 박스 주변 여백까지 AI로 다시 인식'}
+          >
+            주변 영역 AI 재인식
+          </button>
           <button
             className="btn"
             type="button"
             onClick={beginBoxEdit}
             disabled={mutating || !selectedCanBoxEdit}
-            title={selectedCanBoxEdit ? '원본 페이지 위에서 직접 자르기 틀을 조정' : '원본 페이지 이미지가 있어야 합니다'}
+            title={selectedCanBoxEdit ? '원본 페이지 위에서 자르기 틀을 직접 조정' : '원본 페이지 이미지가 있어야 합니다'}
           >
-            틀로 자르기
+            틀 조정/자르기
           </button>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => retryPartialAi()}
-            disabled={!aiAvailable || aiBusy || mutating || !selectedCanBoxEdit}
-            title={retryDisabledReason || '선택한 문제 영역만 AI로 다시 인식'}
-          >
-            선택 영역 AI 재인식
-          </button>
-          <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 가르기</button>
+          <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 두 문제로 나누기</button>
         </>
       )}
       {selectedList.length >= 2 && (
@@ -1278,7 +1332,7 @@ function ItemsRail({
       event.preventDefault();
       suppressClickRef.current = true;
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
-      if (target) reorder(drag.id, target.id, target.position);
+      if (target) reorder(drag.id, target.id, target.position, { resetPlacement: true });
     }
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     pointerDragRef.current = null;
@@ -1541,7 +1595,7 @@ function ItemsRail({
               e.preventDefault();
               const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
               const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && sourceId !== it.id) reorder(sourceId, it.id, position);
+              if (sourceId && sourceId !== it.id) reorder(sourceId, it.id, position, { resetPlacement: true });
               clearDragState();
             }}
             onDragEnd={clearDragState}
@@ -1588,14 +1642,17 @@ function ItemsRail({
 }
 
 // ─── CENTER: big scrollable board stage (page-flow: 1 problem per page) ──
-function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, setPlacement }){
+function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, setPlacement, reorder }){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
   const syncLock = useRef(0);
   const positionDragRef = useRef(null);
   const suppressClickRef = useRef(null);
+  const boardDropTargetRef = useRef(null);
+  const autoScrollRef = useRef({ raf: null, clientY: null });
   const [positioningId, setPositioningId] = useState(null);
+  const [boardDropTarget, setBoardDropTarget] = useState(null);
   const [pageH, setPageH] = useState(400);
   const [contentW, setContentW] = useState(0);
 
@@ -1695,6 +1752,86 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     setActive(id);
   };
 
+  const setCurrentBoardDropTarget = (target) => {
+    boardDropTargetRef.current = target;
+    setBoardDropTarget(prev => (
+      prev?.id === target?.id && prev?.position === target?.position ? prev : target
+    ));
+  };
+
+  const findBoardDropTarget = (clientY, sourceId) => {
+    const content = contentRef.current;
+    if (!content || !items.length) return null;
+    const rect = content.getBoundingClientRect();
+    const contentY = clientY - rect.top;
+    const candidates = layout.positions
+      .map((placement, index) => ({ placement, item: items[index] }))
+      .filter(row => row.item?.id && row.item.id !== sourceId);
+    if (!candidates.length) return null;
+    for (const row of candidates) {
+      const midpoint = row.placement.top + (row.placement.height / 2);
+      if (contentY < midpoint) {
+        return { id: row.item.id, position: 'before' };
+      }
+    }
+    const last = candidates[candidates.length - 1];
+    return last?.item?.id ? { id: last.item.id, position: 'after' } : null;
+  };
+
+  const updateBoardDropTarget = (clientY, sourceId, force = false) => {
+    const drag = positionDragRef.current;
+    if (!force && drag && Math.abs(clientY - drag.startY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
+      setCurrentBoardDropTarget(null);
+      return null;
+    }
+    const target = findBoardDropTarget(clientY, sourceId);
+    setCurrentBoardDropTarget(target);
+    return target;
+  };
+
+  const stopBoardAutoScroll = () => {
+    if (autoScrollRef.current.raf) {
+      cancelAnimationFrame(autoScrollRef.current.raf);
+    }
+    autoScrollRef.current = { raf: null, clientY: null };
+  };
+
+  const stepBoardAutoScroll = () => {
+    const drag = positionDragRef.current;
+    const scroll = scrollRef.current;
+    const clientY = autoScrollRef.current.clientY;
+    if (!drag || !scroll || clientY == null) {
+      stopBoardAutoScroll();
+      return;
+    }
+    const rect = scroll.getBoundingClientRect();
+    let delta = 0;
+    if (clientY < rect.top + BOARD_DRAG_AUTOSCROLL_EDGE_PX) {
+      const strength = 1 - Math.max(0, clientY - rect.top) / BOARD_DRAG_AUTOSCROLL_EDGE_PX;
+      delta = -Math.ceil(strength * BOARD_DRAG_AUTOSCROLL_MAX_PX);
+    } else if (clientY > rect.bottom - BOARD_DRAG_AUTOSCROLL_EDGE_PX) {
+      const strength = 1 - Math.max(0, rect.bottom - clientY) / BOARD_DRAG_AUTOSCROLL_EDGE_PX;
+      delta = Math.ceil(strength * BOARD_DRAG_AUTOSCROLL_MAX_PX);
+    }
+    if (delta) {
+      scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta));
+      setScrollTop(scroll.scrollTop);
+      updateBoardDropTarget(clientY, drag.id);
+      autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
+    } else {
+      autoScrollRef.current.raf = null;
+    }
+  };
+
+  const applyBoardAutoScroll = (clientY) => {
+    autoScrollRef.current.clientY = clientY;
+    if (!autoScrollRef.current.raf) {
+      autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
+    }
+  };
+
+  useEffect(() => () => stopBoardAutoScroll(), []);
+
   const beginPositionDrag = (evt, item, placement) => {
     if (evt.button !== 0 || !contentRef.current) return;
     const contentRect = contentRef.current.getBoundingClientRect();
@@ -1717,6 +1854,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
       moved: false,
     };
     setPositioningId(item.id);
+    setCurrentBoardDropTarget(null);
     syncLock.current = Date.now();
     setActive(item.id);
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
@@ -1730,6 +1868,8 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     drag.moved = true;
     evt.preventDefault();
+    applyBoardAutoScroll(evt.clientY);
+    updateBoardDropTarget(evt.clientY, drag.id);
     const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
     const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
     const nextXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
@@ -1751,15 +1891,24 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   const endPositionDrag = (evt) => {
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
+    const canReorder = drag.moved && Math.abs(evt.clientY - drag.startY) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
+    const target = canReorder
+      ? findBoardDropTarget(evt.clientY, drag.id) || boardDropTargetRef.current
+      : null;
     if (drag.moved) {
       suppressClickRef.current = drag.id;
       window.setTimeout(() => {
         if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
       }, 0);
+      if (target && target.id && target.id !== drag.id) {
+        reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
+      }
     }
     evt.currentTarget.releasePointerCapture?.(evt.pointerId);
     positionDragRef.current = null;
     setPositioningId(null);
+    setCurrentBoardDropTarget(null);
+    stopBoardAutoScroll();
   };
 
   const processedCount = items.filter(i => i.step !== 'raw').length;
@@ -1827,6 +1976,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                   const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - scaledHeight);
                   const xRatio = normalizePlacementXRatio(it.placementXRatio);
                   const yRatio = normalizePlacementYRatio(it.placementYRatio);
+                  const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
                     height: scaledHeight,
@@ -1836,7 +1986,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''}`}
+                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
                       onClick={() => onTileClick(it.id)}
                       title={it.name}
                       style={tileStyle}
@@ -2258,7 +2408,7 @@ function SidePanel({
                     <button
                       className={`icon-btn ${savedCropActive ? 'on' : ''}`}
                       type="button"
-                      title="상하좌우 자체 자르기"
+                      title="상하좌우 여백 자르기"
                       onClick={focusManualCrop}
                     >{Icon.crop}</button>
                     <button
@@ -2279,12 +2429,12 @@ function SidePanel({
                 </div>
 
                 <div className="panel-section-hd">
-                  자체 자르기 <span className="line" />
+                  여백 자르기 <span className="line" />
                 </div>
 
                 <div className="manual-crop-control" ref={cropControlRef}>
                   <div className="manual-crop-note">
-                    +값은 박스를 바깥으로 늘리고, -값은 안쪽으로 자릅니다.
+                    +값은 영역을 바깥으로 넓히고, -값은 안쪽으로 잘라냅니다.
                   </div>
                   <div className="manual-crop-presets">
                     <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05, topRatio: -0.05, bottomRatio: -0.05 })}>
@@ -4812,10 +4962,80 @@ function aiModelFallbackToast(session){
   return `${from} 호출 오류 · ${to}로 재시도했어요`;
 }
 
-function mergeRetryCandidateIntoCurrent(currentSession, candidateSession, pageIds){
+function mergeRetryCandidateIntoCurrent(currentSession, candidateSession, pageIds, options = {}){
   const base = cloneSession(currentSession);
   const candidate = cloneSession(candidateSession);
   if (!base || !candidate || !Array.isArray(candidate.problems)) return candidate;
+
+  const targetProblemIds = new Set(
+    (Array.isArray(options.problemIds) ? options.problemIds : [])
+      .map(id => String(id || '').trim())
+      .filter(Boolean)
+  );
+  if (options.partial && targetProblemIds.size) {
+    const replacementsByProblemId = new Map();
+    candidate.problems.forEach(problem => {
+      const sourceId = replacementSourceIdFor(problem);
+      if (!sourceId || !targetProblemIds.has(sourceId)) return;
+      const replacements = replacementsByProblemId.get(sourceId) || [];
+      replacements.push(problem);
+      replacementsByProblemId.set(sourceId, replacements);
+    });
+    if (replacementsByProblemId.size) {
+      const insertedReplacementIds = new Set();
+      const nextProblems = [];
+      (base.problems || []).forEach(problem => {
+        const problemId = String(problem?.id || '');
+        if (!targetProblemIds.has(problemId)) {
+          nextProblems.push(problem);
+          return;
+        }
+        const replacements = replacementsByProblemId.get(problemId) || [];
+        if (!replacements.length) {
+          nextProblems.push(problem);
+          return;
+        }
+        replacements.forEach(replacement => {
+          if (replacement?.id) insertedReplacementIds.add(String(replacement.id));
+          nextProblems.push(replacement);
+        });
+      });
+      replacementsByProblemId.forEach(replacements => {
+        replacements.forEach(replacement => {
+          if (replacement?.id && !insertedReplacementIds.has(String(replacement.id))) {
+            insertedReplacementIds.add(String(replacement.id));
+            nextProblems.push(replacement);
+          }
+        });
+      });
+
+      base.problems = nextProblems;
+      base.pages = (base.pages || []).map(page => {
+        const ids = page.problemIds || page.problem_ids || [];
+        const nextIds = [];
+        ids.forEach(rawId => {
+          const id = String(rawId || '');
+          const replacements = replacementsByProblemId.get(id);
+          if (replacements?.length) {
+            nextIds.push(...replacements.map(problem => problem.id).filter(Boolean));
+          } else {
+            nextIds.push(rawId);
+          }
+        });
+        return {
+          ...page,
+          problemIds: nextIds,
+        };
+      });
+      applyProblemCounts(base, nextProblems);
+      base.ai_retry_summary = candidate.ai_retry_summary || candidate.aiRetrySummary || [];
+      base.edb_path = null;
+      base.edb_file_uri = null;
+      base.edbPath = null;
+      base.edbFileUri = null;
+      return base;
+    }
+  }
 
   const targetPageIds = new Set(
     (Array.isArray(pageIds) && pageIds.length
@@ -5220,9 +5440,17 @@ function App(){
     if (!nextSession || !Array.isArray(nextSession.problems)) return;
     const nextProblemsById = new Map();
     nextSession.problems.forEach(p => { if (p && p.id) nextProblemsById.set(p.id, p); });
-    // Start from the previous items order, drop missing ids, append any new
-    // ids in their server-side order (this keeps split children adjacent to
-    // where the parent was, and lets reordered exclusion preserve the rest).
+    const replacementsBySourceId = new Map();
+    nextSession.problems.forEach(problem => {
+      const sourceId = replacementSourceIdFor(problem);
+      if (!sourceId || !problem?.id) return;
+      const replacements = replacementsBySourceId.get(sourceId) || [];
+      replacements.push(problem.id);
+      replacementsBySourceId.set(sourceId, replacements);
+    });
+    // Start from the previous items order, drop missing ids, insert explicit
+    // replacements at their old position, then append any remaining server
+    // ids. This keeps partial AI retry results from jumping to the top.
     const prevItemIds = items.map(it => it.id);
     const seen = new Set();
     const orderedIds = [];
@@ -5230,6 +5458,17 @@ function App(){
       if (nextProblemsById.has(id) && !seen.has(id)) {
         orderedIds.push(id);
         seen.add(id);
+        continue;
+      }
+      const replacements = replacementsBySourceId.get(id) || [];
+      replacements.forEach(replacementId => {
+        if (nextProblemsById.has(replacementId) && !seen.has(replacementId)) {
+          orderedIds.push(replacementId);
+          seen.add(replacementId);
+        }
+      });
+      if (replacements.length) {
+        continue;
       }
     }
     for (const prob of nextSession.problems) {
@@ -5244,7 +5483,9 @@ function App(){
     setSession(nextSession);
     setPublished(false);
     if (!nextProblemsById.has(activeId)) {
-      setActiveId(mapped[0]?.id || null);
+      const replacementActiveId = (replacementsBySourceId.get(activeId) || [])
+        .find(id => nextProblemsById.has(id));
+      setActiveId(replacementActiveId || mapped[0]?.id || null);
     }
   }, [items, activeId]);
 
@@ -5306,10 +5547,10 @@ function App(){
     const job = startBackgroundJob({
       scope: 'session-recognition',
       label: isPartialRetry
-        ? (problemIds.length === 1 ? '선택 영역 AI 재인식 중' : `${problemIds.length}개 선택 영역 AI 재인식 중`)
+        ? (problemIds.length === 1 ? '주변 영역 AI 재인식 중' : `${problemIds.length}개 주변 영역 AI 재인식 중`)
         : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
       hint: isPartialRetry
-        ? '선택한 박스만 다시 자릅니다. 완료되면 확인 팝업이 열립니다.'
+        ? '선택한 박스 주변 여백까지 다시 자릅니다. 완료되면 확인 팝업이 열립니다.'
         : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
     });
     try {
@@ -5327,14 +5568,16 @@ function App(){
       setRecognitionReview({
         id: `review-${job.id}`,
         kind: 'retry-ai',
+        partial: isPartialRetry,
         title: isPartialRetry
-          ? (applied ? `${applied}개 선택 영역을 다시 인식했어요` : '부분 AI 인식 결과를 확인해 주세요')
+          ? (applied ? `${applied}개 주변 영역을 다시 인식했어요` : '부분 AI 인식 결과를 확인해 주세요')
           : (applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요'),
         subtitle: isPartialRetry
-          ? '선택한 영역에서 다시 찾은 문제 경계입니다. 맞으면 바로 칠판에 반영합니다.'
+          ? '선택한 박스 주변에서 다시 찾은 문제 경계입니다. 맞으면 기존 자리만 바꿔 반영합니다.'
           : '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
         session: next,
         pageIds: targetPageIds,
+        problemIds,
         snapshotBefore,
         retrySummary: result.retry || [],
       });
@@ -5758,7 +6001,10 @@ function App(){
         const currentSnapshot = session
           ? (materializeSessionForItems(session, items, fileName) || cloneSession(session))
           : cloneSession(review.snapshotBefore);
-        const candidate = mergeRetryCandidateIntoCurrent(currentSnapshot, review.session, review.pageIds);
+        const candidate = mergeRetryCandidateIntoCurrent(currentSnapshot, review.session, review.pageIds, {
+          partial: !!review.partial,
+          problemIds: review.problemIds || [],
+        });
         const restored = await postRestore(candidate);
         setHistoryStack(prev => [...prev, review.snapshotBefore || currentSnapshot].filter(Boolean));
         if (session) {
@@ -5825,9 +6071,11 @@ function App(){
     }));
     setPublished(false);
   };
-  const reorder = (fromId, toId, dropPosition = 'before') => {
+  const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
     setItems(it => {
-      return reorderItemsForDrop(it, fromId, toId, dropPosition);
+      const reordered = reorderItemsForDrop(it, fromId, toId, dropPosition);
+      if (!options?.resetPlacement || reordered === it) return reordered;
+      return reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
     });
     setPublished(false);
   };
@@ -6144,6 +6392,7 @@ function App(){
             fileName={fileName}
             addSample={addSample}
             setPlacement={setPlacement}
+            reorder={reorder}
           />
         )}
         <SidePanel

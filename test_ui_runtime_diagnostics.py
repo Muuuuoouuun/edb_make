@@ -18,7 +18,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
-        self.assertIn("자체 자르기", side_panel)
+        self.assertIn("여백 자르기", side_panel)
         self.assertIn("mutateSession?.('crop'", side_panel)
         self.assertIn("cropDraft.leftRatio", side_panel)
         self.assertIn("cropDraft.rightRatio", side_panel)

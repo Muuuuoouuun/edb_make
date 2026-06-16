@@ -33,6 +33,7 @@ from build_problem_board_edb import (
     _classin_board_placement_overlap_issues,
     _classin_passage_group_source_reuse_issues,
     _classin_source_bbox_overlap_issues,
+    _build_transparent_reconstruction_image,
     _normalize_processing_step,
     _session_duplicate_problem_number_groups,
     _session_problem_count_payload,
@@ -1677,6 +1678,25 @@ def _make_crop_filename(problem_id: str, suffix: str) -> str:
     return f"mutated_{digest}.png"
 
 
+def _crop_refreshes_board_render(problem: dict[str, Any]) -> bool:
+    step = _normalize_processing_step(
+        str(problem.get("step") or problem.get("processingStep") or problem.get("processing_step") or "raw")
+    )
+    return step in {"s2", "s3"}
+
+
+def _render_board_crop_from_raw(raw_crop_path: Path, board_crop_path: Path) -> None:
+    from PIL import Image
+
+    board_crop_path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(raw_crop_path) as image:
+        board_image = _build_transparent_reconstruction_image(
+            image,
+            board_theme=DEFAULT_BOARD_THEME,
+        )
+        board_image.save(board_crop_path)
+
+
 def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
     """Carry over the fields that survive a split/merge unchanged — the
     surgical fields (id, bbox, image paths, title) are filled in by caller."""
@@ -2637,13 +2657,16 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
         base_board_path = base_image_path
 
     crop_dir = _crop_dir_for_session(session)
+    raw_crop_path_for_board: Path | None = None
     if _manual_crop_is_empty(crop):
         raw_uri = base_image_path.resolve().as_uri()
         board_uri = base_board_path.resolve().as_uri()
+        raw_crop_path_for_board = base_image_path
     elif page_source_path is not None and page_source_path.exists():
         raw_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop")
         _crop_image_by_bbox(page_source_path, next_bbox, raw_crop_path)
         raw_uri = raw_crop_path.resolve().as_uri()
+        raw_crop_path_for_board = raw_crop_path
         board_uri = raw_uri
     else:
         if any(value < -0.0001 for value in crop.values()):
@@ -2651,12 +2674,22 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
         raw_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop")
         _crop_image_by_ratios(base_image_path, crop, raw_crop_path)
         raw_uri = raw_crop_path.resolve().as_uri()
+        raw_crop_path_for_board = raw_crop_path
         if base_board_path == base_image_path:
             board_uri = raw_uri
         else:
             board_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop_board")
             _crop_image_by_ratios(base_board_path, crop, board_crop_path)
             board_uri = board_crop_path.resolve().as_uri()
+
+    if (
+        raw_crop_path_for_board is not None
+        and raw_crop_path_for_board.exists()
+        and _crop_refreshes_board_render(problem)
+    ):
+        board_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop_board")
+        _render_board_crop_from_raw(raw_crop_path_for_board, board_crop_path)
+        board_uri = board_crop_path.resolve().as_uri()
 
     problem["imagePath"] = raw_uri
     problem["boardRenderPath"] = board_uri
@@ -3106,12 +3139,15 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                 )
                 _offset_retry_problem_to_source_page(normalized, crop_box)
                 normalized["aiRetry"]["partial"] = True
+                normalized["aiRetry"]["replacesProblemId"] = problem_id
                 normalized["aiRetry"]["cropBox"] = {
                     "left": crop_box.left,
                     "top": crop_box.top,
                     "width": crop_box.width,
                     "height": crop_box.height,
                 }
+                normalized["replacesProblemId"] = problem_id
+                normalized["replaces_problem_id"] = problem_id
                 replacements.append(normalized)
             _replace_single_problem(session, problem_id, replacements)
             summaries.append({

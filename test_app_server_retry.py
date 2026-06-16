@@ -381,6 +381,52 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertIsNotNone(crop_path)
             self.assertEqual((150, 120), Image.open(crop_path).size)
 
+    def test_manual_crop_refreshes_board_render_for_processed_steps(self):
+        from PIL import Image, ImageDraw
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            problem_path = tmpdir / "problem.png"
+            page = Image.new("RGB", (300, 200), "white")
+            draw = ImageDraw.Draw(page)
+            draw.rectangle((70, 55, 175, 125), outline="black", width=4)
+            page.save(page_path)
+            page.crop((50, 40, 150, 120)).save(problem_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1"],
+                }],
+                "problems": [{
+                    "id": "p1",
+                    "sourcePageId": "page-1",
+                    "imagePath": problem_path.resolve().as_uri(),
+                    "boardRenderPath": problem_path.resolve().as_uri(),
+                    "bbox": {"left": 50, "top": 40, "width": 100, "height": 80},
+                    "step": "s2",
+                }],
+            }
+
+            cropped_session = app_server._mutate_crop(
+                session,
+                "p1",
+                {"cropBox": {"left": 45, "top": 35, "width": 145, "height": 110}},
+            )
+
+            problem = cropped_session["problems"][0]
+            crop_path = app_server._resolve_session_path(problem["imagePath"])
+            board_path = app_server._resolve_session_path(problem["boardRenderPath"])
+            self.assertIsNotNone(crop_path)
+            self.assertIsNotNone(board_path)
+            self.assertTrue(crop_path.exists())
+            self.assertTrue(board_path.exists())
+            self.assertNotEqual(crop_path, board_path)
+            with Image.open(board_path) as board_image:
+                self.assertIn("A", board_image.getbands())
+
 
 class TestExportErrorPayload(unittest.TestCase):
     def test_hangul_conversion_error_includes_recovery_steps(self):
