@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import concurrent.futures
+import errno
 import gzip
 import hashlib
 import json
 import math
 import mimetypes
 import os
+import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from datetime import datetime
@@ -22,7 +26,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
-from urllib.request import url2pathname
+from urllib.request import Request, url2pathname, urlopen
 
 import preprocess
 from build_mvp_export import run_export
@@ -53,6 +57,7 @@ from edb_builder import (
     version_string_for_crop_format,
     write_edb,
 )
+from page_repair import build_ai_fallback_config
 from layout_template_schema import LayoutTemplate
 from image_reconstruction_backend import (
     DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER,
@@ -89,14 +94,25 @@ INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 OUTER_EDB_PREFIX_LEN = 11
 
 
+def is_frozen_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def default_frozen_app_home() -> Path:
+    configured = os.environ.get("EDB_APP_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / "Documents" / "ClassInEDBMVP").resolve()
+
+
 def app_root() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys.executable).resolve().parent
+    if is_frozen_app():
+        return default_frozen_app_home()
     return Path(__file__).resolve().parent
 
 
 def resource_root() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    if is_frozen_app() and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)
     return Path(__file__).resolve().parent
 
@@ -108,10 +124,12 @@ RUNTIME_DIR = BASE_DIR / ".app_runtime"
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
-GENERATED_SESSION_JS = UI_DIR / "generated_session.js"
+GENERATED_SESSION_JS = RUNTIME_DIR / "generated_session.js"
+APP_LOG_FILE = RUNTIME_DIR / "app.log"
 
 
 def ensure_runtime_dirs() -> None:
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -126,9 +144,41 @@ def write_placeholder_generated_session() -> None:
     if GENERATED_SESSION_JS.exists():
         return
     try:
+        GENERATED_SESSION_JS.parent.mkdir(parents=True, exist_ok=True)
         GENERATED_SESSION_JS.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def read_generated_session_js() -> str:
+    try:
+        if GENERATED_SESSION_JS.exists():
+            return GENERATED_SESSION_JS.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return "window.EDB_UI_SESSION = null;\n"
+
+
+def configure_app_logging(log_file: str | Path | None = None) -> None:
+    target = Path(log_file).expanduser() if log_file else APP_LOG_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stream = target.open("a", encoding="utf-8", buffering=1)
+    sys.stdout = stream
+    sys.stderr = stream
+    print(f"\n[{datetime.now().isoformat(timespec='seconds')}] {APP_NAME} starting")
+
+
+def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> bool:
+    url = f"http://{host}:{port}/api/health"
+    try:
+        request = Request(url, headers={"Cache-Control": "no-cache"})
+        with urlopen(request, timeout=timeout) as response:
+            if response.status != HTTPStatus.OK:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return False
+    return bool(isinstance(payload, dict) and payload.get("ok"))
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -1318,14 +1368,20 @@ def content_disposition_attachment(filename: str) -> str:
 def load_generated_session() -> dict[str, Any] | None:
     if not GENERATED_SESSION_JS.exists():
         return None
-    raw = GENERATED_SESSION_JS.read_text(encoding="utf-8").strip()
+    try:
+        raw = GENERATED_SESSION_JS.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
     prefix = "window.EDB_UI_SESSION = "
     if not raw.startswith(prefix):
         return None
     payload = raw[len(prefix):].rstrip(";\n ")
     if not payload or payload == "null":
         return None
-    return json.loads(payload)
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        return None
 
 
 def load_latest_session() -> dict[str, Any] | None:
@@ -3260,10 +3316,20 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
             return {"pageId": page_id, "status": "failed", "error": str(exc)}
         return {"pageId": page_id, "status": "ok", "result": result}
 
+    forced_retry_ai_config = build_ai_fallback_config(
+        mode="force",
+        provider=str(ai_config.get("provider") or "gemini"),
+        model=str(ai_config.get("model") or ""),
+        max_tokens=ai_config.get("max_tokens"),
+        threshold=float(ai_config.get("threshold") or 0.72),
+        max_regions=int(ai_config.get("max_regions") or 30),
+        timeout_ms=int(ai_config.get("timeout_ms") or 30000),
+        save_debug=bool(ai_config.get("save_debug")),
+    )
     retry_worker_count = resolve_recognition_worker_count(
         len(retry_jobs),
         ocr_mode=str(payload.get("ocr") or "auto"),
-        ai_config=None,
+        ai_config=forced_retry_ai_config,
     )
     if retry_worker_count <= 1:
         retry_job_results = [_run_retry_job(job) for job in retry_jobs]
@@ -3289,11 +3355,13 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
                 "status": "missing_source",
                 "error": str(retry_result.get("error") or f"source page image missing for retry: {page_id}"),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "workerCount": retry_worker_count,
             }
             summaries.append({
                 "pageId": page_id,
                 "status": "missing_source",
                 "error": str(retry_result.get("error") or f"source page image missing for retry: {page_id}"),
+                "workerCount": retry_worker_count,
             })
             continue
         if retry_result.get("status") != "ok":
@@ -3305,11 +3373,13 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
                 "status": "failed",
                 "error": str(retry_result.get("error") or "AI retry failed"),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "workerCount": retry_worker_count,
             }
             summaries.append({
                 "pageId": page_id,
                 "status": "failed",
                 "error": str(retry_result.get("error") or "AI retry failed"),
+                "workerCount": retry_worker_count,
             })
             continue
 
@@ -3327,8 +3397,14 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
             page["aiRetry"] = {
                 "status": "empty",
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "workerCount": retry_worker_count,
             }
-            summaries.append({"pageId": page_id, "status": "empty", "replacedProblemCount": 0})
+            summaries.append({
+                "pageId": page_id,
+                "status": "empty",
+                "replacedProblemCount": 0,
+                "workerCount": retry_worker_count,
+            })
             continue
 
         previous_problem_count = len(page.get("problemIds") or [])
@@ -3354,8 +3430,14 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
             "previousProblemCount": previous_problem_count,
             "replacedProblemCount": len(replacements),
             "aiSummary": retry_session.get("ai_summary"),
+            "workerCount": retry_worker_count,
         }
-        summaries.append({"pageId": page_id, "status": "applied", "replacedProblemCount": len(replacements)})
+        summaries.append({
+            "pageId": page_id,
+            "status": "applied",
+            "replacedProblemCount": len(replacements),
+            "workerCount": retry_worker_count,
+        })
 
     session["ai_retry_summary"] = summaries
     _refresh_session_problem_counts(session)
@@ -3404,6 +3486,7 @@ class AppHTTPServer(ThreadingHTTPServer):
     def remember_session(self, session: dict[str, Any]) -> None:
         self.latest_session = session
         self.allowed_files = collect_session_file_paths(session)
+        LATEST_SESSION_JSON.parent.mkdir(parents=True, exist_ok=True)
         LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
         remember_session_history(session)
 
@@ -3428,6 +3511,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             self._send_json({"ok": True, "app": APP_NAME})
+            return
+        if parsed.path == "/generated_session.js":
+            self._send_text(read_generated_session_js(), content_type="application/javascript; charset=utf-8")
             return
         if parsed.path == "/api/runtime-diagnostics":
             self._send_json(describe_runtime_diagnostics())
@@ -3469,6 +3555,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/system/open-file":
             self._handle_open_file()
+            return
+        if parsed.path == "/api/system/shutdown":
+            self._handle_shutdown()
             return
         if parsed.path == "/api/session/mutate":
             self._handle_session_mutate()
@@ -4097,6 +4186,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 return
         # also blank out the generated_session.js bridge so a refresh shows empty state
         try:
+            GENERATED_SESSION_JS.parent.mkdir(parents=True, exist_ok=True)
             GENERATED_SESSION_JS.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
         except OSError:
             pass
@@ -4148,6 +4238,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json({"ok": True, "path": str(target)})
 
+    def _handle_shutdown(self) -> None:
+        self._send_json({"ok": True})
+        threading.Thread(target=self.app_server.shutdown, name="app-shutdown", daemon=True).start()
+
     def _handle_user_settings_get(self) -> None:
         self._send_json(
             {"ok": True, "settings": summarize_user_settings(RUNTIME_DIR)}
@@ -4190,6 +4284,20 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_text(
+        self,
+        payload: str,
+        *,
+        status: HTTPStatus = HTTPStatus.OK,
+        content_type: str = "text/plain; charset=utf-8",
+    ) -> None:
+        body = payload.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _handle_latest_session(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
         if session is None:
@@ -4199,6 +4307,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.app_server.latest_session = session
         self.app_server.allowed_files |= collect_session_file_paths(session)
         if not LATEST_SESSION_JSON.exists():
+            LATEST_SESSION_JSON.parent.mkdir(parents=True, exist_ok=True)
             LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
         remember_session_history(session)
         self._send_json(
@@ -4225,14 +4334,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if path.suffix.lower() == ".edb":
             mime_type = "application/octet-stream"
 
-        data = path.read_bytes()
+        file_size = path.stat().st_size
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(file_size))
         if path.suffix.lower() == ".edb":
             self.send_header("Content-Disposition", content_disposition_attachment(path.name))
         self.end_headers()
-        self.wfile.write(data)
+        with path.open("rb") as source:
+            shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
 
     def _save_uploaded_file(self, payload: dict[str, Any]) -> Path:
         file_name = payload.get("fileName") or "upload.bin"
@@ -4240,18 +4350,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not file_data_base64:
             raise ValueError("fileDataBase64 is required when sourcePath is not provided")
         safe_name = sanitize_upload_file_name(file_name)
-        file_bytes = base64.b64decode(file_data_base64)
+        try:
+            file_bytes = base64.b64decode(file_data_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("fileDataBase64 is not valid base64") from exc
         content_digest = hashlib.sha1(file_bytes).hexdigest()
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         suffix = Path(safe_name).suffix
         for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{suffix}")):
-            try:
-                if candidate.read_bytes() == file_bytes:
-                    return candidate
-            except OSError:
-                continue
+            if candidate.is_file():
+                return candidate
         target_path = UPLOAD_DIR / f"{content_digest}_{safe_name}"
-        if not target_path.exists() or target_path.read_bytes() != file_bytes:
+        if not target_path.exists():
             target_path.write_bytes(file_bytes)
         return target_path
 
@@ -4416,9 +4526,23 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
     ensure_runtime_dirs()
     hydrate_user_settings_env()
     write_placeholder_generated_session()
-    handler = partial(AppRequestHandler)
-    server = AppHTTPServer((host, port), handler)
     url = f"http://{host}:{port}/"
+    if _local_server_is_healthy(host, port):
+        print(f"{APP_NAME} already running at {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return
+    handler = partial(AppRequestHandler)
+    try:
+        server = AppHTTPServer((host, port), handler)
+    except OSError as exc:
+        address_in_use = exc.errno in {errno.EADDRINUSE, 48, 98, 10048}
+        if address_in_use and _local_server_is_healthy(host, port):
+            print(f"{APP_NAME} already running at {url}")
+            if open_browser:
+                webbrowser.open(url)
+            return
+        raise
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)
@@ -4434,9 +4558,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the local MVP app server for the ClassIn EDB builder.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")
-    parser.add_argument("--open-browser", action="store_true", help="Open the app in the default browser")
+    parser.add_argument("--open-browser", dest="open_browser", action="store_true", default=None, help="Open the app in the default browser")
+    parser.add_argument("--no-open-browser", dest="open_browser", action="store_false", help="Do not open the default browser")
+    parser.add_argument("--log-file", default="", help="Write stdout/stderr to this file")
     args = parser.parse_args()
-    run_server(host=args.host, port=args.port, open_browser=args.open_browser)
+    ensure_runtime_dirs()
+    if args.log_file or is_frozen_app():
+        configure_app_logging(args.log_file or None)
+    open_browser = is_frozen_app() if args.open_browser is None else bool(args.open_browser)
+    run_server(host=args.host, port=args.port, open_browser=open_browser)
     return 0
 
 

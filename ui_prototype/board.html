@@ -2947,17 +2947,47 @@
 </head>
 <body>
 <div id="root"></div>
+<script>
+(function(){
+  const diagnostics = [];
+  function messageFrom(value){
+    if (!value) return '알 수 없는 오류';
+    if (value.message) return String(value.message);
+    return String(value);
+  }
+  function showRuntimeError(entry){
+    diagnostics.push(entry);
+    if (!document.body || document.querySelector('.runtime-crash-panel')) return;
+    const panel = document.createElement('div');
+    panel.className = 'runtime-crash-panel';
+    panel.style.cssText = 'position:fixed;inset:16px;z-index:2147483647;box-sizing:border-box;overflow:auto;border:1px solid #ef4444;background:#fff5f5;color:#1f2937;padding:16px;font:13px/1.5 system-ui,-apple-system,sans-serif;white-space:pre-wrap;';
+    panel.textContent = '앱 실행 중 오류가 발생했습니다.\n\n' + messageFrom(entry.error || entry.reason || entry.message);
+    document.body.appendChild(panel);
+  }
+  window.EDB_RUNTIME_DIAGNOSTICS = diagnostics;
+  window.EDB_REPORT_RUNTIME_ERROR = showRuntimeError;
+  window.addEventListener('error', event => showRuntimeError({
+    type: 'error',
+    message: event.message,
+    error: event.error,
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+  }));
+  window.addEventListener('unhandledrejection', event => showRuntimeError({
+    type: 'unhandledrejection',
+    reason: event.reason,
+  }));
+})();
+</script>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
 
 <script src="reorder.js?v=reorder-20260612"></script>
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=source-overlap-summary-20260614"></script>
 <script src="publish_guard.js?v=preflight-focus-20260614"></script>
-<script type="text/babel" src="art.jsx"></script>
-<script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="app.jsx?v=source-overlap-summary-20260614"></script>
+<script src="app.bundle.js?v=frontend-bundle-20260617"></script>
 </body>
 </html>

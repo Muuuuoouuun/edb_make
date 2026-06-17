@@ -1,6 +1,74 @@
 // 칠판 자료 편집기 — main app
 const { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } = React;
 
+function reportRuntimeDiagnostic(error, detail = {}) {
+  const payload = {
+    type: detail.type || 'runtime',
+    message: error?.message || String(error || '알 수 없는 오류'),
+    error,
+    ...detail,
+  };
+  try {
+    console.error('[board-runtime]', payload.message, payload);
+  } catch (_err) {
+    // Console logging is best-effort; visible diagnostics are handled below.
+  }
+  if (typeof window.EDB_REPORT_RUNTIME_ERROR === 'function') {
+    window.EDB_REPORT_RUNTIME_ERROR(payload);
+  }
+  return payload;
+}
+
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    reportRuntimeDiagnostic(error, {
+      type: 'react-render',
+      componentStack: info?.componentStack || '',
+    });
+  }
+
+  render() {
+    if (this.state.error) {
+      return React.createElement(
+        'div',
+        {
+          className: 'runtime-crash-panel',
+          style: {
+            margin: 16,
+            padding: 16,
+            border: '1px solid #ef4444',
+            background: '#fff5f5',
+            color: '#1f2937',
+            font: '13px/1.5 system-ui,-apple-system,sans-serif',
+            whiteSpace: 'pre-wrap',
+          },
+        },
+        `앱 화면을 렌더링하지 못했습니다.\n\n${this.state.error?.message || this.state.error}`
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function requiredWindowHelper(namespace, helperName, fallback) {
+  const helper = namespace && namespace[helperName];
+  if (typeof helper === 'function') return helper;
+  reportRuntimeDiagnostic(new Error(`필수 프론트엔드 helper 누락: ${helperName}`), {
+    type: 'missing-helper',
+    helperName,
+  });
+  return fallback;
+}
+
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "dark": false,
   "boardColor": "#1d3a2c",
@@ -24,9 +92,9 @@ const SAMPLE_STEPS = ['raw','raw','raw','s1','s2','raw'];
 
 const REORDER_HELPERS = window.EDB_REORDER || {};
 const PUBLISH_GUARD = window.EDB_PUBLISH_GUARD || {};
-const findBoardPlacementOverlaps = PUBLISH_GUARD.findBoardPlacementOverlaps || (() => []);
-const findPassageGroupSourceReuse = PUBLISH_GUARD.findPassageGroupSourceReuse || (() => []);
-const findSourceProblemOverlaps = PUBLISH_GUARD.findSourceProblemOverlaps || (() => []);
+const findBoardPlacementOverlaps = requiredWindowHelper(PUBLISH_GUARD, 'findBoardPlacementOverlaps', () => []);
+const findPassageGroupSourceReuse = requiredWindowHelper(PUBLISH_GUARD, 'findPassageGroupSourceReuse', () => []);
+const findSourceProblemOverlaps = requiredWindowHelper(PUBLISH_GUARD, 'findSourceProblemOverlaps', () => []);
 const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, fromId, toId, position = 'before') => {
   const sourceId = fromId == null ? '' : String(fromId);
   const targetId = toId == null ? '' : String(toId);
@@ -267,6 +335,7 @@ const Icon = {
   undo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3"/></svg>,
   refresh:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3.5-7.1M21 4v5h-5"/></svg>,
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
+  power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
   arrowUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>,
@@ -289,7 +358,7 @@ const stepLabel = s => {
 };
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo }){
+function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo, onShutdown }){
   return (
     <div className="topbar">
       <div className="brand">
@@ -332,6 +401,9 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         onClick={onUndo}
         disabled={!canUndo}
       >{Icon.undo}</button>
+      <button className="btn ghost icon" onClick={onShutdown} title="로컬 앱 종료">
+        {Icon.power}
+      </button>
       <button className={`btn primary ${published ? 'done' : ''}`} onClick={onPublish}>
         {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
       </button>
@@ -2081,7 +2153,7 @@ async function openPublishedEdb(target){
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: target.edbPath }),
     });
-    const json = await resp.json().catch(() => ({}));
+    const json = await readJsonResponse(resp, '파일 열기 실패').catch(() => ({}));
     if (!resp.ok || !json.ok) {
       console.warn('[board] open-file failed:', json.error || resp.status);
     }
@@ -3459,15 +3531,13 @@ function mapProblemToItem(problem, idx){
 async function fetchLatestSession(){
   const resp = await fetch('/api/session/latest');
   if (resp.status === 404) return null;
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `세션 로드 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '세션 로드 실패');
   return json.session;
 }
 
 async function fetchSessionHistory(){
   const resp = await fetch('/api/session/history');
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `작업 이력 로드 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '작업 이력 로드 실패');
   return Array.isArray(json.history) ? json.history : [];
 }
 
@@ -3477,8 +3547,7 @@ async function postRestoreSessionHistory(id){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `작업 열기 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '작업 열기 실패');
   return json;
 }
 
@@ -5113,6 +5182,29 @@ function requestedInitialView(){
   }
 }
 
+async function readJsonResponse(resp, fallbackMessage){
+  const text = await resp.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const excerpt = text.replace(/\s+/g, ' ').trim().slice(0, 180);
+    throw new Error(`${fallbackMessage || '응답 파싱 실패'} (${resp.status}) · JSON 응답 아님${excerpt ? `: ${excerpt}` : ''}`);
+  }
+}
+
+function assertOkJson(resp, json, fallbackMessage){
+  if (!resp.ok || !json.ok) {
+    throw new Error(json?.error || `${fallbackMessage || '요청 실패'} (${resp.status})`);
+  }
+  return json;
+}
+
+async function expectOkJson(resp, fallbackMessage){
+  const json = await readJsonResponse(resp, fallbackMessage);
+  return assertOkJson(resp, json, fallbackMessage);
+}
+
 async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT, options = {}){
   const resolvedInputIntent = normalizeInputIntent(inputIntent);
   const inputIntentConfig = INPUT_INTENT_BY_VALUE[resolvedInputIntent] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
@@ -5140,7 +5232,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     }),
   });
-  const json = await resp.json();
+  const json = await readJsonResponse(resp, '파싱 실행 실패');
   if (!resp.ok || !json.ok) throw new Error(formatApiError(json, `파싱 실행 실패 (${resp.status})`));
   return json.session;
 }
@@ -5156,23 +5248,26 @@ function formatApiError(payload, fallbackMessage){
 
 async function fetchUserSettings(){
   const resp = await fetch('/api/user-settings');
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `설정 로드 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '설정 로드 실패');
   return json.settings;
 }
 
 async function fetchRuntimeDiagnostics(){
   const resp = await fetch('/api/runtime-diagnostics');
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `진단 로드 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '진단 로드 실패');
   return json;
 }
 
 async function clearSession(){
   const resp = await fetch('/api/session/latest', { method: 'DELETE' });
   if (resp.status === 404) return { history: [] }; // already cleared
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `세션 초기화 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '세션 초기화 실패');
+  return json;
+}
+
+async function postShutdown(){
+  const resp = await fetch('/api/system/shutdown', { method: 'POST' });
+  const json = await expectOkJson(resp, '앱 종료 실패');
   return json;
 }
 
@@ -5182,8 +5277,7 @@ async function postMutate(action, args){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, ...args }),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `검수 수정 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '검수 수정 실패');
   return json.session;
 }
 
@@ -5194,8 +5288,7 @@ async function postRetryAi(args, options = {}){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...(args || {}), preview: !!options.preview }),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `AI 재인식 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, 'AI 재인식 실패');
   return json;
 }
 
@@ -5206,8 +5299,7 @@ async function postEnhanceImage(args, options = {}){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(args || {}),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `AI 업스케일 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, 'AI 업스케일 실패');
   return json;
 }
 
@@ -5217,8 +5309,7 @@ async function postRestore(snapshot){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session: snapshot }),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `이전 상태 복원 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '이전 상태 복원 실패');
   return json.session;
 }
 
@@ -5228,8 +5319,7 @@ async function postClassinReviewResult(payload){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `ClassIn 검수 저장 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, 'ClassIn 검수 저장 실패');
   return json.session;
 }
 
@@ -5241,7 +5331,7 @@ async function openOutputFolder(path){
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
     });
-    const json = await resp.json().catch(() => ({}));
+    const json = await readJsonResponse(resp, '폴더 열기 실패').catch(() => ({}));
     if (!resp.ok || !json.ok) {
       console.warn('[board] open-folder failed:', json.error || resp.status);
     }
@@ -5259,8 +5349,7 @@ async function saveUserSettings(settings){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const json = await resp.json();
-  if (!resp.ok || !json.ok) throw new Error(json.error || `설정 저장 실패 (${resp.status})`);
+  const json = await expectOkJson(resp, '설정 저장 실패');
   return json.settings;
 }
 
@@ -5792,6 +5881,16 @@ function App(){
     }
   }, [loading, session, items.length, pendingFiles.length, recentSessions.length]);
 
+  const shutdownApp = useCallback(async () => {
+    if (!window.confirm('로컬 앱을 종료할까요? 브라우저 창은 직접 닫으면 됩니다.')) return;
+    try {
+      await postShutdown();
+      showToast('앱을 종료합니다. 브라우저 창을 닫아도 됩니다.');
+    } catch (e) {
+      showToast('앱 종료 실패: ' + e.message);
+    }
+  }, []);
+
   const refreshSession = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -6290,7 +6389,7 @@ function App(){
           session: sessionForPublish,
         }),
       });
-      const json = await resp.json();
+      const json = await readJsonResponse(resp, 'publish 실패');
       if (!resp.ok || !json.ok) {
         const blockedPublish = normalizePublishPreflightBlock(json);
         if (blockedPublish) {
@@ -6345,6 +6444,7 @@ function App(){
         reviewAvailable={reviewAvailable}
         onUndo={undoMutation}
         canUndo={canUndo}
+        onShutdown={shutdownApp}
       />
       <div className="main">
         <ItemsRail
@@ -6475,4 +6575,8 @@ function App(){
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>
+);

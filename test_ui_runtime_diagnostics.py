@@ -225,6 +225,17 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("passage_cross_page_merge_check", risk_meta)
         self.assertIn("긴 지문 병합 확인", risk_meta)
 
+    def test_board_uses_prebuilt_bundle_without_browser_babel(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", board_html)
+        self.assertNotIn("vendor/babel.min.js", board_html)
+        self.assertNotIn('type="text/babel"', board_html)
+        self.assertIn("EDB_REPORT_RUNTIME_ERROR", board_html)
+        self.assertIn("class AppErrorBoundary", source)
+        self.assertIn("requiredWindowHelper(PUBLISH_GUARD", source)
+
     def test_review_summary_surfaces_passage_review_queue(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]

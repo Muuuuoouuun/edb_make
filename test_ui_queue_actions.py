@@ -19,7 +19,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.jsx?v=source-overlap-summary-20260614", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -45,8 +45,8 @@ class TestUiQueueActions(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("틀로 자르기", source)
-        self.assertIn("선택 영역 AI 재인식", source)
+        self.assertIn("틀 조정/자르기", source)
+        self.assertIn("주변 영역 AI 재인식", source)
         self.assertIn("partial: true", source)
         self.assertIn("cropBoxes", source)
         self.assertIn("MANUAL_CROP_OUTSET_MAX", source)

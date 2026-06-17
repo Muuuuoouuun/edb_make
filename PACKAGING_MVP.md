@@ -3,13 +3,17 @@
 ## What This Delivers
 - Local HTTP app server for the ClassIn EDB MVP
 - Browser UI connected to the real export pipeline
-- One-click-ish local launch via PowerShell
-- First-pass desktop packaging flow with PyInstaller
+- Double-click local launch for development
+- User-facing Windows `.exe` and macOS `.app` packaging with PyInstaller
+- Bundled React/Babel browser runtime so the core UI can open without CDN access
 
 ## Main Entry Points
 - Local app server: `app_server.py`
-- Local launcher: `run_local_app.ps1`
-- Packaging script: `package_mvp.ps1`
+- Windows local launcher: `run_local_app.ps1`
+- macOS local launcher: `run_local_app.command`
+- Windows packaging script: `package_mvp.ps1`
+- Windows installer script: `package_windows_installer.ps1`
+- macOS packaging script: `package_macos_app.sh`
 
 ## Local Run
 ```powershell
@@ -51,7 +55,22 @@ If the local server is already running, it only opens the browser instead of sta
 8. Open the generated `.edb` from the inspector or header
 
 ## PyInstaller Packaging
-Install PyInstaller if needed:
+Windows packages must be built on Windows. macOS `.app` bundles must be built on macOS.
+
+### Windows `.exe`
+Build the installable Windows setup file on Windows:
+```powershell
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller
+```
+
+Expected installer:
+```text
+dist\ClassInEDBMVP-Setup.exe
+```
+
+That installer creates a Start menu shortcut and can create a desktop shortcut. Clicking the installed app opens the browser at the local app.
+
+If you only want the raw packaged app folder, install PyInstaller if needed:
 ```powershell
 .\package_mvp.ps1 -InstallPyInstaller
 ```
@@ -66,37 +85,79 @@ Useful options:
 # Create a single executable file instead of a directory
 .\package_mvp.ps1 -OneFile
 
+# Keep a console window for debugging
+.\package_mvp.ps1 -Console
+
+# Reuse an existing frontend bundle instead of running Node
+.\package_mvp.ps1 -SkipFrontendBuild
+
 # Clean previous builds and zip the output directory
 .\package_mvp.ps1 -OutputDir .\dist_smoke -Clean -Zip
 ```
 
 Expected output:
-- **Default (`--onedir`)**: A folder containing the executable and dependencies: `dist\ClassInEDBMVP\`
-- **Single File (`--onefile` with `-OneFile`)**: A single standalone executable: `dist\ClassInEDBMVP.exe`
+- **Default**: a folder containing the executable and dependencies: `dist\ClassInEDBMVP\`
+- **Single file**: a standalone executable: `dist\ClassInEDBMVP.exe`
 
 Typical packaged launch target:
 - Default mode: `dist\ClassInEDBMVP\ClassInEDBMVP.exe`
 - Standalone mode: `dist\ClassInEDBMVP.exe`
 
-If PyInstaller is not installed, the script falls back to a source bundle:
+The default Windows build is windowed, so no console appears. Logs are written under:
 ```text
-dist\source-package\
+%USERPROFILE%\Documents\ClassInEDBMVP\.app_runtime\app.log
+```
+
+### macOS `.app`
+Install PyInstaller if needed and build:
+```zsh
+./package_macos_app.sh --install-pyinstaller --clean --zip
+```
+
+If PyInstaller is already installed:
+```zsh
+./package_macos_app.sh --clean --zip
+```
+
+Expected output:
+```text
+dist/ClassInEDBMVP.app
+dist/ClassInEDBMVP-macOS.zip
+```
+
+The default macOS build is windowed and ad-hoc signed when `codesign` is available. Logs are written under:
+```text
+~/Documents/ClassInEDBMVP/.app_runtime/app.log
 ```
 
 ## Included Runtime Assets
 - `ui_prototype\index.html`
-- `ui_prototype\app.js`
-- `ui_prototype\styles.css`
-- `ui_prototype\generated_session.js` if present at build time
+- `ui_prototype\board.html`
+- `ui_prototype\reorder.js`
+- `ui_prototype\review_filters.js`
+- `ui_prototype\publish_summary.js`
+- `ui_prototype\publish_guard.js`
+- `ui_prototype\app.bundle.js`
+- `ui_prototype\vendor\react.production.min.js`
+- `ui_prototype\vendor\react-dom.production.min.js`
+- `assets\app_icon.ico`
+- `assets\app_icon.icns`
+- `assets\app_icon.png`
 
 ## Notes
-- Export outputs are written into the project folder unless another output directory name is entered in the UI.
-- Uploaded files are cached in `.app_runtime\uploads`.
+- `ui_prototype\app.bundle.js` is generated from `art.jsx`, `tweaks-panel.jsx`, and `app.jsx` by `scripts\build_frontend_bundle.mjs`. Packaging scripts rebuild it when Node.js is available.
+- Browser-side Babel is not included in packaged builds.
+- Development runs write outputs into the project folder unless another output directory name is entered in the UI.
+- Packaged runs write default outputs under `Documents\ClassInEDBMVP` unless another output directory name is entered in the UI.
+- Uploaded files are cached in `.app_runtime\uploads` under the active app home.
 - The browser UI talks to the local server over HTTP and does not call Python directly.
+- Double-clicking the packaged app opens the browser automatically. If the app server is already running, it opens the browser instead of starting a duplicate server.
+- API keys are entered in the app's `칠판 설정` panel and stored locally under the app runtime folder.
+- Use the top-bar power button to stop the local app server after use.
 - The current `.edb` export is still the MVP image-based board export, not the final mixed text/image writer.
-- `package_mvp.ps1` can create either a PyInstaller onedir build or a source-package fallback.
 
 ## Known Limits
 - OCR quality depends on optional local OCR dependencies.
 - Packaged builds still rely on Python-side native dependencies like Pillow, PyMuPDF, and OpenCV.
+- HWP conversion can still depend on external converters such as LibreOffice, Chrome, `hwpilot`, or configured command-line tools depending on the input path.
 - The UI is connected to the MVP pipeline, but it is not yet a full production desktop shell.

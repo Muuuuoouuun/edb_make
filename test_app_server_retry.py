@@ -1,6 +1,8 @@
 import json
 import os
 import base64
+import io
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,6 +23,52 @@ class TestStaticAssetCaching(unittest.TestCase):
 
         self.assertIn(("Cache-Control", "no-store, max-age=0"), headers)
         self.assertIn(("Pragma", "no-cache"), headers)
+
+    def test_generated_session_script_is_served_from_runtime_file(self):
+        with TemporaryDirectory() as raw_tmp:
+            generated_path = Path(raw_tmp) / "generated_session.js"
+            generated_path.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.path = "/generated_session.js"
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+
+            with patch.object(app_server, "GENERATED_SESSION_JS", generated_path):
+                handler.do_GET()
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            self.assertIn(("Content-Type", "application/javascript; charset=utf-8"), headers)
+            self.assertEqual(b"window.EDB_UI_SESSION = null;\n", handler.wfile.getvalue())
+
+    def test_file_download_streams_without_reading_entire_artifact(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            artifact = tmpdir / "large.edb"
+            payload = (b"0123456789abcdef" * 70000) + b"tail"
+            artifact.write_bytes(payload)
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "allowed_files": {str(artifact.resolve())},
+            })()
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            parsed = app_server.urlparse(app_server.path_to_api_url(artifact))
+            with patch.object(Path, "read_bytes", side_effect=AssertionError("read_bytes should not be used for downloads")):
+                handler._handle_file(parsed)
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            self.assertIn(("Content-Length", str(len(payload))), headers)
+            self.assertEqual(payload, handler.wfile.getvalue())
 
 
 def _build_session(tmpdir: Path, *, present_page_ids: set[str]) -> dict:
@@ -113,6 +161,57 @@ class TestRetryAiResilience(unittest.TestCase):
             new_problem_ids = {prob["id"] for prob in new_session["problems"]}
             self.assertNotIn("page-2-p1", new_problem_ids)
             self.assertIn("page-1-p1", new_problem_ids)
+
+    def test_retry_ai_clamps_forced_ai_worker_count_from_env(self):
+        previous_workers = os.environ.get("EDB_RECOGNITION_WORKERS")
+        previous_ai_workers = os.environ.get("EDB_AI_MAX_WORKERS")
+        os.environ["EDB_RECOGNITION_WORKERS"] = "8"
+        os.environ.pop("EDB_AI_MAX_WORKERS", None)
+        try:
+            with TemporaryDirectory() as raw_tmp:
+                tmpdir = Path(raw_tmp)
+                pages = []
+                problems = []
+                page_ids = []
+                for index in range(1, 5):
+                    page_id = f"page-{index}"
+                    page_ids.append(page_id)
+                    image_path = tmpdir / f"{page_id}.png"
+                    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+                    problem_id = f"{page_id}-p1"
+                    pages.append({
+                        "id": page_id,
+                        "sourceImageUri": image_path.resolve().as_uri(),
+                        "problemIds": [problem_id],
+                        "riskFlags": [],
+                    })
+                    problems.append({
+                        "id": problem_id,
+                        "sourcePageId": page_id,
+                        "bbox": {"left": 0, "top": 0, "width": 100, "height": 100},
+                        "riskFlags": ["needs_review"],
+                    })
+                session = {
+                    "pages": pages,
+                    "problems": problems,
+                    "ai_fallback": {"provider": "gemini"},
+                }
+
+                with patch.object(app_server, "run_problem_export", side_effect=_fake_run_problem_export):
+                    new_session = app_server._mutate_retry_ai(session, {"pageIds": page_ids})
+
+                summaries = new_session.get("ai_retry_summary") or []
+                self.assertEqual(4, len(summaries))
+                self.assertEqual({3}, {summary.get("workerCount") for summary in summaries})
+        finally:
+            if previous_workers is None:
+                os.environ.pop("EDB_RECOGNITION_WORKERS", None)
+            else:
+                os.environ["EDB_RECOGNITION_WORKERS"] = previous_workers
+            if previous_ai_workers is None:
+                os.environ.pop("EDB_AI_MAX_WORKERS", None)
+            else:
+                os.environ["EDB_AI_MAX_WORKERS"] = previous_ai_workers
 
     def test_missing_key_rejects_before_any_mutation(self):
         os.environ.pop("GEMINI_API_KEY", None)
@@ -505,6 +604,39 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertEqual(b"same hwp bytes", first.read_bytes())
             self.assertIn("평가원 양식", first.name)
             self.assertEqual(1, len(list(upload_dir.glob("*.hwp"))))
+
+    def test_uploaded_files_reuse_digest_path_without_rereading_existing_file(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            upload_dir = tmpdir / "uploads"
+            upload_dir.mkdir()
+            handler = object.__new__(app_server.AppRequestHandler)
+            payload = {
+                "fileName": "same.hwp",
+                "fileDataBase64": base64.b64encode(b"same hwp bytes").decode("ascii"),
+            }
+
+            with patch.object(app_server, "UPLOAD_DIR", upload_dir):
+                first = handler._save_uploaded_file(payload)
+                with patch.object(Path, "read_bytes", side_effect=AssertionError("should not reread cache hit")):
+                    second = handler._save_uploaded_file(payload)
+
+            self.assertEqual(first, second)
+
+    def test_uploaded_file_rejects_malformed_base64(self):
+        with TemporaryDirectory() as raw_tmp:
+            upload_dir = Path(raw_tmp) / "uploads"
+            upload_dir.mkdir()
+            handler = object.__new__(app_server.AppRequestHandler)
+
+            with patch.object(app_server, "UPLOAD_DIR", upload_dir):
+                with self.assertRaises(ValueError) as ctx:
+                    handler._save_uploaded_file({
+                        "fileName": "broken.hwp",
+                        "fileDataBase64": "not valid base64!!!",
+                    })
+
+            self.assertIn("valid base64", str(ctx.exception))
 
     def test_uploaded_files_reuse_same_content_path_when_filename_changes(self):
         with TemporaryDirectory() as raw_tmp:
@@ -2132,6 +2264,20 @@ class TestSystemOpenTargets(unittest.TestCase):
             self.assertIsNone(handler.server.latest_session)
             self.assertEqual(set(), handler.server.allowed_files)
             self.assertEqual({"ok": True, "history": []}, responses[0][0])
+
+    def test_shutdown_endpoint_sends_ok_and_stops_server(self):
+        shutdown_called = threading.Event()
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = type("FakeServer", (), {
+            "shutdown": lambda _self: shutdown_called.set(),
+        })()
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        handler._handle_shutdown()
+
+        self.assertEqual([({"ok": True}, {})], responses)
+        self.assertTrue(shutdown_called.wait(1.0))
 
 
 class TestClassInManualReview(unittest.TestCase):

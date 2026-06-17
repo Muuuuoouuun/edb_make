@@ -296,6 +296,13 @@ def resolve_recognition_worker_count(
     if item_count <= 1:
         return 1
 
+    normalized_ocr = (ocr_mode or "auto").strip().lower()
+    gemini_primary = normalized_ocr in {"auto", "gemini", "google", "claude", "anthropic"} and bool(
+        os.environ.get("GEMINI_API_KEY", "").strip()
+    )
+    ai_enabled = bool(ai_config and ai_config.enabled)
+    network_bound = gemini_primary or ai_enabled
+
     raw_worker_count = (
         os.environ.get("EDB_RECOGNITION_PAGE_WORKERS", "").strip()
         or os.environ.get("EDB_RECOGNITION_WORKERS", "").strip()
@@ -305,16 +312,17 @@ def resolve_recognition_worker_count(
             requested_workers = int(raw_worker_count)
         except ValueError:
             requested_workers = 2
+        if network_bound:
+            try:
+                network_cap = int(os.environ.get("EDB_AI_MAX_WORKERS", "3").strip() or "3")
+            except ValueError:
+                network_cap = 3
+            return max(1, min(item_count, requested_workers, max(1, network_cap)))
         return max(1, min(item_count, requested_workers))
 
     # OCR/AI repair is mostly network-bound when Gemini is active, but each
     # page already parallelizes block OCR. Keep the default modest to overlap
     # page waits without inviting rate-limit failures.
-    normalized_ocr = (ocr_mode or "auto").strip().lower()
-    gemini_primary = normalized_ocr in {"auto", "gemini", "google", "claude", "anthropic"} and bool(
-        os.environ.get("GEMINI_API_KEY", "").strip()
-    )
-    ai_enabled = bool(ai_config and ai_config.enabled)
     default_workers = 2 if gemini_primary or ai_enabled else min(2, os.cpu_count() or 2)
     return max(1, min(item_count, default_workers))
 

@@ -91,7 +91,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
         self.assertIn("publish_summary.js?v=source-overlap-summary-20260614", html)
-        self.assertIn("app.jsx?v=source-overlap-summary-20260614", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", html)
 
 
 if __name__ == "__main__":
