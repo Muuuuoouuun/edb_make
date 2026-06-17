@@ -12,6 +12,8 @@ import json
 import math
 import mimetypes
 import os
+import platform
+import re
 import shutil
 import struct
 import subprocess
@@ -44,6 +46,7 @@ from build_problem_board_edb import (
     _session_problem_count_payload,
     build_records,
     build_ui_session,
+    estimate_height_pages,
     recrop_problem,
     resolve_subject,
     run_problem_export,
@@ -90,6 +93,7 @@ def load_env_local() -> None:
 load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
+APP_UPDATE_CONFIG_FILE = "app_update_config.json"
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 OUTER_EDB_PREFIX_LEN = 11
 
@@ -126,6 +130,203 @@ LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
 GENERATED_SESSION_JS = RUNTIME_DIR / "generated_session.js"
 APP_LOG_FILE = RUNTIME_DIR / "app.log"
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _first_nonempty(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _app_platform_key() -> str:
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return sys.platform
+
+
+def load_app_update_config() -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "appName": "ClassInEDBMVP",
+        "version": "0.1.0",
+        "updateFeedUrl": "",
+        "downloadUrl": "",
+        "releaseNotesUrl": "",
+    }
+    seen: set[Path] = set()
+    for path in (RESOURCE_DIR / APP_UPDATE_CONFIG_FILE, BASE_DIR / APP_UPDATE_CONFIG_FILE):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        config.update({k: v for k, v in _read_json_object(path).items() if v is not None})
+    env_map = {
+        "version": "EDB_APP_VERSION",
+        "updateFeedUrl": "EDB_UPDATE_FEED_URL",
+        "downloadUrl": "EDB_DOWNLOAD_URL",
+        "releaseNotesUrl": "EDB_RELEASE_NOTES_URL",
+    }
+    for key, env_name in env_map.items():
+        if os.environ.get(env_name):
+            config[key] = os.environ[env_name].strip()
+    config["platform"] = _app_platform_key()
+    config["system"] = platform.system() or sys.platform
+    return config
+
+
+def _version_number_tuple(version: Any) -> tuple[int, ...]:
+    text = str(version or "").strip().lower()
+    text = re.sub(r"^[^\d]+", "", text)
+    text = text.split("+", 1)[0].split("-", 1)[0]
+    parts: list[int] = []
+    for token in re.split(r"[._\s]+", text):
+        if not token:
+            continue
+        match = re.match(r"(\d+)", token)
+        parts.append(int(match.group(1)) if match else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def compare_app_versions(current: Any, latest: Any) -> int:
+    current_parts = _version_number_tuple(current)
+    latest_parts = _version_number_tuple(latest)
+    max_len = max(len(current_parts), len(latest_parts))
+    current_parts += (0,) * (max_len - len(current_parts))
+    latest_parts += (0,) * (max_len - len(latest_parts))
+    if latest_parts > current_parts:
+        return 1
+    if latest_parts < current_parts:
+        return -1
+    return 0
+
+
+def _normalize_update_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return text
+
+
+def _fetch_update_feed(feed_url: str) -> dict[str, Any]:
+    request = Request(feed_url, headers={
+        "Accept": "application/json",
+        "User-Agent": f"ClassInEDBMVP/{load_app_update_config().get('version', '0')}",
+    })
+    with urlopen(request, timeout=4.0) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("update feed must be a JSON object")
+    return data
+
+
+def _select_platform_update(feed: dict[str, Any], platform_key: str) -> dict[str, Any]:
+    selected = dict(feed)
+    platforms = feed.get("platforms")
+    if isinstance(platforms, dict):
+        platform_payload = platforms.get(platform_key)
+        if platform_payload is None and platform_key == "macos":
+            platform_payload = platforms.get("darwin")
+        if platform_payload is None and platform_key == "windows":
+            platform_payload = platforms.get("win32")
+        if isinstance(platform_payload, dict):
+            selected.update({k: v for k, v in platform_payload.items() if v is not None})
+            selected["platformSupported"] = True
+        else:
+            selected["platformSupported"] = False
+    else:
+        selected["platformSupported"] = True
+    return selected
+
+
+def build_app_update_status() -> dict[str, Any]:
+    config = load_app_update_config()
+    platform_key = str(config.get("platform") or _app_platform_key())
+    current_version = str(config.get("version") or "0.0.0")
+    feed_url = _normalize_update_url(config.get("updateFeedUrl") or config.get("update_feed_url"))
+    fallback_download_url = _normalize_update_url(config.get("downloadUrl") or config.get("download_url"))
+    fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
+    status: dict[str, Any] = {
+        "ok": True,
+        "appName": config.get("appName") or "ClassInEDBMVP",
+        "platform": platform_key,
+        "currentVersion": current_version,
+        "configured": bool(feed_url or fallback_download_url),
+        "updateAvailable": False,
+        "channelStatus": "not_configured",
+        "feedUrl": feed_url,
+        "downloadUrl": fallback_download_url,
+        "releaseNotesUrl": fallback_notes_url,
+        "latest": None,
+    }
+    if not feed_url:
+        if fallback_download_url:
+            status["channelStatus"] = "manual_download"
+        return status
+    try:
+        feed = _fetch_update_feed(feed_url)
+        selected = _select_platform_update(feed, platform_key)
+    except Exception as exc:
+        status["channelStatus"] = "error"
+        status["error"] = str(exc)
+        return status
+    if selected.get("platformSupported") is False:
+        status["channelStatus"] = "unsupported_platform"
+        return status
+    latest_version = _first_nonempty(
+        selected.get("version"),
+        selected.get("latestVersion"),
+        selected.get("latest_version"),
+    )
+    download_url = _normalize_update_url(_first_nonempty(
+        selected.get("downloadUrl"),
+        selected.get("download_url"),
+        selected.get("url"),
+        fallback_download_url,
+    ))
+    notes_url = _normalize_update_url(_first_nonempty(
+        selected.get("releaseNotesUrl"),
+        selected.get("release_notes_url"),
+        selected.get("notesUrl"),
+        selected.get("notes_url"),
+        fallback_notes_url,
+    ))
+    status["downloadUrl"] = download_url
+    status["releaseNotesUrl"] = notes_url
+    status["latest"] = {
+        "version": latest_version,
+        "downloadUrl": download_url,
+        "releaseNotesUrl": notes_url,
+        "summary": str(selected.get("summary") or selected.get("notes") or "").strip(),
+    }
+    if not latest_version:
+        status["channelStatus"] = "invalid_feed"
+        status["error"] = "update feed does not include a version"
+        return status
+    comparison = compare_app_versions(current_version, latest_version)
+    status["updateAvailable"] = comparison > 0
+    status["channelStatus"] = "update_available" if comparison > 0 else "up_to_date"
+    return status
 
 
 def ensure_runtime_dirs() -> None:
@@ -1580,7 +1781,31 @@ def _open_system_target(target: Path) -> None:
         subprocess.Popen(["xdg-open", str(target)])
 
 
-def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
+def _actual_height_pages_from_problem_image(
+    problem: dict[str, Any],
+    crop_path: Path,
+    template: LayoutTemplate,
+) -> float:
+    try:
+        fallback = _coerce_optional_float(
+            problem.get("actualHeightPages")
+            or problem.get("actual_height_pages")
+            or problem.get("actualContentHeightPages")
+            or problem.get("actual_content_height_pages")
+        )
+    except (TypeError, ValueError):
+        fallback = None
+    try:
+        from PIL import Image
+
+        with Image.open(crop_path) as image:
+            return float(estimate_height_pages(image.size, template))
+    except Exception:
+        return float(fallback or template.base_slot_height_pages or 1.2)
+
+
+def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemplate | None = None) -> list[ProblemEntry]:
+    resolved_template = template or LayoutTemplate(name="academy-default")
     entries: list[ProblemEntry] = []
     for problem in problems:
         if _session_problem_is_supplemental(problem):
@@ -1613,7 +1838,11 @@ def _problems_to_entries(problems: list[dict[str, Any]]) -> list[ProblemEntry]:
                 crop_path=crop_path,
                 board_render_path=board_render_path,
                 blocks=[],  # image-only mode doesn't use OCR blocks
-                actual_height_pages=float(problem.get("actualHeightPages") or 1.2),
+                actual_height_pages=_actual_height_pages_from_problem_image(
+                    problem,
+                    crop_path,
+                    resolved_template,
+                ),
                 overflow_allowed=bool(problem.get("overflowAllowed", True)),
                 reading_heavy=bool(problem.get("readingHeavy", False)),
                 risk_flags=[str(flag) for flag in (problem.get("riskFlags") or []) if flag],
@@ -3518,6 +3747,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/runtime-diagnostics":
             self._send_json(describe_runtime_diagnostics())
             return
+        if parsed.path == "/api/app/update":
+            self._send_json(build_app_update_status())
+            return
         if parsed.path == "/api/session/latest":
             self._handle_latest_session()
             return
@@ -3555,6 +3787,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/system/open-file":
             self._handle_open_file()
+            return
+        if parsed.path == "/api/system/open-url":
+            self._handle_open_url()
             return
         if parsed.path == "/api/system/shutdown":
             self._handle_shutdown()
@@ -3652,8 +3887,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
 
+        template = _template_from_session(session)
         try:
-            entries = _problems_to_entries(sequence)
+            entries = _problems_to_entries(sequence, template=template)
         except FileNotFoundError as exc:
             self._send_json({"ok": False, "error": f"missing asset: {exc}"}, status=HTTPStatus.CONFLICT)
             return
@@ -3662,7 +3898,6 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                             status=HTTPStatus.CONFLICT)
             return
 
-        template = _template_from_session(session)
         # Resize the logical canvas to match the actual problem count after the
         # user may have excluded items in the review UI. Mirrors the formula in
         # run_problem_export so mvp_board.edb and the published EDB agree.
@@ -4237,6 +4472,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"failed to open: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "path": str(target)})
+
+    def _handle_open_url(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        url = _normalize_update_url(payload.get("url"))
+        if not url:
+            self._send_json({"ok": False, "error": "http/https URL is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            opened = webbrowser.open(url)
+        except Exception as exc:
+            self._send_json({"ok": False, "error": f"failed to open URL: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self._send_json({"ok": True, "url": url, "opened": bool(opened)})
 
     def _handle_shutdown(self) -> None:
         self._send_json({"ok": True})

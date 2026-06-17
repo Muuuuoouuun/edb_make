@@ -3,6 +3,10 @@ set -euo pipefail
 
 APP_NAME="ClassInEDBMVP"
 OUTPUT_DIR="dist"
+APP_VERSION=""
+UPDATE_FEED_URL=""
+DOWNLOAD_URL=""
+RELEASE_NOTES_URL=""
 CLEAN=0
 ZIP=0
 DMG=0
@@ -17,6 +21,10 @@ Usage: ./package_macos_app.sh [options]
 
 Options:
   --name NAME              App bundle name. Default: ClassInEDBMVP
+  --version VERSION        App version written into bundled update metadata
+  --update-feed-url URL    JSON update feed checked by the in-app updater
+  --download-url URL       Fallback installer/download page URL
+  --release-notes-url URL  Fallback release notes URL
   --output-dir DIR         Output directory. Default: dist
   --python PATH            Python executable to use. Default: .venv/bin/python or python3
   --clean                  Remove previous build output first
@@ -37,6 +45,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output-dir)
       OUTPUT_DIR="${2:-}"
+      shift 2
+      ;;
+    --version)
+      APP_VERSION="${2:-}"
+      shift 2
+      ;;
+    --update-feed-url)
+      UPDATE_FEED_URL="${2:-}"
+      shift 2
+      ;;
+    --download-url)
+      DOWNLOAD_URL="${2:-}"
+      shift 2
+      ;;
+    --release-notes-url)
+      RELEASE_NOTES_URL="${2:-}"
       shift 2
       ;;
     --python)
@@ -100,6 +124,46 @@ if [[ "$CLEAN" == "1" ]]; then
 fi
 mkdir -p "$RESOLVED_OUTPUT_DIR"
 SPEC_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_spec"
+mkdir -p "$SPEC_DIR"
+
+APP_UPDATE_CONFIG="$SPEC_DIR/app_update_config.json"
+EDB_PACKAGE_APP_NAME="$APP_NAME" \
+EDB_PACKAGE_APP_VERSION="$APP_VERSION" \
+EDB_PACKAGE_UPDATE_FEED_URL="$UPDATE_FEED_URL" \
+EDB_PACKAGE_DOWNLOAD_URL="$DOWNLOAD_URL" \
+EDB_PACKAGE_RELEASE_NOTES_URL="$RELEASE_NOTES_URL" \
+"$PYTHON_EXE" - "$PROJECT_ROOT/app_update_config.json" "$APP_UPDATE_CONFIG" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+config = {
+    "appName": "ClassInEDBMVP",
+    "version": "0.1.0",
+    "updateFeedUrl": "",
+    "downloadUrl": "",
+    "releaseNotesUrl": "",
+}
+if source.exists():
+    try:
+        existing = json.loads(source.read_text(encoding="utf-8"))
+        if isinstance(existing, dict):
+            config.update({key: value for key, value in existing.items() if value is not None})
+    except json.JSONDecodeError:
+        pass
+overrides = {
+    "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),
+    "version": os.environ.get("EDB_PACKAGE_APP_VERSION", "").strip(),
+    "updateFeedUrl": os.environ.get("EDB_PACKAGE_UPDATE_FEED_URL", "").strip(),
+    "downloadUrl": os.environ.get("EDB_PACKAGE_DOWNLOAD_URL", "").strip(),
+    "releaseNotesUrl": os.environ.get("EDB_PACKAGE_RELEASE_NOTES_URL", "").strip(),
+}
+config.update({key: value for key, value in overrides.items() if value})
+target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
 
 if [[ "$INSTALL_PYINSTALLER" == "1" ]]; then
   "$PYTHON_EXE" -m pip install pyinstaller
@@ -133,6 +197,7 @@ if [[ -f "$PROJECT_ROOT/assets/app_icon.icns" ]]; then
 fi
 
 DATA_ARGS=()
+DATA_ARGS+=(--add-data "$APP_UPDATE_CONFIG:.")
 add_data() {
   local src="$1"
   local dest="$2"

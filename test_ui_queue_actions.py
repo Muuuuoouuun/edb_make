@@ -54,6 +54,21 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("crop-frame-handle", html)
         self.assertIn("manual-crop-presets", html)
 
+    def test_review_crop_apply_is_primary_rightmost_and_preserves_current_steps(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        box_edit_branch = source.split("const actionBar = boxEdit ? (", 1)[1]
+        box_edit_branch = box_edit_branch.split(") : splitTarget ? (", 1)[0]
+        retry_index = box_edit_branch.index("주변 영역 AI 재인식")
+        apply_index = box_edit_branch.index("자르기 적용")
+
+        self.assertLess(retry_index, apply_index)
+        self.assertIn('<button className="btn primary" type="button" onClick={applyBoxEdit}', box_edit_branch)
+
+        mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
+        mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
+        self.assertIn("materializeSessionForItems(session, items, fileName) || session", mutation_source)
+        self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 
 import build_problem_board_edb as problem_board
 from app_server import (
+    _problems_to_entries,
     _session_publish_history,
     _session_publish_summary,
     content_disposition_attachment,
@@ -31,6 +32,7 @@ from build_problem_board_edb import (
     _pad_problem_crop_bottom,
     _hwp_conversion_has_pdf_problem_markers,
     _trim_edge_vertical_guides,
+    _trim_source_page_chrome,
 )
 from edb_builder import CROP_FORMAT_V1
 from layout_template_schema import LayoutTemplate
@@ -141,6 +143,61 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["problem-1", "problem-2"], [entry.problem_id for entry in entries])
             self.assertTrue(all(entry.crop_path.exists() for entry in entries))
             self.assertTrue(all(entry.board_render_path.exists() for entry in entries))
+
+    def test_pdf_marker_problem_crop_does_not_pull_in_page_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            image = Image.new("RGB", (500, 700), "white")
+            draw = ImageDraw.Draw(image)
+            draw.text((160, 30), "과학탐구 영역", fill="black")
+            draw.text((90, 120), "7. problem stem", fill="black")
+            draw.line((50, 110, 50, 389), fill="black", width=2)
+            image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=Image.open(source).convert("RGB"),
+                original_size=(500, 700),
+            )
+            block = ContentBlock(
+                block_id="b-1",
+                block_type=BlockType.TITLE,
+                bbox=Box(80, 110, 340, 260),
+                reading_order=0,
+                text="7.",
+                metadata={
+                    "segmenter": "pdf-text-markers",
+                    "problem_number": 7,
+                    "problem_number_source": "pdf_text_marker",
+                    "question_band_index": 1,
+                },
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=500,
+                height_px=700,
+                subject=Subject.SCIENCE,
+                source_path=str(source),
+                blocks=[block],
+                problems=[
+                    ProblemUnit(
+                        unit_id="problem-7",
+                        subject=Subject.SCIENCE,
+                        title="7.",
+                        stem_block_ids=["b-1"],
+                        metadata={"problem_number": 7, "problem_number_source": "pdf_text_marker"},
+                    )
+                ],
+            )
+
+            with mock.patch.object(problem_board, "_extract_problem_cutout", side_effect=lambda crop, **_kwargs: crop.convert("RGBA")):
+                entries = build_problem_entries([prepared], [page], root / "out", LayoutTemplate(name="academy-default"))
+
+            self.assertEqual(110.0, entries[0].bounds.top)
+            self.assertEqual(80.0 - problem_board.PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX, entries[0].bounds.left)
+            self.assertEqual(round(entries[0].bounds.width), Image.open(entries[0].crop_path).size[0])
 
     def test_build_problem_entries_restores_ignored_hwp_marker_from_text_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3100,6 +3157,53 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(placements[0]["image_pixel_width"], 1330)
             self.assertGreater(placements[0]["image_pixel_width"], int(entry.bounds.width))
             self.assertEqual(placements[0]["rendered_width_px"], V1_DEFAULT_DISPLAY_WIDTH_PX)
+
+    def test_publish_entries_recalculate_actual_height_from_current_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crop_path = root / "long-reconstructed.png"
+            Image.new("RGBA", (400, 1200), (0, 0, 0, 0)).save(crop_path)
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+
+            entries = _problems_to_entries(
+                [
+                    {
+                        "id": "problem-long",
+                        "title": "long",
+                        "imagePath": crop_path.resolve().as_uri(),
+                        "boardRenderPath": crop_path.resolve().as_uri(),
+                        "actualHeightPages": 0.72,
+                        "bbox": {"left": 0, "top": 0, "width": 400, "height": 1200},
+                    }
+                ],
+                template=template,
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertGreater(entries[0].actual_height_pages, ONE_PROBLEM_SLOT_HEIGHT_PAGES)
+
+    def test_source_page_chrome_trim_removes_edge_tabs_and_blue_footer(self):
+        image = Image.new("RGB", (900, 1100), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((64, 80), "5. problem body", fill="black")
+        draw.text((64, 910), "1 2 3 4 5", fill="black")
+        draw.line((0, 0, 0, 1030), fill="black", width=3)
+        draw.rectangle((0, 1010, 54, 1099), outline="black", width=2)
+        draw.text((10, 1038), "32", fill="black")
+        draw.rectangle((820, 720, 899, 1000), fill=(180, 180, 180))
+        draw.text((840, 820), "지구과학", fill="white")
+        draw.text((200, 1060), "이 문제지에 관한 저작권은 한국교육과정평가원에 있습니다.", fill=(30, 70, 250))
+
+        cleaned = _trim_source_page_chrome(image)
+
+        self.assertLess(cleaned.width, 840)
+        self.assertLess(cleaned.height, 1080)
+        self.assertGreater(cleaned.width, 650)
+        self.assertGreater(cleaned.height, 900)
+        self.assertEqual(cleaned.getpixel((8, cleaned.height - 8)), (255, 255, 255))
 
     def test_problem_crops_use_same_column_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:

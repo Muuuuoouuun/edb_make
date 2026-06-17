@@ -1,6 +1,10 @@
 param(
     [string]$AppName = "ClassInEDBMVP",
     [string]$OutputDir = "dist",
+    [string]$Version = "",
+    [string]$UpdateFeedUrl = "",
+    [string]$DownloadUrl = "",
+    [string]$ReleaseNotesUrl = "",
     [switch]$Clean,
     [switch]$Zip,
     [switch]$OneFile,
@@ -37,7 +41,35 @@ if ($Clean -and (Test-Path $ResolvedOutputDir)) {
 }
 New-Item -ItemType Directory -Force -Path $ResolvedOutputDir | Out-Null
 $SpecDir = Join-Path $ResolvedOutputDir "_pyinstaller_spec"
+New-Item -ItemType Directory -Force -Path $SpecDir | Out-Null
 $FrontendBundle = Join-Path $ProjectRoot "ui_prototype\app.bundle.js"
+$BuildUpdateConfig = Join-Path $SpecDir "app_update_config.json"
+$ProjectUpdateConfig = Join-Path $ProjectRoot "app_update_config.json"
+$UpdateConfig = [ordered]@{
+    appName = $AppName
+    version = "0.1.0"
+    updateFeedUrl = ""
+    downloadUrl = ""
+    releaseNotesUrl = ""
+}
+if (Test-Path $ProjectUpdateConfig) {
+    try {
+        $ExistingUpdateConfig = Get-Content -Raw -Path $ProjectUpdateConfig | ConvertFrom-Json
+        foreach ($Name in @("appName", "version", "updateFeedUrl", "downloadUrl", "releaseNotesUrl")) {
+            if ($ExistingUpdateConfig.PSObject.Properties[$Name]) {
+                $UpdateConfig[$Name] = $ExistingUpdateConfig.$Name
+            }
+        }
+    } catch {
+        Write-Warning "Could not read app_update_config.json; using defaults."
+    }
+}
+$UpdateConfig["appName"] = $AppName
+if ($Version) { $UpdateConfig["version"] = $Version }
+if ($UpdateFeedUrl) { $UpdateConfig["updateFeedUrl"] = $UpdateFeedUrl }
+if ($DownloadUrl) { $UpdateConfig["downloadUrl"] = $DownloadUrl }
+if ($ReleaseNotesUrl) { $UpdateConfig["releaseNotesUrl"] = $ReleaseNotesUrl }
+$UpdateConfig | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $BuildUpdateConfig
 
 if (-not $SkipFrontendBuild) {
     $NodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -82,6 +114,7 @@ if ($HasPyInstaller) {
         @("assets\app_icon.png", "assets")
     )
     $DataArgs = @()
+    $DataArgs += @("--add-data", ($BuildUpdateConfig + ";."))
     foreach ($Item in $DataItems) {
         $SourcePath = Join-Path $ProjectRoot $Item[0]
         if (Test-Path $SourcePath) {
@@ -109,6 +142,7 @@ if ($HasPyInstaller) {
 
     $ItemsToCopy = @(
         "app_server.py",
+        "app_update_config.json",
         "build_mvp_export.py",
         "build_structured_page_json.py",
         "preprocess.py",

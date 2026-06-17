@@ -1885,6 +1885,84 @@ def _extend_terminal_document_entries_to_content_tail(
     return adjusted_columns, extension_count
 
 
+def _looks_like_two_visual_columns(
+    entries: list[DocumentColumnEntry],
+    content_box: Box,
+    page_height: int,
+) -> tuple[float, list[DocumentColumnEntry], list[DocumentColumnEntry]] | None:
+    if len(entries) < 4:
+        return None
+
+    has_top_inversion = any(
+        entries[index + 1][0].top + 4.0 < entries[index][0].top
+        for index in range(len(entries) - 1)
+    )
+    if not has_top_inversion:
+        return None
+
+    centers = sorted(
+        ((entry[0].left + entry[0].right) / 2.0, index, entry)
+        for index, entry in enumerate(entries)
+    )
+    gaps = [
+        (centers[index + 1][0] - centers[index][0], index)
+        for index in range(len(centers) - 1)
+    ]
+    if not gaps:
+        return None
+
+    largest_gap, split_index = max(gaps, key=lambda item: item[0])
+    if largest_gap < max(90.0, content_box.width * 0.18):
+        return None
+
+    left_entries = [entry for _center, _index, entry in centers[: split_index + 1]]
+    right_entries = [entry for _center, _index, entry in centers[split_index + 1 :]]
+    if len(left_entries) < 2 or len(right_entries) < 2:
+        return None
+
+    left_sorted = sorted(left_entries, key=lambda entry: (entry[0].top, entry[0].left))
+    right_sorted = sorted(right_entries, key=lambda entry: (entry[0].top, entry[0].left))
+    pair_count = min(len(left_sorted), len(right_sorted))
+    row_tolerance = max(48.0, float(page_height) * 0.08)
+    aligned_pairs = sum(
+        1
+        for index in range(pair_count)
+        if abs(left_sorted[index][0].top - right_sorted[index][0].top) <= row_tolerance
+    )
+    if aligned_pairs < max(2, pair_count - 1):
+        return None
+
+    split_x = (centers[split_index][0] + centers[split_index + 1][0]) / 2.0
+    if (
+        split_x < content_box.left + content_box.width * 0.28
+        or split_x > content_box.right - content_box.width * 0.28
+    ):
+        return None
+
+    return split_x, left_sorted, right_sorted
+
+
+def _reassign_single_column_entries_by_visual_columns(
+    column_entry_groups: list[list[DocumentColumnEntry]],
+    column_boxes: list[Box],
+    *,
+    content_box: Box,
+    page_height: int,
+) -> tuple[list[list[DocumentColumnEntry]], list[Box], bool]:
+    """Recover two visual columns when the gutter detector missed a tight grid."""
+    if len(column_entry_groups) != 1 or len(column_boxes) != 1:
+        return column_entry_groups, column_boxes, False
+
+    visual_columns = _looks_like_two_visual_columns(column_entry_groups[0], content_box, page_height)
+    if visual_columns is None:
+        return column_entry_groups, column_boxes, False
+
+    split_x, left_entries, right_entries = visual_columns
+    left_box = Box.from_points(content_box.left, content_box.top, split_x, content_box.bottom)
+    right_box = Box.from_points(split_x, content_box.top, content_box.right, content_box.bottom)
+    return [left_entries, right_entries], [left_box, right_box], True
+
+
 def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
     mask = _dark_mask(image, options.document_dark_threshold)
     content_box = _find_document_content_box(mask, image.width, image.height)
@@ -1929,6 +2007,12 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
         mask,
         column_entry_groups,
         columns,
+        page_height=image.height,
+    )
+    column_entry_groups, columns, visual_column_reassign_applied = _reassign_single_column_entries_by_visual_columns(
+        column_entry_groups,
+        columns,
+        content_box=content_box,
         page_height=image.height,
     )
 
@@ -1999,6 +2083,7 @@ def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOpt
         "document_continuation_merge_count": continuation_merge_count,
         "document_grid_row_alignment_count": row_alignment_count,
         "document_terminal_tail_extension_count": terminal_tail_extension_count,
+        "document_visual_column_reassign_applied": visual_column_reassign_applied,
         "document_row_band_count": row_band_count,
         "document_split_block_count": len(blocks),
         "document_split_applied": total_split_count > 0,

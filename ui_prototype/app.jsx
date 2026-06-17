@@ -140,6 +140,7 @@ const BOARD_DRAG_AUTOSCROLL_MAX_PX = 22;
 const MANUAL_CROP_EDGE_MAX = 0.45;
 const MANUAL_CROP_OUTSET_MAX = 0.60;
 const MANUAL_CROP_EDGE_STEP = 0.01;
+const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
   rightRatio: 0,
@@ -280,6 +281,40 @@ function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio
   const heightPages = Math.max(0.12, item.heightFrac || 0.8);
   const scale = normalizePlacementScaleRatio(scaleRatio, maxPlacementScaleRatio(item));
   return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
+}
+
+function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  if (!item) return slotHeight;
+  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
+  const snappedNext = Number.isFinite(item.snappedNextStartYPages) ? Math.max(0, item.snappedNextStartYPages) : null;
+  const savedSpan = startPages !== null && snappedNext !== null && snappedNext > startPages
+    ? snappedNext - startPages
+    : 0;
+  return Math.max(heightPages, savedSpan || snapUpPages(heightPages, slotHeight));
+}
+
+function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  if (!Array.isArray(items)) return items;
+  let cursorPages = 0;
+  return items.map(item => {
+    const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+    const startPages = snapUpPages(cursorPages, slotHeight);
+    const slotSpanPages = itemSlotSpanPages(item, slotHeight);
+    const snappedNextStartYPages = snapUpPages(startPages + Math.max(heightPages, slotSpanPages), slotHeight);
+    const actualBottomPages = startPages + heightPages;
+    const slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - startPages) / slotHeight));
+    cursorPages = snappedNextStartYPages;
+    return {
+      ...item,
+      heightFrac: heightPages,
+      startYPages: Number(startPages.toFixed(6)),
+      snappedNextStartYPages: Number(snappedNextStartYPages.toFixed(6)),
+      actualBottomYPages: Number(actualBottomPages.toFixed(6)),
+      slotSpanCount,
+      overflowAmountPages: Math.max(0, heightPages - slotHeight),
+    };
+  });
 }
 
 const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
@@ -798,17 +833,17 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       <span className="hint">모서리와 변을 끌어 문제 전체가 들어오게 맞춘 뒤 자르거나, 주변 여백까지 포함해 다시 인식하세요.</span>
       <div className="spacer" />
       <button className="btn" type="button" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
-      <button className="btn" type="button" onClick={applyBoxEdit} disabled={mutating}>
-        자르기 적용
-      </button>
       <button
-        className="btn primary"
+        className="btn"
         type="button"
         title={retryDisabledReason || '조정한 영역 주변까지 AI로 다시 인식'}
         onClick={retryBoxEdit}
         disabled={!aiAvailable || aiBusy || mutating}
       >
         주변 영역 AI 재인식
+      </button>
+      <button className="btn primary" type="button" onClick={applyBoxEdit} disabled={mutating}>
+        자르기 적용
       </button>
     </div>
   ) : splitTarget ? (
@@ -1283,6 +1318,13 @@ function ItemsRail({
   const pointerDragRef = useRef(null);
   const suppressClickRef = useRef(false);
   const dropTargetRef = useRef(null);
+  const [recentSessionsCollapsed, setRecentSessionsCollapsed] = useState(() => {
+    try {
+      return window.localStorage?.getItem(RECENT_SESSIONS_COLLAPSED_KEY) === '1';
+    } catch (_err) {
+      return false;
+    }
+  });
 
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
@@ -1411,6 +1453,18 @@ function ItemsRail({
     clearDragState();
   };
 
+  const toggleRecentSessionsCollapsed = () => {
+    setRecentSessionsCollapsed(prev => {
+      const next = !prev;
+      try {
+        window.localStorage?.setItem(RECENT_SESSIONS_COLLAPSED_KEY, next ? '1' : '0');
+      } catch (_err) {
+        // Local storage is optional; the in-memory toggle still works.
+      }
+      return next;
+    });
+  };
+
   // keep active item visible
   useEffect(() => {
     const el = itemRefs.current[activeId];
@@ -1476,83 +1530,96 @@ function ItemsRail({
         </div>
 
         {!!recentSessions?.length && (
-          <div className="session-history-card">
-            <div className="source-queue-head">
+          <div className={`session-history-card ${recentSessionsCollapsed ? 'is-collapsed' : ''}`}>
+            <div className="source-queue-head session-history-head">
               <strong>최근 작업</strong>
               <span>{recentSessions.length}개</span>
+              <div className="spacer" />
+              <button
+                className="icon-btn"
+                type="button"
+                title={recentSessionsCollapsed ? '최근 작업 펼치기' : '최근 작업 접기'}
+                aria-expanded={!recentSessionsCollapsed}
+                aria-controls="recent-session-history-list"
+                onClick={toggleRecentSessionsCollapsed}
+              >
+                {recentSessionsCollapsed ? Icon.arrowDown : Icon.arrowUp}
+              </button>
             </div>
-            <div className="session-history-list">
-              {recentSessions.slice(0, 5).map(entry => {
-                const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
-                return (
-                  <div className="session-history-row" key={entry.id}>
-                    <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
-                      <div className="name">{entry.sessionName || '이름 없는 작업'}</div>
-                      <div className="meta">
-                        {formatProblemCount({
-                          core: entry.coreProblemCount,
-                          supplemental: entry.supplementalItemCount,
-                        })}
-                        {entry.updatedAt ? ` · ${formatPublishTime(entry.updatedAt)}` : ''}
-                        {publish?.recordCountLabel ? ` · ${publish.recordCountLabel}` : ''}
-                        {publish?.classinReviewStatusLabel ? ` · ${publish.classinReviewStatusLabel}` : ''}
+            {!recentSessionsCollapsed && (
+              <div className="session-history-list" id="recent-session-history-list">
+                {recentSessions.slice(0, 5).map(entry => {
+                  const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
+                  return (
+                    <div className="session-history-row" key={entry.id}>
+                      <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
+                        <div className="name">{entry.sessionName || '이름 없는 작업'}</div>
+                        <div className="meta">
+                          {formatProblemCount({
+                            core: entry.coreProblemCount,
+                            supplemental: entry.supplementalItemCount,
+                          })}
+                          {entry.updatedAt ? ` · ${formatPublishTime(entry.updatedAt)}` : ''}
+                          {publish?.recordCountLabel ? ` · ${publish.recordCountLabel}` : ''}
+                          {publish?.classinReviewStatusLabel ? ` · ${publish.classinReviewStatusLabel}` : ''}
+                        </div>
+                      </div>
+                      <div className="session-history-actions">
+                        {publish && (
+                          <>
+                            <button
+                              className="icon-btn"
+                              type="button"
+                              disabled={!publish.canDownload}
+                              onClick={() => downloadPublishSummary(publish)}
+                              title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : '최근 제작본 다운로드'}
+                            >
+                              {Icon.download}
+                            </button>
+                            <button
+                              className="icon-btn"
+                              type="button"
+                              disabled={!publish.canOpenEdbFile}
+                              onClick={() => openPublishedEdb(publish)}
+                              title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
+                            >
+                              {Icon.board}
+                            </button>
+                            <button
+                              className="icon-btn"
+                              type="button"
+                              disabled={!publish.canOpenOutputDir}
+                              onClick={() => openOutputFolder(publish.outputDir)}
+                              title={publish.outputDirExists === false ? '최근 작업 출력 폴더가 없습니다' : '최근 작업 출력 폴더 열기'}
+                            >
+                              {Icon.folder}
+                            </button>
+                            <button
+                              className="icon-btn"
+                              type="button"
+                              disabled={!publish.canOpenClassinHandoff}
+                              onClick={() => openClassinHandoff(publish)}
+                              title={publish.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
+                            >
+                              {Icon.check}
+                            </button>
+                          </>
+                        )}
+                        <button
+                          className="btn"
+                          type="button"
+                          disabled={restoringSessionId === entry.id}
+                          onClick={() => onRestoreRecentSession?.(entry.id)}
+                          title="이 작업을 다시 엽니다"
+                        >
+                          {Icon.refresh}<span>{restoringSessionId === entry.id ? '여는 중' : '열기'}</span>
+                        </button>
                       </div>
                     </div>
-                    <div className="session-history-actions">
-                      {publish && (
-                        <>
-                          <button
-                            className="icon-btn"
-                            type="button"
-                            disabled={!publish.canDownload}
-                            onClick={() => downloadPublishSummary(publish)}
-                            title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : '최근 제작본 다운로드'}
-                          >
-                            {Icon.download}
-                          </button>
-                          <button
-                            className="icon-btn"
-                            type="button"
-                            disabled={!publish.canOpenEdbFile}
-                            onClick={() => openPublishedEdb(publish)}
-                            title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
-                          >
-                            {Icon.board}
-                          </button>
-                          <button
-                            className="icon-btn"
-                            type="button"
-                            disabled={!publish.canOpenOutputDir}
-                            onClick={() => openOutputFolder(publish.outputDir)}
-                            title={publish.outputDirExists === false ? '최근 작업 출력 폴더가 없습니다' : '최근 작업 출력 폴더 열기'}
-                          >
-                            {Icon.folder}
-                          </button>
-                          <button
-                            className="icon-btn"
-                            type="button"
-                            disabled={!publish.canOpenClassinHandoff}
-                            onClick={() => openClassinHandoff(publish)}
-                            title={publish.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
-                          >
-                            {Icon.check}
-                          </button>
-                        </>
-                      )}
-                      <button
-                        className="btn"
-                        type="button"
-                        disabled={restoringSessionId === entry.id}
-                        onClick={() => onRestoreRecentSession?.(entry.id)}
-                        title="이 작업을 다시 엽니다"
-                      >
-                        {Icon.refresh}<span>{restoringSessionId === entry.id ? '여는 중' : '열기'}</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -2302,6 +2369,7 @@ function SidePanel({
   onRecognizeSession, canRecognizeSession,
   session, published,
   onClassinReviewComplete,
+  updateInfo, updateBusy, onCheckUpdate, onOpenUpdate,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -2359,6 +2427,33 @@ function SidePanel({
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
+  const updateStatus = updateInfo?.channelStatus || 'unknown';
+  const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || updateInfo?.releaseNotesUrl || updateInfo?.latest?.releaseNotesUrl || '';
+  const updateStatusLabel = updateBusy
+    ? '확인 중'
+    : updateInfo?.updateAvailable
+      ? '새 버전'
+      : updateStatus === 'up_to_date'
+        ? '최신'
+        : updateStatus === 'manual_download'
+          ? '수동'
+          : updateStatus === 'not_configured'
+            ? '미설정'
+            : updateStatus === 'error'
+              ? '오류'
+              : updateStatus === 'unsupported_platform'
+                ? '미지원'
+                : '확인 전';
+  const updateStatusTone = updateInfo?.updateAvailable
+    ? 'var(--accent)'
+    : updateStatus === 'up_to_date'
+      ? 'var(--ok)'
+      : updateStatus === 'error'
+        ? 'var(--danger)'
+        : 'var(--muted)';
+  const updateVersionLine = updateInfo?.currentVersion
+    ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
+    : '버전 정보를 불러오지 않았습니다';
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
@@ -2498,6 +2593,46 @@ function SidePanel({
                     <div className="spacer" />
                     <span className="scale">{Math.round(placementScale * 100)}%</span>
                   </div>
+                </div>
+
+                <div className="panel-section-hd">
+                  처리 방식 선택 <span className="line" />
+                </div>
+
+                <div className="steps">
+                  <button
+                    className={`step-row ${item.step === 's1' ? 'on' : ''}`}
+                    onClick={() => setStep(item.id, 's1')}
+                  >
+                    <span className="radio" />
+                    <div>
+                      <div className="t">1단계 · 그대로 붙이기</div>
+                      <div className="d">스캔한 모양 그대로. 원본 색·여백 유지.</div>
+                    </div>
+                    <div className="meta-r">즉시<strong>~ 0.3s</strong></div>
+                  </button>
+                  <button
+                    className={`step-row ${item.step === 's2' ? 'on' : ''}`}
+                    onClick={() => setStep(item.id, 's2')}
+                  >
+                    <span className="radio" />
+                    <div>
+                      <div className="t">2단계 · AI 칠판 변환 <span className="ai-badge">AI</span></div>
+                      <div className="d">배경 제거 · 분필 색상 자동 배치 · 가독성 최적화.</div>
+                    </div>
+                    <div className="meta-r">자동<strong>~ 4s</strong></div>
+                  </button>
+                  <button
+                    className={`step-row ${item.step === 's3' ? 'on' : ''}`}
+                    onClick={() => setStep(item.id, 's3')}
+                  >
+                    <span className="radio" />
+                    <div>
+                      <div className="t">3단계 · 고화질 재구성 <span className="ai-badge">HQ</span></div>
+                      <div className="d">선택한 문제만 업스케일링 · 배경제거 · 완전 투명 PNG로 제작.</div>
+                    </div>
+                    <div className="meta-r">제작시<strong>~ 8s</strong></div>
+                  </button>
                 </div>
 
                 <div className="panel-section-hd">
@@ -2687,45 +2822,6 @@ function SidePanel({
                   </div>
                 </div>
 
-                <div className="panel-section-hd">
-                  처리 방식 선택 <span className="line" />
-                </div>
-
-                <div className="steps">
-                  <button
-                    className={`step-row ${item.step === 's1' ? 'on' : ''}`}
-                    onClick={() => setStep(item.id, 's1')}
-                  >
-                    <span className="radio" />
-                    <div>
-                      <div className="t">1단계 · 그대로 붙이기</div>
-                      <div className="d">스캔한 모양 그대로. 원본 색·여백 유지.</div>
-                    </div>
-                    <div className="meta-r">즉시<strong>~ 0.3s</strong></div>
-                  </button>
-                  <button
-                    className={`step-row ${item.step === 's2' ? 'on' : ''}`}
-                    onClick={() => setStep(item.id, 's2')}
-                  >
-                    <span className="radio" />
-                    <div>
-                      <div className="t">2단계 · AI 칠판 변환 <span className="ai-badge">AI</span></div>
-                      <div className="d">배경 제거 · 분필 색상 자동 배치 · 가독성 최적화.</div>
-                    </div>
-                    <div className="meta-r">자동<strong>~ 4s</strong></div>
-                  </button>
-                  <button
-                    className={`step-row ${item.step === 's3' ? 'on' : ''}`}
-                    onClick={() => setStep(item.id, 's3')}
-                  >
-                    <span className="radio" />
-                    <div>
-                      <div className="t">3단계 · 고화질 재구성 <span className="ai-badge">HQ</span></div>
-                      <div className="d">선택한 문제만 업스케일링 · 배경제거 · 완전 투명 PNG로 제작.</div>
-                    </div>
-                    <div className="meta-r">제작시<strong>~ 8s</strong></div>
-                  </button>
-                </div>
                 <div className="panel-section-hd" style={{marginTop: 6}}>
                   추가 업스케일 <span className="line" />
                 </div>
@@ -3038,6 +3134,51 @@ function SidePanel({
                 저장된 키 삭제
               </button>
             </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>앱 업데이트 <span className="line" /></div>
+
+            <div className="row-control">
+              <div className="lbl">
+                현재 버전
+                <small>{updateVersionLine}</small>
+              </div>
+              <span
+                className="pos-tag"
+                style={{
+                  background: updateStatusTone,
+                  minWidth: 58,
+                  textAlign: 'center',
+                }}
+              >
+                {updateStatusLabel}
+              </span>
+            </div>
+            {updateInfo?.error && (
+              <div className="runtime-note warn">
+                {updateInfo.error}
+              </div>
+            )}
+            <div style={{display: 'flex', gap: 6}}>
+              <button
+                className="btn"
+                style={{flex: 1, justifyContent: 'center'}}
+                type="button"
+                onClick={() => onCheckUpdate?.()}
+                disabled={updateBusy}
+              >
+                {updateBusy ? '확인 중...' : '업데이트 확인'}
+              </button>
+              <button
+                className="btn primary"
+                style={{flex: 1, justifyContent: 'center'}}
+                type="button"
+                onClick={() => onOpenUpdate?.()}
+                disabled={!updateDownloadUrl}
+                title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
+              >
+                {Icon.download} 다운로드 열기
+              </button>
+            </div>
           </div>
         </>
       )}
@@ -3319,6 +3460,11 @@ function makeUniqueId(baseId, existingIds){
 
 function applyItemStateToProblem(problem, item){
   const next = { ...problem };
+  const actualHeightPages = Math.max(0.12, item.heightFrac || next.actualHeightPages || next.actual_height_pages || 0.8);
+  const startYPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
+  const snappedNextStartYPages = Number.isFinite(item.snappedNextStartYPages)
+    ? Math.max(startYPages || 0, item.snappedNextStartYPages)
+    : null;
   next.title = item.name || next.title || '';
   next.riskFlags = Array.isArray(item.riskFlags) ? [...item.riskFlags] : [];
   next.risk_flags = next.riskFlags;
@@ -3332,6 +3478,24 @@ function applyItemStateToProblem(problem, item){
     ? normalizePlacementYRatio(item.placementYRatio)
     : DEFAULT_PLACEMENT_Y_RATIO;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
+  next.actualHeightPages = actualHeightPages;
+  next.actual_height_pages = actualHeightPages;
+  if (startYPages !== null) {
+    next.startYPages = Number(startYPages.toFixed(6));
+    next.start_y_pages = next.startYPages;
+  }
+  if (snappedNextStartYPages !== null) {
+    next.snappedNextStartYPages = Number(snappedNextStartYPages.toFixed(6));
+    next.snapped_next_start_y_pages = next.snappedNextStartYPages;
+    next.slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - (startYPages || 0)) / DEFAULT_SLOT_HEIGHT_PAGES));
+    next.slot_span_count = next.slotSpanCount;
+  }
+  if (startYPages !== null) {
+    next.actualBottomYPages = Number((startYPages + actualHeightPages).toFixed(6));
+    next.actual_bottom_y_pages = next.actualBottomYPages;
+  }
+  next.overflowAmountPages = Math.max(0, actualHeightPages - DEFAULT_SLOT_HEIGHT_PAGES);
+  next.overflow_amount_pages = next.overflowAmountPages;
   return next;
 }
 
@@ -3392,7 +3556,8 @@ function materializeSessionForItems(rawSession, items, fileName){
   const snapshot = cloneSession(rawSession);
   if (!snapshot || !Array.isArray(snapshot.problems)) return null;
   const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
-  const orderedProblems = items
+  const reflowedItems = reflowItemsForBoardOrder(items);
+  const orderedProblems = reflowedItems
     .filter(item => byId.has(item.id))
     .map(item => applyItemStateToProblem(byId.get(item.id), item));
   const activeIds = new Set(orderedProblems.map(problem => problem.id));
@@ -3404,9 +3569,12 @@ function materializeSessionForItems(rawSession, items, fileName){
   snapshot.edbPath = null;
   snapshot.edbFileUri = null;
   if (Array.isArray(snapshot.pages)) {
+    const orderIndex = new Map(orderedProblems.map((problem, index) => [problem.id, index]));
     snapshot.pages = snapshot.pages.map(page => ({
       ...page,
-      problemIds: (page.problemIds || page.problem_ids || []).filter(id => activeIds.has(id)),
+      problemIds: (page.problemIds || page.problem_ids || [])
+        .filter(id => activeIds.has(id))
+        .sort((a, b) => (orderIndex.get(a) ?? 999999) - (orderIndex.get(b) ?? 999999)),
     }));
   }
   return snapshot;
@@ -5258,6 +5426,12 @@ async function fetchRuntimeDiagnostics(){
   return json;
 }
 
+async function fetchAppUpdateStatus(){
+  const resp = await fetch('/api/app/update');
+  const json = await expectOkJson(resp, '업데이트 확인 실패');
+  return json;
+}
+
 async function clearSession(){
   const resp = await fetch('/api/session/latest', { method: 'DELETE' });
   if (resp.status === 404) return { history: [] }; // already cleared
@@ -5268,6 +5442,16 @@ async function clearSession(){
 async function postShutdown(){
   const resp = await fetch('/api/system/shutdown', { method: 'POST' });
   const json = await expectOkJson(resp, '앱 종료 실패');
+  return json;
+}
+
+async function postOpenUrl(url){
+  const resp = await fetch('/api/system/open-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const json = await expectOkJson(resp, '브라우저 열기 실패');
   return json;
 }
 
@@ -5376,6 +5560,8 @@ function App(){
   const [usingMock, setUsingMock] = useState(false);
   const [userSettings, setUserSettings] = useState(null);
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
@@ -5412,6 +5598,51 @@ function App(){
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
+
+  const updateStatusToast = (info) => {
+    if (!info) return '업데이트 정보를 확인하지 못했습니다';
+    if (info.updateAvailable) {
+      const latestVersion = info.latest?.version || '새 버전';
+      return `업데이트 가능 · ${latestVersion}`;
+    }
+    if (info.channelStatus === 'up_to_date') return '현재 최신 버전입니다';
+    if (info.channelStatus === 'manual_download') return '다운로드 페이지를 열 수 있습니다';
+    if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
+    if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
+    if (info.channelStatus === 'error') return `업데이트 확인 오류: ${info.error || '채널 확인 실패'}`;
+    return '업데이트 정보를 확인했습니다';
+  };
+
+  const checkForUpdates = useCallback(async (options = {}) => {
+    setUpdateBusy(true);
+    try {
+      const info = await fetchAppUpdateStatus();
+      setUpdateInfo(info);
+      if (!options.silent) showToast(updateStatusToast(info));
+      return info;
+    } catch (e) {
+      if (!options.silent) showToast('업데이트 확인 실패: ' + e.message);
+      console.warn('[board] update check skipped:', e.message);
+      return null;
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+
+  const openUpdatePage = useCallback(async () => {
+    const info = updateInfo || await checkForUpdates({ silent: true });
+    const url = info?.downloadUrl || info?.latest?.downloadUrl || info?.releaseNotesUrl || info?.latest?.releaseNotesUrl || '';
+    if (!url) {
+      showToast('업데이트 다운로드 URL이 없습니다');
+      return;
+    }
+    try {
+      await postOpenUrl(url);
+      showToast('다운로드 페이지를 열었어요');
+    } catch (e) {
+      showToast('다운로드 페이지 열기 실패: ' + e.message);
+    }
+  }, [updateInfo, checkForUpdates]);
 
   const refreshSessionHistory = useCallback(async () => {
     try {
@@ -5595,8 +5826,9 @@ function App(){
         : '변경 중…',
       startedAt: Date.now(),
     });
-    const snapshotBefore = session;
+    const snapshotBefore = materializeSessionForItems(session, items, fileName) || session;
     try {
+      await postRestore(snapshotBefore);
       const next = await postMutate(action, args);
       setHistoryStack(prev => [...prev, snapshotBefore]);
       adoptMutatedSession(next, snapshotBefore);
@@ -5613,7 +5845,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [session, adoptMutatedSession, refreshSessionHistory]);
+  }, [session, items, fileName, adoptMutatedSession, refreshSessionHistory]);
 
   const retryAiSession = useCallback(async (args) => {
     if (!session) {
@@ -5787,6 +6019,10 @@ function App(){
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    checkForUpdates({ silent: true });
+  }, [checkForUpdates]);
 
   const onSaveGeminiKey = useCallback(async (key) => {
     try {
@@ -6171,15 +6407,20 @@ function App(){
     setPublished(false);
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
-    setItems(it => {
-      const reordered = reorderItemsForDrop(it, fromId, toId, dropPosition);
-      if (!options?.resetPlacement || reordered === it) return reordered;
-      return reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
-    });
+    const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
+    if (reordered === items) return;
+    const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
+    const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered);
+    setItems(nextItems);
+    if (session) {
+      const nextSession = materializeSessionForItems(session, nextItems, fileName) || session;
+      setSession(nextSession);
+      postRestore(nextSession).catch(e => console.warn('[board] reorder persist failed:', e.message));
+    }
     setPublished(false);
   };
   const removeItem = (id) => {
-    const nextItems = items.filter(x => x.id !== id);
+    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id));
     setItems(nextItems);
     if (activeId === id) {
       setActiveId(nextItems[0]?.id || null);
@@ -6528,6 +6769,10 @@ function App(){
           session={session}
           published={published}
           onClassinReviewComplete={markClassinReviewComplete}
+          updateInfo={updateInfo}
+          updateBusy={updateBusy}
+          onCheckUpdate={checkForUpdates}
+          onOpenUpdate={openUpdatePage}
         />
       </div>
 

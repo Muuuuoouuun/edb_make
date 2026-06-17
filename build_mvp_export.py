@@ -24,6 +24,7 @@ from build_problem_board_edb import (
     _remove_hwp_template_instruction_problems,
     _session_passage_groups,
     _session_problem_count_payload,
+    PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX,
 )
 from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
@@ -297,6 +298,25 @@ def _problem_block_ids(problem: ProblemUnit) -> list[str]:
     )
 
 
+def _expand_problem_bounds(box: Box, *, page_width: int, page_height: int, padding_px: float, top_padding_px: float | None = None) -> Box:
+    resolved_top_padding = padding_px if top_padding_px is None else top_padding_px
+    left = max(0.0, box.left - padding_px)
+    top = max(0.0, box.top - resolved_top_padding)
+    right = min(float(page_width), box.right + padding_px)
+    bottom = min(float(page_height), box.bottom + padding_px)
+    return Box.from_points(left, top, right, bottom)
+
+
+def _is_trusted_pdf_text_marker_problem(problem: ProblemUnit, blocks: Sequence[Any]) -> bool:
+    if problem.metadata.get("problem_number_source") == "pdf_text_marker":
+        return True
+    return any(
+        getattr(block, "metadata", {}).get("segmenter") == "pdf-text-markers"
+        and getattr(block, "metadata", {}).get("problem_number_source") == "pdf_text_marker"
+        for block in blocks
+    )
+
+
 def _problem_bounds(page_model: PageModel, problem: ProblemUnit) -> Box:
     metadata_box = problem.metadata.get("bbox_px")
     if isinstance(metadata_box, dict):
@@ -329,7 +349,16 @@ def _problem_bounds(page_model: PageModel, problem: ProblemUnit) -> Box:
     top = min(block.bbox.top for block in selected)
     right = max(block.bbox.right for block in selected)
     bottom = max(block.bbox.bottom for block in selected)
-    return Box.from_points(left, top, right, bottom).expanded(24.0, max_width=page_model.width_px, max_height=page_model.height_px)
+    trusted_pdf_marker_problem = _is_trusted_pdf_text_marker_problem(problem, selected)
+    top_padding_px = 0.0 if trusted_pdf_marker_problem else 24.0
+    padding_px = PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX if trusted_pdf_marker_problem else 24.0
+    return _expand_problem_bounds(
+        Box.from_points(left, top, right, bottom),
+        page_width=page_model.width_px,
+        page_height=page_model.height_px,
+        padding_px=padding_px,
+        top_padding_px=top_padding_px,
+    )
 
 
 def _problem_title(page_model: PageModel, problem: ProblemUnit, index: int) -> str:

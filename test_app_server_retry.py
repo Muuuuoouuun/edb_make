@@ -13,6 +13,74 @@ from structured_schema import Box
 
 
 class TestStaticAssetCaching(unittest.TestCase):
+    def test_app_version_comparison_handles_semver_like_versions(self):
+        self.assertEqual(0, app_server.compare_app_versions("v0.1.0", "0.1"))
+        self.assertGreater(app_server.compare_app_versions("0.1.0", "0.1.1"), 0)
+        self.assertLess(app_server.compare_app_versions("0.2.0", "0.1.9"), 0)
+
+    def test_update_status_reports_platform_release_from_feed(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.1",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
+                        "releaseNotesUrl": "https://example.test/releases/0.1.2",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertTrue(status["ok"])
+            self.assertTrue(status["configured"])
+            self.assertTrue(status["updateAvailable"])
+            self.assertEqual("update_available", status["channelStatus"])
+            self.assertEqual("0.1.2", status["latest"]["version"])
+            self.assertEqual("https://example.test/ClassInEDBMVP-macOS.dmg", status["downloadUrl"])
+
+    def test_update_status_is_safe_when_channel_is_unconfigured(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({"version": "0.3.0"}),
+                encoding="utf-8",
+            )
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }):
+                status = app_server.build_app_update_status()
+
+            self.assertTrue(status["ok"])
+            self.assertFalse(status["configured"])
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("not_configured", status["channelStatus"])
+            self.assertEqual("0.3.0", status["currentVersion"])
+
     def test_static_responses_disable_browser_cache(self):
         handler = object.__new__(app_server.AppRequestHandler)
         headers = []
@@ -543,6 +611,7 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertTrue(crop_path.exists())
             self.assertTrue(board_path.exists())
             self.assertNotEqual(crop_path, board_path)
+            self.assertEqual("s2", problem["step"])
             with Image.open(board_path) as board_image:
                 self.assertIn("A", board_image.getbands())
 

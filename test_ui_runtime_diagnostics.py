@@ -25,6 +25,27 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("cropDraft.topRatio", side_panel)
         self.assertIn("cropDraft.bottomRatio", side_panel)
 
+    def test_reorder_reflows_saved_board_page_positions(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        self.assertIn("function reflowItemsForBoardOrder", source)
+        materialize = source.split("function materializeSessionForItems", 1)[1]
+        materialize = materialize.split("function mergeSessions", 1)[0]
+        apply_state = source.split("function applyItemStateToProblem", 1)[1]
+        apply_state = apply_state.split("function confirmedItemState", 1)[0]
+        reorder_flow = source.split("const reorder = (fromId, toId", 1)[1]
+        reorder_flow = reorder_flow.split("const removeItem", 1)[0]
+        remove_flow = source.split("const removeItem = (id) =>", 1)[1]
+        remove_flow = remove_flow.split("const addMockSample", 1)[0]
+
+        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(items)", materialize)
+        self.assertIn("next.startYPages", apply_state)
+        self.assertIn("next.snappedNextStartYPages", apply_state)
+        self.assertIn("const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered)", reorder_flow)
+        self.assertIn("materializeSessionForItems(session, nextItems, fileName)", reorder_flow)
+        self.assertIn("setSession(nextSession)", reorder_flow)
+        self.assertIn("postRestore(nextSession)", reorder_flow)
+        self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
+
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         summary_helper = source.split("function hangulRuntimeSummary", 1)[1]
@@ -36,6 +57,17 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("렌더 ${rendererCount}", summary_helper)
         self.assertIn("HWP 렌더", tool_rows)
         self.assertIn("hangul.hwpRenderers || []", tool_rows)
+
+    def test_board_settings_exposes_app_update_controls(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn("앱 업데이트", side_panel)
+        self.assertIn("업데이트 확인", side_panel)
+        self.assertIn("다운로드 열기", side_panel)
+        self.assertIn("fetch('/api/app/update')", source)
+        self.assertIn("fetch('/api/system/open-url'", source)
 
     def test_review_summary_surfaces_hwp_cache_hits(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -1114,6 +1114,7 @@ const BOARD_DRAG_AUTOSCROLL_MAX_PX = 22;
 const MANUAL_CROP_EDGE_MAX = 0.45;
 const MANUAL_CROP_OUTSET_MAX = 0.60;
 const MANUAL_CROP_EDGE_STEP = 0.01;
+const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
   rightRatio: 0,
@@ -1224,6 +1225,36 @@ function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio
   const heightPages = Math.max(0.12, item.heightFrac || 0.8);
   const scale = normalizePlacementScaleRatio(scaleRatio, maxPlacementScaleRatio(item));
   return Math.max(0, placementSlotHeightPages(item) - heightPages * scale);
+}
+function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES) {
+  if (!item) return slotHeight;
+  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
+  const snappedNext = Number.isFinite(item.snappedNextStartYPages) ? Math.max(0, item.snappedNextStartYPages) : null;
+  const savedSpan = startPages !== null && snappedNext !== null && snappedNext > startPages ? snappedNext - startPages : 0;
+  return Math.max(heightPages, savedSpan || snapUpPages(heightPages, slotHeight));
+}
+function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES) {
+  if (!Array.isArray(items)) return items;
+  let cursorPages = 0;
+  return items.map(item => {
+    const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+    const startPages = snapUpPages(cursorPages, slotHeight);
+    const slotSpanPages = itemSlotSpanPages(item, slotHeight);
+    const snappedNextStartYPages = snapUpPages(startPages + Math.max(heightPages, slotSpanPages), slotHeight);
+    const actualBottomPages = startPages + heightPages;
+    const slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - startPages) / slotHeight));
+    cursorPages = snappedNextStartYPages;
+    return {
+      ...item,
+      heightFrac: heightPages,
+      startYPages: Number(startPages.toFixed(6)),
+      snappedNextStartYPages: Number(snappedNextStartYPages.toFixed(6)),
+      actualBottomYPages: Number(actualBottomPages.toFixed(6)),
+      slotSpanCount,
+      overflowAmountPages: Math.max(0, heightPages - slotHeight)
+    };
+  });
 }
 const INITIAL_ITEMS = Array.from({
   length: 12
@@ -2043,15 +2074,15 @@ function ReviewStage({
   }, "\uCDE8\uC18C"), React.createElement("button", {
     className: "btn",
     type: "button",
-    onClick: applyBoxEdit,
-    disabled: mutating
-  }, "\uC790\uB974\uAE30 \uC801\uC6A9"), React.createElement("button", {
-    className: "btn primary",
-    type: "button",
     title: retryDisabledReason || '조정한 영역 주변까지 AI로 다시 인식',
     onClick: retryBoxEdit,
     disabled: !aiAvailable || aiBusy || mutating
-  }, "\uC8FC\uBCC0 \uC601\uC5ED AI \uC7AC\uC778\uC2DD")) : splitTarget ? React.createElement("div", {
+  }, "\uC8FC\uBCC0 \uC601\uC5ED AI \uC7AC\uC778\uC2DD"), React.createElement("button", {
+    className: "btn primary",
+    type: "button",
+    onClick: applyBoxEdit,
+    disabled: mutating
+  }, "\uC790\uB974\uAE30 \uC801\uC6A9")) : splitTarget ? React.createElement("div", {
     className: "review-actionbar"
   }, React.createElement("span", {
     className: "count-chip"
@@ -2407,6 +2438,13 @@ function ItemsRail({
   const pointerDragRef = useRef(null);
   const suppressClickRef = useRef(false);
   const dropTargetRef = useRef(null);
+  const [recentSessionsCollapsed, setRecentSessionsCollapsed] = useState(() => {
+    try {
+      return window.localStorage?.getItem(RECENT_SESSIONS_COLLAPSED_KEY) === '1';
+    } catch (_err) {
+      return false;
+    }
+  });
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     const nextRects = new Map();
@@ -2543,6 +2581,15 @@ function ItemsRail({
     pointerDragRef.current = null;
     clearDragState();
   };
+  const toggleRecentSessionsCollapsed = () => {
+    setRecentSessionsCollapsed(prev => {
+      const next = !prev;
+      try {
+        window.localStorage?.setItem(RECENT_SESSIONS_COLLAPSED_KEY, next ? '1' : '0');
+      } catch (_err) {}
+      return next;
+    });
+  };
   useEffect(() => {
     const el = itemRefs.current[activeId];
     const rail = railRef.current;
@@ -2611,11 +2658,21 @@ function ItemsRail({
       marginTop: 6
     }
   }, "\uC774\uBBF8\uC9C0\xB7PDF\xB7HWP \uB300\uAE30\uC5F4\uC5D0 \uCD94\uAC00"), React.createElement("small", null, "\uD30C\uC77C\uBCC4\uB85C \uADF8\uB300\uB85C \uB4F1\uB85D\uD558\uAC70\uB098 AI \uC778\uC2DD\uD569\uB2C8\uB2E4")), !!recentSessions?.length && React.createElement("div", {
-    className: "session-history-card"
+    className: `session-history-card ${recentSessionsCollapsed ? 'is-collapsed' : ''}`
   }, React.createElement("div", {
-    className: "source-queue-head"
-  }, React.createElement("strong", null, "\uCD5C\uADFC \uC791\uC5C5"), React.createElement("span", null, recentSessions.length, "\uAC1C")), React.createElement("div", {
-    className: "session-history-list"
+    className: "source-queue-head session-history-head"
+  }, React.createElement("strong", null, "\uCD5C\uADFC \uC791\uC5C5"), React.createElement("span", null, recentSessions.length, "\uAC1C"), React.createElement("div", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    type: "button",
+    title: recentSessionsCollapsed ? '최근 작업 펼치기' : '최근 작업 접기',
+    "aria-expanded": !recentSessionsCollapsed,
+    "aria-controls": "recent-session-history-list",
+    onClick: toggleRecentSessionsCollapsed
+  }, recentSessionsCollapsed ? Icon.arrowDown : Icon.arrowUp)), !recentSessionsCollapsed && React.createElement("div", {
+    className: "session-history-list",
+    id: "recent-session-history-list"
   }, recentSessions.slice(0, 5).map(entry => {
     const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
     return React.createElement("div", {
@@ -3430,7 +3487,11 @@ function SidePanel({
   canRecognizeSession,
   session,
   published,
-  onClassinReviewComplete
+  onClassinReviewComplete,
+  updateInfo,
+  updateBusy,
+  onCheckUpdate,
+  onOpenUpdate
 }) {
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw');
@@ -3484,6 +3545,11 @@ function SidePanel({
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
+  const updateStatus = updateInfo?.channelStatus || 'unknown';
+  const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || updateInfo?.releaseNotesUrl || updateInfo?.latest?.releaseNotesUrl || '';
+  const updateStatusLabel = updateBusy ? '확인 중' : updateInfo?.updateAvailable ? '새 버전' : updateStatus === 'up_to_date' ? '최신' : updateStatus === 'manual_download' ? '수동' : updateStatus === 'not_configured' ? '미설정' : updateStatus === 'error' ? '오류' : updateStatus === 'unsupported_platform' ? '미지원' : '확인 전';
+  const updateStatusTone = updateInfo?.updateAvailable ? 'var(--accent)' : updateStatus === 'up_to_date' ? 'var(--ok)' : updateStatus === 'error' ? 'var(--danger)' : 'var(--muted)';
+  const updateVersionLine = updateInfo?.currentVersion ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}` : '버전 정보를 불러오지 않았습니다';
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : {
     ...EMPTY_MANUAL_CROP
   };
@@ -3662,6 +3728,49 @@ function SidePanel({
     className: "scale"
   }, Math.round(placementScale * 100), "%"))), React.createElement("div", {
     className: "panel-section-hd"
+  }, "\uCC98\uB9AC \uBC29\uC2DD \uC120\uD0DD ", React.createElement("span", {
+    className: "line"
+  })), React.createElement("div", {
+    className: "steps"
+  }, React.createElement("button", {
+    className: `step-row ${item.step === 's1' ? 'on' : ''}`,
+    onClick: () => setStep(item.id, 's1')
+  }, React.createElement("span", {
+    className: "radio"
+  }), React.createElement("div", null, React.createElement("div", {
+    className: "t"
+  }, "1\uB2E8\uACC4 \xB7 \uADF8\uB300\uB85C \uBD99\uC774\uAE30"), React.createElement("div", {
+    className: "d"
+  }, "\uC2A4\uCE94\uD55C \uBAA8\uC591 \uADF8\uB300\uB85C. \uC6D0\uBCF8 \uC0C9\xB7\uC5EC\uBC31 \uC720\uC9C0.")), React.createElement("div", {
+    className: "meta-r"
+  }, "\uC989\uC2DC", React.createElement("strong", null, "~ 0.3s"))), React.createElement("button", {
+    className: `step-row ${item.step === 's2' ? 'on' : ''}`,
+    onClick: () => setStep(item.id, 's2')
+  }, React.createElement("span", {
+    className: "radio"
+  }), React.createElement("div", null, React.createElement("div", {
+    className: "t"
+  }, "2\uB2E8\uACC4 \xB7 AI \uCE60\uD310 \uBCC0\uD658 ", React.createElement("span", {
+    className: "ai-badge"
+  }, "AI")), React.createElement("div", {
+    className: "d"
+  }, "\uBC30\uACBD \uC81C\uAC70 \xB7 \uBD84\uD544 \uC0C9\uC0C1 \uC790\uB3D9 \uBC30\uCE58 \xB7 \uAC00\uB3C5\uC131 \uCD5C\uC801\uD654.")), React.createElement("div", {
+    className: "meta-r"
+  }, "\uC790\uB3D9", React.createElement("strong", null, "~ 4s"))), React.createElement("button", {
+    className: `step-row ${item.step === 's3' ? 'on' : ''}`,
+    onClick: () => setStep(item.id, 's3')
+  }, React.createElement("span", {
+    className: "radio"
+  }), React.createElement("div", null, React.createElement("div", {
+    className: "t"
+  }, "3\uB2E8\uACC4 \xB7 \uACE0\uD654\uC9C8 \uC7AC\uAD6C\uC131 ", React.createElement("span", {
+    className: "ai-badge"
+  }, "HQ")), React.createElement("div", {
+    className: "d"
+  }, "\uC120\uD0DD\uD55C \uBB38\uC81C\uB9CC \uC5C5\uC2A4\uCF00\uC77C\uB9C1 \xB7 \uBC30\uACBD\uC81C\uAC70 \xB7 \uC644\uC804 \uD22C\uBA85 PNG\uB85C \uC81C\uC791.")), React.createElement("div", {
+    className: "meta-r"
+  }, "\uC81C\uC791\uC2DC", React.createElement("strong", null, "~ 8s")))), React.createElement("div", {
+    className: "panel-section-hd"
   }, "\uC5EC\uBC31 \uC790\uB974\uAE30 ", React.createElement("span", {
     className: "line"
   })), React.createElement("div", {
@@ -3832,49 +3941,6 @@ function SidePanel({
     disabled: !canZoomIn,
     onClick: () => nudgeScale(PLACEMENT_SCALE_STEP)
   }, Icon.zoomIn)))), React.createElement("div", {
-    className: "panel-section-hd"
-  }, "\uCC98\uB9AC \uBC29\uC2DD \uC120\uD0DD ", React.createElement("span", {
-    className: "line"
-  })), React.createElement("div", {
-    className: "steps"
-  }, React.createElement("button", {
-    className: `step-row ${item.step === 's1' ? 'on' : ''}`,
-    onClick: () => setStep(item.id, 's1')
-  }, React.createElement("span", {
-    className: "radio"
-  }), React.createElement("div", null, React.createElement("div", {
-    className: "t"
-  }, "1\uB2E8\uACC4 \xB7 \uADF8\uB300\uB85C \uBD99\uC774\uAE30"), React.createElement("div", {
-    className: "d"
-  }, "\uC2A4\uCE94\uD55C \uBAA8\uC591 \uADF8\uB300\uB85C. \uC6D0\uBCF8 \uC0C9\xB7\uC5EC\uBC31 \uC720\uC9C0.")), React.createElement("div", {
-    className: "meta-r"
-  }, "\uC989\uC2DC", React.createElement("strong", null, "~ 0.3s"))), React.createElement("button", {
-    className: `step-row ${item.step === 's2' ? 'on' : ''}`,
-    onClick: () => setStep(item.id, 's2')
-  }, React.createElement("span", {
-    className: "radio"
-  }), React.createElement("div", null, React.createElement("div", {
-    className: "t"
-  }, "2\uB2E8\uACC4 \xB7 AI \uCE60\uD310 \uBCC0\uD658 ", React.createElement("span", {
-    className: "ai-badge"
-  }, "AI")), React.createElement("div", {
-    className: "d"
-  }, "\uBC30\uACBD \uC81C\uAC70 \xB7 \uBD84\uD544 \uC0C9\uC0C1 \uC790\uB3D9 \uBC30\uCE58 \xB7 \uAC00\uB3C5\uC131 \uCD5C\uC801\uD654.")), React.createElement("div", {
-    className: "meta-r"
-  }, "\uC790\uB3D9", React.createElement("strong", null, "~ 4s"))), React.createElement("button", {
-    className: `step-row ${item.step === 's3' ? 'on' : ''}`,
-    onClick: () => setStep(item.id, 's3')
-  }, React.createElement("span", {
-    className: "radio"
-  }), React.createElement("div", null, React.createElement("div", {
-    className: "t"
-  }, "3\uB2E8\uACC4 \xB7 \uACE0\uD654\uC9C8 \uC7AC\uAD6C\uC131 ", React.createElement("span", {
-    className: "ai-badge"
-  }, "HQ")), React.createElement("div", {
-    className: "d"
-  }, "\uC120\uD0DD\uD55C \uBB38\uC81C\uB9CC \uC5C5\uC2A4\uCF00\uC77C\uB9C1 \xB7 \uBC30\uACBD\uC81C\uAC70 \xB7 \uC644\uC804 \uD22C\uBA85 PNG\uB85C \uC81C\uC791.")), React.createElement("div", {
-    className: "meta-r"
-  }, "\uC81C\uC791\uC2DC", React.createElement("strong", null, "~ 8s")))), React.createElement("div", {
     className: "panel-section-hd",
     style: {
       marginTop: 6
@@ -4274,7 +4340,51 @@ function SidePanel({
       if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.('');
     },
     disabled: !userSettings?.hasStoredOpenAiApiKey
-  }, "\uC800\uC7A5\uB41C \uD0A4 \uC0AD\uC81C")))));
+  }, "\uC800\uC7A5\uB41C \uD0A4 \uC0AD\uC81C")), React.createElement("div", {
+    className: "panel-section-hd",
+    style: {
+      marginTop: 4
+    }
+  }, "\uC571 \uC5C5\uB370\uC774\uD2B8 ", React.createElement("span", {
+    className: "line"
+  })), React.createElement("div", {
+    className: "row-control"
+  }, React.createElement("div", {
+    className: "lbl"
+  }, "\uD604\uC7AC \uBC84\uC804", React.createElement("small", null, updateVersionLine)), React.createElement("span", {
+    className: "pos-tag",
+    style: {
+      background: updateStatusTone,
+      minWidth: 58,
+      textAlign: 'center'
+    }
+  }, updateStatusLabel)), updateInfo?.error && React.createElement("div", {
+    className: "runtime-note warn"
+  }, updateInfo.error), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    style: {
+      flex: 1,
+      justifyContent: 'center'
+    },
+    type: "button",
+    onClick: () => onCheckUpdate?.(),
+    disabled: updateBusy
+  }, updateBusy ? '확인 중...' : '업데이트 확인'), React.createElement("button", {
+    className: "btn primary",
+    style: {
+      flex: 1,
+      justifyContent: 'center'
+    },
+    type: "button",
+    onClick: () => onOpenUpdate?.(),
+    disabled: !updateDownloadUrl,
+    title: updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'
+  }, Icon.download, " \uB2E4\uC6B4\uB85C\uB4DC \uC5F4\uAE30")))));
 }
 function LoadingOverlay({
   label,
@@ -4545,6 +4655,9 @@ function applyItemStateToProblem(problem, item) {
   const next = {
     ...problem
   };
+  const actualHeightPages = Math.max(0.12, item.heightFrac || next.actualHeightPages || next.actual_height_pages || 0.8);
+  const startYPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
+  const snappedNextStartYPages = Number.isFinite(item.snappedNextStartYPages) ? Math.max(startYPages || 0, item.snappedNextStartYPages) : null;
   next.title = item.name || next.title || '';
   next.riskFlags = Array.isArray(item.riskFlags) ? [...item.riskFlags] : [];
   next.risk_flags = next.riskFlags;
@@ -4556,6 +4669,24 @@ function applyItemStateToProblem(problem, item) {
   next.placementXRatio = normalizePlacementXRatio(item.placementXRatio);
   next.placementYRatio = verticalPlacementRoomPages(item) > 0.001 ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
+  next.actualHeightPages = actualHeightPages;
+  next.actual_height_pages = actualHeightPages;
+  if (startYPages !== null) {
+    next.startYPages = Number(startYPages.toFixed(6));
+    next.start_y_pages = next.startYPages;
+  }
+  if (snappedNextStartYPages !== null) {
+    next.snappedNextStartYPages = Number(snappedNextStartYPages.toFixed(6));
+    next.snapped_next_start_y_pages = next.snappedNextStartYPages;
+    next.slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - (startYPages || 0)) / DEFAULT_SLOT_HEIGHT_PAGES));
+    next.slot_span_count = next.slotSpanCount;
+  }
+  if (startYPages !== null) {
+    next.actualBottomYPages = Number((startYPages + actualHeightPages).toFixed(6));
+    next.actual_bottom_y_pages = next.actualBottomYPages;
+  }
+  next.overflowAmountPages = Math.max(0, actualHeightPages - DEFAULT_SLOT_HEIGHT_PAGES);
+  next.overflow_amount_pages = next.overflowAmountPages;
   return next;
 }
 function confirmedItemState(item) {
@@ -4608,7 +4739,8 @@ function materializeSessionForItems(rawSession, items, fileName) {
   const snapshot = cloneSession(rawSession);
   if (!snapshot || !Array.isArray(snapshot.problems)) return null;
   const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
-  const orderedProblems = items.filter(item => byId.has(item.id)).map(item => applyItemStateToProblem(byId.get(item.id), item));
+  const reflowedItems = reflowItemsForBoardOrder(items);
+  const orderedProblems = reflowedItems.filter(item => byId.has(item.id)).map(item => applyItemStateToProblem(byId.get(item.id), item));
   const activeIds = new Set(orderedProblems.map(problem => problem.id));
   snapshot.problems = orderedProblems;
   applyProblemCounts(snapshot, orderedProblems);
@@ -4618,9 +4750,10 @@ function materializeSessionForItems(rawSession, items, fileName) {
   snapshot.edbPath = null;
   snapshot.edbFileUri = null;
   if (Array.isArray(snapshot.pages)) {
+    const orderIndex = new Map(orderedProblems.map((problem, index) => [problem.id, index]));
     snapshot.pages = snapshot.pages.map(page => ({
       ...page,
-      problemIds: (page.problemIds || page.problem_ids || []).filter(id => activeIds.has(id))
+      problemIds: (page.problemIds || page.problem_ids || []).filter(id => activeIds.has(id)).sort((a, b) => (orderIndex.get(a) ?? 999999) - (orderIndex.get(b) ?? 999999))
     }));
   }
   return snapshot;
@@ -5942,6 +6075,11 @@ async function fetchRuntimeDiagnostics() {
   const json = await expectOkJson(resp, '진단 로드 실패');
   return json;
 }
+async function fetchAppUpdateStatus() {
+  const resp = await fetch('/api/app/update');
+  const json = await expectOkJson(resp, '업데이트 확인 실패');
+  return json;
+}
 async function clearSession() {
   const resp = await fetch('/api/session/latest', {
     method: 'DELETE'
@@ -5957,6 +6095,19 @@ async function postShutdown() {
     method: 'POST'
   });
   const json = await expectOkJson(resp, '앱 종료 실패');
+  return json;
+}
+async function postOpenUrl(url) {
+  const resp = await fetch('/api/system/open-url', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      url
+    })
+  });
+  const json = await expectOkJson(resp, '브라우저 열기 실패');
   return json;
 }
 async function postMutate(action, args) {
@@ -6081,6 +6232,8 @@ function App() {
   const [usingMock, setUsingMock] = useState(false);
   const [userSettings, setUserSettings] = useState(null);
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
@@ -6111,6 +6264,50 @@ function App() {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
+  const updateStatusToast = info => {
+    if (!info) return '업데이트 정보를 확인하지 못했습니다';
+    if (info.updateAvailable) {
+      const latestVersion = info.latest?.version || '새 버전';
+      return `업데이트 가능 · ${latestVersion}`;
+    }
+    if (info.channelStatus === 'up_to_date') return '현재 최신 버전입니다';
+    if (info.channelStatus === 'manual_download') return '다운로드 페이지를 열 수 있습니다';
+    if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
+    if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
+    if (info.channelStatus === 'error') return `업데이트 확인 오류: ${info.error || '채널 확인 실패'}`;
+    return '업데이트 정보를 확인했습니다';
+  };
+  const checkForUpdates = useCallback(async (options = {}) => {
+    setUpdateBusy(true);
+    try {
+      const info = await fetchAppUpdateStatus();
+      setUpdateInfo(info);
+      if (!options.silent) showToast(updateStatusToast(info));
+      return info;
+    } catch (e) {
+      if (!options.silent) showToast('업데이트 확인 실패: ' + e.message);
+      console.warn('[board] update check skipped:', e.message);
+      return null;
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+  const openUpdatePage = useCallback(async () => {
+    const info = updateInfo || (await checkForUpdates({
+      silent: true
+    }));
+    const url = info?.downloadUrl || info?.latest?.downloadUrl || info?.releaseNotesUrl || info?.latest?.releaseNotesUrl || '';
+    if (!url) {
+      showToast('업데이트 다운로드 URL이 없습니다');
+      return;
+    }
+    try {
+      await postOpenUrl(url);
+      showToast('다운로드 페이지를 열었어요');
+    } catch (e) {
+      showToast('다운로드 페이지 열기 실패: ' + e.message);
+    }
+  }, [updateInfo, checkForUpdates]);
   const refreshSessionHistory = useCallback(async () => {
     try {
       const history = await fetchSessionHistory();
@@ -6273,8 +6470,9 @@ function App() {
       label: action === 'split' ? '문제를 가르는 중…' : action === 'merge' ? '문제를 합치는 중…' : action === 'crop' ? '이미지를 자르는 중…' : action === 'exclude' ? '문제를 제외하는 중…' : '변경 중…',
       startedAt: Date.now()
     });
-    const snapshotBefore = session;
+    const snapshotBefore = materializeSessionForItems(session, items, fileName) || session;
     try {
+      await postRestore(snapshotBefore);
       const next = await postMutate(action, args);
       setHistoryStack(prev => [...prev, snapshotBefore]);
       adoptMutatedSession(next, snapshotBefore);
@@ -6286,7 +6484,7 @@ function App() {
       setMutating(false);
       setLoading(null);
     }
-  }, [session, adoptMutatedSession, refreshSessionHistory]);
+  }, [session, items, fileName, adoptMutatedSession, refreshSessionHistory]);
   const retryAiSession = useCallback(async args => {
     if (!session) {
       showToast('변경할 세션이 없습니다');
@@ -6449,6 +6647,11 @@ function App() {
       cancelled = true;
     };
   }, []);
+  useEffect(() => {
+    checkForUpdates({
+      silent: true
+    });
+  }, [checkForUpdates]);
   const onSaveGeminiKey = useCallback(async key => {
     try {
       const s = await saveUserSettings({
@@ -6806,15 +7009,20 @@ function App() {
     setPublished(false);
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
-    setItems(it => {
-      const reordered = reorderItemsForDrop(it, fromId, toId, dropPosition);
-      if (!options?.resetPlacement || reordered === it) return reordered;
-      return reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
-    });
+    const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
+    if (reordered === items) return;
+    const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
+    const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered);
+    setItems(nextItems);
+    if (session) {
+      const nextSession = materializeSessionForItems(session, nextItems, fileName) || session;
+      setSession(nextSession);
+      postRestore(nextSession).catch(e => console.warn('[board] reorder persist failed:', e.message));
+    }
     setPublished(false);
   };
   const removeItem = id => {
-    const nextItems = items.filter(x => x.id !== id);
+    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id));
     setItems(nextItems);
     if (activeId === id) {
       setActiveId(nextItems[0]?.id || null);
@@ -7122,7 +7330,11 @@ function App() {
     canRecognizeSession: !!session && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition,
     session: session,
     published: published,
-    onClassinReviewComplete: markClassinReviewComplete
+    onClassinReviewComplete: markClassinReviewComplete,
+    updateInfo: updateInfo,
+    updateBusy: updateBusy,
+    onCheckUpdate: checkForUpdates,
+    onOpenUpdate: openUpdatePage
   })), React.createElement(BackgroundJobsPanel, {
     jobs: backgroundJobs,
     onCancel: cancelBackgroundJob,

@@ -2,8 +2,8 @@ import unittest
 
 from PIL import Image, ImageDraw
 
-from segment import segment_page
-from structured_schema import Subject
+from segment import _reassign_single_column_entries_by_visual_columns, segment_page
+from structured_schema import Box, Subject
 
 
 class TestDocumentGridSegmentation(unittest.TestCase):
@@ -136,6 +136,28 @@ class TestDocumentGridSegmentation(unittest.TestCase):
         self.assertEqual("document-bands", page.metadata.get("segmenter"))
         self.assertEqual(2, len(page.blocks))
         self.assertLess(page.blocks[-1].bbox.bottom, 710)
+
+    def test_single_column_entries_with_visual_two_column_top_inversion_are_reassigned(self):
+        content_box = Box.from_points(18, 15, 848, 642)
+        entries = [
+            (Box.from_points(4, 1, 439, 324), 1, 1, 2, False),
+            (Box.from_points(427, 9, 862, 334), 1, 2, 2, False),
+            (Box.from_points(19, 390, 423, 639), 2, 1, 2, False),
+            (Box.from_points(428, 372, 861, 642), 2, 2, 2, False),
+        ]
+
+        groups, columns, changed = _reassign_single_column_entries_by_visual_columns(
+            [entries],
+            [content_box],
+            content_box=content_box,
+            page_height=652,
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(2, len(columns))
+        self.assertEqual(2, len(groups))
+        self.assertEqual([1, 390], [int(entry[0].top) for entry in groups[0]])
+        self.assertEqual([9, 372], [int(entry[0].top) for entry in groups[1]])
 
 
 if __name__ == "__main__":

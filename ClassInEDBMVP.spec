@@ -30,11 +30,15 @@ ASSET_DATAS = [
     ("assets/app_icon.png", "assets"),
 ]
 
+APP_CONFIG_DATAS = [
+    ("app_update_config.json", "."),
+]
+
 a = Analysis(
     ['app_server.py'],
     pathex=[],
     binaries=[],
-    datas=[item for item in UI_DATAS + ASSET_DATAS if Path(item[0]).exists()],
+    datas=[item for item in UI_DATAS + ASSET_DATAS + APP_CONFIG_DATAS if Path(item[0]).exists()],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

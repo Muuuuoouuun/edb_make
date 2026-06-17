@@ -1,8 +1,18 @@
-#define AppName "ClassInEDBMVP"
-#define AppDisplayName "ClassIn EDB"
-#define AppVersion "0.1.0"
-#define SourceDir "..\..\dist\ClassInEDBMVP"
-#define OutputDir "..\..\dist"
+#ifndef AppName
+  #define AppName "ClassInEDBMVP"
+#endif
+#ifndef AppDisplayName
+  #define AppDisplayName "ClassIn EDB"
+#endif
+#ifndef AppVersion
+  #define AppVersion "0.1.0"
+#endif
+#ifndef SourceDir
+  #define SourceDir "..\..\dist\ClassInEDBMVP"
+#endif
+#ifndef OutputDir
+  #define OutputDir "..\..\dist"
+#endif
 
 [Setup]
 AppId={{8F3C4B60-7E9A-4B0F-A7F1-EDB0D1E7C001}

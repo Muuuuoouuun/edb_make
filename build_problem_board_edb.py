@@ -69,6 +69,9 @@ MIN_PROBLEM_AREA_RATIO = 0.12
 DOCUMENT_BAND_TOP_PADDING_PX = 44.0
 DOCUMENT_BAND_BOTTOM_PADDING_PX = 20.0
 DOCUMENT_BAND_NEXT_PROBLEM_GAP_PX = 6.0
+PDF_TEXT_MARKER_TOP_PADDING_PX = 0.0
+PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX = 44.0
+PDF_TEXT_MARKER_EDGE_TOP_EXTRA_PADDING_PX = 0.0
 V1_LAYOUT_MARGIN_X_PX = 24.0
 V1_LAYOUT_MARGIN_Y_PX = 24.0
 V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
@@ -85,7 +88,13 @@ PROBLEM_EDGE_TOP_EXTRA_PADDING_PX = 34.0
 PROBLEM_EDGE_BOTTOM_EXTRA_PADDING_PX = 32.0
 PROBLEM_CHOICE_EDGE_BOTTOM_EXTRA_PADDING_PX = 42.0
 PAGE_FOOTER_CHROME_BAND_RATIO = 0.86
-PAGE_FOOTER_CHROME_TEXT_MARKERS = ("fillthevoid", "윤자매")
+PAGE_FOOTER_CHROME_TEXT_MARKERS = (
+    "fillthevoid",
+    "윤자매",
+    "저작권",
+    "문제지에관한저작권",
+    "한국교육과정평가원",
+)
 PAGE_FOOTER_CHROME_LINE_MIN_WIDTH_RATIO = 0.55
 PAGE_FOOTER_CHROME_LINE_MAX_HEIGHT_PX = 14.0
 PAGE_FOOTER_CHROME_SCAN_PX = 180
@@ -94,6 +103,14 @@ PAGE_FOOTER_CHROME_LINE_MIN_DARK_RATIO = 0.52
 PAGE_FOOTER_CHROME_MIN_GAP_FROM_CONTENT_PX = 18.0
 PAGE_FOOTER_CHROME_TRIM_ABOVE_LINE_PX = 36.0
 PAGE_FOOTER_CHROME_CONTENT_PADDING_PX = 14.0
+PAGE_SIDE_CHROME_TEXT_MARKERS = (
+    "과학탐구",
+    "사회탐구",
+    "지구과학",
+    "생명과학",
+    "물리학",
+    "화학",
+)
 PROCESSING_STEP_RAW = "raw"
 PROCESSING_STEP_ORIGINAL = "s1"
 PROCESSING_STEP_CHALK = "s2"
@@ -258,6 +275,20 @@ EDGE_GUIDE_CLUSTER_MIN_COVERAGE_RATIO = 0.55
 EDGE_GUIDE_CLUSTER_MAX_WIDTH_PX = 24
 EDGE_GUIDE_CLUSTER_GAP_PX = 2
 EDGE_GUIDE_TRIM_PADDING_PX = 4
+SIDE_PAGE_CHROME_SCAN_RATIO = 0.24
+SIDE_PAGE_CHROME_SCAN_MAX_PX = 180
+SIDE_PAGE_CHROME_TAB_MAX_WIDTH_RATIO = 0.16
+SIDE_PAGE_CHROME_TAB_MAX_HEIGHT_RATIO = 0.48
+SIDE_PAGE_CHROME_TAB_MIN_HEIGHT_RATIO = 0.08
+SIDE_PAGE_CHROME_TRIM_PADDING_PX = 6
+BOTTOM_WATERMARK_SCAN_RATIO = 0.22
+BOTTOM_WATERMARK_MIN_Y_RATIO = 0.82
+BOTTOM_WATERMARK_BLUE_DELTA = 22
+BOTTOM_WATERMARK_TRIM_PADDING_PX = 10
+CORNER_PAGE_BADGE_SCAN_RATIO = 0.18
+CORNER_PAGE_BADGE_SCAN_MAX_PX = 180
+CORNER_PAGE_BADGE_EDGE_SEED_PX = 10
+CORNER_PAGE_BADGE_ERASE_PADDING_PX = 8
 
 
 def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
@@ -349,6 +380,243 @@ def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
     if right_trim - left_trim < width * 0.75:
         return image
     return image.crop((max(0, left_trim), 0, min(width, right_trim), height))
+
+
+def _trim_edge_attached_page_chrome(image: Image.Image) -> Image.Image:
+    """Trim side chrome such as subject tabs attached to the crop edge."""
+    if np is None:
+        return image
+    width, height = image.size
+    if width <= 80 or height <= 80:
+        return image
+
+    rgb = image.convert("RGB")
+    arr = np.asarray(rgb, dtype=np.uint8)
+    rgb_float = arr.astype(np.float32)
+    luminance = (
+        0.299 * rgb_float[..., 0]
+        + 0.587 * rgb_float[..., 1]
+        + 0.114 * rgb_float[..., 2]
+    )
+    saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
+    foreground = (luminance <= 246.0) | (saturation >= 24.0)
+
+    scan_width = min(
+        width,
+        max(32, min(SIDE_PAGE_CHROME_SCAN_MAX_PX, int(round(width * SIDE_PAGE_CHROME_SCAN_RATIO)))),
+    )
+    min_tab_height = max(36, int(round(height * SIDE_PAGE_CHROME_TAB_MIN_HEIGHT_RATIO)))
+    max_tab_height = max(min_tab_height, int(round(height * SIDE_PAGE_CHROME_TAB_MAX_HEIGHT_RATIO)))
+    max_tab_width = max(18, int(round(width * SIDE_PAGE_CHROME_TAB_MAX_WIDTH_RATIO)))
+    max_line_width = max(8, int(round(width * 0.018)))
+
+    def edge_components(side: str) -> list[tuple[int, int, int, int, int]]:
+        seed_width = max(4, min(scan_width, max(20, int(round(width * 0.035)))))
+        if side == "left":
+            x_min, x_max = 0, scan_width
+            edge_columns = range(0, min(seed_width, scan_width))
+        else:
+            x_min, x_max = width - scan_width, width
+            edge_columns = range(max(width - seed_width, x_min), width)
+
+        visited = np.zeros((height, scan_width), dtype=bool)
+        components: list[tuple[int, int, int, int, int]] = []
+        for y in range(height):
+            for x in edge_columns:
+                if not foreground[y, x]:
+                    continue
+                local_x = x - x_min
+                if local_x < 0 or local_x >= scan_width or visited[y, local_x]:
+                    continue
+                stack = [(x, y)]
+                visited[y, local_x] = True
+                min_x = max_x = x
+                min_y = max_y = y
+                count = 0
+                while stack:
+                    cx, cy = stack.pop()
+                    count += 1
+                    min_x = min(min_x, cx)
+                    max_x = max(max_x, cx)
+                    min_y = min(min_y, cy)
+                    max_y = max(max_y, cy)
+                    for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                        if nx < x_min or nx >= x_max or ny < 0 or ny >= height:
+                            continue
+                        lx = nx - x_min
+                        if visited[ny, lx] or not foreground[ny, nx]:
+                            continue
+                        visited[ny, lx] = True
+                        stack.append((nx, ny))
+                components.append((min_x, min_y, max_x, max_y, count))
+        return components
+
+    left_trim = 0
+    right_trim = width
+    for side in ("left", "right"):
+        for min_x, min_y, max_x, max_y, count in edge_components(side):
+            component_width = max_x - min_x + 1
+            component_height = max_y - min_y + 1
+            thin_edge_line = component_width <= max_line_width and component_height >= height * 0.45
+            side_tab = (
+                component_width <= max_tab_width
+                and min_tab_height <= component_height <= max_tab_height
+                and count >= max(24, int(round(width * height * 0.001)))
+            )
+            if not (thin_edge_line or side_tab):
+                continue
+            if side == "left":
+                left_trim = max(left_trim, max_x + SIDE_PAGE_CHROME_TRIM_PADDING_PX + 1)
+            else:
+                right_trim = min(right_trim, min_x - SIDE_PAGE_CHROME_TRIM_PADDING_PX)
+
+    if left_trim <= 0 and right_trim >= width:
+        return image
+    if right_trim - left_trim < width * 0.70:
+        return image
+    return image.crop((max(0, left_trim), 0, min(width, right_trim), height))
+
+
+def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
+    """Remove the blue 평가원 copyright footer when it is outside the problem."""
+    if np is None:
+        return image
+    width, height = image.size
+    if width <= 80 or height <= 120:
+        return image
+
+    rgb = image.convert("RGB")
+    arr = np.asarray(rgb, dtype=np.int16)
+    scan_top = int(round(height * (1.0 - BOTTOM_WATERMARK_SCAN_RATIO)))
+    scan_top = max(scan_top, int(round(height * BOTTOM_WATERMARK_MIN_Y_RATIO)))
+    if scan_top >= height - 2:
+        return image
+    lower = arr[scan_top:, :, :]
+    red = lower[..., 0]
+    green = lower[..., 1]
+    blue = lower[..., 2]
+    saturation = lower.max(axis=2) - lower.min(axis=2)
+    blue_mask = (
+        (blue >= red + BOTTOM_WATERMARK_BLUE_DELTA)
+        & (blue >= green + 8)
+        & (saturation >= 32)
+    )
+    if int(np.count_nonzero(blue_mask)) < max(18, int(round(width * height * 0.00035))):
+        return image
+
+    rows = np.where(np.count_nonzero(blue_mask, axis=1) >= max(4, int(round(width * 0.006))))[0]
+    if rows.size == 0:
+        return image
+    first_y = scan_top + int(rows.min())
+    if first_y < int(round(height * BOTTOM_WATERMARK_MIN_Y_RATIO)):
+        return image
+    target_bottom = max(1, first_y - BOTTOM_WATERMARK_TRIM_PADDING_PX)
+    if target_bottom >= height - 4 or target_bottom <= height * 0.72:
+        return image
+    return image.crop((0, 0, width, target_bottom))
+
+
+def _erase_corner_page_badges(image: Image.Image) -> Image.Image:
+    """Erase small page-number badges glued to the crop corners."""
+    if np is None:
+        return image
+    width, height = image.size
+    if width <= 80 or height <= 80:
+        return image
+
+    mode = image.mode
+    rgba = image.convert("RGBA")
+    arr = np.asarray(rgba, dtype=np.uint8)
+    rgb_float = arr[..., :3].astype(np.float32)
+    luminance = (
+        0.299 * rgb_float[..., 0]
+        + 0.587 * rgb_float[..., 1]
+        + 0.114 * rgb_float[..., 2]
+    )
+    saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
+    alpha = arr[..., 3]
+    foreground = (alpha > 24) & ((luminance <= 246.0) | (saturation >= 24.0))
+
+    roi_width = min(width, max(48, min(CORNER_PAGE_BADGE_SCAN_MAX_PX, int(round(width * CORNER_PAGE_BADGE_SCAN_RATIO)))))
+    roi_height = min(height, max(48, min(CORNER_PAGE_BADGE_SCAN_MAX_PX, int(round(height * CORNER_PAGE_BADGE_SCAN_RATIO)))))
+    seed_px = max(3, min(CORNER_PAGE_BADGE_EDGE_SEED_PX, roi_width, roi_height))
+    fill = (255, 255, 255, 0) if "A" in image.getbands() else (255, 255, 255, 255)
+    output = rgba.copy()
+
+    corner_specs = (
+        ("left", "bottom", 0, height - roi_height),
+        ("right", "bottom", width - roi_width, height - roi_height),
+        ("left", "top", 0, 0),
+        ("right", "top", width - roi_width, 0),
+    )
+
+    for horizontal, vertical, left, top in corner_specs:
+        roi_mask = foreground[top:top + roi_height, left:left + roi_width]
+        visited = np.zeros((roi_height, roi_width), dtype=bool)
+        seeds: list[tuple[int, int]] = []
+        x_edge = range(0, seed_px) if horizontal == "left" else range(roi_width - seed_px, roi_width)
+        y_edge = range(roi_height - seed_px, roi_height) if vertical == "bottom" else range(0, seed_px)
+        for y in range(roi_height):
+            for x in x_edge:
+                if roi_mask[y, x]:
+                    seeds.append((x, y))
+        for y in y_edge:
+            for x in range(roi_width):
+                if roi_mask[y, x]:
+                    seeds.append((x, y))
+
+        for seed_x, seed_y in seeds:
+            if visited[seed_y, seed_x] or not roi_mask[seed_y, seed_x]:
+                continue
+            stack = [(seed_x, seed_y)]
+            visited[seed_y, seed_x] = True
+            min_x = max_x = seed_x
+            min_y = max_y = seed_y
+            count = 0
+            while stack:
+                cx, cy = stack.pop()
+                count += 1
+                min_x = min(min_x, cx)
+                max_x = max(max_x, cx)
+                min_y = min(min_y, cy)
+                max_y = max(max_y, cy)
+                for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                    if nx < 0 or nx >= roi_width or ny < 0 or ny >= roi_height:
+                        continue
+                    if visited[ny, nx] or not roi_mask[ny, nx]:
+                        continue
+                    visited[ny, nx] = True
+                    stack.append((nx, ny))
+
+            component_width = max_x - min_x + 1
+            component_height = max_y - min_y + 1
+            touches_horizontal = min_x <= seed_px if horizontal == "left" else max_x >= roi_width - seed_px - 1
+            touches_vertical = max_y >= roi_height - seed_px - 1 if vertical == "bottom" else min_y <= seed_px
+            small_enough = (
+                component_width <= max(42, int(round(width * 0.16)))
+                and component_height <= max(42, int(round(height * 0.14)))
+                and count <= max(1200, int(round(width * height * 0.018)))
+            )
+            if not (touches_horizontal or touches_vertical) or not small_enough:
+                continue
+
+            pad = CORNER_PAGE_BADGE_ERASE_PADDING_PX
+            erase_left = max(0, left + min_x - pad)
+            erase_top = max(0, top + min_y - pad)
+            erase_right = min(width, left + max_x + pad + 1)
+            erase_bottom = min(height, top + max_y + pad + 1)
+            patch = Image.new("RGBA", (erase_right - erase_left, erase_bottom - erase_top), fill)
+            output.paste(patch, (erase_left, erase_top))
+
+    return output if "A" in image.getbands() else output.convert(mode)
+
+
+def _trim_source_page_chrome(image: Image.Image) -> Image.Image:
+    trimmed = _trim_edge_vertical_guides(image)
+    trimmed = _trim_edge_attached_page_chrome(trimmed)
+    trimmed = _trim_bottom_blue_watermark(trimmed)
+    trimmed = _erase_corner_page_badges(trimmed)
+    return trimmed
 
 
 def _integer_crop_rect_for_box(box: Box, *, image_width: int, image_height: int) -> tuple[int, int, int, int]:
@@ -728,6 +996,7 @@ def _build_transparent_reconstruction_image(
     *,
     board_theme: str = DEFAULT_BOARD_THEME,
 ) -> Image.Image:
+    crop_image = _trim_source_page_chrome(crop_image)
     enhanced_crop = _enhance_problem_crop(
         crop_image,
         target_min_width_px=RECONSTRUCT_TARGET_MIN_WIDTH_PX,
@@ -796,6 +1065,7 @@ class _ProblemAssetTask:
     chalk_color: tuple[int, int, int]
     text_payload: str | None = None
     text_title: str | None = None
+    trim_edge_guides: bool = True
 
 
 @dataclass(slots=True)
@@ -936,7 +1206,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             image_height=task.source_image.height,
         )
     )
-    crop = _trim_edge_vertical_guides(crop)
+    if task.trim_edge_guides:
+        crop = _trim_source_page_chrome(crop)
     crop = _pad_problem_crop_edges(crop)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(task.crop_path)
@@ -984,7 +1255,7 @@ def merge_boxes(
     page_width: int,
     page_height: int,
     padding_px: int = PROBLEM_PADDING_PX,
-    top_padding_px: int | None = None,
+    top_padding_px: int | float | None = None,
     bottom_padding_px: int | float | None = None,
 ) -> Box:
     left = min(box.left for box in boxes)
@@ -1168,8 +1439,35 @@ def _is_page_footer_chrome_block(page: PageModel, block: ContentBlock) -> bool:
     return False
 
 
-def _filter_page_footer_chrome_blocks(page: PageModel, blocks: list[ContentBlock]) -> list[ContentBlock]:
-    filtered = [block for block in blocks if not _is_page_footer_chrome_block(page, block)]
+def _is_page_side_chrome_block(page: PageModel, block: ContentBlock) -> bool:
+    page_width = float(page.width_px)
+    page_height = float(page.height_px)
+    if page_width <= 0 or page_height <= 0:
+        return False
+
+    near_left = block.bbox.left <= page_width * 0.035
+    near_right = block.bbox.right >= page_width * 0.965
+    if not (near_left or near_right):
+        return False
+
+    normalized_text = re.sub(r"\s+", "", str(block.text or "")).lower()
+    narrow = block.bbox.width <= max(32.0, page_width * 0.13)
+    tall_enough = block.bbox.height >= max(36.0, page_height * 0.06)
+    if narrow and tall_enough and any(marker.lower() in normalized_text for marker in PAGE_SIDE_CHROME_TEXT_MARKERS):
+        return True
+
+    very_narrow = block.bbox.width <= max(10.0, page_width * 0.015)
+    very_tall = block.bbox.height >= page_height * 0.40
+    return very_narrow and very_tall
+
+
+def _filter_page_chrome_blocks(page: PageModel, blocks: list[ContentBlock]) -> list[ContentBlock]:
+    filtered = [
+        block
+        for block in blocks
+        if not _is_page_footer_chrome_block(page, block)
+        and not _is_page_side_chrome_block(page, block)
+    ]
     return filtered if filtered else blocks
 
 
@@ -1345,6 +1643,16 @@ def _should_prefer_problem_metadata_bbox(problem: ProblemUnit) -> bool:
     if isinstance(ai_unit, dict) and isinstance(ai_unit.get("review_flags"), list):
         flags.extend(str(flag) for flag in ai_unit["review_flags"])
     return "uncertain_bbox" not in {flag.strip() for flag in flags}
+
+
+def _is_trusted_pdf_text_marker_problem(problem: ProblemUnit, blocks: Sequence[ContentBlock]) -> bool:
+    if problem.metadata.get("problem_number_source") == "pdf_text_marker":
+        return True
+    return any(
+        block.metadata.get("segmenter") == "pdf-text-markers"
+        and block.metadata.get("problem_number_source") == "pdf_text_marker"
+        for block in blocks
+    )
 
 
 def _append_problem_block_ids(target: list[str], values: Sequence[str]) -> None:
@@ -2365,6 +2673,7 @@ def build_problem_entries(
             all_assigned_ids.update(_iter_problem_block_ids_raw(prob))
 
         for problem in ordered_problems:
+            trusted_pdf_marker_problem = False
             next_problem = next_problem_for_crop.get(problem.unit_id)
             own_ids = set(_iter_problem_block_ids_raw(problem))
             other_problem_block_ids = all_assigned_ids - own_ids
@@ -2374,7 +2683,7 @@ def build_problem_entries(
                 page, problem, next_problem, block_by_id, other_problem_block_ids
             )
             blocks = gap_filled if gap_filled else own_blocks
-            blocks = _filter_page_footer_chrome_blocks(page, blocks)
+            blocks = _filter_page_chrome_blocks(page, blocks)
             raw_problem_number = problem.metadata.get("problem_number")
             if isinstance(raw_problem_number, int):
                 problem_number = raw_problem_number
@@ -2396,12 +2705,25 @@ def build_problem_entries(
                 if not boxes:
                     boxes = [Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))]
                 has_document_band_metadata = any("question_band_index" in block.metadata for block in blocks)
+                trusted_pdf_marker_problem = _is_trusted_pdf_text_marker_problem(problem, blocks)
                 has_choice_blocks = any(block.block_type == BlockType.CHOICE for block in blocks)
                 bottom_padding_px = (
                     max(DOCUMENT_BAND_BOTTOM_PADDING_PX, CHOICE_BOTTOM_SAFE_PADDING_PX)
                     if has_choice_blocks
                     else DOCUMENT_BAND_BOTTOM_PADDING_PX
                     if has_document_band_metadata
+                    else PROBLEM_PADDING_PX
+                )
+                top_padding_px = (
+                    PDF_TEXT_MARKER_TOP_PADDING_PX
+                    if trusted_pdf_marker_problem
+                    else int(DOCUMENT_BAND_TOP_PADDING_PX)
+                    if has_document_band_metadata
+                    else PROBLEM_PADDING_PX
+                )
+                horizontal_padding_px = (
+                    PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX
+                    if trusted_pdf_marker_problem
                     else PROBLEM_PADDING_PX
                 )
                 content_bottom = (
@@ -2418,7 +2740,8 @@ def build_problem_entries(
                     boxes,
                     page_width=page.width_px,
                     page_height=page.height_px,
-                    top_padding_px=int(DOCUMENT_BAND_TOP_PADDING_PX) if has_document_band_metadata else PROBLEM_PADDING_PX,
+                    padding_px=horizontal_padding_px,
+                    top_padding_px=top_padding_px,
                     bottom_padding_px=bottom_padding_px,
                 )
                 if has_document_band_metadata:
@@ -2431,6 +2754,11 @@ def build_problem_entries(
                 merged_box = _expand_box_for_edge_content(
                     prepared_page.image,
                     merged_box,
+                    top_extra_px=(
+                        PDF_TEXT_MARKER_EDGE_TOP_EXTRA_PADDING_PX
+                        if trusted_pdf_marker_problem
+                        else PROBLEM_EDGE_TOP_EXTRA_PADDING_PX
+                    ),
                     bottom_extra_px=(
                         PROBLEM_CHOICE_EDGE_BOTTOM_EXTRA_PADDING_PX
                         if has_choice_blocks
@@ -2488,6 +2816,7 @@ def build_problem_entries(
                         chalk_color=chalk_color,
                         text_payload=text_fallback_payload or None,
                         text_title=problem_title if text_fallback_payload else None,
+                        trim_edge_guides=not trusted_pdf_marker_problem,
                     ),
                 )
             )

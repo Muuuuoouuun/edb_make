@@ -1,6 +1,10 @@
 param(
     [string]$AppName = "ClassInEDBMVP",
     [string]$OutputDir = "dist",
+    [string]$Version = "",
+    [string]$UpdateFeedUrl = "",
+    [string]$DownloadUrl = "",
+    [string]$ReleaseNotesUrl = "",
     [switch]$Clean,
     [switch]$SkipAppBuild,
     [switch]$InstallPyInstaller,
@@ -45,6 +49,18 @@ if (-not $SkipAppBuild) {
         AppName = $AppName
         OutputDir = $OutputDir
     }
+    if ($Version) {
+        $AppBuildArgs.Version = $Version
+    }
+    if ($UpdateFeedUrl) {
+        $AppBuildArgs.UpdateFeedUrl = $UpdateFeedUrl
+    }
+    if ($DownloadUrl) {
+        $AppBuildArgs.DownloadUrl = $DownloadUrl
+    }
+    if ($ReleaseNotesUrl) {
+        $AppBuildArgs.ReleaseNotesUrl = $ReleaseNotesUrl
+    }
     if ($Clean) {
         $AppBuildArgs.Clean = $true
     }
@@ -63,7 +79,11 @@ if (-not $Iscc) {
 }
 
 $InstallerScript = Join-Path $ProjectRoot "installer\windows\ClassInEDBMVP.iss"
-& $Iscc $InstallerScript
+$IsccArgs = @()
+if ($Version) {
+    $IsccArgs += "/DAppVersion=$Version"
+}
+& $Iscc @IsccArgs $InstallerScript
 
 $InstallerPath = Join-Path (Join-Path $ProjectRoot $OutputDir) "$AppName-Setup.exe"
 Write-Host "Installer complete."

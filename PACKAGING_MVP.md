@@ -63,6 +63,14 @@ Build the installable Windows setup file on Windows:
 .\package_windows_installer.ps1 -Clean -InstallPyInstaller
 ```
 
+With in-app update metadata:
+```powershell
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller `
+  -Version 0.1.1 `
+  -UpdateFeedUrl "https://example.com/classin-edb/update.json" `
+  -DownloadUrl "https://example.com/classin-edb/download"
+```
+
 Expected installer:
 ```text
 dist\ClassInEDBMVP-Setup.exe
@@ -114,6 +122,14 @@ Install PyInstaller if needed and build:
 ./package_macos_app.sh --install-pyinstaller --clean --zip
 ```
 
+With in-app update metadata:
+```zsh
+./package_macos_app.sh --install-pyinstaller --clean --dmg --zip \
+  --version 0.1.1 \
+  --update-feed-url "https://example.com/classin-edb/update.json" \
+  --download-url "https://example.com/classin-edb/download"
+```
+
 If PyInstaller is already installed:
 ```zsh
 ./package_macos_app.sh --clean --zip
@@ -130,6 +146,44 @@ The default macOS build is windowed and ad-hoc signed when `codesign` is availab
 ~/Documents/ClassInEDBMVP/.app_runtime/app.log
 ```
 
+## In-App Updates
+The app uses a semi-automatic update flow:
+1. The installed app keeps user settings and API keys under the user's app runtime folder.
+2. `칠판 설정` shows the current app version and an `업데이트 확인` button.
+3. If the configured update feed reports a newer version, the app opens the configured download page in the browser.
+4. The user installs the new `.dmg` or `Setup.exe` over the previous app. Existing API keys and session data stay in the runtime folder.
+
+Default update metadata lives in:
+```text
+app_update_config.json
+```
+
+The packaged app reads `app_update_config.json` from bundled resources, then allows a local override at:
+```text
+Documents\ClassInEDBMVP\app_update_config.json
+~/Documents/ClassInEDBMVP/app_update_config.json
+```
+
+Update feed JSON shape:
+```json
+{
+  "version": "0.1.1",
+  "summary": "Bug fixes and packaging improvements.",
+  "platforms": {
+    "windows": {
+      "version": "0.1.1",
+      "downloadUrl": "https://example.com/ClassInEDBMVP-Setup.exe",
+      "releaseNotesUrl": "https://example.com/releases/0.1.1"
+    },
+    "macos": {
+      "version": "0.1.1",
+      "downloadUrl": "https://example.com/ClassInEDBMVP-macOS.dmg",
+      "releaseNotesUrl": "https://example.com/releases/0.1.1"
+    }
+  }
+}
+```
+
 ## Included Runtime Assets
 - `ui_prototype\index.html`
 - `ui_prototype\board.html`
@@ -140,6 +194,7 @@ The default macOS build is windowed and ad-hoc signed when `codesign` is availab
 - `ui_prototype\app.bundle.js`
 - `ui_prototype\vendor\react.production.min.js`
 - `ui_prototype\vendor\react-dom.production.min.js`
+- `app_update_config.json`
 - `assets\app_icon.ico`
 - `assets\app_icon.icns`
 - `assets\app_icon.png`
@@ -153,6 +208,7 @@ The default macOS build is windowed and ad-hoc signed when `codesign` is availab
 - The browser UI talks to the local server over HTTP and does not call Python directly.
 - Double-clicking the packaged app opens the browser automatically. If the app server is already running, it opens the browser instead of starting a duplicate server.
 - API keys are entered in the app's `칠판 설정` panel and stored locally under the app runtime folder.
+- Updates are semi-automatic: the app checks configured release metadata and opens the installer download page; it does not self-replace in the background.
 - Use the top-bar power button to stop the local app server after use.
 - The current `.edb` export is still the MVP image-based board export, not the final mixed text/image writer.
 
