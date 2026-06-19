@@ -17,6 +17,7 @@ Set-StrictMode -Version Latest
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
+$ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
 
 function Find-InnoSetupCompiler {
     param([string]$Requested)
@@ -67,10 +68,17 @@ if (-not $SkipAppBuild) {
     if ($InstallPyInstaller) {
         $AppBuildArgs.InstallPyInstaller = $true
     }
+    $AppBuildArgs.RequirePyInstaller = $true
     if ($PythonExe) {
         $AppBuildArgs.PythonExe = $PythonExe
     }
     & (Join-Path $ProjectRoot "package_mvp.ps1") @AppBuildArgs
+}
+
+$PackageRoot = Join-Path $ResolvedOutputDir $AppName
+$PackageExe = Join-Path $PackageRoot "$AppName.exe"
+if (-not (Test-Path $PackageExe)) {
+    throw "PyInstaller app output was not found: $PackageExe. Build the app first or remove -SkipAppBuild."
 }
 
 $Iscc = Find-InnoSetupCompiler $InnoSetupCompiler
@@ -79,12 +87,16 @@ if (-not $Iscc) {
 }
 
 $InstallerScript = Join-Path $ProjectRoot "installer\windows\ClassInEDBMVP.iss"
-$IsccArgs = @()
+$IsccArgs = @(
+    "/DAppName=$AppName",
+    "/DSourceDir=$PackageRoot",
+    "/DOutputDir=$ResolvedOutputDir"
+)
 if ($Version) {
     $IsccArgs += "/DAppVersion=$Version"
 }
 & $Iscc @IsccArgs $InstallerScript
 
-$InstallerPath = Join-Path (Join-Path $ProjectRoot $OutputDir) "$AppName-Setup.exe"
+$InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"
 Write-Host "Installer complete."
 Write-Host "Installer: $InstallerPath"

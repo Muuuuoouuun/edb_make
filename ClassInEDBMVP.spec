@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +13,41 @@ def resolve_icon() -> str | None:
 
 
 resolved_icon = resolve_icon()
+
+
+def build_update_config() -> tuple[str, dict]:
+    config = {
+        "appName": "ClassInEDBMVP",
+        "version": "0.1.0",
+        "updateFeedUrl": "",
+        "downloadUrl": "",
+        "releaseNotesUrl": "",
+    }
+    source = Path("app_update_config.json")
+    if source.exists():
+        try:
+            data = json.loads(source.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict):
+                config.update({key: value for key, value in data.items() if value is not None})
+        except json.JSONDecodeError:
+            pass
+    env_overrides = {
+        "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),
+        "version": os.environ.get("EDB_PACKAGE_APP_VERSION", os.environ.get("EDB_APP_VERSION", "")).strip(),
+        "updateFeedUrl": os.environ.get("EDB_PACKAGE_UPDATE_FEED_URL", os.environ.get("EDB_UPDATE_FEED_URL", "")).strip(),
+        "downloadUrl": os.environ.get("EDB_PACKAGE_DOWNLOAD_URL", os.environ.get("EDB_DOWNLOAD_URL", "")).strip(),
+        "releaseNotesUrl": os.environ.get("EDB_PACKAGE_RELEASE_NOTES_URL", os.environ.get("EDB_RELEASE_NOTES_URL", "")).strip(),
+    }
+    config.update({key: value for key, value in env_overrides.items() if value})
+    target = Path("build") / "app_update_config.generated.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return str(target), config
+
+
+generated_update_config, generated_update_config_payload = build_update_config()
+bundle_version = str(generated_update_config_payload.get("version") or "0.1.0")
+bundle_identifier = os.environ.get("EDB_MACOS_BUNDLE_ID", "local.classin.edbmvp").strip() or "local.classin.edbmvp"
 
 UI_DATAS = [
     ("ui_prototype/index.html", "ui_prototype"),
@@ -25,21 +62,33 @@ UI_DATAS = [
 ]
 
 ASSET_DATAS = [
-    ("assets/app_icon.ico", "assets"),
-    ("assets/app_icon.icns", "assets"),
     ("assets/app_icon.png", "assets"),
 ]
 
 APP_CONFIG_DATAS = [
-    ("app_update_config.json", "."),
+    (generated_update_config, "."),
+]
+
+SCRIPT_DATAS = [
+    ("scripts/render_hwp_with_rhwp_core.mjs", "scripts"),
+]
+
+HIDDEN_IMPORTS = [
+    "preprocess",
+    "build_mvp_export",
+    "build_problem_board_edb",
+    "build_structured_page_json",
+    "edb_builder",
+    "page_repair",
+    "image_reconstruction_backend",
 ]
 
 a = Analysis(
     ['app_server.py'],
     pathex=[],
     binaries=[],
-    datas=[item for item in UI_DATAS + ASSET_DATAS + APP_CONFIG_DATAS if Path(item[0]).exists()],
-    hiddenimports=[],
+    datas=[item for item in UI_DATAS + ASSET_DATAS + APP_CONFIG_DATAS + SCRIPT_DATAS if Path(item[0]).exists()],
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -82,5 +131,6 @@ if sys.platform == "darwin":
         coll,
         name='ClassInEDBMVP.app',
         icon=resolved_icon,
-        bundle_identifier='local.classin.edbmvp',
+        bundle_identifier=bundle_identifier,
+        version=bundle_version,
     )

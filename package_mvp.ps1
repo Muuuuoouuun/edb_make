@@ -11,6 +11,7 @@ param(
     [switch]$Console,
     [switch]$InstallPyInstaller,
     [switch]$SkipFrontendBuild,
+    [switch]$RequirePyInstaller,
     [string]$IconPath = "assets\app_icon.ico",
     [string]$PythonExe = ""
 )
@@ -109,8 +110,7 @@ if ($HasPyInstaller) {
         @("ui_prototype\app.bundle.js", "ui_prototype"),
         @("ui_prototype\vendor\react.production.min.js", "ui_prototype\vendor"),
         @("ui_prototype\vendor\react-dom.production.min.js", "ui_prototype\vendor"),
-        @("assets\app_icon.ico", "assets"),
-        @("assets\app_icon.icns", "assets"),
+        @("scripts\render_hwp_with_rhwp_core.mjs", "scripts"),
         @("assets\app_icon.png", "assets")
     )
     $DataArgs = @()
@@ -121,6 +121,15 @@ if ($HasPyInstaller) {
             $DataArgs += @("--add-data", ($SourcePath + ";" + $Item[1]))
         }
     }
+    $HiddenImportArgs = @(
+        "--hidden-import", "preprocess",
+        "--hidden-import", "build_mvp_export",
+        "--hidden-import", "build_problem_board_edb",
+        "--hidden-import", "build_structured_page_json",
+        "--hidden-import", "edb_builder",
+        "--hidden-import", "page_repair",
+        "--hidden-import", "image_reconstruction_backend"
+    )
 
     $PyInstallerArgs = @(
         "--noconfirm",
@@ -130,13 +139,16 @@ if ($HasPyInstaller) {
         "--distpath", $ResolvedOutputDir,
         "--specpath", $SpecDir,
         "--name", $AppName
-    ) + $DataArgs + $IconArgs + @("app_server.py")
+    ) + $DataArgs + $HiddenImportArgs + $IconArgs + @("app_server.py")
 
     & $PythonExe -m PyInstaller @PyInstallerArgs
 
     $PackageRoot = if ($OneFile) { Join-Path $ResolvedOutputDir "$AppName.exe" } else { Join-Path $ResolvedOutputDir $AppName }
     Write-Host "PyInstaller packaging complete."
 } else {
+    if ($RequirePyInstaller) {
+        throw "PyInstaller is required for this packaging mode. Run with -InstallPyInstaller or install PyInstaller first."
+    }
     $PackageRoot = Join-Path $ResolvedOutputDir "source-package"
     New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
 

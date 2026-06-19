@@ -8,6 +8,7 @@ import concurrent.futures
 import errno
 import gzip
 import hashlib
+import importlib
 import json
 import math
 import mimetypes
@@ -22,7 +23,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
-from functools import partial
+from functools import lru_cache, partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,46 +31,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
-import preprocess
-from build_mvp_export import run_export
-from build_problem_board_edb import (
-    DEFAULT_BOARD_THEME,
-    ONE_PROBLEM_SLOT_HEIGHT_PAGES,
-    PASSAGE_REVIEW_REASON_LABELS,
-    ProblemEntry,
-    _classin_board_placement_overlap_issues,
-    _classin_passage_group_source_reuse_issues,
-    _classin_source_bbox_overlap_issues,
-    _build_transparent_reconstruction_image,
-    _normalize_processing_step,
-    _session_duplicate_problem_number_groups,
-    _session_problem_count_payload,
-    build_records,
-    build_ui_session,
-    estimate_height_pages,
-    recrop_problem,
-    resolve_subject,
-    run_problem_export,
-    write_classin_handoff_manifest,
-)
-from build_structured_page_json import resolve_recognition_worker_count
-from edb_builder import (
-    CROP_FORMAT_V1,
-    CROP_FORMAT_V2,
-    build_edb,
-    version_string_for_crop_format,
-    write_edb,
-)
-from page_repair import build_ai_fallback_config
 from layout_template_schema import LayoutTemplate
-from image_reconstruction_backend import (
-    DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER,
-    DEFAULT_RECONSTRUCTION_PROMPT,
-    default_image_model,
-    normalize_image_model,
-    normalize_image_provider,
-    reconstruct_problem_image,
-)
 from structured_schema import Box, Subject
 from user_settings import (
     apply_to_env as apply_user_settings_to_env,
@@ -78,6 +40,165 @@ from user_settings import (
     update_api_keys,
     update_gemini_api_key,
 )
+
+
+CROP_FORMAT_V1 = "v1"
+CROP_FORMAT_V2 = "v2"
+DEFAULT_BOARD_THEME = "charcoal"
+ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
+DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
+PASSAGE_REVIEW_REASON_LABELS = {
+    "cross_page_passage_group": "페이지 넘김 긴 지문",
+    "hwp_text_fallback_problem": "HWP 텍스트 fallback",
+    "marker_document_continuation": "문서 이어짐 표시",
+    "passage_cross_page_merge_check": "긴 지문 병합 확인",
+    "passage_fragment": "이어짐 자료",
+    "passage_group_source_reuse": "지문 그룹 원본 중복",
+    "passage_missing_child_questions": "지문 하위 문항 누락",
+    "source_problem_bbox_overlap": "원본 영역 겹침",
+}
+
+
+@lru_cache(maxsize=None)
+def _lazy_module(module_name: str) -> Any:
+    return importlib.import_module(module_name)
+
+
+def _lazy_call(module_name: str, attr_name: str, *args: Any, **kwargs: Any) -> Any:
+    return getattr(_lazy_module(module_name), attr_name)(*args, **kwargs)
+
+
+def _lazy_attr(module_name: str, attr_name: str) -> Any:
+    return getattr(_lazy_module(module_name), attr_name)
+
+
+class _LazyModuleProxy:
+    def __init__(self, module_name: str) -> None:
+        object.__setattr__(self, "_module_name", module_name)
+
+    def _module(self) -> Any:
+        return _lazy_module(str(object.__getattribute__(self, "_module_name")))
+
+    def __getattr__(self, attr_name: str) -> Any:
+        return getattr(self._module(), attr_name)
+
+    def __setattr__(self, attr_name: str, value: Any) -> None:
+        setattr(self._module(), attr_name, value)
+
+    def __delattr__(self, attr_name: str) -> None:
+        delattr(self._module(), attr_name)
+
+
+preprocess = _LazyModuleProxy("preprocess")
+
+
+def _preprocess_module() -> Any:
+    return preprocess._module()
+
+
+
+def run_export(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_mvp_export", "run_export", *args, **kwargs)
+
+
+def ProblemEntry(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "ProblemEntry", *args, **kwargs)
+
+
+def _classin_board_placement_overlap_issues(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_classin_board_placement_overlap_issues", *args, **kwargs)
+
+
+def _classin_passage_group_source_reuse_issues(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_classin_passage_group_source_reuse_issues", *args, **kwargs)
+
+
+def _classin_source_bbox_overlap_issues(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_classin_source_bbox_overlap_issues", *args, **kwargs)
+
+
+def _build_transparent_reconstruction_image(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_build_transparent_reconstruction_image", *args, **kwargs)
+
+
+def _normalize_processing_step(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_normalize_processing_step", *args, **kwargs)
+
+
+def _session_duplicate_problem_number_groups(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_session_duplicate_problem_number_groups", *args, **kwargs)
+
+
+def _session_problem_count_payload(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_session_problem_count_payload", *args, **kwargs)
+
+
+def build_records(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "build_records", *args, **kwargs)
+
+
+def build_ui_session(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "build_ui_session", *args, **kwargs)
+
+
+def estimate_height_pages(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "estimate_height_pages", *args, **kwargs)
+
+
+def recrop_problem(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "recrop_problem", *args, **kwargs)
+
+
+def resolve_subject(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "resolve_subject", *args, **kwargs)
+
+
+def run_problem_export(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "run_problem_export", *args, **kwargs)
+
+
+def write_classin_handoff_manifest(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "write_classin_handoff_manifest", *args, **kwargs)
+
+
+def resolve_recognition_worker_count(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_structured_page_json", "resolve_recognition_worker_count", *args, **kwargs)
+
+
+def build_edb(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("edb_builder", "build_edb", *args, **kwargs)
+
+
+def version_string_for_crop_format(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("edb_builder", "version_string_for_crop_format", *args, **kwargs)
+
+
+def write_edb(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("edb_builder", "write_edb", *args, **kwargs)
+
+
+def build_ai_fallback_config(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("page_repair", "build_ai_fallback_config", *args, **kwargs)
+
+
+def _default_reconstruction_prompt() -> str:
+    return str(_lazy_attr("image_reconstruction_backend", "DEFAULT_RECONSTRUCTION_PROMPT"))
+
+
+def default_image_model(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("image_reconstruction_backend", "default_image_model", *args, **kwargs)
+
+
+def normalize_image_model(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("image_reconstruction_backend", "normalize_image_model", *args, **kwargs)
+
+
+def normalize_image_provider(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("image_reconstruction_backend", "normalize_image_provider", *args, **kwargs)
+
+
+def reconstruct_problem_image(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("image_reconstruction_backend", "reconstruct_problem_image", *args, **kwargs)
 
 
 def load_env_local() -> None:
@@ -94,8 +215,16 @@ load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
 APP_UPDATE_CONFIG_FILE = "app_update_config.json"
+MAX_JSON_BODY_BYTES = 1_048_576
+MAX_UPDATE_FEED_BYTES = 262_144
+UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
+RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 OUTER_EDB_PREFIX_LEN = 11
+_update_status_cache_lock = threading.Lock()
+_update_status_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+_runtime_diagnostics_cache_lock = threading.Lock()
+_runtime_diagnostics_cache: tuple[float, dict[str, Any]] | None = None
 
 
 def is_frozen_app() -> bool:
@@ -148,6 +277,35 @@ def _first_nonempty(*values: Any) -> str:
     return ""
 
 
+def _clone_jsonish(value: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def clear_app_update_status_cache() -> None:
+    with _update_status_cache_lock:
+        _update_status_cache.clear()
+
+
+def _cached_update_status(cache_key: tuple[str, ...]) -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _update_status_cache_lock:
+        cached = _update_status_cache.get(cache_key)
+        if cached is None:
+            return None
+        expires_at, status = cached
+        if expires_at <= now:
+            _update_status_cache.pop(cache_key, None)
+            return None
+        return _clone_jsonish(status)
+
+
+def _remember_update_status(cache_key: tuple[str, ...], status: dict[str, Any]) -> dict[str, Any]:
+    snapshot = _clone_jsonish(status)
+    with _update_status_cache_lock:
+        _update_status_cache[cache_key] = (time.monotonic() + UPDATE_STATUS_CACHE_TTL_SECONDS, snapshot)
+    return _clone_jsonish(snapshot)
+
+
 def _app_platform_key() -> str:
     if sys.platform == "darwin":
         return "macos"
@@ -190,24 +348,45 @@ def load_app_update_config() -> dict[str, Any]:
     return config
 
 
-def _version_number_tuple(version: Any) -> tuple[int, ...]:
+def _version_components(version: Any) -> tuple[tuple[int, ...], tuple[str, ...] | None]:
     text = str(version or "").strip().lower()
     text = re.sub(r"^[^\d]+", "", text)
-    text = text.split("+", 1)[0].split("-", 1)[0]
+    text = text.split("+", 1)[0]
+    base, prerelease = (text.split("-", 1) + [""])[:2] if "-" in text else (text, "")
     parts: list[int] = []
-    for token in re.split(r"[._\s]+", text):
+    for token in re.split(r"[._\s]+", base):
         if not token:
             continue
         match = re.match(r"(\d+)", token)
         parts.append(int(match.group(1)) if match else 0)
     while len(parts) < 3:
         parts.append(0)
-    return tuple(parts)
+    prerelease_parts = tuple(part for part in re.split(r"[.\s]+", prerelease) if part)
+    return tuple(parts), prerelease_parts or None
+
+
+def _compare_prerelease_versions(current: tuple[str, ...], latest: tuple[str, ...]) -> int:
+    for current_part, latest_part in zip(current, latest):
+        current_numeric = current_part.isdigit()
+        latest_numeric = latest_part.isdigit()
+        if current_numeric and latest_numeric:
+            current_value = int(current_part)
+            latest_value = int(latest_part)
+            if latest_value != current_value:
+                return 1 if latest_value > current_value else -1
+            continue
+        if current_numeric != latest_numeric:
+            return -1 if latest_numeric else 1
+        if latest_part != current_part:
+            return 1 if latest_part > current_part else -1
+    if len(latest) != len(current):
+        return 1 if len(latest) > len(current) else -1
+    return 0
 
 
 def compare_app_versions(current: Any, latest: Any) -> int:
-    current_parts = _version_number_tuple(current)
-    latest_parts = _version_number_tuple(latest)
+    current_parts, current_prerelease = _version_components(current)
+    latest_parts, latest_prerelease = _version_components(latest)
     max_len = max(len(current_parts), len(latest_parts))
     current_parts += (0,) * (max_len - len(current_parts))
     latest_parts += (0,) * (max_len - len(latest_parts))
@@ -215,6 +394,14 @@ def compare_app_versions(current: Any, latest: Any) -> int:
         return 1
     if latest_parts < current_parts:
         return -1
+    if current_prerelease == latest_prerelease:
+        return 0
+    if current_prerelease and latest_prerelease is None:
+        return 1
+    if current_prerelease is None and latest_prerelease:
+        return -1
+    if current_prerelease and latest_prerelease:
+        return _compare_prerelease_versions(current_prerelease, latest_prerelease)
     return 0
 
 
@@ -223,9 +410,31 @@ def _normalize_update_url(value: Any) -> str:
     if not text:
         return ""
     parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if not parsed.netloc:
         return ""
-    return text
+    if parsed.scheme == "https":
+        return text
+    if parsed.scheme == "http" and _is_loopback_hostname(parsed.hostname):
+        return text
+    return ""
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    host = (hostname or "").strip().lower()
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
+def _request_is_same_origin(headers: Any) -> bool:
+    host = str(headers.get("Host") or "").strip().lower()
+    if not host:
+        return False
+    for header_name in ("Origin", "Referer"):
+        raw_value = str(headers.get(header_name) or "").strip()
+        if not raw_value:
+            continue
+        parsed = urlparse(raw_value)
+        return parsed.scheme == "http" and parsed.netloc.lower() == host
+    return True
 
 
 def _fetch_update_feed(feed_url: str) -> dict[str, Any]:
@@ -234,7 +443,10 @@ def _fetch_update_feed(feed_url: str) -> dict[str, Any]:
         "User-Agent": f"ClassInEDBMVP/{load_app_update_config().get('version', '0')}",
     })
     with urlopen(request, timeout=4.0) as response:
-        data = json.loads(response.read().decode("utf-8"))
+        raw_body = response.read(MAX_UPDATE_FEED_BYTES + 1)
+    if len(raw_body) > MAX_UPDATE_FEED_BYTES:
+        raise ValueError("update feed is too large")
+    data = json.loads(raw_body.decode("utf-8"))
     if not isinstance(data, dict):
         raise ValueError("update feed must be a JSON object")
     return data
@@ -259,6 +471,13 @@ def _select_platform_update(feed: dict[str, Any], platform_key: str) -> dict[str
     return selected
 
 
+def _copy_update_fields(target: dict[str, Any], source: dict[str, Any], field_names: tuple[str, ...]) -> None:
+    for field_name in field_names:
+        value = source.get(field_name)
+        if value is not None and value != "":
+            target[field_name] = value
+
+
 def build_app_update_status() -> dict[str, Any]:
     config = load_app_update_config()
     platform_key = str(config.get("platform") or _app_platform_key())
@@ -266,9 +485,21 @@ def build_app_update_status() -> dict[str, Any]:
     feed_url = _normalize_update_url(config.get("updateFeedUrl") or config.get("update_feed_url"))
     fallback_download_url = _normalize_update_url(config.get("downloadUrl") or config.get("download_url"))
     fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
+    app_name = str(config.get("appName") or "ClassInEDBMVP")
+    cache_key = (
+        app_name,
+        platform_key,
+        current_version,
+        feed_url,
+        fallback_download_url,
+        fallback_notes_url,
+    )
+    cached = _cached_update_status(cache_key)
+    if cached is not None:
+        return cached
     status: dict[str, Any] = {
         "ok": True,
-        "appName": config.get("appName") or "ClassInEDBMVP",
+        "appName": app_name,
         "platform": platform_key,
         "currentVersion": current_version,
         "configured": bool(feed_url or fallback_download_url),
@@ -282,17 +513,29 @@ def build_app_update_status() -> dict[str, Any]:
     if not feed_url:
         if fallback_download_url:
             status["channelStatus"] = "manual_download"
-        return status
+        return _remember_update_status(cache_key, status)
     try:
         feed = _fetch_update_feed(feed_url)
         selected = _select_platform_update(feed, platform_key)
     except Exception as exc:
         status["channelStatus"] = "error"
         status["error"] = str(exc)
-        return status
+        return _remember_update_status(cache_key, status)
     if selected.get("platformSupported") is False:
         status["channelStatus"] = "unsupported_platform"
-        return status
+        return _remember_update_status(cache_key, status)
+    _copy_update_fields(
+        status,
+        selected,
+        (
+            "schemaVersion",
+            "appId",
+            "channel",
+            "publishedAt",
+            "manifestUrl",
+            "manifestSha256",
+        ),
+    )
     latest_version = _first_nonempty(
         selected.get("version"),
         selected.get("latestVersion"),
@@ -319,14 +562,40 @@ def build_app_update_status() -> dict[str, Any]:
         "releaseNotesUrl": notes_url,
         "summary": str(selected.get("summary") or selected.get("notes") or "").strip(),
     }
+    _copy_update_fields(
+        status["latest"],
+        selected,
+        (
+            "fileName",
+            "artifactType",
+            "arch",
+            "sizeBytes",
+            "sha256",
+            "publishedAt",
+            "manifestUrl",
+            "manifestSha256",
+        ),
+    )
     if not latest_version:
         status["channelStatus"] = "invalid_feed"
         status["error"] = "update feed does not include a version"
-        return status
+        return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     status["updateAvailable"] = comparison > 0
     status["channelStatus"] = "update_available" if comparison > 0 else "up_to_date"
-    return status
+    return _remember_update_status(cache_key, status)
+
+
+def _allowed_update_urls() -> set[str]:
+    status = build_app_update_status()
+    latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
+    candidates = {
+        status.get("downloadUrl"),
+        status.get("releaseNotesUrl"),
+        latest.get("downloadUrl") if isinstance(latest, dict) else None,
+        latest.get("releaseNotesUrl") if isinstance(latest, dict) else None,
+    }
+    return {str(url).strip() for url in candidates if str(url or "").strip()}
 
 
 def ensure_runtime_dirs() -> None:
@@ -494,6 +763,7 @@ def _command_info(command: list[str]) -> dict[str, Any]:
 
 
 def describe_runtime_diagnostics() -> dict[str, Any]:
+    preprocess = _preprocess_module()
     pdf_converters = [_command_info(command) for command in preprocess._iter_hwp_pdf_converter_commands()]
     hwp_to_hwpx_converters = [_command_info(command) for command in preprocess._iter_hwp_hwpx_converter_commands()]
     html_converters = [_command_info(command) for command in preprocess._iter_pyhwp_html_converter_commands()]
@@ -573,6 +843,22 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
             "recommendedActions": recommended_actions,
         },
     }
+
+
+def cached_runtime_diagnostics(*, force_refresh: bool = False) -> dict[str, Any]:
+    global _runtime_diagnostics_cache
+    now = time.monotonic()
+    if not force_refresh:
+        with _runtime_diagnostics_cache_lock:
+            if _runtime_diagnostics_cache is not None:
+                expires_at, payload = _runtime_diagnostics_cache
+                if expires_at > now:
+                    return _clone_jsonish(payload)
+    payload = describe_runtime_diagnostics()
+    snapshot = _clone_jsonish(payload)
+    with _runtime_diagnostics_cache_lock:
+        _runtime_diagnostics_cache = (time.monotonic() + RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS, snapshot)
+    return _clone_jsonish(snapshot)
 
 
 def _export_error_payload(exc: Exception) -> dict[str, Any]:
@@ -3191,7 +3477,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         raise ValueError("AI 업스케일할 문항이 없습니다.")
 
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
-    prompt = str(payload.get("prompt") or payload.get("imagePrompt") or DEFAULT_RECONSTRUCTION_PROMPT)
+    prompt = str(payload.get("prompt") or payload.get("imagePrompt") or _default_reconstruction_prompt())
     quality = str(payload.get("quality") or "high")
     size = str(payload.get("size") or "auto")
     timeout_ms = int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)
@@ -3706,6 +3992,9 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 class AppHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
     def __init__(self, server_address, RequestHandlerClass):
         super().__init__(server_address, RequestHandlerClass)
         self.latest_session: dict[str, Any] | None = load_latest_session()
@@ -3729,7 +4018,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def log_message(self, format: str, *args) -> None:
-        print(f"[app-server] {self.address_string()} - {format % args}")
+        client = self.client_address[0] if self.client_address else "-"
+        print(f"[app-server] {client} - {format % args}")
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, max-age=0")
@@ -3745,7 +4035,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_text(read_generated_session_js(), content_type="application/javascript; charset=utf-8")
             return
         if parsed.path == "/api/runtime-diagnostics":
-            self._send_json(describe_runtime_diagnostics())
+            params = parse_qs(parsed.query)
+            force_refresh = str(params.get("refresh", [""])[0]).strip().lower() in {"1", "true", "yes"}
+            self._send_json(cached_runtime_diagnostics(force_refresh=force_refresh))
             return
         if parsed.path == "/api/app/update":
             self._send_json(build_app_update_status())
@@ -4428,6 +4720,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "history": []})
 
     def _handle_open_folder(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            return
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
@@ -4451,6 +4746,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "path": str(target)})
 
     def _handle_open_file(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            return
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
@@ -4474,6 +4772,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "path": str(target)})
 
     def _handle_open_url(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            return
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
@@ -4481,7 +4782,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         url = _normalize_update_url(payload.get("url"))
         if not url:
-            self._send_json({"ok": False, "error": "http/https URL is required"}, status=HTTPStatus.BAD_REQUEST)
+            self._send_json({"ok": False, "error": "trusted HTTPS URL is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if url not in _allowed_update_urls():
+            self._send_json({"ok": False, "error": "URL is not in the configured update metadata"}, status=HTTPStatus.FORBIDDEN)
             return
         try:
             opened = webbrowser.open(url)
@@ -4491,6 +4795,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "url": url, "opened": bool(opened)})
 
     def _handle_shutdown(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            return
         self._send_json({"ok": True})
         threading.Thread(target=self.app_server.shutdown, name="app-shutdown", daemon=True).start()
 
@@ -4522,7 +4829,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "settings": summary})
 
     def _read_json_body(self) -> dict[str, Any]:
-        content_length = int(self.headers.get("Content-Length", "0"))
+        raw_content_length = self.headers.get("Content-Length", "0")
+        try:
+            content_length = int(raw_content_length)
+        except (TypeError, ValueError) as exc:
+            raise json.JSONDecodeError("invalid Content-Length", str(raw_content_length), 0) from exc
+        if content_length > MAX_JSON_BODY_BYTES:
+            raise json.JSONDecodeError("JSON body too large", "", 0)
         raw_body = self.rfile.read(content_length) if content_length else b"{}"
         if not raw_body:
             return {}

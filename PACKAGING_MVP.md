@@ -126,6 +126,7 @@ With in-app update metadata:
 ```zsh
 ./package_macos_app.sh --install-pyinstaller --clean --dmg --zip \
   --version 0.1.1 \
+  --bundle-id "local.classin.edbmvp" \
   --update-feed-url "https://example.com/classin-edb/update.json" \
   --download-url "https://example.com/classin-edb/download"
 ```
@@ -153,6 +154,8 @@ The app uses a semi-automatic update flow:
 3. If the configured update feed reports a newer version, the app opens the configured download page in the browser.
 4. The user installs the new `.dmg` or `Setup.exe` over the previous app. Existing API keys and session data stay in the runtime folder.
 
+Update feed and download URLs must use HTTPS. Plain HTTP is accepted only for loopback development URLs such as `http://127.0.0.1:9999/update.json`.
+
 Default update metadata lives in:
 ```text
 app_update_config.json
@@ -164,25 +167,67 @@ Documents\ClassInEDBMVP\app_update_config.json
 ~/Documents/ClassInEDBMVP/app_update_config.json
 ```
 
+Prefer the packaging scripts for release builds because they generate build-scoped update metadata. If you run `pyinstaller ClassInEDBMVP.spec` directly, set the same metadata through environment variables such as `EDB_PACKAGE_APP_VERSION`, `EDB_PACKAGE_UPDATE_FEED_URL`, and `EDB_PACKAGE_DOWNLOAD_URL`.
+
 Update feed JSON shape:
 ```json
 {
+  "schemaVersion": 1,
+  "appId": "ClassInEDBMVP",
+  "appName": "ClassInEDBMVP",
+  "channel": "stable",
   "version": "0.1.1",
+  "publishedAt": "2026-06-19T00:00:00+00:00",
   "summary": "Bug fixes and packaging improvements.",
+  "releaseNotesUrl": "https://example.com/releases/0.1.1",
+  "manifestUrl": "https://example.com/releases/0.1.1/manifest.json",
+  "manifestSha256": "manifest-sha256",
   "platforms": {
     "windows": {
       "version": "0.1.1",
       "downloadUrl": "https://example.com/ClassInEDBMVP-Setup.exe",
-      "releaseNotesUrl": "https://example.com/releases/0.1.1"
+      "releaseNotesUrl": "https://example.com/releases/0.1.1",
+      "fileName": "ClassInEDBMVP-Setup.exe",
+      "artifactType": "setup-exe",
+      "arch": "x64",
+      "sizeBytes": 12345678,
+      "sha256": "windows-installer-sha256"
     },
     "macos": {
       "version": "0.1.1",
       "downloadUrl": "https://example.com/ClassInEDBMVP-macOS.dmg",
-      "releaseNotesUrl": "https://example.com/releases/0.1.1"
+      "releaseNotesUrl": "https://example.com/releases/0.1.1",
+      "fileName": "ClassInEDBMVP-macOS.dmg",
+      "artifactType": "dmg",
+      "arch": "arm64",
+      "sizeBytes": 12345678,
+      "sha256": "macos-installer-sha256"
     }
   }
 }
 ```
+
+Generate the feed after building release artifacts:
+```zsh
+python3 scripts/build_update_feed.py \
+  --version 0.1.1 \
+  --channel stable \
+  --summary "Packaging and updater fixes." \
+  --update-feed-url "https://example.com/classin-edb/update.json" \
+  --release-notes-url "https://example.com/releases/0.1.1" \
+  --manifest-url "https://example.com/releases/0.1.1/manifest.json" \
+  --macos-url "https://example.com/ClassInEDBMVP-macOS.dmg" \
+  --macos-file dist/ClassInEDBMVP-macOS.dmg \
+  --windows-url "https://example.com/ClassInEDBMVP-Setup.exe" \
+  --windows-file dist/ClassInEDBMVP-Setup.exe \
+  --manifest-output dist/manifest.json \
+  --checksums-output dist/checksums.txt \
+  --output dist/update.json
+```
+
+Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist/manifest.json` plus `dist/checksums.txt` with the same release assets.
+
+The GitHub Actions workflow in `.github/workflows/build-installers.yml` builds the macOS DMG/zip and Windows Setup.exe on matching runners, then generates `update.json`, `manifest.json`, and `checksums.txt` from those artifacts. Public distribution still needs a real Apple Developer ID certificate/notarization and Windows code-signing certificate; the local scripts currently ad-hoc sign macOS builds for local validation only.
 
 ## Included Runtime Assets
 - `ui_prototype\index.html`

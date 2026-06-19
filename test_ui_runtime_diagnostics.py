@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+import re
 from pathlib import Path
 
 
@@ -66,8 +67,19 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("앱 업데이트", side_panel)
         self.assertIn("업데이트 확인", side_panel)
         self.assertIn("다운로드 열기", side_panel)
+        self.assertIn("const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || ''", side_panel)
+        self.assertIn("disabled={updateBusy || !updateDownloadUrl}", side_panel)
+        self.assertIn("if (updateBusy)", source)
         self.assertIn("fetch('/api/app/update')", source)
         self.assertIn("fetch('/api/system/open-url'", source)
+
+    def test_shipped_bundle_contains_app_update_controls(self) -> None:
+        bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")
+        compact_bundle = re.sub(r"\s+", "", bundle)
+
+        self.assertIn("updateBusy||!updateDownloadUrl", compact_bundle)
+        self.assertIn("fetch('/api/app/update')", bundle)
+        self.assertIn("fetch('/api/system/open-url'", bundle)
 
     def test_review_summary_surfaces_hwp_cache_hits(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -2428,7 +2428,7 @@ function SidePanel({
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
   const updateStatus = updateInfo?.channelStatus || 'unknown';
-  const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || updateInfo?.releaseNotesUrl || updateInfo?.latest?.releaseNotesUrl || '';
+  const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || '';
   const updateStatusLabel = updateBusy
     ? '확인 중'
     : updateInfo?.updateAvailable
@@ -3173,7 +3173,7 @@ function SidePanel({
                 style={{flex: 1, justifyContent: 'center'}}
                 type="button"
                 onClick={() => onOpenUpdate?.()}
-                disabled={!updateDownloadUrl}
+                disabled={updateBusy || !updateDownloadUrl}
                 title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
               >
                 {Icon.download} 다운로드 열기
@@ -5630,8 +5630,12 @@ function App(){
   }, []);
 
   const openUpdatePage = useCallback(async () => {
+    if (updateBusy) {
+      showToast('업데이트 확인이 끝난 뒤 다시 눌러 주세요');
+      return;
+    }
     const info = updateInfo || await checkForUpdates({ silent: true });
-    const url = info?.downloadUrl || info?.latest?.downloadUrl || info?.releaseNotesUrl || info?.latest?.releaseNotesUrl || '';
+    const url = info?.downloadUrl || info?.latest?.downloadUrl || '';
     if (!url) {
       showToast('업데이트 다운로드 URL이 없습니다');
       return;
@@ -5642,7 +5646,7 @@ function App(){
     } catch (e) {
       showToast('다운로드 페이지 열기 실패: ' + e.message);
     }
-  }, [updateInfo, checkForUpdates]);
+  }, [updateInfo, updateBusy, checkForUpdates]);
 
   const refreshSessionHistory = useCallback(async () => {
     try {
@@ -6019,10 +6023,6 @@ function App(){
     })();
     return () => { cancelled = true; };
   }, []);
-
-  useEffect(() => {
-    checkForUpdates({ silent: true });
-  }, [checkForUpdates]);
 
   const onSaveGeminiKey = useCallback(async (key) => {
     try {

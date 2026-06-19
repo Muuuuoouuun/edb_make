@@ -20,7 +20,7 @@ for (const fileName of inputFiles) {
     presets: ["react"],
     sourceMaps: false,
     comments: false,
-    compact: false,
+    compact: true,
   });
   sections.push(`\n/* ${fileName} */\n${result.code}\n`);
 }

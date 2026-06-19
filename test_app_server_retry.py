@@ -13,10 +13,29 @@ from structured_schema import Box
 
 
 class TestStaticAssetCaching(unittest.TestCase):
+    def setUp(self):
+        app_server.clear_app_update_status_cache()
+
     def test_app_version_comparison_handles_semver_like_versions(self):
         self.assertEqual(0, app_server.compare_app_versions("v0.1.0", "0.1"))
         self.assertGreater(app_server.compare_app_versions("0.1.0", "0.1.1"), 0)
         self.assertLess(app_server.compare_app_versions("0.2.0", "0.1.9"), 0)
+        self.assertGreater(app_server.compare_app_versions("1.0.0-beta.1", "1.0.0"), 0)
+
+    def test_update_urls_require_https_except_loopback(self):
+        self.assertEqual("", app_server._normalize_update_url("http://example.test/update.json"))
+        self.assertEqual("https://example.test/update.json", app_server._normalize_update_url("https://example.test/update.json"))
+        self.assertEqual("http://127.0.0.1:9999/update.json", app_server._normalize_update_url("http://127.0.0.1:9999/update.json"))
+
+    def test_same_origin_guard_rejects_cross_site_browser_posts(self):
+        self.assertTrue(app_server._request_is_same_origin({
+            "Host": "127.0.0.1:8765",
+            "Origin": "http://127.0.0.1:8765",
+        }))
+        self.assertFalse(app_server._request_is_same_origin({
+            "Host": "127.0.0.1:8765",
+            "Origin": "https://example.test",
+        }))
 
     def test_update_status_reports_platform_release_from_feed(self):
         with TemporaryDirectory() as raw_tmp:
@@ -30,12 +49,23 @@ class TestStaticAssetCaching(unittest.TestCase):
                 encoding="utf-8",
             )
             feed = {
+                "schemaVersion": 1,
+                "appId": "ClassInEDBMVP",
+                "channel": "stable",
                 "version": "0.1.1",
+                "publishedAt": "2026-06-19T00:00:00+00:00",
+                "manifestUrl": "https://example.test/releases/0.1.2/manifest.json",
+                "manifestSha256": "manifest-digest",
                 "platforms": {
                     "macos": {
                         "version": "0.1.2",
                         "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
                         "releaseNotesUrl": "https://example.test/releases/0.1.2",
+                        "fileName": "ClassInEDBMVP-macOS.dmg",
+                        "artifactType": "dmg",
+                        "arch": "arm64",
+                        "sizeBytes": 12345,
+                        "sha256": "artifact-digest",
                     }
                 },
             }
@@ -55,8 +85,53 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertTrue(status["configured"])
             self.assertTrue(status["updateAvailable"])
             self.assertEqual("update_available", status["channelStatus"])
+            self.assertEqual("stable", status["channel"])
+            self.assertEqual("https://example.test/releases/0.1.2/manifest.json", status["manifestUrl"])
             self.assertEqual("0.1.2", status["latest"]["version"])
+            self.assertEqual("ClassInEDBMVP-macOS.dmg", status["latest"]["fileName"])
+            self.assertEqual("dmg", status["latest"]["artifactType"])
+            self.assertEqual("artifact-digest", status["latest"]["sha256"])
+            self.assertEqual(12345, status["latest"]["sizeBytes"])
             self.assertEqual("https://example.test/ClassInEDBMVP-macOS.dmg", status["downloadUrl"])
+
+    def test_update_status_caches_feed_fetches_for_short_ttl(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.1",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.1",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed) as fetch_feed:
+                first = app_server.build_app_update_status()
+                second = app_server.build_app_update_status()
+                allowed = app_server._allowed_update_urls()
+
+            self.assertTrue(first["updateAvailable"])
+            self.assertEqual(first, second)
+            self.assertIn("https://example.test/ClassInEDBMVP-macOS.dmg", allowed)
+            self.assertEqual(1, fetch_feed.call_count)
 
     def test_update_status_is_safe_when_channel_is_unconfigured(self):
         with TemporaryDirectory() as raw_tmp:
@@ -80,6 +155,36 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("not_configured", status["channelStatus"])
             self.assertEqual("0.3.0", status["currentVersion"])
+
+    def test_open_url_rejects_unconfigured_url_before_browser_open(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        payload = json.dumps({"url": "https://example.test/not-configured"}).encode("utf-8")
+        handler.headers = {
+            "Host": "127.0.0.1:8765",
+            "Origin": "http://127.0.0.1:8765",
+            "Content-Length": str(len(payload)),
+        }
+        handler.rfile = io.BytesIO(payload)
+        handler.wfile = io.BytesIO()
+        statuses = []
+        handler.send_response = lambda status: statuses.append(status)
+        handler.send_header = lambda _name, _value: None
+        handler.end_headers = lambda: None
+
+        with patch.object(app_server, "_allowed_update_urls", return_value=set()), \
+                patch.object(app_server.webbrowser, "open", side_effect=AssertionError("browser should not open")):
+            handler._handle_open_url()
+
+        self.assertEqual([app_server.HTTPStatus.FORBIDDEN], statuses)
+        self.assertIn(b"not in the configured update metadata", handler.wfile.getvalue())
+
+    def test_json_body_rejects_oversized_content_length(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.headers = {"Content-Length": str(app_server.MAX_JSON_BODY_BYTES + 1)}
+        handler.rfile = io.BytesIO(b"{}")
+
+        with self.assertRaises(json.JSONDecodeError):
+            handler._read_json_body()
 
     def test_static_responses_disable_browser_cache(self):
         handler = object.__new__(app_server.AppRequestHandler)
@@ -2340,6 +2445,10 @@ class TestSystemOpenTargets(unittest.TestCase):
         handler.server = type("FakeServer", (), {
             "shutdown": lambda _self: shutdown_called.set(),
         })()
+        handler.headers = {
+            "Host": "127.0.0.1:8765",
+            "Origin": "http://127.0.0.1:8765",
+        }
         responses = []
         handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
 

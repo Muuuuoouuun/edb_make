@@ -4,6 +4,7 @@ set -euo pipefail
 APP_NAME="ClassInEDBMVP"
 OUTPUT_DIR="dist"
 APP_VERSION=""
+BUNDLE_ID="local.classin.edbmvp"
 UPDATE_FEED_URL=""
 DOWNLOAD_URL=""
 RELEASE_NOTES_URL=""
@@ -22,6 +23,7 @@ Usage: ./package_macos_app.sh [options]
 Options:
   --name NAME              App bundle name. Default: ClassInEDBMVP
   --version VERSION        App version written into bundled update metadata
+  --bundle-id ID           macOS bundle identifier. Default: local.classin.edbmvp
   --update-feed-url URL    JSON update feed checked by the in-app updater
   --download-url URL       Fallback installer/download page URL
   --release-notes-url URL  Fallback release notes URL
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --version)
       APP_VERSION="${2:-}"
+      shift 2
+      ;;
+    --bundle-id)
+      BUNDLE_ID="${2:-}"
       shift 2
       ;;
     --update-feed-url)
@@ -165,6 +171,16 @@ config.update({key: value for key, value in overrides.items() if value})
 target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
+EFFECTIVE_APP_VERSION="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(config.get("version") or "0.1.0"))
+PY
+)"
+
 if [[ "$INSTALL_PYINSTALLER" == "1" ]]; then
   "$PYTHON_EXE" -m pip install pyinstaller
 fi
@@ -198,6 +214,15 @@ fi
 
 DATA_ARGS=()
 DATA_ARGS+=(--add-data "$APP_UPDATE_CONFIG:.")
+HIDDEN_IMPORT_ARGS=(
+  --hidden-import preprocess
+  --hidden-import build_mvp_export
+  --hidden-import build_problem_board_edb
+  --hidden-import build_structured_page_json
+  --hidden-import edb_builder
+  --hidden-import page_repair
+  --hidden-import image_reconstruction_backend
+)
 add_data() {
   local src="$1"
   local dest="$2"
@@ -215,8 +240,7 @@ add_data "ui_prototype/publish_guard.js" "ui_prototype"
 add_data "ui_prototype/app.bundle.js" "ui_prototype"
 add_data "ui_prototype/vendor/react.production.min.js" "ui_prototype/vendor"
 add_data "ui_prototype/vendor/react-dom.production.min.js" "ui_prototype/vendor"
-add_data "assets/app_icon.ico" "assets"
-add_data "assets/app_icon.icns" "assets"
+add_data "scripts/render_hwp_with_rhwp_core.mjs" "scripts"
 add_data "assets/app_icon.png" "assets"
 
 "$PYTHON_EXE" -m PyInstaller \
@@ -224,20 +248,31 @@ add_data "assets/app_icon.png" "assets"
   --clean \
   --onedir \
   "$WINDOW_ARG" \
+  --osx-bundle-identifier "$BUNDLE_ID" \
   --distpath "$RESOLVED_OUTPUT_DIR" \
   --specpath "$SPEC_DIR" \
   --name "$APP_NAME" \
   "${DATA_ARGS[@]}" \
+  "${HIDDEN_IMPORT_ARGS[@]}" \
   "${ICON_ARGS[@]}" \
   app_server.py
 
 APP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME.app"
+PLIST_PATH="$APP_PATH/Contents/Info.plist"
+if [[ -f "$PLIST_PATH" && -x "/usr/libexec/PlistBuddy" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EFFECTIVE_APP_VERSION" "$PLIST_PATH" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $EFFECTIVE_APP_VERSION" "$PLIST_PATH" >/dev/null
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EFFECTIVE_APP_VERSION" "$PLIST_PATH" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $EFFECTIVE_APP_VERSION" "$PLIST_PATH" >/dev/null
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH" >/dev/null
+fi
 if [[ -d "$APP_PATH" ]] && command -v codesign >/dev/null 2>&1; then
   codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
 fi
 
 if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
-  (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent "$APP_NAME.app" "$APP_NAME-macOS.zip")
+  (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$APP_NAME-macOS.zip")
 fi
 
 if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then

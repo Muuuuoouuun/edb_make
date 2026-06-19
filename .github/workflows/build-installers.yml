@@ -1,0 +1,155 @@
+name: Build Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 0.1.1"
+        required: true
+        default: "0.1.0"
+      update_feed_url:
+        description: "Public update feed URL used by installed apps"
+        required: false
+        default: ""
+      release_notes_url:
+        description: "Public release notes URL"
+        required: false
+        default: ""
+      manifest_url:
+        description: "Public release manifest URL"
+        required: false
+        default: ""
+      macos_download_url:
+        description: "Public macOS DMG download URL"
+        required: false
+        default: ""
+      windows_download_url:
+        description: "Public Windows Setup.exe download URL"
+        required: false
+        default: ""
+
+jobs:
+  macos:
+    name: macOS DMG
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements-local.txt pyinstaller
+
+      - name: Build macOS package
+        run: |
+          chmod +x ./package_macos_app.sh
+          ./package_macos_app.sh --clean --dmg --zip \
+            --version "${{ inputs.version }}" \
+            --update-feed-url "${{ inputs.update_feed_url }}" \
+            --download-url "${{ inputs.macos_download_url }}" \
+            --release-notes-url "${{ inputs.release_notes_url }}"
+
+      - name: Verify DMG
+        run: hdiutil verify dist/ClassInEDBMVP-macOS.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: |
+            dist/ClassInEDBMVP-macOS.dmg
+            dist/ClassInEDBMVP-macOS.zip
+
+  windows:
+    name: Windows Setup
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements-local.txt pyinstaller
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          .\package_windows_installer.ps1 `
+            -Clean `
+            -Version "${{ inputs.version }}" `
+            -UpdateFeedUrl "${{ inputs.update_feed_url }}" `
+            -DownloadUrl "${{ inputs.windows_download_url }}" `
+            -ReleaseNotesUrl "${{ inputs.release_notes_url }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/ClassInEDBMVP-Setup.exe
+
+  update-feed:
+    name: Update Feed
+    runs-on: ubuntu-latest
+    needs:
+      - macos
+      - windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Build update feed
+        run: |
+          python scripts/build_update_feed.py \
+            --version "${{ inputs.version }}" \
+            --app-id "ClassInEDBMVP" \
+            --app-name "ClassInEDBMVP" \
+            --channel "stable" \
+            --summary "ClassInEDBMVP ${{ inputs.version }}" \
+            --update-feed-url "${{ inputs.update_feed_url }}" \
+            --release-notes-url "${{ inputs.release_notes_url }}" \
+            --manifest-url "${{ inputs.manifest_url }}" \
+            --macos-url "${{ inputs.macos_download_url }}" \
+            --macos-file release-artifacts/macos-installer/ClassInEDBMVP-macOS.dmg \
+            --windows-url "${{ inputs.windows_download_url }}" \
+            --windows-file release-artifacts/windows-installer/ClassInEDBMVP-Setup.exe \
+            --git-commit "${{ github.sha }}" \
+            --build-number "${{ github.run_number }}" \
+            --manifest-output dist/manifest.json \
+            --checksums-output dist/checksums.txt \
+            --output dist/update.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update-feed
+          path: |
+            dist/update.json
+            dist/manifest.json
+            dist/checksums.txt
