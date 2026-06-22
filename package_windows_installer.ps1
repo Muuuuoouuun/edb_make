@@ -8,6 +8,14 @@ param(
     [switch]$Clean,
     [switch]$SkipAppBuild,
     [switch]$InstallPyInstaller,
+    [switch]$Sign,
+    [string]$SignTool = "",
+    [string]$SignCertificatePath = "",
+    [string]$SignCertificatePassword = "",
+    [string]$SignCertificateSubject = "",
+    [string]$SignCertificateThumbprint = "",
+    [switch]$SignCertificateAutoSelect,
+    [string]$SignTimestampUrl = "http://timestamp.digicert.com",
     [string]$PythonExe = "",
     [string]$InnoSetupCompiler = ""
 )
@@ -17,6 +25,7 @@ Set-StrictMode -Version Latest
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
+. (Join-Path $ProjectRoot "scripts\Sign-WindowsArtifact.ps1")
 $ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
 
 function Find-InnoSetupCompiler {
@@ -72,6 +81,16 @@ if (-not $SkipAppBuild) {
     if ($PythonExe) {
         $AppBuildArgs.PythonExe = $PythonExe
     }
+    if ($Sign) {
+        $AppBuildArgs.Sign = $true
+        $AppBuildArgs.SignTool = $SignTool
+        $AppBuildArgs.SignCertificatePath = $SignCertificatePath
+        $AppBuildArgs.SignCertificatePassword = $SignCertificatePassword
+        $AppBuildArgs.SignCertificateSubject = $SignCertificateSubject
+        $AppBuildArgs.SignCertificateThumbprint = $SignCertificateThumbprint
+        $AppBuildArgs.SignCertificateAutoSelect = $SignCertificateAutoSelect
+        $AppBuildArgs.SignTimestampUrl = $SignTimestampUrl
+    }
     & (Join-Path $ProjectRoot "package_mvp.ps1") @AppBuildArgs
 }
 
@@ -79,6 +98,19 @@ $PackageRoot = Join-Path $ResolvedOutputDir $AppName
 $PackageExe = Join-Path $PackageRoot "$AppName.exe"
 if (-not (Test-Path $PackageExe)) {
     throw "PyInstaller app output was not found: $PackageExe. Build the app first or remove -SkipAppBuild."
+}
+
+if ($Sign -and $SkipAppBuild) {
+    Invoke-EDBWindowsPackageSigning `
+        -PackagePath $PackageRoot `
+        -SignTool $SignTool `
+        -CertificatePath $SignCertificatePath `
+        -CertificatePassword $SignCertificatePassword `
+        -CertificateSubject $SignCertificateSubject `
+        -CertificateThumbprint $SignCertificateThumbprint `
+        -CertificateAutoSelect:$SignCertificateAutoSelect `
+        -TimestampUrl $SignTimestampUrl `
+        -Description $AppName
 }
 
 $Iscc = Find-InnoSetupCompiler $InnoSetupCompiler
@@ -98,5 +130,17 @@ if ($Version) {
 & $Iscc @IsccArgs $InstallerScript
 
 $InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"
+if ($Sign) {
+    Invoke-EDBWindowsSignature `
+        -Path $InstallerPath `
+        -SignTool $SignTool `
+        -CertificatePath $SignCertificatePath `
+        -CertificatePassword $SignCertificatePassword `
+        -CertificateSubject $SignCertificateSubject `
+        -CertificateThumbprint $SignCertificateThumbprint `
+        -CertificateAutoSelect:$SignCertificateAutoSelect `
+        -TimestampUrl $SignTimestampUrl `
+        -Description "$AppName Setup"
+}
 Write-Host "Installer complete."
 Write-Host "Installer: $InstallerPath"

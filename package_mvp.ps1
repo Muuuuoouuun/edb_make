@@ -12,6 +12,14 @@ param(
     [switch]$InstallPyInstaller,
     [switch]$SkipFrontendBuild,
     [switch]$RequirePyInstaller,
+    [switch]$Sign,
+    [string]$SignTool = "",
+    [string]$SignCertificatePath = "",
+    [string]$SignCertificatePassword = "",
+    [string]$SignCertificateSubject = "",
+    [string]$SignCertificateThumbprint = "",
+    [switch]$SignCertificateAutoSelect,
+    [string]$SignTimestampUrl = "http://timestamp.digicert.com",
     [string]$IconPath = "assets\app_icon.ico",
     [string]$PythonExe = ""
 )
@@ -21,6 +29,7 @@ Set-StrictMode -Version Latest
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
+. (Join-Path $ProjectRoot "scripts\Sign-WindowsArtifact.ps1")
 
 if (-not $PythonExe) {
     $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -198,6 +207,19 @@ if ($HasPyInstaller) {
 }
 
 if ($Zip) {
+    if ($Sign) {
+        Invoke-EDBWindowsPackageSigning `
+            -PackagePath $PackageRoot `
+            -SignTool $SignTool `
+            -CertificatePath $SignCertificatePath `
+            -CertificatePassword $SignCertificatePassword `
+            -CertificateSubject $SignCertificateSubject `
+            -CertificateThumbprint $SignCertificateThumbprint `
+            -CertificateAutoSelect:$SignCertificateAutoSelect `
+            -TimestampUrl $SignTimestampUrl `
+            -Description $AppName
+    }
+
     $ZipPath = Join-Path $ResolvedOutputDir "$AppName.zip"
     if (Test-Path $ZipPath) {
         Remove-Item $ZipPath -Force
@@ -206,6 +228,17 @@ if ($Zip) {
         Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
         Write-Host "Zip archive: $ZipPath"
     }
+} elseif ($Sign) {
+    Invoke-EDBWindowsPackageSigning `
+        -PackagePath $PackageRoot `
+        -SignTool $SignTool `
+        -CertificatePath $SignCertificatePath `
+        -CertificatePassword $SignCertificatePassword `
+        -CertificateSubject $SignCertificateSubject `
+        -CertificateThumbprint $SignCertificateThumbprint `
+        -CertificateAutoSelect:$SignCertificateAutoSelect `
+        -TimestampUrl $SignTimestampUrl `
+        -Description $AppName
 }
 
 Write-Host "Packaging complete."

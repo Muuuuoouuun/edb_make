@@ -78,6 +78,27 @@ dist\ClassInEDBMVP-Setup.exe
 
 That installer creates a Start menu shortcut and can create a desktop shortcut. Clicking the installed app opens the browser at the local app.
 
+For external Windows testing, sign both the packaged app binaries and the final installer with an Authenticode code-signing certificate:
+```powershell
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller -Sign `
+  -SignCertificatePath "C:\secure\ClassInEDB-CodeSigning.pfx" `
+  -SignCertificatePassword $env:WINDOWS_CERT_PASSWORD
+```
+
+If the certificate is already installed in the Windows certificate store, you can sign by thumbprint, subject, or automatic selection:
+```powershell
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller -Sign `
+  -SignCertificateThumbprint "CERTIFICATE_THUMBPRINT"
+
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller -Sign `
+  -SignCertificateSubject "Your Publisher Name"
+
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller -Sign `
+  -SignCertificateAutoSelect
+```
+
+The script locates `signtool.exe` from `PATH` or the Windows SDK. It signs `.exe`, `.dll`, and `.pyd` files in the packaged app folder before building the installer, then signs and verifies `dist\ClassInEDBMVP-Setup.exe`.
+
 If you only want the raw packaged app folder, install PyInstaller if needed:
 ```powershell
 .\package_mvp.ps1 -InstallPyInstaller
@@ -146,6 +167,33 @@ The default macOS build is windowed and ad-hoc signed when `codesign` is availab
 ```text
 ~/Documents/ClassInEDBMVP/.app_runtime/app.log
 ```
+
+For external macOS testing without Gatekeeper blocking, build with a real Apple Developer ID Application certificate and notarize the app/DMG:
+```zsh
+./package_macos_app.sh --clean --dmg --zip \
+  --version 0.1.1 \
+  --bundle-id "com.yourcompany.classin-edb" \
+  --sign-identity "Developer ID Application: Your Company (TEAMID)" \
+  --notarize \
+  --notary-key "/secure/AuthKey_KEYID.p8" \
+  --notary-key-id "KEYID" \
+  --notary-issuer "ISSUER_UUID"
+```
+
+If the Developer ID certificate is installed in Keychain, `--sign-identity auto` selects the first `Developer ID Application` identity. You can also use a saved notarytool profile:
+```zsh
+xcrun notarytool store-credentials "classin-edb-notary" \
+  --apple-id "developer@example.com" \
+  --team-id "TEAMID" \
+  --password "APP_SPECIFIC_PASSWORD"
+
+./package_macos_app.sh --clean --dmg --zip \
+  --sign-identity auto \
+  --notarize \
+  --notary-profile "classin-edb-notary"
+```
+
+The unsigned/ad-hoc DMG is fine for internal development, but a downloaded public macOS app needs Developer ID signing, notarization, and stapling to open cleanly on other Macs.
 
 ## In-App Updates
 The app uses a semi-automatic update flow:
@@ -227,7 +275,26 @@ python3 scripts/build_update_feed.py \
 
 Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist/manifest.json` plus `dist/checksums.txt` with the same release assets.
 
-The GitHub Actions workflow in `.github/workflows/build-installers.yml` builds the macOS DMG/zip and Windows Setup.exe on matching runners, then generates `update.json`, `manifest.json`, and `checksums.txt` from those artifacts. Public distribution still needs a real Apple Developer ID certificate/notarization and Windows code-signing certificate; the local scripts currently ad-hoc sign macOS builds for local validation only.
+The GitHub Actions workflow in `.github/workflows/build-installers.yml` builds the macOS DMG/zip and Windows Setup.exe on matching runners, then generates `update.json`, `manifest.json`, and `checksums.txt` from those artifacts.
+
+For signed public builds, configure these repository secrets:
+```text
+MACOS_CERTIFICATE_P12_BASE64
+MACOS_CERTIFICATE_PASSWORD
+MACOS_CODESIGN_IDENTITY
+APPLE_NOTARY_KEY_ID
+APPLE_NOTARY_ISSUER_ID
+APPLE_NOTARY_KEY_P8_BASE64
+WINDOWS_CERTIFICATE_PFX_BASE64
+WINDOWS_CERTIFICATE_PASSWORD
+```
+
+Optional repository variable:
+```text
+WINDOWS_SIGN_TIMESTAMP_URL
+```
+
+If signing secrets are missing, CI still produces internal-test installers. macOS then remains ad-hoc signed, and Windows remains unsigned.
 
 ## Included Runtime Assets
 - `ui_prototype\index.html`

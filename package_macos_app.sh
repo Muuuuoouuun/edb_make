@@ -8,6 +8,16 @@ BUNDLE_ID="local.classin.edbmvp"
 UPDATE_FEED_URL=""
 DOWNLOAD_URL=""
 RELEASE_NOTES_URL=""
+SIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY:-}"
+ENTITLEMENTS_PATH=""
+NOTARIZE=0
+NOTARY_PROFILE="${APPLE_NOTARY_PROFILE:-}"
+NOTARY_KEY="${APPLE_NOTARY_KEY:-}"
+NOTARY_KEY_ID="${APPLE_NOTARY_KEY_ID:-}"
+NOTARY_ISSUER="${APPLE_NOTARY_ISSUER:-}"
+NOTARY_APPLE_ID="${APPLE_ID:-}"
+NOTARY_PASSWORD="${APPLE_APP_PASSWORD:-}"
+NOTARY_TEAM_ID="${APPLE_TEAM_ID:-}"
 CLEAN=0
 ZIP=0
 DMG=0
@@ -27,6 +37,16 @@ Options:
   --update-feed-url URL    JSON update feed checked by the in-app updater
   --download-url URL       Fallback installer/download page URL
   --release-notes-url URL  Fallback release notes URL
+  --sign-identity ID       Developer ID Application identity, or "auto". Default: ad-hoc test signing
+  --entitlements PATH      Optional entitlements plist used when Developer ID signing
+  --notarize               Submit the signed app/DMG to Apple Notary and staple tickets
+  --notary-profile NAME    notarytool keychain profile name
+  --notary-key PATH        App Store Connect API key .p8 path
+  --notary-key-id ID       App Store Connect API key ID
+  --notary-issuer ID       App Store Connect issuer ID
+  --apple-id EMAIL         Apple ID for notarytool password auth
+  --apple-password PASS    App-specific password for notarytool password auth
+  --team-id ID             Apple Developer Team ID for password auth
   --output-dir DIR         Output directory. Default: dist
   --python PATH            Python executable to use. Default: .venv/bin/python or python3
   --clean                  Remove previous build output first
@@ -67,6 +87,46 @@ while [[ $# -gt 0 ]]; do
       ;;
     --release-notes-url)
       RELEASE_NOTES_URL="${2:-}"
+      shift 2
+      ;;
+    --sign-identity)
+      SIGN_IDENTITY="${2:-}"
+      shift 2
+      ;;
+    --entitlements)
+      ENTITLEMENTS_PATH="${2:-}"
+      shift 2
+      ;;
+    --notarize)
+      NOTARIZE=1
+      shift
+      ;;
+    --notary-profile)
+      NOTARY_PROFILE="${2:-}"
+      shift 2
+      ;;
+    --notary-key)
+      NOTARY_KEY="${2:-}"
+      shift 2
+      ;;
+    --notary-key-id)
+      NOTARY_KEY_ID="${2:-}"
+      shift 2
+      ;;
+    --notary-issuer)
+      NOTARY_ISSUER="${2:-}"
+      shift 2
+      ;;
+    --apple-id)
+      NOTARY_APPLE_ID="${2:-}"
+      shift 2
+      ;;
+    --apple-password)
+      NOTARY_PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --team-id)
+      NOTARY_TEAM_ID="${2:-}"
       shift 2
       ;;
     --python)
@@ -111,6 +171,33 @@ done
 
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_ROOT"
+
+if [[ -n "$ENTITLEMENTS_PATH" && "$ENTITLEMENTS_PATH" != /* ]]; then
+  ENTITLEMENTS_PATH="$PROJECT_ROOT/$ENTITLEMENTS_PATH"
+fi
+if [[ -n "$ENTITLEMENTS_PATH" && ! -f "$ENTITLEMENTS_PATH" ]]; then
+  echo "Entitlements file not found: $ENTITLEMENTS_PATH" >&2
+  exit 2
+fi
+
+if [[ "$SIGN_IDENTITY" == "auto" ]]; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '"' '/Developer ID Application/ { print $2; exit }')"
+  if [[ -z "$SIGN_IDENTITY" ]]; then
+    echo "No Developer ID Application identity was found in the keychain." >&2
+    exit 2
+  fi
+fi
+
+if [[ "$NOTARIZE" == "1" ]]; then
+  if [[ -z "$SIGN_IDENTITY" || "$SIGN_IDENTITY" == "-" ]]; then
+    echo "--notarize requires --sign-identity with a Developer ID Application certificate." >&2
+    exit 2
+  fi
+  if ! command -v xcrun >/dev/null 2>&1; then
+    echo "xcrun is required for Apple notarization." >&2
+    exit 2
+  fi
+fi
 
 if [[ -z "$PYTHON_EXE" ]]; then
   if [[ -x "$PROJECT_ROOT/.venv/bin/python" ]]; then
@@ -267,11 +354,47 @@ if [[ -f "$PLIST_PATH" && -x "/usr/libexec/PlistBuddy" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" >/dev/null 2>&1 || \
     /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH" >/dev/null
 fi
+notarytool_submit() {
+  local artifact_path="$1"
+  local args=(notarytool submit "$artifact_path" --wait)
+  if [[ -n "$NOTARY_PROFILE" ]]; then
+    args+=(--keychain-profile "$NOTARY_PROFILE")
+  elif [[ -n "$NOTARY_KEY" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]]; then
+    args+=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+  elif [[ -n "$NOTARY_APPLE_ID" && -n "$NOTARY_PASSWORD" && -n "$NOTARY_TEAM_ID" ]]; then
+    args+=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$NOTARY_TEAM_ID")
+  else
+    echo "Notarization credentials are missing. Provide --notary-profile, App Store Connect API key args, or Apple ID password args." >&2
+    exit 2
+  fi
+  xcrun "${args[@]}"
+}
+
 if [[ -d "$APP_PATH" ]] && command -v codesign >/dev/null 2>&1; then
-  codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
+  if [[ -n "$SIGN_IDENTITY" && "$SIGN_IDENTITY" != "-" ]]; then
+    SIGN_ARGS=(--force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY")
+    if [[ -n "$ENTITLEMENTS_PATH" ]]; then
+      SIGN_ARGS+=(--entitlements "$ENTITLEMENTS_PATH")
+    fi
+    codesign "${SIGN_ARGS[@]}" "$APP_PATH"
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+  else
+    codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
+  APP_NOTARY_ZIP="$RESOLVED_OUTPUT_DIR/$APP_NAME-notary-upload.zip"
+  rm -f "$APP_NOTARY_ZIP"
+  (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$APP_NOTARY_ZIP")
+  notarytool_submit "$APP_NOTARY_ZIP"
+  xcrun stapler staple "$APP_PATH"
+  codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+  rm -f "$APP_NOTARY_ZIP"
 fi
 
 if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
+  rm -f "$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.zip"
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$APP_NAME-macOS.zip")
 fi
 
@@ -288,6 +411,15 @@ if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
     -format UDZO \
     "$DMG_PATH" >/dev/null
   rm -rf "$STAGING_DIR"
+  if [[ -n "$SIGN_IDENTITY" && "$SIGN_IDENTITY" != "-" ]] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    codesign --verify --verbose=2 "$DMG_PATH"
+  fi
+  if [[ "$NOTARIZE" == "1" ]]; then
+    notarytool_submit "$DMG_PATH"
+    xcrun stapler staple "$DMG_PATH"
+    hdiutil verify "$DMG_PATH"
+  fi
 fi
 
 echo "Packaging complete."
