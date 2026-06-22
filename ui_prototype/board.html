@@ -94,15 +94,17 @@
   }
   .brand{
     display:flex; align-items:center; gap:9px;
-    font-weight: 700; font-size: 14.5px; letter-spacing: -.015em;
+    font-weight: 700; font-size: 14.5px;
   }
   .brand .logo{
-    width: 26px; height: 26px; border-radius: 7px;
-    background: linear-gradient(135deg, var(--board) 0%, #2a5841 100%);
+    width: 48px; height: 30px; border-radius: 9px;
+    background: linear-gradient(145deg, #fbfff8 0%, #eafff3 58%, #edf8ff 100%);
     display: grid; place-items: center;
-    color: var(--chalk);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), inset 0 -4px 8px rgba(0,0,0,.25);
-    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(55, 190, 151, .2), 0 1px 2px rgba(15,20,30,.08);
+  }
+  .brand .logo svg{
+    width: 42px; height: 26px;
+    display: block;
   }
   .crumb{ color: var(--muted); font-size: 13px; display:flex; align-items:center; gap:8px; }
   .crumb input{

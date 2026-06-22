@@ -393,11 +393,47 @@ const stepLabel = s => {
 };
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────
+function BrandMark(){
+  return (
+    <span className="logo" aria-hidden="true">
+      <svg viewBox="0 0 192 128" focusable="false">
+        <defs>
+          <linearGradient id="brandFlow" x1="24" y1="18" x2="168" y2="112" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="#b8f76b" />
+            <stop offset=".52" stopColor="#44dcc7" />
+            <stop offset="1" stopColor="#78b8ff" />
+          </linearGradient>
+        </defs>
+        <g fill="#fbfff8" opacity=".82">
+          <rect x="26" y="35" width="20" height="58" rx="8" />
+          <rect x="26" y="35" width="40" height="20" rx="8" />
+          <rect x="26" y="55" width="34" height="18" rx="7" />
+          <rect x="26" y="73" width="42" height="20" rx="8" />
+        </g>
+        <g fill="none" stroke="#fbfff8" strokeWidth="17" strokeLinecap="round" strokeLinejoin="round" opacity=".82">
+          <path d="M76 43V85M76 43C111 43 111 85 76 85" />
+          <path d="M122 43V85M122 43C153 43 153 64 122 64M122 64C158 64 158 85 122 85" />
+        </g>
+        <g fill="url(#brandFlow)">
+          <rect x="31" y="40" width="10" height="48" rx="5" />
+          <rect x="31" y="40" width="31" height="10" rx="5" />
+          <rect x="31" y="59" width="25" height="10" rx="5" />
+          <rect x="31" y="78" width="33" height="10" rx="5" />
+        </g>
+        <g fill="none" stroke="url(#brandFlow)" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M76 43V85M76 43C111 43 111 85 76 85" />
+          <path d="M122 43V85M122 43C153 43 153 64 122 64M122 64C158 64 158 85 122 85" />
+        </g>
+      </svg>
+    </span>
+  );
+}
+
 function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo, onShutdown }){
   return (
     <div className="topbar">
       <div className="brand">
-        <span className="logo">板</span>
+        <BrandMark />
         칠판 자료 편집기
       </div>
       <div className="crumb">
