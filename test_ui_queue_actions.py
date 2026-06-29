@@ -19,7 +19,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260629", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -40,6 +40,20 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertNotIn("칠판에", queue_review_setup)
         self.assertIn("review?.kind === 'queue-recognition'", modal_source)
         self.assertIn("맞아요, 검수로 이동", modal_source)
+
+    def test_ai_recognition_auto_stops_after_ninety_seconds(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        retry_branch = source.split("const retryAiSession = useCallback", 1)[1]
+        retry_branch = retry_branch.split("const recognizeCurrentSession", 1)[0]
+        queue_branch = source.split("const processQueuedFiles = useCallback", 1)[1]
+        queue_branch = queue_branch.split("setLoading({", 1)[0]
+
+        self.assertIn("const RECOGNITION_AUTO_STOP_MS = 90 * 1000", source)
+        self.assertIn("startRecognitionAutoStop(job.controller)", retry_branch)
+        self.assertIn("startRecognitionAutoStop(job.controller)", queue_branch)
+        self.assertIn("AI 인식 자동 중단", retry_branch)
+        self.assertIn("문제 인식 자동 중단", queue_branch)
+        self.assertIn("setView('review');", retry_branch)
 
     def test_review_stage_exposes_crop_frame_and_partial_retry(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

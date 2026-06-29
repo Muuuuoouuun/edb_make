@@ -26,6 +26,16 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("cropDraft.topRatio", side_panel)
         self.assertIn("cropDraft.bottomRatio", side_panel)
 
+    def test_review_stage_exposes_direct_selected_crop_action(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("function ItemsRail", 1)[0]
+
+        self.assertIn("const applySelectedCrop = async () =>", review_stage)
+        self.assertIn("mutateSession?.('crop'", review_stage)
+        self.assertIn("cropBox: clampReviewBox", review_stage)
+        self.assertIn("선택 영역 자르기", review_stage)
+
     def test_reorder_reflows_saved_board_page_positions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         self.assertIn("function reflowItemsForBoardOrder", source)
@@ -273,7 +283,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", board_html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260629", board_html)
         self.assertNotIn("vendor/babel.min.js", board_html)
         self.assertNotIn('type="text/babel"', board_html)
         self.assertIn("EDB_REPORT_RUNTIME_ERROR", board_html)

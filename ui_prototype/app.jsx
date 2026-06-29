@@ -134,6 +134,8 @@ const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
 const ADJACENT_RETRY_PADDING_RATIO = 0.16;
 const ADJACENT_RETRY_MIN_PADDING_PX = 28;
+const RECOGNITION_AUTO_STOP_MS = 90 * 1000;
+const RECOGNITION_AUTO_STOP_LABEL = '1분 30초';
 const BOARD_DRAG_REORDER_THRESHOLD_PX = 28;
 const BOARD_DRAG_AUTOSCROLL_EDGE_PX = 58;
 const BOARD_DRAG_AUTOSCROLL_MAX_PX = 22;
@@ -171,6 +173,17 @@ function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
 function normalizeManualCropEdgeRatio(value){
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(-MANUAL_CROP_OUTSET_MAX, Math.min(MANUAL_CROP_EDGE_MAX, n)) : 0;
+}
+
+function startRecognitionAutoStop(controller){
+  const state = { timedOut: false, clear: () => {} };
+  if (!controller?.signal || typeof window === 'undefined') return state;
+  const timeoutId = window.setTimeout(() => {
+    state.timedOut = true;
+    if (!controller.signal.aborted) controller.abort();
+  }, RECOGNITION_AUTO_STOP_MS);
+  state.clear = () => window.clearTimeout(timeoutId);
+  return state;
 }
 
 function manualCropValue(rawCrop, camelKey, snakeKey, plainKey){
@@ -644,6 +657,13 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
     setBoxEdit(null);
   };
+  const applySelectedCrop = async () => {
+    if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
+    await mutateSession?.('crop', {
+      problemId: selectedSingleProblem.id,
+      cropBox: clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage),
+    });
+  };
   const retryPartialAi = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
     if (!problem?.id || !page?.id) return;
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
@@ -955,11 +975,11 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           <button
             className="btn primary"
             type="button"
-            onClick={() => retryPartialAi()}
-            disabled={!aiAvailable || aiBusy || mutating || !selectedCanBoxEdit}
-            title={retryDisabledReason || '선택한 박스 주변 여백까지 AI로 다시 인식'}
+            onClick={applySelectedCrop}
+            disabled={mutating || !selectedCanBoxEdit}
+            title={selectedCanBoxEdit ? '현재 선택된 문제 박스 그대로 이미지를 다시 자릅니다' : '원본 페이지 이미지가 있어야 합니다'}
           >
-            주변 영역 AI 재인식
+            {Icon.crop} 선택 영역 자르기
           </button>
           <button
             className="btn"
@@ -970,7 +990,16 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           >
             틀 조정/자르기
           </button>
-          <button className="btn primary" onClick={beginSplit} disabled={mutating}>✂ 두 문제로 나누기</button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => retryPartialAi()}
+            disabled={!aiAvailable || aiBusy || mutating || !selectedCanBoxEdit}
+            title={retryDisabledReason || '선택한 박스 주변 여백까지 AI로 다시 인식'}
+          >
+            주변 영역 AI 재인식
+          </button>
+          <button className="btn" onClick={beginSplit} disabled={mutating}>✂ 두 문제로 나누기</button>
         </>
       )}
       {selectedList.length >= 2 && (
@@ -1307,6 +1336,7 @@ function ItemsRail({
   items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
+  recognizingItemIds,
 }){
   const dragId = useRef(null);
   const [draggingId, setDraggingId] = useState(null);
@@ -1524,9 +1554,11 @@ function ItemsRail({
             if (files.length && handleFiles) handleFiles(files);
           }}
         >
-          {Icon.upload}
-          <strong style={{marginTop:6}}>이미지·PDF·HWP 대기열에 추가</strong>
-          <small>파일별로 그대로 등록하거나 AI 인식합니다</small>
+          <span className="drop-zone-icon">{Icon.upload}</span>
+          <span className="drop-zone-copy">
+            <strong>이미지·PDF·HWP 대기열에 추가</strong>
+            <small>파일별로 그대로 등록하거나 AI 인식합니다</small>
+          </span>
         </div>
 
         {!!recentSessions?.length && (
@@ -1638,10 +1670,12 @@ function ItemsRail({
                 const key = fileQueueKey(file);
                 return (
                 <div className="source-queue-row" key={key}>
-                  <span className="idx">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="source-queue-icon" title={`${String(index + 1).padStart(2, '0')} · ${sourceFileKindLabel(file)}`}>
+                    {isDocumentLikeFile(file) ? Icon.folder : Icon.upload}
+                  </span>
                   <div className="file">
                     <div className="name">{file.name || '이름 없는 파일'}</div>
-                    <div className="meta">{sourceFileKindLabel(file)} · {formatBytes(file.size)}</div>
+                    <div className="meta">#{String(index + 1).padStart(2, '0')} · {sourceFileKindLabel(file)} · {formatBytes(file.size)}</div>
                   </div>
                   <button
                     className="icon-btn queue-row-action"
@@ -1701,6 +1735,7 @@ function ItemsRail({
 
         {items.map((it, i) => {
           const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
+          const isRecognizing = Boolean(recognizingItemIds?.has?.(it.id));
           return (
           <div
             key={it.id}
@@ -1708,8 +1743,9 @@ function ItemsRail({
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${isRecognizing ? 'is-recognizing' : ''}`}
             data-item-id={it.id}
+            aria-busy={isRecognizing ? 'true' : undefined}
             onClick={() => {
               if (suppressClickRef.current) return;
               setActive(it.id);
@@ -1751,6 +1787,11 @@ function ItemsRail({
                   className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
                   title={it.statusReason || it.statusLabel}
                 />
+                {isRecognizing && (
+                  <span className="item-recognition-spinner" title="AI 인식 중" aria-label="AI 인식 중">
+                    <span className="mini-spinner" />
+                  </span>
+                )}
                 {it.name}
               </div>
               <div className="sub">
@@ -2458,6 +2499,7 @@ function SidePanel({
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
+  const cropStateLabel = cropChanged ? '변경 있음' : savedCropActive ? '적용됨' : '기본';
   const updatePlacement = (patch) => {
     if (!item) return;
     setPlacement?.(item.id, patch);
@@ -2507,6 +2549,9 @@ function SidePanel({
     const reset = { ...EMPTY_MANUAL_CROP };
     setCropDraft(reset);
     if (savedCropActive) applyManualCrop(reset);
+  };
+  const revertManualCrop = () => {
+    setCropDraft(savedCrop);
   };
 
   return (
@@ -2573,9 +2618,9 @@ function SidePanel({
                   <div className="ptools">
                     <button className="icon-btn" title="회전">{Icon.rotate}</button>
                     <button
-                      className={`icon-btn ${savedCropActive ? 'on' : ''}`}
+                      className={`icon-btn ${savedCropActive || cropChanged ? 'on' : ''}`}
                       type="button"
-                      title="상하좌우 여백 자르기"
+                      title={cropChanged ? '자르기 값이 변경되었습니다. 아래에서 적용하세요.' : '상하좌우 여백 자르기'}
                       onClick={focusManualCrop}
                     >{Icon.crop}</button>
                     <button
@@ -2640,8 +2685,13 @@ function SidePanel({
                 </div>
 
                 <div className="manual-crop-control" ref={cropControlRef}>
-                  <div className="manual-crop-note">
-                    +값은 영역을 바깥으로 넓히고, -값은 안쪽으로 잘라냅니다.
+                  <div className="manual-crop-head">
+                    <div className="manual-crop-note">
+                      +값은 영역을 바깥으로 넓히고, -값은 안쪽으로 잘라냅니다.
+                    </div>
+                    <span className={`manual-crop-state ${cropChanged ? 'dirty' : savedCropActive ? 'active' : ''}`}>
+                      {cropStateLabel}
+                    </span>
                   </div>
                   <div className="manual-crop-presets">
                     <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05, topRatio: -0.05, bottomRatio: -0.05 })}>
@@ -2708,6 +2758,12 @@ function SidePanel({
                     </label>
                   </div>
                   <div className="manual-crop-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={!item || mutating || !cropChanged}
+                      onClick={revertManualCrop}
+                    >되돌리기</button>
                     <button
                       className="btn"
                       type="button"
@@ -3674,6 +3730,7 @@ function mapProblemToItem(problem, idx){
       : 0.8,
     imageUrl: problem.imagePath || null,
     chalkUrl: problem.boardRenderPath || null,
+    sourcePageId: problem.sourcePageId || problem.source_page_id || '',
     subject: problem.subject || 'unknown',
     riskFlags,
     reviewStatus,
@@ -5593,6 +5650,39 @@ function App(){
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
   const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
+  const recognizingItemIds = useMemo(() => {
+    const ids = new Set();
+    const runningRecognitionJobs = backgroundJobs.filter(job => (
+      job.status === 'running' && job.scope === 'session-recognition'
+    ));
+    if (!runningRecognitionJobs.length) return ids;
+
+    runningRecognitionJobs.forEach(job => {
+      const problemIds = listUnique(job.problemIds || job.problem_ids || [])
+        .map(id => String(id || '').trim())
+        .filter(Boolean);
+      if (problemIds.length) {
+        problemIds.forEach(id => ids.add(id));
+        return;
+      }
+
+      const pageIds = new Set(
+        listUnique(job.pageIds || job.page_ids || [])
+          .map(id => String(id || '').trim())
+          .filter(Boolean)
+      );
+      if (pageIds.size) {
+        items.forEach(item => {
+          const sourcePageId = String(item.sourcePageId || item.source || '').trim();
+          if (sourcePageId && pageIds.has(sourcePageId)) ids.add(item.id);
+        });
+        return;
+      }
+
+      items.forEach(item => ids.add(item.id));
+    });
+    return ids;
+  }, [backgroundJobs, items]);
 
   const showToast = msg => {
     setToast(msg);
@@ -5686,6 +5776,9 @@ function App(){
         label: job.label || '백그라운드 작업',
         hint: job.hint || '',
         scope: job.scope || 'general',
+        pageIds: Array.isArray(job.pageIds) ? job.pageIds : [],
+        problemIds: Array.isArray(job.problemIds) ? job.problemIds : [],
+        fileKeys: Array.isArray(job.fileKeys) ? job.fileKeys : [],
       },
       ...prev.filter(item => item.status === 'running').slice(0, 2),
       ...prev.filter(item => item.status !== 'running').slice(0, 1),
@@ -5739,17 +5832,21 @@ function App(){
   };
 
   const applySession = useCallback((rawSession) => {
-    if (!rawSession || !Array.isArray(rawSession.problems) || rawSession.problems.length === 0) {
+    const problems = Array.isArray(rawSession?.problems) ? rawSession.problems : [];
+    const pages = Array.isArray(rawSession?.pages) ? rawSession.pages : [];
+    if (!rawSession || (!problems.length && !pages.length)) {
       return false;
     }
-    const mapped = rawSession.problems.map((p, idx) => mapProblemToItem(p, idx));
+    const mapped = problems.map((p, idx) => mapProblemToItem(p, idx));
     setItems(mapped);
-    setActiveId(mapped[0].id);
+    setActiveId(mapped[0]?.id || null);
     setSession(rawSession);
     setUsingMock(false);
     setPublished(!!sessionPublishSummary(rawSession));
     if (rawSession.session_name) setFileName(rawSession.session_name);
-    const wantsReview = (!initialViewConsumedRef.current && initialViewRef.current === 'review') || shouldOpenReview(rawSession);
+    const wantsReview = (!initialViewConsumedRef.current && initialViewRef.current === 'review')
+      || shouldOpenReview(rawSession)
+      || (pages.length > 0 && problems.length === 0);
     if (hasReviewPages(rawSession) && wantsReview) {
       setView('review');
       initialViewConsumedRef.current = true;
@@ -5870,14 +5967,17 @@ function App(){
       : pageIds;
     const snapshotBefore = materializeSessionForItems(session, items, fileName) || cloneSession(session);
     const job = startBackgroundJob({
-      scope: 'session-recognition',
-      label: isPartialRetry
+        scope: 'session-recognition',
+        pageIds: targetPageIds,
+        problemIds,
+        label: isPartialRetry
         ? (problemIds.length === 1 ? '주변 영역 AI 재인식 중' : `${problemIds.length}개 주변 영역 AI 재인식 중`)
         : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
       hint: isPartialRetry
         ? '선택한 박스 주변 여백까지 다시 자릅니다. 완료되면 확인 팝업이 열립니다.'
         : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
     });
+    const autoStop = startRecognitionAutoStop(job.controller);
     try {
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
       if (job.controller.signal.aborted) return;
@@ -5908,6 +6008,16 @@ function App(){
       });
     } catch (e) {
       if (e?.name === 'AbortError') {
+        if (autoStop.timedOut) {
+          settleBackgroundJob(job.id, {
+            status: 'canceled',
+            label: 'AI 인식 자동 중단',
+            hint: `${RECOGNITION_AUTO_STOP_LABEL} 동안 완료되지 않아 멈췄습니다. 검수 화면에서 박스를 바로 수정하세요.`,
+          }, 5000);
+          if (hasReviewPages(session)) setView('review');
+          showToast(`AI 인식이 ${RECOGNITION_AUTO_STOP_LABEL}을 넘어 중단됐어요. 검수 화면에서 수정하세요.`);
+          return;
+        }
         settleBackgroundJob(job.id, {
           status: 'canceled',
           label: 'AI 인식 취소됨',
@@ -5921,6 +6031,8 @@ function App(){
         hint: e.message,
       }, 5000);
       showToast(`AI 재인식 실패: ${e.message}`);
+    } finally {
+      autoStop.clear();
     }
   }, [session, userSettings, items, fileName, startBackgroundJob, settleBackgroundJob]);
 
@@ -6131,7 +6243,7 @@ function App(){
     setRefreshing(true);
     try {
       const s = await fetchLatestSession();
-      if (s && Array.isArray(s.problems) && s.problems.length) {
+      if (s && ((Array.isArray(s.problems) && s.problems.length) || hasReviewPages(s))) {
         applySession(s);
         refreshSessionHistory();
         showToast(`새로고침 완료 · ${formatProblemCount(sessionProblemCounts(s))}`);
@@ -6217,11 +6329,13 @@ function App(){
       const fileKeys = files.map(fileQueueKey);
       const job = startBackgroundJob({
         scope: 'queue-recognition',
+        fileKeys,
         label: files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`,
         hint: aiFallback.enabled
           ? 'Gemini AI 보정으로 문항 경계를 확인합니다.'
           : '기본 문항 인식으로 실행 중입니다.',
       });
+      const autoStop = startRecognitionAutoStop(job.controller);
       try {
         const incomingSession = await postExport(files, aiFallback, resolvedInputIntent, {
           signal: job.controller.signal,
@@ -6251,6 +6365,15 @@ function App(){
         });
       } catch (e) {
         if (e?.name === 'AbortError') {
+          if (autoStop.timedOut) {
+            settleBackgroundJob(job.id, {
+              status: 'canceled',
+              label: '문제 인식 자동 중단',
+              hint: `${RECOGNITION_AUTO_STOP_LABEL} 동안 완료되지 않아 멈췄습니다. 대기열에서 그대로 등록하거나 다시 인식하세요.`,
+            }, 5000);
+            showToast(`문제 인식이 ${RECOGNITION_AUTO_STOP_LABEL}을 넘어 중단됐어요. 대기열은 그대로 유지했어요.`);
+            return;
+          }
           settleBackgroundJob(job.id, {
             status: 'canceled',
             label: '문제 인식 취소됨',
@@ -6265,6 +6388,7 @@ function App(){
         }, 5000);
         showToast(`문제 인식 실패: ${e.message}`);
       } finally {
+        autoStop.clear();
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
       return;
@@ -6708,6 +6832,7 @@ function App(){
           recentSessions={recentSessions}
           restoringSessionId={restoringSessionId}
           onRestoreRecentSession={restoreRecentSession}
+          recognizingItemIds={recognizingItemIds}
         />
         {view === 'review' ? (
           <ReviewStage
