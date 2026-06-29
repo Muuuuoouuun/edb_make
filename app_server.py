@@ -215,7 +215,9 @@ load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
 APP_UPDATE_CONFIG_FILE = "app_update_config.json"
-MAX_JSON_BODY_BYTES = 1_048_576
+# Frontend uploads files as base64 inside JSON, so a 1 MB limit rejects many
+# normal PDFs/photos before parsing or AI recognition can start.
+MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
 MAX_UPDATE_FEED_BYTES = 262_144
 UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
 RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
