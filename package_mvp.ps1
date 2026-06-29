@@ -112,6 +112,7 @@ if ($HasPyInstaller) {
     $DataItems = @(
         @("ui_prototype\index.html", "ui_prototype"),
         @("ui_prototype\board.html", "ui_prototype"),
+        @("ui_prototype\favicon.png", "ui_prototype"),
         @("ui_prototype\reorder.js", "ui_prototype"),
         @("ui_prototype\review_filters.js", "ui_prototype"),
         @("ui_prototype\publish_summary.js", "ui_prototype"),
@@ -120,7 +121,8 @@ if ($HasPyInstaller) {
         @("ui_prototype\vendor\react.production.min.js", "ui_prototype\vendor"),
         @("ui_prototype\vendor\react-dom.production.min.js", "ui_prototype\vendor"),
         @("scripts\render_hwp_with_rhwp_core.mjs", "scripts"),
-        @("assets\app_icon.png", "assets")
+        @("assets\app_icon.png", "assets"),
+        @("assets\app_icon_source.png", "assets")
     )
     $DataArgs = @()
     $DataArgs += @("--add-data", ($BuildUpdateConfig + ";."))

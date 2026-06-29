@@ -320,6 +320,7 @@ add_data() {
 
 add_data "ui_prototype/index.html" "ui_prototype"
 add_data "ui_prototype/board.html" "ui_prototype"
+add_data "ui_prototype/favicon.png" "ui_prototype"
 add_data "ui_prototype/reorder.js" "ui_prototype"
 add_data "ui_prototype/review_filters.js" "ui_prototype"
 add_data "ui_prototype/publish_summary.js" "ui_prototype"
@@ -329,6 +330,7 @@ add_data "ui_prototype/vendor/react.production.min.js" "ui_prototype/vendor"
 add_data "ui_prototype/vendor/react-dom.production.min.js" "ui_prototype/vendor"
 add_data "scripts/render_hwp_with_rhwp_core.mjs" "scripts"
 add_data "assets/app_icon.png" "assets"
+add_data "assets/app_icon_source.png" "assets"
 
 "$PYTHON_EXE" -m PyInstaller \
   --noconfirm \

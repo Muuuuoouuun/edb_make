@@ -52,6 +52,7 @@ bundle_identifier = os.environ.get("EDB_MACOS_BUNDLE_ID", "local.classin.edbmvp"
 UI_DATAS = [
     ("ui_prototype/index.html", "ui_prototype"),
     ("ui_prototype/board.html", "ui_prototype"),
+    ("ui_prototype/favicon.png", "ui_prototype"),
     ("ui_prototype/reorder.js", "ui_prototype"),
     ("ui_prototype/review_filters.js", "ui_prototype"),
     ("ui_prototype/publish_summary.js", "ui_prototype"),
@@ -63,6 +64,7 @@ UI_DATAS = [
 
 ASSET_DATAS = [
     ("assets/app_icon.png", "assets"),
+    ("assets/app_icon_source.png", "assets"),
 ]
 
 APP_CONFIG_DATAS = [

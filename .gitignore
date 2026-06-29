@@ -45,3 +45,5 @@ test_output_*/
 *.jpeg
 !assets/
 !assets/app_icon.png
+!assets/app_icon_source.png
+!ui_prototype/favicon.png
