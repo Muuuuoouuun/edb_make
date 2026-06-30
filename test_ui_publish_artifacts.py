@@ -87,11 +87,38 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("markClassinReviewComplete", source)
         self.assertIn("status: 'passed'", source)
 
+    def test_publish_result_panel_exposes_png_bundle_action(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        panel = source.split("function PublishResultPanel", 1)[1]
+        panel = panel.split("function SidePanel", 1)[0]
+
+        self.assertIn("onExportImages", panel)
+        self.assertIn("exportingImages", panel)
+        self.assertIn("canExportImages", panel)
+        self.assertIn("PNG 묶음", panel)
+        self.assertIn("현재 문제 이미지를 PNG 묶음으로 다운로드", panel)
+
+    def test_board_toolbar_exposes_image_download_action(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        topbar = source.split("function TopBar", 1)[1]
+        topbar = topbar.split("function ReviewStage", 1)[0]
+
+        self.assertIn("async function postExportImages", source)
+        self.assertIn("fetch('/api/session/export-images'", source)
+        self.assertIn("const exportSessionImages = useCallback", source)
+        self.assertIn("result.downloadUrl", source)
+        self.assertIn("result.fileName", source)
+        self.assertIn("onExportImages", topbar)
+        self.assertIn("exportingImages", topbar)
+        self.assertIn("canExportImages", topbar)
+        self.assertIn("이미지 다운로드", topbar)
+        self.assertIn("PNG ZIP", topbar)
+
     def test_board_uses_publish_artifact_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
         self.assertIn("publish_summary.js?v=source-overlap-summary-20260614", html)
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-stamp-size-controls", html)
 
 
 if __name__ == "__main__":

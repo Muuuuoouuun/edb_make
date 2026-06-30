@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import webbrowser
+import zipfile
 from datetime import datetime
 from functools import lru_cache, partial
 from http import HTTPStatus
@@ -3279,6 +3280,330 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     return session
 
 
+def _bulk_crop_parent(
+    session: dict[str, Any],
+    page: dict[str, Any],
+    source_path: Path,
+    image_width: int,
+    image_height: int,
+    replace_problem_ids: list[str],
+) -> dict[str, Any]:
+    candidate_ids = list(replace_problem_ids)
+    if not candidate_ids:
+        candidate_ids = [str(pid) for pid in (page.get("problemIds") or []) if pid]
+    for problem_id in candidate_ids:
+        try:
+            _index, problem = _find_problem(session, problem_id)
+        except ValueError:
+            if replace_problem_ids:
+                raise
+            continue
+        return problem
+    return {
+        "id": str(page.get("id") or "page"),
+        "title": str(page.get("title") or page.get("sourceFileName") or source_path.stem or "문항"),
+        "sourcePageId": str(page.get("id") or ""),
+        "sourceFileName": source_path.name,
+        "sourceImagePath": source_path.resolve().as_uri(),
+        "recordMode": "image-only",
+        "textRecordCount": 0,
+        "imageRecordCount": 1,
+        "bbox": {
+            "left": 0.0,
+            "top": 0.0,
+            "width": float(image_width),
+            "height": float(image_height),
+        },
+    }
+
+
+def _replace_bulk_crop_problems(
+    session: dict[str, Any],
+    page: dict[str, Any],
+    replacements: list[dict[str, Any]],
+    replace_problem_ids: list[str],
+) -> None:
+    replacement_ids = [str(problem.get("id")) for problem in replacements if problem.get("id")]
+    if not replace_problem_ids:
+        session["problems"] = list(session.get("problems") or []) + replacements
+        page_ids = [str(pid) for pid in (page.get("problemIds") or []) if pid]
+        page["problemIds"] = [*page_ids, *replacement_ids]
+        _refresh_session_problem_counts(session)
+        return
+
+    replace_set = set(replace_problem_ids)
+    next_problems: list[dict[str, Any]] = []
+    inserted = False
+    for problem in session.get("problems", []) or []:
+        if isinstance(problem, dict) and str(problem.get("id")) in replace_set:
+            if not inserted:
+                next_problems.extend(replacements)
+                inserted = True
+            continue
+        next_problems.append(problem)
+    if not inserted:
+        next_problems.extend(replacements)
+    session["problems"] = next_problems
+
+    next_page_ids: list[str] = []
+    inserted_on_page = False
+    for raw_id in page.get("problemIds") or []:
+        current_id = str(raw_id)
+        if current_id in replace_set:
+            if not inserted_on_page:
+                next_page_ids.extend(replacement_ids)
+                inserted_on_page = True
+            continue
+        next_page_ids.append(current_id)
+    if not inserted_on_page:
+        next_page_ids.extend(replacement_ids)
+    page["problemIds"] = next_page_ids
+    _refresh_session_problem_counts(session)
+
+
+def _mutate_bulk_crop(
+    session: dict[str, Any],
+    page_id: str,
+    regions: Any,
+    replace_problem_ids: Any = None,
+) -> dict[str, Any]:
+    page_id = str(page_id or "").strip()
+    if not page_id:
+        raise ValueError("pageId is required")
+    page = _find_page(session, page_id)
+    source_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+    if source_path is None or not source_path.exists():
+        raise FileNotFoundError(f"page image missing for {page_id}: {source_path}")
+    raw_regions = regions if isinstance(regions, list) else []
+    if not raw_regions:
+        raise ValueError("regions is required")
+
+    replace_ids = _coerce_problem_ids(replace_problem_ids)
+    for problem_id in replace_ids:
+        _index, problem = _find_problem(session, problem_id)
+        problem_page_id = str(problem.get("sourcePageId") or "")
+        if problem_page_id and problem_page_id != page_id:
+            raise ValueError(f"problem {problem_id} does not belong to page {page_id}")
+
+    from PIL import Image
+
+    with Image.open(source_path) as page_image:
+        image_width, image_height = page_image.size
+
+    boxes: list[tuple[Box, str]] = []
+    for index, raw_region in enumerate(raw_regions, start=1):
+        region = raw_region if isinstance(raw_region, dict) else {}
+        raw_box = (
+            region.get("bbox")
+            or region.get("cropBox")
+            or region.get("crop_box")
+            or region
+        )
+        box = _coerce_crop_box(raw_box, image_width=image_width, image_height=image_height)
+        title = str(region.get("title") or "").strip() or f"문항 {index:02d}"
+        boxes.append((box, title))
+
+    parent = _bulk_crop_parent(session, page, source_path, image_width, image_height, replace_ids)
+    base_id = replace_ids[0] if len(replace_ids) == 1 else str(parent.get("id") or page_id)
+    replacement_source_id = replace_ids[0] if replace_ids else ""
+    crop_dir = _crop_dir_for_session(session)
+    source_uri = source_path.resolve().as_uri()
+    candidate_session = {**session, "problems": list(session.get("problems") or [])}
+    replacements: list[dict[str, Any]] = []
+    for index, (box, title) in enumerate(boxes, start=1):
+        new_id = _next_problem_id(candidate_session, base_id, f"crop-{index:02d}")
+        candidate_session["problems"].append({"id": new_id})
+        crop_path = crop_dir / _make_crop_filename(new_id, f"bulk_crop_{index:02d}")
+        _crop_image_by_bbox(source_path, box, crop_path)
+
+        entry = _problem_skeleton_from_parent(parent)
+        entry["id"] = new_id
+        entry["title"] = title
+        entry["sourcePageId"] = page_id
+        entry["sourceImagePath"] = source_uri
+        entry["sourceFileName"] = str(parent.get("sourceFileName") or source_path.name)
+        if replacement_source_id:
+            entry["replacesProblemId"] = replacement_source_id
+            entry["replaces_problem_id"] = replacement_source_id
+        entry["bbox"] = {
+            "left": box.left,
+            "top": box.top,
+            "width": box.width,
+            "height": box.height,
+        }
+        entry["imagePath"] = crop_path.resolve().as_uri()
+        entry["boardRenderPath"] = crop_path.resolve().as_uri()
+        entry["recordMode"] = "image-only"
+        entry["textRecordCount"] = 0
+        entry["imageRecordCount"] = 1
+        entry["riskFlags"] = []
+        entry["reviewStatus"] = "normal"
+        replacements.append(entry)
+
+    _replace_bulk_crop_problems(session, page, replacements, replace_ids)
+    return session
+
+
+def _session_problem_image_export_items(
+    session: dict[str, Any],
+    problem_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    problems = [problem for problem in (session.get("problems") or []) if isinstance(problem, dict)]
+    if problem_ids is None:
+        ordered = problems
+    else:
+        by_id = {str(problem.get("id")): problem for problem in problems if problem.get("id")}
+        ordered = []
+        for problem_id in problem_ids:
+            if problem_id not in by_id:
+                raise ValueError(f"problem not found: {problem_id}")
+            ordered.append(by_id[problem_id])
+    return [problem for problem in ordered if not _session_problem_is_supplemental(problem)]
+
+
+def _safe_export_filename(index: int, title: Any, problem_id: Any) -> str:
+    def sanitize_part(value: Any) -> str:
+        raw = str(value or "").strip()
+        invalid = '<>:"/\\|?*'
+        safe_chars = [ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw]
+        safe = re.sub(r"\s+", "_", "".join(safe_chars)).strip(" ._")
+        return re.sub(r"_+", "_", safe)[:80].strip(" ._")
+
+    safe = sanitize_part(title) or sanitize_part(problem_id) or "problem"
+    if not safe:
+        safe = "problem"
+    return f"{index:03d}_{safe}.png"
+
+
+def _existing_session_image_path(value: Any) -> Path | None:
+    path = _resolve_session_path(value)
+    if path is None:
+        return None
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    return resolved if resolved.exists() and resolved.is_file() else None
+
+
+def _write_zip_png(zip_file: zipfile.ZipFile, source_path: Path, arcname: str) -> None:
+    if source_path.suffix.lower() == ".png":
+        zip_file.write(source_path, arcname)
+        return
+
+    from io import BytesIO
+    from PIL import Image
+
+    with Image.open(source_path) as image:
+        if image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+            image = image.convert("RGBA")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+    zip_file.writestr(arcname, buffer.getvalue())
+
+
+def _session_image_export_source_path(problem: dict[str, Any], kind: str) -> Path | None:
+    image_path = _existing_session_image_path(problem.get("imagePath"))
+    if kind == "raw":
+        return image_path
+    board_path = _existing_session_image_path(problem.get("boardRenderPath"))
+    return board_path or image_path
+
+
+def _write_session_image_export_zip(
+    session: dict[str, Any],
+    mode: str,
+    problem_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_mode = str(mode or "both").strip().lower()
+    if normalized_mode not in {"edb", "raw", "both"}:
+        raise ValueError("mode must be one of edb, raw, or both")
+
+    items = _session_problem_image_export_items(session, problem_ids)
+    if not items:
+        raise ValueError("no problem images available to export")
+
+    session_name = str(session.get("session_name") or session.get("sessionName") or "session")
+    export_dir = RUNTIME_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    safe_session_name = sanitize_output_dir_name(session_name or "session")
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    digest = hashlib.sha1(f"{safe_session_name}|{stamp}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
+    zip_path = (export_dir / f"{safe_session_name}_images_{stamp}_{digest}.zip").resolve()
+
+    manifest: dict[str, Any] = {
+        "sessionName": session_name,
+        "exportedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "mode": normalized_mode,
+        "count": 0,
+        "items": [],
+        "missing": [],
+    }
+    exported_problem_ids: set[str] = set()
+    folders = []
+    if normalized_mode in {"edb", "both"}:
+        folders.append(("edb", "edb_images", "edbImage"))
+    if normalized_mode in {"raw", "both"}:
+        folders.append(("raw", "raw_crops", "rawCrop"))
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, problem in enumerate(items, start=1):
+            problem_id = str(problem.get("id") or "")
+            filename = _safe_export_filename(index, problem.get("title"), problem_id)
+            manifest_item: dict[str, Any] = {
+                "index": index,
+                "problemId": problem_id,
+                "title": str(problem.get("title") or ""),
+                "sourcePageId": str(problem.get("sourcePageId") or ""),
+                "bbox": problem.get("bbox") or None,
+            }
+            exported_any = False
+            for kind, folder, manifest_key in folders:
+                arcname = f"{folder}/{filename}"
+                source_path = _session_image_export_source_path(problem, kind)
+                if source_path is None:
+                    manifest_item[manifest_key] = None
+                    missing = {
+                        "index": index,
+                        "problemId": problem_id,
+                        "title": manifest_item["title"],
+                        "kind": kind,
+                        "reason": "image file missing",
+                    }
+                    manifest["missing"].append(missing)
+                    continue
+                try:
+                    _write_zip_png(archive, source_path, arcname)
+                except OSError as exc:
+                    manifest_item[manifest_key] = None
+                    manifest["missing"].append({
+                        "index": index,
+                        "problemId": problem_id,
+                        "title": manifest_item["title"],
+                        "kind": kind,
+                        "sourcePath": str(source_path),
+                        "reason": str(exc),
+                    })
+                    continue
+                manifest_item[manifest_key] = arcname
+                exported_any = True
+            if exported_any:
+                exported_problem_ids.add(problem_id)
+            manifest["items"].append(manifest_item)
+
+        manifest["count"] = len(exported_problem_ids)
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    return {
+        "zipPath": str(zip_path),
+        "fileName": zip_path.name,
+        "count": manifest["count"],
+        "missing": manifest["missing"],
+        "manifest": manifest,
+        "mode": normalized_mode,
+    }
+
+
 def _mutate_exclude_many(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]:
     ids = _coerce_problem_ids(problem_ids)
     if not ids:
@@ -4091,6 +4416,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/mutate":
             self._handle_session_mutate()
             return
+        if parsed.path == "/api/session/export-images":
+            self._handle_session_export_images()
+            return
         if parsed.path == "/api/session/retry-ai":
             self._handle_session_retry_ai()
             return
@@ -4497,7 +4825,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         })
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "exclude", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "bulk-crop" | "exclude", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
@@ -4535,6 +4863,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if raw_crop is None:
                     raw_crop = payload
                 new_session = _mutate_crop(session, problem_id, raw_crop)
+            elif action in {"bulk-crop", "bulk_crop"}:
+                page_id = str(payload.get("pageId") or payload.get("page_id") or "")
+                regions = payload.get("regions")
+                replace_ids = payload.get("replaceProblemIds", payload.get("replace_problem_ids"))
+                new_session = _mutate_bulk_crop(session, page_id, regions, replace_ids)
             elif action == "exclude":
                 ids_raw = payload.get("problemIds", payload.get("problem_ids"))
                 if ids_raw is not None:
@@ -4548,7 +4881,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|exclude|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
@@ -4561,6 +4894,44 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
         self.app_server.remember_session(new_session)
         self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+
+    def _handle_session_export_images(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        raw_problem_ids = payload.get("problemIds", payload.get("problem_ids"))
+        problem_ids = _coerce_problem_ids(raw_problem_ids) if raw_problem_ids is not None else None
+        try:
+            result = _write_session_image_export_zip(
+                session,
+                str(payload.get("mode") or "both"),
+                problem_ids=problem_ids,
+            )
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except OSError as exc:
+            self._send_json({"ok": False, "error": f"failed to export images: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        zip_path = Path(result["zipPath"]).resolve()
+        self.app_server.allowed_files.add(str(zip_path))
+        self._send_json({
+            "ok": True,
+            "downloadUrl": path_to_api_url(zip_path),
+            "zipPath": str(zip_path),
+            "fileName": result["fileName"],
+            "count": result["count"],
+            "missing": result["missing"],
+            "mode": result["mode"],
+        })
 
     def _handle_session_retry_ai(self) -> None:
         session = self.app_server.latest_session or load_latest_session()

@@ -26,6 +26,67 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("cropDraft.topRatio", side_panel)
         self.assertIn("cropDraft.bottomRatio", side_panel)
 
+    def test_side_panel_keeps_editor_controls_collapsed_behind_detail_settings(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        preview_block = side_panel.split("<div className=\"item-preview\" ref={wrapRef}>", 1)[1]
+        preview_block = preview_block.split("<div className=\"panel-section-hd\">", 1)[0]
+        detail_block = side_panel.split("detail-settings-toggle", 1)[1]
+
+        self.assertIn("const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)", side_panel)
+        self.assertIn("setAdvancedSettingsOpen(true)", side_panel)
+        self.assertIn("aria-expanded={advancedSettingsOpen}", side_panel)
+        self.assertIn("상세 설정", side_panel)
+        self.assertNotIn("className=\"ptools\"", preview_block)
+        self.assertIn("className=\"ptools detail-tools\"", detail_block)
+        self.assertIn("이동 · 자르기 · 확대 · 업스케일", detail_block)
+        self.assertIn("const [cropPresetsOpen, setCropPresetsOpen] = useState(false)", side_panel)
+        self.assertIn("자르기 프리셋", side_panel)
+        self.assertIn("showItemConfirmBar", side_panel)
+        self.assertIn("view === 'review'", side_panel)
+
+    def test_main_controls_are_compact_by_default(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        topbar = source.split("function TopBar", 1)[1]
+        topbar = topbar.split("function ReviewStage", 1)[0]
+        rail = source.split("function ItemsRail", 1)[1]
+        rail = rail.split("function BoardStage", 1)[0]
+        board_stage = source.split("function BoardStage", 1)[1]
+        board_stage = board_stage.split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn("topbar-actions", topbar)
+        self.assertIn("topbar-more-menu", topbar)
+        self.assertIn("더보기", topbar)
+        self.assertIn("파일 추가", rail)
+        self.assertIn("hasSessionItems ? 'is-compact'", rail)
+        self.assertIn("stage-fit-btn", board_stage)
+        self.assertNotIn("title=\"자동 정렬\"", board_stage)
+        self.assertIn(".drop-zone.is-compact", html)
+        self.assertIn(".topbar-more-menu", html)
+
+    def test_compact_controls_expose_hover_tooltips(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        topbar = source.split("function TopBar", 1)[1]
+        topbar = topbar.split("function ReviewStage", 1)[0]
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn("function TooltipLayer", source)
+        self.assertIn("<TooltipLayer />", source)
+        self.assertIn("document.addEventListener('pointerover'", source)
+        self.assertIn("document.addEventListener('pointermove'", source)
+        self.assertIn("document.addEventListener('focusin'", source)
+        self.assertIn("data-tooltip", topbar)
+        self.assertIn("보드 배치 화면으로 이동", topbar)
+        self.assertIn("현재 배치로 EDB 파일 제작", topbar)
+        self.assertIn("선택한 자료의 처리 방식과 세부 편집", side_panel)
+        self.assertIn("위치 이동, 여백 자르기, 확대, 업스케일 상세 설정", side_panel)
+        self.assertIn(".ui-tooltip", html)
+        self.assertIn("position: fixed", html)
+
     def test_reorder_reflows_saved_board_page_positions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         self.assertIn("function reflowItemsForBoardOrder", source)
@@ -273,7 +334,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", board_html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-stamp-size-controls", board_html)
         self.assertNotIn("vendor/babel.min.js", board_html)
         self.assertNotIn('type="text/babel"', board_html)
         self.assertIn("EDB_REPORT_RUNTIME_ERROR", board_html)

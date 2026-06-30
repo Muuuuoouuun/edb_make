@@ -8,18 +8,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TestUiQueueActions(unittest.TestCase):
-    def test_upload_queue_exposes_bulk_register_and_recognize_actions(self) -> None:
+    def test_upload_queue_exposes_page_png_and_recognize_actions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
 
-        self.assertIn("전체 그대로 등록", source)
-        self.assertIn("전체 AI 인식", source)
+        self.assertIn("페이지 PNG", source)
+        self.assertIn("문제 파싱 없음", source)
+        self.assertIn("문항 AI 인식", source)
+        self.assertIn("문제별 자동 분리", source)
         self.assertIn("onClick={() => processQueuedFiles('register')}", source)
         self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
+        self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
 
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260617", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-stamp-size-controls", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -51,6 +54,11 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("cropBoxes", source)
         self.assertIn("MANUAL_CROP_OUTSET_MAX", source)
         self.assertIn("인식 중단", source)
+        self.assertIn("바깥을 클릭해 바로 적용", source)
+        self.assertIn("onManualCropOutsideMouseDown", source)
+        self.assertIn("window.addEventListener('mousedown', onManualCropOutsideMouseDown, true)", source)
+        self.assertIn("target?.closest?.('.review-bbox.editing')", source)
+        self.assertIn("void applyBoxEdit();", source)
         self.assertIn("crop-frame-handle", html)
         self.assertIn("manual-crop-presets", html)
 
@@ -68,6 +76,64 @@ class TestUiQueueActions(unittest.TestCase):
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
         self.assertIn("materializeSessionForItems(session, items, fileName) || session", mutation_source)
         self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
+
+    def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")
+
+        self.assertIn("function ManualSplitEditor", source)
+        self.assertIn("수동 쪼개기", source)
+        self.assertIn("분할 적용", source)
+        self.assertIn("mutateSession?.('bulk-crop'", source)
+        self.assertIn("serializeManualSplitRegions", source)
+        self.assertIn("manualSplitStampBoxFromPoint", source)
+        self.assertIn("stampManualSplitRegion", source)
+        self.assertIn("manual-split-tool", source)
+        self.assertIn("manual-stamp-card", source)
+        self.assertIn("focusShadeRegionId", source)
+        self.assertIn("focus-shade", source)
+        self.assertIn("Esc로 스탬프 종료", source)
+        self.assertIn("aria-keyshortcuts=\"Escape\"", source)
+        self.assertIn("aria-keyshortcuts=\"Enter\"", source)
+        self.assertIn("manualSplit.mode === 'stamp'", source)
+        self.assertIn("setManualSplitMode('draw')", source)
+        self.assertIn("manual-split-panel-actions", source)
+        self.assertIn("onApply={applyManualPageSplit}", source)
+        self.assertIn("스탬프 크기 조절", source)
+        self.assertIn("manual-stamp-field", source)
+        self.assertIn("manual-stamp-scale-actions", source)
+        self.assertIn("스탬프 10% 확대", source)
+        self.assertIn("onStampSizeChange={updateManualSplitStampSize}", source)
+        self.assertIn("clampManualSplitStampBox", source)
+        self.assertIn("const nextSession = await mutateSession?.('bulk-crop', payload);", source)
+        self.assertIn("if (!nextSession) return;", source)
+        self.assertIn("const [reviewZoom, setReviewZoom] = useState(1)", source)
+        self.assertIn("onWheel={handleReviewWheel}", source)
+        self.assertIn("review-zoom-controls", source)
+        key_handler = source.split("const onKeyDown = (evt) => {", 1)[1]
+        key_handler = key_handler.split("if (evt.key === 'Delete'", 1)[0]
+        self.assertLess(key_handler.index("manualSplit.mode === 'stamp'"), key_handler.index("if (isFormControl) return;"))
+        self.assertIn("0 0 0 9999px rgba(13,18,30,.20)", html)
+        self.assertIn("이 크기로 계속", source)
+        self.assertIn("onManualSplitOutsideMouseDown", source)
+        self.assertIn("window.addEventListener('mousedown', onManualSplitOutsideMouseDown, true)", source)
+        self.assertIn("target?.closest?.('.manual-split-layout')", source)
+        self.assertIn("void applyManualPageSplit();", source)
+        self.assertIn("manual-split-box", bundle)
+        self.assertIn("스탬프", bundle)
+
+    def test_items_rail_keeps_step_and_source_on_one_line_without_status_text_chip(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        rail_item = source.split("{items.map((it, i) => {", 1)[1]
+        rail_item = rail_item.split("</div>\n        );})}", 1)[0]
+
+        self.assertIn('className="source-label"', rail_item)
+        self.assertNotIn("statusShortLabel", rail_item)
+        self.assertNotIn("status-tag", rail_item)
+        self.assertIn(".item .meta .sub .source-label", html)
+        self.assertIn("word-break: keep-all", html)
 
 
 if __name__ == "__main__":

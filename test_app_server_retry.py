@@ -4,6 +4,7 @@ import base64
 import io
 import threading
 import unittest
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -719,6 +720,176 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual("s2", problem["step"])
             with Image.open(board_path) as board_image:
                 self.assertIn("A", board_image.getbands())
+
+    def test_bulk_crop_replaces_source_problem_with_multiple_png_entries(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            Image.new("RGB", (300, 200), "white").save(page_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p0", "p1", "p2"],
+                }],
+                "problems": [
+                    {
+                        "id": "p0",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 0, "top": 0, "width": 10, "height": 10},
+                    },
+                    {
+                        "id": "p1",
+                        "title": "원본",
+                        "sourcePageId": "page-1",
+                        "sourceFileName": "page.png",
+                        "sourceImagePath": page_path.resolve().as_uri(),
+                        "bbox": {"left": 0, "top": 0, "width": 300, "height": 200},
+                        "riskFlags": ["large_block_dominance"],
+                        "recordMode": "image-only",
+                    },
+                    {
+                        "id": "p2",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 10, "top": 10, "width": 20, "height": 20},
+                    },
+                ],
+            }
+
+            updated = app_server._mutate_bulk_crop(
+                session,
+                "page-1",
+                [
+                    {"bbox": {"left": 10, "top": 20, "width": 50, "height": 40}, "title": "직접 1"},
+                    {"bbox": {"left": 250, "top": 180, "width": 100, "height": 50}},
+                ],
+                ["p1"],
+            )
+
+            problem_ids = [problem["id"] for problem in updated["problems"]]
+            self.assertEqual("p0", problem_ids[0])
+            self.assertEqual("p2", problem_ids[-1])
+            created = updated["problems"][1:3]
+            created_ids = [problem["id"] for problem in created]
+            self.assertEqual(created_ids, updated["pages"][0]["problemIds"][1:3])
+            self.assertEqual(["p0", *created_ids, "p2"], updated["pages"][0]["problemIds"])
+            self.assertEqual("직접 1", created[0]["title"])
+            self.assertEqual("문항 02", created[1]["title"])
+            self.assertEqual("p1", created[0]["replacesProblemId"])
+            self.assertEqual("p1", created[0]["replaces_problem_id"])
+            self.assertEqual("p1", created[1]["replacesProblemId"])
+            self.assertEqual("p1", created[1]["replaces_problem_id"])
+            self.assertEqual("image-only", created[0]["recordMode"])
+            self.assertEqual(1, created[0]["imageRecordCount"])
+            self.assertEqual([], created[0]["riskFlags"])
+            self.assertEqual("normal", created[0]["reviewStatus"])
+            self.assertEqual(page_path.resolve().as_uri(), created[0]["sourceImagePath"])
+            self.assertEqual({"left": 250.0, "top": 180.0, "width": 50.0, "height": 20.0}, created[1]["bbox"])
+
+            first_crop = app_server._resolve_session_path(created[0]["imagePath"])
+            second_crop = app_server._resolve_session_path(created[1]["imagePath"])
+            self.assertIsNotNone(first_crop)
+            self.assertIsNotNone(second_crop)
+            self.assertTrue(first_crop.exists())
+            self.assertTrue(second_crop.exists())
+            with Image.open(first_crop) as first_image:
+                self.assertEqual((50, 40), first_image.size)
+            with Image.open(second_crop) as second_image:
+                self.assertEqual((50, 20), second_image.size)
+
+    def test_session_image_export_zip_uses_order_fallback_and_safe_names(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            raw_1 = tmpdir / "raw-1.png"
+            board_1 = tmpdir / "board-1.png"
+            raw_2 = tmpdir / "raw-2.png"
+            Image.new("RGB", (20, 10), "white").save(raw_1)
+            Image.new("RGB", (24, 12), "black").save(board_1)
+            Image.new("RGB", (18, 8), "blue").save(raw_2)
+            session = {
+                "session_name": "국어 수업",
+                "problems": [
+                    {
+                        "id": "p1",
+                        "title": "문항 01/위험:*",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 1, "top": 2, "width": 3, "height": 4},
+                        "imagePath": raw_1.resolve().as_uri(),
+                        "boardRenderPath": board_1.resolve().as_uri(),
+                    },
+                    {
+                        "id": "p2",
+                        "title": "문항 02",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 5, "top": 6, "width": 7, "height": 8},
+                        "imagePath": raw_2.resolve().as_uri(),
+                        "boardRenderPath": (tmpdir / "missing-board.png").resolve().as_uri(),
+                    },
+                ],
+            }
+
+            with patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"):
+                result = app_server._write_session_image_export_zip(session, "both", problem_ids=["p2", "p1"])
+
+            self.assertEqual(2, result["count"])
+            self.assertEqual([], result["missing"])
+            zip_path = Path(result["zipPath"])
+            with zipfile.ZipFile(zip_path) as archive:
+                names = set(archive.namelist())
+                self.assertIn("edb_images/001_문항_02.png", names)
+                self.assertIn("raw_crops/001_문항_02.png", names)
+                self.assertIn("edb_images/002_문항_01_위험.png", names)
+                self.assertIn("raw_crops/002_문항_01_위험.png", names)
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+            self.assertEqual("국어 수업", manifest["sessionName"])
+            self.assertEqual("both", manifest["mode"])
+            self.assertEqual(2, manifest["count"])
+            self.assertEqual(["p2", "p1"], [item["problemId"] for item in manifest["items"]])
+            self.assertEqual("edb_images/001_문항_02.png", manifest["items"][0]["edbImage"])
+            self.assertEqual("raw_crops/001_문항_02.png", manifest["items"][0]["rawCrop"])
+
+    def test_session_export_images_handler_allows_generated_zip_file(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            crop = tmpdir / "crop.png"
+            Image.new("RGB", (12, 8), "white").save(crop)
+            session = {
+                "session_name": "수업",
+                "problems": [{
+                    "id": "p1",
+                    "title": "문항 1",
+                    "sourcePageId": "page-1",
+                    "bbox": {"left": 0, "top": 0, "width": 12, "height": 8},
+                    "imagePath": crop.resolve().as_uri(),
+                    "boardRenderPath": crop.resolve().as_uri(),
+                }],
+            }
+            fake_server = type("FakeServer", (), {
+                "latest_session": session,
+                "allowed_files": set(),
+            })()
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = fake_server
+            handler._read_json_body = lambda: {"mode": "edb"}
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            with patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"):
+                handler._handle_session_export_images()
+
+            body = responses[0][0]
+            self.assertTrue(body["ok"])
+            self.assertTrue(body["downloadUrl"].startswith("/api/file?path="))
+            self.assertIn(body["zipPath"], fake_server.allowed_files)
+            self.assertTrue(Path(body["zipPath"]).exists())
 
 
 class TestExportErrorPayload(unittest.TestCase):
