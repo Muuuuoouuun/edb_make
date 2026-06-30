@@ -1859,7 +1859,7 @@
 
   .item{
     display: grid;
-    grid-template-columns: 22px 56px minmax(0, 1fr) 28px;
+    grid-template-columns: 22px 56px minmax(0, 1fr) 58px;
     gap: 8px;
     align-items: center;
     padding: 8px 8px 8px 4px;
@@ -2010,6 +2010,12 @@
   .item .actions .icon-btn{
     width: 28px;
     height: 28px;
+  }
+  .item .actions .item-download-action{
+    color: var(--accent);
+  }
+  .item .actions .item-download-action:disabled{
+    color: var(--muted);
   }
   .item:hover .actions, .item.active .actions{ opacity: 1; }
   .item.dragging{
@@ -3692,6 +3698,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=source-overlap-summary-20260614"></script>
 <script src="publish_guard.js?v=preflight-focus-20260614"></script>
-<script src="app.bundle.js?v=frontend-bundle-20260630-undo-order"></script>
+<script src="app.bundle.js?v=frontend-bundle-20260630-item-download"></script>
 </body>
 </html>

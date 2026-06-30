@@ -27,6 +27,7 @@ from datetime import datetime
 from functools import lru_cache, partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -3475,6 +3476,12 @@ def _safe_export_filename(index: int, title: Any, problem_id: Any) -> str:
     return f"{index:03d}_{safe}.png"
 
 
+def _safe_problem_image_download_filename(index: int, title: Any, problem_id: Any) -> str:
+    filename = _safe_export_filename(index, title, problem_id)
+    _, _, suffix = filename.partition("_")
+    return f"{index:02d}_{suffix or 'problem.png'}"
+
+
 def _existing_session_image_path(value: Any) -> Path | None:
     path = _resolve_session_path(value)
     if path is None:
@@ -3508,6 +3515,32 @@ def _session_image_export_source_path(problem: dict[str, Any], kind: str) -> Pat
         return image_path
     board_path = _existing_session_image_path(problem.get("boardRenderPath"))
     return board_path or image_path
+
+
+def _session_problem_image_download_source_path(problem: dict[str, Any], variant: str) -> Path | None:
+    normalized = str(variant or "board").strip().lower()
+    if normalized == "raw":
+        keys = ("imagePath", "sourceImagePath", "boardRenderPath")
+    elif normalized == "source":
+        keys = ("sourceImagePath", "imagePath", "boardRenderPath")
+    else:
+        keys = ("boardRenderPath", "imagePath", "sourceImagePath")
+    for key in keys:
+        path = _existing_session_image_path(problem.get(key))
+        if path is not None:
+            return path
+    return None
+
+
+def _encode_image_as_png_bytes(path: Path) -> bytes:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        if image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+            image = image.convert("RGBA")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _write_session_image_export_zip(
@@ -4375,6 +4408,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/history":
             self._handle_session_history()
             return
+        if parsed.path == "/api/session/problem-image":
+            self._handle_session_problem_image(parsed)
+            return
         if parsed.path == "/api/file":
             self._handle_file(parsed)
             return
@@ -4932,6 +4968,51 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "missing": result["missing"],
             "mode": result["mode"],
         })
+
+    def _handle_session_problem_image(self, parsed) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "no session available")
+            return
+        query = parse_qs(parsed.query)
+        problem_id = str(query.get("problemId", query.get("problem_id", [""]))[0] or "").strip()
+        if not problem_id:
+            self.send_error(HTTPStatus.BAD_REQUEST, "problemId is required")
+            return
+        variant = str(query.get("variant", ["board"])[0] or "board")
+        problems = [problem for problem in session.get("problems", []) if isinstance(problem, dict)]
+        problem = next((problem for problem in problems if str(problem.get("id") or "") == problem_id), None)
+        if problem is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "problem not found")
+            return
+        source_path = _session_problem_image_download_source_path(problem, variant)
+        if source_path is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "problem image not found")
+            return
+        index = problems.index(problem) + 1
+        filename = _safe_problem_image_download_filename(index, problem.get("title"), problem_id)
+        try:
+            if source_path.suffix.lower() == ".png":
+                file_size = source_path.stat().st_size
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(file_size))
+                self.send_header("Content-Disposition", content_disposition_attachment(filename))
+                self.end_headers()
+                with source_path.open("rb") as source:
+                    shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
+                return
+            payload = _encode_image_as_png_bytes(source_path)
+        except OSError as exc:
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"failed to read problem image: {exc}")
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Content-Disposition", content_disposition_attachment(filename))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _handle_session_retry_ai(self) -> None:
         session = self.app_server.latest_session or load_latest_session()

@@ -2770,6 +2770,7 @@ function ItemsRail({
   items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
+  onDownloadItemImage, downloadingItemId,
 }){
   const dragId = useRef(null);
   const [draggingId, setDraggingId] = useState(null);
@@ -3180,6 +3181,13 @@ function ItemsRail({
 
         {items.map((it, i) => {
           const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
+          const isDownloading = downloadingItemId === it.id;
+          const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
+          const downloadTitle = isDownloading
+            ? '다운로드 준비 중'
+            : canDownloadItem
+              ? '이 자료 PNG 다운로드'
+              : '다운로드할 이미지가 아직 없습니다';
           return (
           <div
             key={it.id}
@@ -3241,6 +3249,21 @@ function ItemsRail({
               </div>
             </div>
             <div className="actions">
+              <button
+                className="icon-btn item-download-action"
+                type="button"
+                title={downloadTitle}
+                data-tooltip={downloadTitle}
+                aria-label={`${it.name} PNG 다운로드`}
+                disabled={!canDownloadItem || isDownloading}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (!canDownloadItem || isDownloading) return;
+                  onDownloadItemImage?.(it);
+                }}
+              >
+                {Icon.download}
+              </button>
               <button className="icon-btn" title="삭제" onClick={e => { e.stopPropagation(); removeItem(it.id); }}>
                 {Icon.trash}
               </button>
@@ -7026,6 +7049,46 @@ async function postExportImages(args = {}){
   return json;
 }
 
+function filenameFromContentDisposition(header, fallbackName = 'problem.png'){
+  const text = String(header || '');
+  const encoded = text.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1]).trim() || fallbackName;
+    } catch (_err) {
+      return fallbackName;
+    }
+  }
+  const quoted = text.match(/filename="([^"]+)"/i);
+  return quoted?.[1]?.trim() || fallbackName;
+}
+
+async function fetchProblemImageDownload(problemId){
+  const id = String(problemId || '').trim();
+  if (!id) throw new Error('자료 ID가 없습니다');
+  const resp = await fetch(`/api/session/problem-image?problemId=${encodeURIComponent(id)}&variant=board`);
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(body.trim() || `HTTP ${resp.status}`);
+  }
+  const blob = await resp.blob();
+  return {
+    blob,
+    fileName: filenameFromContentDisposition(resp.headers.get('Content-Disposition'), `${id}.png`),
+  };
+}
+
+function triggerBlobDownload(blob, fileName){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName || 'problem.png';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 async function postRetryAi(args, options = {}){
   const resp = await fetch('/api/session/retry-ai', {
     method: 'POST',
@@ -7124,6 +7187,7 @@ function App(){
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportingImages, setExportingImages] = useState(false);
+  const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
@@ -7537,6 +7601,27 @@ function App(){
       setExportingImages(false);
     }
   }, [session, items, fileName]);
+
+  const downloadItemImage = useCallback(async (item) => {
+    if (!session) {
+      showToast('다운로드할 세션이 없습니다');
+      return;
+    }
+    if (!item?.id) {
+      showToast('다운로드할 자료가 없습니다');
+      return;
+    }
+    setDownloadingItemId(item.id);
+    try {
+      const result = await fetchProblemImageDownload(item.id);
+      triggerBlobDownload(result.blob, result.fileName);
+      showToast('PNG 다운로드 시작');
+    } catch (e) {
+      showToast(`다운로드 실패: ${e.message}`);
+    } finally {
+      setDownloadingItemId(null);
+    }
+  }, [session]);
 
   const undoMutation = useCallback(async () => {
     if (historyStack.length === 0) return;
@@ -8312,6 +8397,8 @@ function App(){
           recentSessions={recentSessions}
           restoringSessionId={restoringSessionId}
           onRestoreRecentSession={restoreRecentSession}
+          onDownloadItemImage={downloadItemImage}
+          downloadingItemId={downloadingItemId}
         />
         {view === 'review' ? (
           <ReviewStage

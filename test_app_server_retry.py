@@ -244,6 +244,58 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertIn(("Content-Length", str(len(payload))), headers)
             self.assertEqual(payload, handler.wfile.getvalue())
 
+    def test_problem_image_download_streams_named_png_attachment(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            crop = tmpdir / "crop.png"
+            Image.new("RGB", (12, 8), "white").save(crop)
+            payload = crop.read_bytes()
+            session = {
+                "problems": [{
+                    "id": "p1",
+                    "title": "문항 1",
+                    "imagePath": crop.resolve().as_uri(),
+                    "boardRenderPath": crop.resolve().as_uri(),
+                }],
+            }
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "latest_session": session,
+            })()
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            parsed = app_server.urlparse("/api/session/problem-image?problemId=p1")
+            handler._handle_session_problem_image(parsed)
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            self.assertIn(("Content-Type", "image/png"), headers)
+            self.assertIn(("Content-Length", str(len(payload))), headers)
+            disposition = dict(headers)["Content-Disposition"]
+            self.assertIn("filename*=UTF-8''01_%EB%AC%B8%ED%95%AD_1.png", disposition)
+            self.assertEqual(payload, handler.wfile.getvalue())
+
+    def test_problem_image_download_returns_404_without_image(self):
+        session = {"problems": [{"id": "p1", "title": "문항 1"}]}
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = type("FakeServer", (), {
+            "latest_session": session,
+        })()
+        statuses = []
+        handler.send_error = lambda status, message=None: statuses.append((status, message))
+
+        parsed = app_server.urlparse("/api/session/problem-image?problemId=p1")
+        handler._handle_session_problem_image(parsed)
+
+        self.assertEqual([(app_server.HTTPStatus.NOT_FOUND, "problem image not found")], statuses)
+
 
 def _build_session(tmpdir: Path, *, present_page_ids: set[str]) -> dict:
     pages = []

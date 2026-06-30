@@ -22,7 +22,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-undo-order", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-item-download", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -139,9 +139,13 @@ class TestUiQueueActions(unittest.TestCase):
         rail_item = rail_item.split("</div>\n        );})}", 1)[0]
 
         self.assertIn('className="source-label"', rail_item)
+        self.assertIn('className="icon-btn item-download-action"', rail_item)
+        self.assertIn("이 자료 PNG 다운로드", rail_item)
+        self.assertIn("onDownloadItemImage?.(it)", rail_item)
         self.assertNotIn("statusShortLabel", rail_item)
         self.assertNotIn("status-tag", rail_item)
         self.assertIn(".item .meta .sub .source-label", html)
+        self.assertIn(".item .actions .item-download-action", html)
         self.assertIn("word-break: keep-all", html)
 
 
