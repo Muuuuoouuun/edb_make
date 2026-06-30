@@ -22,7 +22,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-stamp-size-controls", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-undo-order", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -122,6 +122,15 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("void applyManualPageSplit();", source)
         self.assertIn("manual-split-box", bundle)
         self.assertIn("스탬프", bundle)
+
+    def test_undo_restores_server_snapshot_order_directly(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        undo_source = source.split("const undoMutation = useCallback(async () => {", 1)[1]
+        undo_source = undo_source.split("  // Ctrl/Cmd+Z", 1)[0]
+
+        self.assertIn("const restored = await postRestore(snapshot);", undo_source)
+        self.assertIn("applySession(restored);", undo_source)
+        self.assertNotIn("adoptMutatedSession(restored", undo_source)
 
     def test_items_rail_keeps_step_and_source_on_one_line_without_status_text_chip(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

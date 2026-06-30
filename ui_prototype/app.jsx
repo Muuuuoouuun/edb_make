@@ -7546,7 +7546,7 @@ function App(){
     try {
       const restored = await postRestore(snapshot);
       setHistoryStack(prev => prev.slice(0, -1));
-      adoptMutatedSession(restored, session);
+      applySession(restored);
       refreshSessionHistory();
       showToast('이전 상태로 되돌렸어요');
     } catch (e) {
@@ -7555,7 +7555,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, session, adoptMutatedSession, refreshSessionHistory]);
+  }, [historyStack, applySession, refreshSessionHistory]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).

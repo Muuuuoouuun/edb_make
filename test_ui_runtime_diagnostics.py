@@ -334,7 +334,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-stamp-size-controls", board_html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-undo-order", board_html)
         self.assertNotIn("vendor/babel.min.js", board_html)
         self.assertNotIn('type="text/babel"', board_html)
         self.assertIn("EDB_REPORT_RUNTIME_ERROR", board_html)
