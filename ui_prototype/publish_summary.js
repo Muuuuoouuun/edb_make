@@ -288,6 +288,69 @@
     return parts.join(" · ");
   }
 
+  function normalizeEdbParts(raw, fallback = {}) {
+    const rawParts = Array.isArray(raw?.edbParts)
+      ? raw.edbParts
+      : Array.isArray(raw?.edb_parts)
+        ? raw.edb_parts
+        : [];
+    const parts = rawParts
+      .filter(part => part && typeof part === "object")
+      .map((part, index) => {
+        const edbPath = String(part.edbPath || part.edb_path || "").trim();
+        const edbFileUri = String(part.edbFileUri || part.edb_file_uri || "").trim();
+        const edbFileName = String(
+          part.edbFileName
+          || part.edb_file_name
+          || (edbPath ? edbPath.split(/[\\/]/).pop() : "")
+          || `classin_part${String(index + 1).padStart(2, "0")}.edb`
+        ).trim();
+        const exists = part.edbFileExists ?? part.edb_file_exists;
+        return {
+          ...part,
+          partIndex: positiveNumber(part.partIndex ?? part.part_index ?? index + 1) || index + 1,
+          part_index: positiveNumber(part.partIndex ?? part.part_index ?? index + 1) || index + 1,
+          partCount: positiveNumber(part.partCount ?? part.part_count ?? rawParts.length) || rawParts.length,
+          part_count: positiveNumber(part.partCount ?? part.part_count ?? rawParts.length) || rawParts.length,
+          edbFileName,
+          edb_file_name: edbFileName,
+          edbPath,
+          edb_path: edbPath,
+          edbFileUri,
+          edb_file_uri: edbFileUri,
+          edbFileExists: exists === undefined ? true : exists !== false,
+          edb_file_exists: exists === undefined ? true : exists !== false,
+          recordCount: positiveNumber(part.recordCount ?? part.record_count),
+          record_count: positiveNumber(part.recordCount ?? part.record_count),
+          pageCountHint: positiveNumber(part.pageCountHint ?? part.page_count_hint),
+          page_count_hint: positiveNumber(part.pageCountHint ?? part.page_count_hint),
+        };
+      });
+    if (!parts.length && (fallback.edbFileName || fallback.edbPath || fallback.edbFileUri)) {
+      const fallbackName = fallback.edbFileName || (fallback.edbPath ? fallback.edbPath.split(/[\\/]/).pop() : "classin.edb");
+      const fallbackExists = fallback.edbFileExists ?? fallback.edb_file_exists;
+      parts.push({
+        partIndex: 1,
+        part_index: 1,
+        partCount: 1,
+        part_count: 1,
+        edbFileName: fallbackName,
+        edb_file_name: fallbackName,
+        edbPath: fallback.edbPath || "",
+        edb_path: fallback.edbPath || "",
+        edbFileUri: fallback.edbFileUri || "",
+        edb_file_uri: fallback.edbFileUri || "",
+        edbFileExists: fallbackExists === undefined ? true : fallbackExists !== false,
+        edb_file_exists: fallbackExists === undefined ? true : fallbackExists !== false,
+        recordCount: positiveNumber(fallback.recordCount),
+        record_count: positiveNumber(fallback.recordCount),
+        pageCountHint: positiveNumber(fallback.pageCountHint),
+        page_count_hint: positiveNumber(fallback.pageCountHint),
+      });
+    }
+    return parts;
+  }
+
   function normalizePublishSummary(raw, session = null) {
     if (!raw || typeof raw !== "object") return null;
     const recordCount = positiveNumber(raw.recordCount ?? raw.record_count ?? raw.recordCountActual ?? raw.record_count_actual);
@@ -300,6 +363,15 @@
     const edbPath = String(raw.edbPath || raw.edb_path || "").trim();
     const outputDir = String(raw.outputDir || raw.output_dir || session?.output_dir || session?.outputDir || "").trim();
     const edbFileUri = String(raw.edbFileUri || raw.edb_file_uri || session?.edb_file_uri || session?.edbFileUri || "").trim();
+    const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
+    const edbParts = normalizeEdbParts(raw, {
+      edbFileName,
+      edbPath,
+      edbFileUri,
+      edbFileExists,
+      recordCount: recordCountActual || recordCount,
+      pageCountHint,
+    });
     const classinReview = raw.classinReview || raw.classin_review || session?.classinReview || session?.classin_review || {};
     const classinReviewStatus = String(
       raw.classinReviewStatus
@@ -475,15 +547,23 @@
       || raw.layout_diagnostics_label
       || formatLayoutDiagnosticsLabel(layoutDiagnostics)
     ).trim();
-    const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
     const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
-    if (!edbFileName && !edbPath && !edbFileUri) return null;
+    if (!edbFileName && !edbPath && !edbFileUri && !edbParts.length) return null;
+    const normalizedEdbPartCount = edbParts.length
+      ? edbParts.length
+      : positiveNumber(raw.edbPartCount ?? raw.edb_part_count);
+    const normalizedEdbSplit = edbParts.length
+      ? edbParts.length > 1
+      : Boolean(raw.edbSplit ?? raw.edb_split);
     const summary = {
       validated: raw.validated !== false,
       statusLabel: String(raw.statusLabel || raw.status_label || "제작 완료"),
       edbFileName: edbFileName || (edbPath ? edbPath.split("/").pop() : "classin.edb"),
       edbPath,
       edbFileUri,
+      edbParts,
+      edbPartCount: normalizedEdbPartCount,
+      edbSplit: normalizedEdbSplit,
       outputDir,
       classinReview,
       classinReviewStatus,
@@ -531,8 +611,10 @@
       outerSize,
       publishedAt: String(raw.publishedAt || raw.published_at || "").trim(),
     };
-    summary.canDownload = Boolean(summary.edbFileUri) && summary.edbFileExists !== false;
-    summary.canOpenEdbFile = Boolean(summary.edbPath) && summary.edbFileExists !== false;
+    summary.canDownload = summary.edbParts.some(part => Boolean(part.edbFileUri) && part.edbFileExists !== false)
+      || (Boolean(summary.edbFileUri) && summary.edbFileExists !== false);
+    summary.canOpenEdbFile = summary.edbParts.some(part => Boolean(part.edbPath) && part.edbFileExists !== false)
+      || (Boolean(summary.edbPath) && summary.edbFileExists !== false);
     summary.canOpenOutputDir = Boolean(summary.outputDir) && summary.outputDirExists !== false;
     summary.canOpenClassinHandoff = Boolean(summary.classinHandoffMarkdownUri || summary.classinHandoffUri);
     summary.canMarkClassinReviewComplete = summary.canOpenEdbFile && !summary.classinReviewPassed;

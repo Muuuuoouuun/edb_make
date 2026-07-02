@@ -22,7 +22,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-scaled-reflow", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-scaled-reflow-edb-split", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -36,7 +36,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_page_png_registration_does_not_auto_open_output_folder(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent);", 1)[1]
+        register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent, { edbName: fileName });", 1)[1]
         register_branch = register_branch.split("} catch (e) {", 1)[0]
 
         self.assertIn("페이지 PNG 등록", register_branch)
@@ -66,6 +66,40 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn('aria-label="초기화"', actions)
         self.assertIn("onClick={onReset}", actions)
         self.assertIn("{Icon.reset}", actions)
+
+    def test_queue_recognition_ignores_stale_queue_results(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        recognition_branch = source.split("if (isRecognition) {", 1)[1]
+        recognition_branch = recognition_branch.split("setLoading({", 1)[0]
+        confirm_branch = source.split("if (review.kind === 'queue-recognition') {", 1)[1]
+        confirm_branch = confirm_branch.split("} else if (review.kind === 'retry-ai') {", 1)[0]
+
+        self.assertIn("const pendingFileKeysRef = useRef(new Set());", source)
+        self.assertIn("const queueGenerationRef = useRef(0);", source)
+        self.assertIn("const queueGeneration = queueGenerationRef.current;", recognition_branch)
+        self.assertIn("if (!queueRequestIsCurrent(queueGeneration, fileKeys))", recognition_branch)
+        self.assertIn("queueGeneration,", recognition_branch)
+        self.assertIn("if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || []))", confirm_branch)
+
+    def test_session_history_refresh_ignores_stale_responses(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        refresh_source = source.split("const refreshSessionHistory = useCallback(async () => {", 1)[1]
+        refresh_source = refresh_source.split("const dismissBackgroundJob", 1)[0]
+
+        self.assertIn("const sessionHistoryRequestRef = useRef(0);", source)
+        self.assertIn("setRecentSessionsAuthoritative", source)
+        self.assertIn("const requestId = sessionHistoryRequestRef.current + 1;", refresh_source)
+        self.assertIn("if (requestId === sessionHistoryRequestRef.current)", refresh_source)
+
+    def test_reset_aborts_background_jobs_and_clears_stale_review_state(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        reset_source = source.split("const resetSession = useCallback(async () => {", 1)[1]
+        reset_source = reset_source.split("const shutdownApp", 1)[0]
+
+        self.assertIn("jobControllersRef.current.forEach(controller => controller.abort());", reset_source)
+        self.assertIn("setBackgroundJobs([]);", reset_source)
+        self.assertIn("setRecognitionReview(null);", reset_source)
+        self.assertIn("setPendingFilesTracked([]);", reset_source)
 
     def test_queue_recognition_review_copy_points_to_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

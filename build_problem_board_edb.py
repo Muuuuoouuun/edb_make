@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -77,6 +78,7 @@ V1_LAYOUT_MARGIN_Y_PX = 24.0
 V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
 V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
+CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 CHOICE_BOTTOM_SAFE_PADDING_PX = 44.0
 PROBLEM_CROP_TOP_SAFE_PADDING_PX = 36
 PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 52
@@ -224,11 +226,16 @@ def _problem_scale_ratio(
     placement: "ProblemPlacement",
     rendered_width_px: float,
     rendered_height_px: float,
+    *,
+    ignore_height_limit: bool = False,
 ) -> float:
     requested = _clamp_placement_scale_ratio(entry.placement_scale_ratio)
     if requested is None:
         return 1.0
     max_width_scale = (CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX) / max(rendered_width_px, 1.0)
+    if ignore_height_limit:
+        max_scale = max(PLACEMENT_SCALE_MIN, min(PLACEMENT_SCALE_MAX, max_width_scale))
+        return max(PLACEMENT_SCALE_MIN, min(max_scale, requested))
     slot_height_px = max(
         rendered_height_px,
         (placement.snapped_next_start_y_pages - placement.start_y_pages) * CANVAS_WIDTH,
@@ -239,6 +246,10 @@ def _problem_scale_ratio(
         min(PLACEMENT_SCALE_MAX, max_width_scale, max_height_scale),
     )
     return max(PLACEMENT_SCALE_MIN, min(max_scale, requested))
+
+
+def _entry_uses_continuous_page_flow(entry: "ProblemEntry") -> bool:
+    return _normalize_input_intent(entry.input_intent) == "page-as-is"
 
 
 def _resolve_board_theme(board_theme: str | None) -> str:
@@ -258,6 +269,40 @@ def _resolve_chalk_color(board_theme: str | None) -> tuple[int, int, int]:
 def _normalize_processing_step(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in PROCESSING_STEPS else PROCESSING_STEP_RAW
+
+
+def _default_processing_step_for_problem(problem: ProblemUnit) -> str:
+    raw_step = (
+        problem.metadata.get("processing_step")
+        or problem.metadata.get("processingStep")
+        or problem.metadata.get("step")
+    )
+    if raw_step:
+        return _normalize_processing_step(raw_step)
+    if _is_page_as_is_problem(problem):
+        return PROCESSING_STEP_RECONSTRUCT
+    return PROCESSING_STEP_RAW
+
+
+def _is_page_as_is_problem(problem: ProblemUnit) -> bool:
+    raw_intent = problem.metadata.get("input_intent") or problem.metadata.get("inputIntent")
+    return _normalize_input_intent(str(raw_intent or "")) == "page-as-is"
+
+
+def _default_placement_scale_for_problem(problem: ProblemUnit) -> float | None:
+    raw_scale = (
+        problem.metadata.get("placement_scale_ratio")
+        or problem.metadata.get("placementScaleRatio")
+        or problem.metadata.get("scaleRatio")
+    )
+    if raw_scale is not None:
+        try:
+            return _clamp_placement_scale_ratio(float(raw_scale))
+        except (TypeError, ValueError):
+            return None
+    if _is_page_as_is_problem(problem):
+        return PLACEMENT_SCALE_MAX
+    return None
 
 
 # Minimum width (px) for a problem crop before chalk rendering. Smaller crops
@@ -384,22 +429,50 @@ def _trim_edge_vertical_guides(image: Image.Image) -> Image.Image:
 
 def _trim_edge_attached_page_chrome(image: Image.Image) -> Image.Image:
     """Trim side chrome such as subject tabs attached to the crop edge."""
-    if np is None:
-        return image
     width, height = image.size
     if width <= 80 or height <= 80:
         return image
 
     rgb = image.convert("RGB")
-    arr = np.asarray(rgb, dtype=np.uint8)
-    rgb_float = arr.astype(np.float32)
-    luminance = (
-        0.299 * rgb_float[..., 0]
-        + 0.587 * rgb_float[..., 1]
-        + 0.114 * rgb_float[..., 2]
-    )
-    saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
-    foreground = (luminance <= 246.0) | (saturation >= 24.0)
+    if np is not None:
+        arr = np.asarray(rgb, dtype=np.uint8)
+        rgb_float = arr.astype(np.float32)
+        luminance = (
+            0.299 * rgb_float[..., 0]
+            + 0.587 * rgb_float[..., 1]
+            + 0.114 * rgb_float[..., 2]
+        )
+        saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
+        foreground = (luminance <= 246.0) | (saturation >= 24.0)
+
+        def is_foreground(x: int, y: int) -> bool:
+            return bool(foreground[y, x])
+
+        def new_visited() -> Any:
+            return np.zeros((height, scan_width), dtype=bool)
+
+        def visited_get(visited: Any, y: int, x: int) -> bool:
+            return bool(visited[y, x])
+
+        def visited_set(visited: Any, y: int, x: int) -> None:
+            visited[y, x] = True
+    else:
+        pixels = rgb.load()
+
+        def is_foreground(x: int, y: int) -> bool:
+            red, green, blue = pixels[x, y]
+            luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            saturation = max(red, green, blue) - min(red, green, blue)
+            return luminance <= 246.0 or saturation >= 24.0
+
+        def new_visited() -> Any:
+            return [[False] * scan_width for _ in range(height)]
+
+        def visited_get(visited: Any, y: int, x: int) -> bool:
+            return bool(visited[y][x])
+
+        def visited_set(visited: Any, y: int, x: int) -> None:
+            visited[y][x] = True
 
     scan_width = min(
         width,
@@ -419,17 +492,17 @@ def _trim_edge_attached_page_chrome(image: Image.Image) -> Image.Image:
             x_min, x_max = width - scan_width, width
             edge_columns = range(max(width - seed_width, x_min), width)
 
-        visited = np.zeros((height, scan_width), dtype=bool)
+        visited = new_visited()
         components: list[tuple[int, int, int, int, int]] = []
         for y in range(height):
             for x in edge_columns:
-                if not foreground[y, x]:
+                if not is_foreground(x, y):
                     continue
                 local_x = x - x_min
-                if local_x < 0 or local_x >= scan_width or visited[y, local_x]:
+                if local_x < 0 or local_x >= scan_width or visited_get(visited, y, local_x):
                     continue
                 stack = [(x, y)]
-                visited[y, local_x] = True
+                visited_set(visited, y, local_x)
                 min_x = max_x = x
                 min_y = max_y = y
                 count = 0
@@ -444,9 +517,9 @@ def _trim_edge_attached_page_chrome(image: Image.Image) -> Image.Image:
                         if nx < x_min or nx >= x_max or ny < 0 or ny >= height:
                             continue
                         lx = nx - x_min
-                        if visited[ny, lx] or not foreground[ny, nx]:
+                        if visited_get(visited, ny, lx) or not is_foreground(nx, ny):
                             continue
-                        visited[ny, lx] = True
+                        visited_set(visited, ny, lx)
                         stack.append((nx, ny))
                 components.append((min_x, min_y, max_x, max_y, count))
         return components
@@ -479,35 +552,54 @@ def _trim_edge_attached_page_chrome(image: Image.Image) -> Image.Image:
 
 def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
     """Remove the blue 평가원 copyright footer when it is outside the problem."""
-    if np is None:
-        return image
     width, height = image.size
     if width <= 80 or height <= 120:
         return image
 
     rgb = image.convert("RGB")
-    arr = np.asarray(rgb, dtype=np.int16)
     scan_top = int(round(height * (1.0 - BOTTOM_WATERMARK_SCAN_RATIO)))
     scan_top = max(scan_top, int(round(height * BOTTOM_WATERMARK_MIN_Y_RATIO)))
     if scan_top >= height - 2:
         return image
-    lower = arr[scan_top:, :, :]
-    red = lower[..., 0]
-    green = lower[..., 1]
-    blue = lower[..., 2]
-    saturation = lower.max(axis=2) - lower.min(axis=2)
-    blue_mask = (
-        (blue >= red + BOTTOM_WATERMARK_BLUE_DELTA)
-        & (blue >= green + 8)
-        & (saturation >= 32)
-    )
-    if int(np.count_nonzero(blue_mask)) < max(18, int(round(width * height * 0.00035))):
-        return image
-
-    rows = np.where(np.count_nonzero(blue_mask, axis=1) >= max(4, int(round(width * 0.006))))[0]
-    if rows.size == 0:
-        return image
-    first_y = scan_top + int(rows.min())
+    if np is not None:
+        arr = np.asarray(rgb, dtype=np.int16)
+        lower = arr[scan_top:, :, :]
+        red = lower[..., 0]
+        green = lower[..., 1]
+        blue = lower[..., 2]
+        saturation = lower.max(axis=2) - lower.min(axis=2)
+        blue_mask = (
+            (blue >= red + BOTTOM_WATERMARK_BLUE_DELTA)
+            & (blue >= green + 8)
+            & (saturation >= 32)
+        )
+        if int(np.count_nonzero(blue_mask)) < max(18, int(round(width * height * 0.00035))):
+            return image
+        rows = np.where(np.count_nonzero(blue_mask, axis=1) >= max(4, int(round(width * 0.006))))[0]
+        if rows.size == 0:
+            return image
+        first_y = scan_top + int(rows.min())
+    else:
+        pixels = rgb.load()
+        min_row_blue_count = max(4, int(round(width * 0.006)))
+        total_blue_count = 0
+        first_y: int | None = None
+        for y in range(scan_top, height):
+            row_blue_count = 0
+            for x in range(width):
+                red, green, blue = pixels[x, y]
+                saturation = max(red, green, blue) - min(red, green, blue)
+                if (
+                    blue >= red + BOTTOM_WATERMARK_BLUE_DELTA
+                    and blue >= green + 8
+                    and saturation >= 32
+                ):
+                    row_blue_count += 1
+            total_blue_count += row_blue_count
+            if first_y is None and row_blue_count >= min_row_blue_count:
+                first_y = y
+        if total_blue_count < max(18, int(round(width * height * 0.00035))) or first_y is None:
+            return image
     if first_y < int(round(height * BOTTOM_WATERMARK_MIN_Y_RATIO)):
         return image
     target_bottom = max(1, first_y - BOTTOM_WATERMARK_TRIM_PADDING_PX)
@@ -518,24 +610,52 @@ def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
 
 def _erase_corner_page_badges(image: Image.Image) -> Image.Image:
     """Erase small page-number badges glued to the crop corners."""
-    if np is None:
-        return image
     width, height = image.size
     if width <= 80 or height <= 80:
         return image
 
     mode = image.mode
     rgba = image.convert("RGBA")
-    arr = np.asarray(rgba, dtype=np.uint8)
-    rgb_float = arr[..., :3].astype(np.float32)
-    luminance = (
-        0.299 * rgb_float[..., 0]
-        + 0.587 * rgb_float[..., 1]
-        + 0.114 * rgb_float[..., 2]
-    )
-    saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
-    alpha = arr[..., 3]
-    foreground = (alpha > 24) & ((luminance <= 246.0) | (saturation >= 24.0))
+    if np is not None:
+        arr = np.asarray(rgba, dtype=np.uint8)
+        rgb_float = arr[..., :3].astype(np.float32)
+        luminance = (
+            0.299 * rgb_float[..., 0]
+            + 0.587 * rgb_float[..., 1]
+            + 0.114 * rgb_float[..., 2]
+        )
+        saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
+        alpha = arr[..., 3]
+        foreground = (alpha > 24) & ((luminance <= 246.0) | (saturation >= 24.0))
+
+        def is_foreground(x: int, y: int) -> bool:
+            return bool(foreground[y, x])
+
+        def new_visited() -> Any:
+            return np.zeros((roi_height, roi_width), dtype=bool)
+
+        def visited_get(visited: Any, y: int, x: int) -> bool:
+            return bool(visited[y, x])
+
+        def visited_set(visited: Any, y: int, x: int) -> None:
+            visited[y, x] = True
+    else:
+        pixels = rgba.load()
+
+        def is_foreground(x: int, y: int) -> bool:
+            red, green, blue, alpha = pixels[x, y]
+            luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            saturation = max(red, green, blue) - min(red, green, blue)
+            return alpha > 24 and (luminance <= 246.0 or saturation >= 24.0)
+
+        def new_visited() -> Any:
+            return [[False] * roi_width for _ in range(roi_height)]
+
+        def visited_get(visited: Any, y: int, x: int) -> bool:
+            return bool(visited[y][x])
+
+        def visited_set(visited: Any, y: int, x: int) -> None:
+            visited[y][x] = True
 
     roi_width = min(width, max(48, min(CORNER_PAGE_BADGE_SCAN_MAX_PX, int(round(width * CORNER_PAGE_BADGE_SCAN_RATIO)))))
     roi_height = min(height, max(48, min(CORNER_PAGE_BADGE_SCAN_MAX_PX, int(round(height * CORNER_PAGE_BADGE_SCAN_RATIO)))))
@@ -551,25 +671,24 @@ def _erase_corner_page_badges(image: Image.Image) -> Image.Image:
     )
 
     for horizontal, vertical, left, top in corner_specs:
-        roi_mask = foreground[top:top + roi_height, left:left + roi_width]
-        visited = np.zeros((roi_height, roi_width), dtype=bool)
+        visited = new_visited()
         seeds: list[tuple[int, int]] = []
         x_edge = range(0, seed_px) if horizontal == "left" else range(roi_width - seed_px, roi_width)
         y_edge = range(roi_height - seed_px, roi_height) if vertical == "bottom" else range(0, seed_px)
         for y in range(roi_height):
             for x in x_edge:
-                if roi_mask[y, x]:
+                if is_foreground(left + x, top + y):
                     seeds.append((x, y))
         for y in y_edge:
             for x in range(roi_width):
-                if roi_mask[y, x]:
+                if is_foreground(left + x, top + y):
                     seeds.append((x, y))
 
         for seed_x, seed_y in seeds:
-            if visited[seed_y, seed_x] or not roi_mask[seed_y, seed_x]:
+            if visited_get(visited, seed_y, seed_x) or not is_foreground(left + seed_x, top + seed_y):
                 continue
             stack = [(seed_x, seed_y)]
-            visited[seed_y, seed_x] = True
+            visited_set(visited, seed_y, seed_x)
             min_x = max_x = seed_x
             min_y = max_y = seed_y
             count = 0
@@ -583,9 +702,9 @@ def _erase_corner_page_badges(image: Image.Image) -> Image.Image:
                 for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
                     if nx < 0 or nx >= roi_width or ny < 0 or ny >= roi_height:
                         continue
-                    if visited[ny, nx] or not roi_mask[ny, nx]:
+                    if visited_get(visited, ny, nx) or not is_foreground(left + nx, top + ny):
                         continue
-                    visited[ny, nx] = True
+                    visited_set(visited, ny, nx)
                     stack.append((nx, ny))
 
             component_width = max_x - min_x + 1
@@ -1054,6 +1173,8 @@ class ProblemEntry:
     placement_y_ratio: float | None = None
     placement_scale_ratio: float | None = None
     processing_step: str = PROCESSING_STEP_RAW
+    input_intent: str | None = None
+    force_full_page_bounds: bool = False
 
 
 @dataclass(slots=True)
@@ -1085,13 +1206,44 @@ class _ProblemEntryDraft:
     overflow_allowed: bool
     reading_heavy: bool
     risk_flags: list[str]
+    processing_step: str
+    placement_scale_ratio: float | None
+    input_intent: str | None
+    force_full_page_bounds: bool
     asset_task: _ProblemAssetTask
+
+
+@dataclass(slots=True)
+class _ImageOnlyRecordImage:
+    crop_path: Path
+    board_render_path: Path
+    image_bytes: bytes
+    secondary_bytes: bytes
+    width_px: int
+    height_px: int
+    scale_ratio: float | None = None
 
 
 def _resolve_problem_asset_worker_count(task_count: int) -> int:
     if task_count <= 1:
         return 1
     return min(4, task_count)
+
+
+def _resolve_image_record_worker_count(item_count: int) -> int:
+    if item_count <= 1:
+        return 1
+    max_workers = max(1, min(4, item_count, os.cpu_count() or 2))
+    raw_worker_count = os.environ.get("EDB_IMAGE_RECORD_WORKERS", "").strip()
+    if raw_worker_count:
+        try:
+            requested_workers = int(raw_worker_count)
+        except ValueError:
+            requested_workers = max_workers
+        if requested_workers <= 0:
+            return 1
+        return max(1, min(max_workers, requested_workers))
+    return max_workers
 
 
 def _load_text_fallback_font(size: int) -> ImageFont.ImageFont:
@@ -1278,6 +1430,14 @@ def estimate_height_pages(image_size: tuple[int, int], template: LayoutTemplate)
     width_px, height_px = image_size
     available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
     scaled_height_px = available_width_px * (height_px / max(width_px, 1))
+    estimated = scaled_height_px / CANVAS_WIDTH
+    return max(MIN_HEIGHT_PAGES, min(MAX_HEIGHT_PAGES, estimated))
+
+
+def estimate_page_as_is_height_pages(image_size: tuple[int, int], template: LayoutTemplate) -> float:
+    width_px, height_px = image_size
+    display_width_px = _v1_default_display_width_px(template)
+    scaled_height_px = display_width_px * (height_px / max(width_px, 1))
     estimated = scaled_height_px / CANVAS_WIDTH
     return max(MIN_HEIGHT_PAGES, min(MAX_HEIGHT_PAGES, estimated))
 
@@ -2799,6 +2959,11 @@ def build_problem_entries(
                 if problem.metadata.get("hwp_text_fallback_problem")
                 else ""
             )
+            problem_input_intent = _normalize_input_intent(
+                str(problem.metadata.get("input_intent") or problem.metadata.get("inputIntent") or "")
+            )
+            if problem_input_intent == "auto":
+                problem_input_intent = ""
             drafts.append(
                 _ProblemEntryDraft(
                     problem_id=problem.unit_id,
@@ -2815,6 +2980,10 @@ def build_problem_entries(
                     overflow_allowed=reading_heavy,
                     reading_heavy=reading_heavy,
                     risk_flags=_collect_problem_risk_flags(problem),
+                    processing_step=_default_processing_step_for_problem(problem),
+                    placement_scale_ratio=_default_placement_scale_for_problem(problem),
+                    input_intent=problem_input_intent or None,
+                    force_full_page_bounds=bool(problem.metadata.get("force_full_page_bounds")),
                     asset_task=_ProblemAssetTask(
                         source_image=prepared_page.image,
                         bounds=merged_box,
@@ -2832,6 +3001,11 @@ def build_problem_entries(
     crop_sizes = _render_problem_assets([draft.asset_task for draft in drafts])
     entries: list[ProblemEntry] = []
     for draft, crop_size in zip(drafts, crop_sizes):
+        actual_height_pages = (
+            estimate_page_as_is_height_pages(crop_size, template)
+            if draft.input_intent == "page-as-is"
+            else estimate_height_pages(crop_size, template)
+        )
         entries.append(
             ProblemEntry(
                 problem_id=draft.problem_id,
@@ -2845,10 +3019,14 @@ def build_problem_entries(
                 crop_path=draft.crop_path,
                 board_render_path=draft.board_render_path,
                 blocks=draft.blocks,
-                actual_height_pages=estimate_height_pages(crop_size, template),
+                actual_height_pages=actual_height_pages,
                 overflow_allowed=draft.overflow_allowed,
                 reading_heavy=draft.reading_heavy,
                 risk_flags=draft.risk_flags,
+                placement_scale_ratio=draft.placement_scale_ratio,
+                processing_step=draft.processing_step,
+                input_intent=draft.input_intent,
+                force_full_page_bounds=draft.force_full_page_bounds,
             )
         )
     return entries
@@ -3753,11 +3931,19 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
             message = f"문항 번호 {label}가 각 {min_occurrences}회 등장합니다."
         else:
             message = f"문항 번호 {label} 범위에서 중복 번호가 {sum(counts[number] - 1 for number in numbers)}개 있습니다."
-        classification = "alternate_section" if _duplicate_number_group_looks_like_alternate_section(
-            start=start,
-            end=end,
-            min_occurrences=min_occurrences,
-            max_occurrences=max_occurrences,
+        classification = "alternate_section" if (
+            _duplicate_number_group_looks_like_alternate_section(
+                start=start,
+                end=end,
+                min_occurrences=min_occurrences,
+                max_occurrences=max_occurrences,
+            )
+            or _duplicate_number_group_looks_like_common_plus_alternate_sections(
+                numbers=numbers,
+                counts=counts,
+                min_occurrences=min_occurrences,
+                max_occurrences=max_occurrences,
+            )
         ) else "duplicate"
         blocking = classification != "alternate_section"
         groups.append(
@@ -3794,6 +3980,46 @@ def _duplicate_number_group_looks_like_alternate_section(
         and min_occurrences == max_occurrences
         and max_occurrences in {2, 3}
     )
+
+
+def _duplicate_number_group_looks_like_common_plus_alternate_sections(
+    *,
+    numbers: Sequence[int],
+    counts: dict[int, int],
+    min_occurrences: int,
+    max_occurrences: int,
+) -> bool:
+    if min_occurrences < 2 or max_occurrences <= min_occurrences:
+        return False
+    ordered = sorted(number for number in numbers if counts.get(number, 0) > 1)
+    if not ordered or ordered[0] != 1 or ordered[-1] < 25 or ordered[-1] > 45:
+        return False
+    if ordered != list(range(ordered[0], ordered[-1] + 1)):
+        return False
+
+    high_count_numbers = [number for number in ordered if counts.get(number, 0) == max_occurrences]
+    low_count_numbers = [number for number in ordered if counts.get(number, 0) == min_occurrences]
+    if not high_count_numbers or not low_count_numbers:
+        return False
+    high_start = high_count_numbers[0]
+    high_end = high_count_numbers[-1]
+    high_range = list(range(high_start, high_end + 1))
+    if high_count_numbers != high_range:
+        return False
+    if high_end != ordered[-1]:
+        return False
+    if high_start < 20:
+        return False
+
+    high_range_size = high_end - high_start + 1
+    low_range_size = high_start - ordered[0]
+    if not (6 <= high_range_size <= 12 and low_range_size >= 15):
+        return False
+    if any(counts.get(number, 0) != min_occurrences for number in range(ordered[0], high_start)):
+        return False
+
+    elective_multiplier = max_occurrences / max(1, min_occurrences)
+    return elective_multiplier in {2, 3}
 
 
 DUPLICATE_PROBLEM_NUMBER_RISK_FLAG = "duplicate_problem_number"
@@ -4803,7 +5029,11 @@ def build_ui_session(
         name="academy-default",
         board_page_count=max(50, len(placements) * 2 or 50),
         base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
-        metadata={"placement_mode": "one-problem-per-page"},
+        metadata={
+            "placement_mode": "continuous-page-as-is"
+            if resolved_input_intent == "page-as-is"
+            else "one-problem-per-page"
+        },
     )
 
     # Map page_id → PageModel for risk-flag lookup, and page_id → list[problem_id]
@@ -4837,7 +5067,10 @@ def build_ui_session(
         problem_flags = list(placement.get("risk_flags") or [])
         problem_flags.extend(reason for reason in page_flags if reason in _GLOBAL_RISK_REASONS)
         problem_id = str(placement["problem_id"])
-        problem_metadata = problem_metadata_by_id.get(problem_id)
+        problem_metadata = problem_metadata_by_id.get(problem_id) or {}
+        problem_input_intent = _normalize_input_intent(
+            str(problem_metadata.get("input_intent") or problem_metadata.get("inputIntent") or resolved_input_intent)
+        )
         if _problem_passage_continues_across_pages(problem_metadata):
             problem_flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
         problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
@@ -4846,6 +5079,11 @@ def build_ui_session(
             placement.get("processing_step") or placement.get("step")
         )
         layout_diagnostics = _layout_diagnostic_from_placement(placement)
+        problem_placement_mode = (
+            "continuous-page-as-is"
+            if problem_input_intent == "page-as-is"
+            else "one-problem-per-page"
+        )
         problems.append(
             {
                 "id": problem_id,
@@ -4880,6 +5118,12 @@ def build_ui_session(
                 "placementScaleRatio": float(placement.get("placement_scale_ratio") or 1.0),
                 "step": processing_step,
                 "processingStep": processing_step,
+                "inputIntent": problem_input_intent,
+                "input_intent": problem_input_intent,
+                "forceFullPageBounds": bool(problem_metadata.get("force_full_page_bounds")),
+                "force_full_page_bounds": bool(problem_metadata.get("force_full_page_bounds")),
+                "placementMode": problem_placement_mode,
+                "placement_mode": problem_placement_mode,
                 "recordMode": str(placement.get("record_mode") or record_mode),
                 "textRecordCount": int(placement.get("text_record_count", 0)),
                 "imageRecordCount": int(placement.get("image_record_count", 0)),
@@ -5047,6 +5291,7 @@ def write_classin_handoff_manifest(
     *,
     source_paths: Sequence[Path],
     edb_path: Path,
+    edb_parts: list[dict[str, Any]] | None = None,
     ui_session: dict[str, Any],
     summary: dict[str, Any],
     template: LayoutTemplate,
@@ -5105,6 +5350,14 @@ def write_classin_handoff_manifest(
         layout_diagnostics = _layout_diagnostics_from_problems(problems)
     ready_for_classin = bool(classin_preflight.get("passed")) and not blocking_duplicate_problem_number_groups
     handoff_status = "ready_for_classin_review" if ready_for_classin else "needs_attention_before_classin"
+    actual_edb_page_count_hint = max(
+        [
+            int(part.get("pageCountHint") or part.get("page_count_hint") or 0)
+            for part in (edb_parts or [])
+            if isinstance(part, dict)
+        ],
+        default=min(int(template.board_page_count), CLASSIN_MAX_BOARD_PAGE_COUNT),
+    )
     payload = {
         "status": handoff_status,
         "readyForClassIn": ready_for_classin,
@@ -5114,12 +5367,16 @@ def write_classin_handoff_manifest(
         "outputDir": str(output_dir.resolve()),
         "edbPath": str(edb_path.resolve()),
         "edbFileName": edb_path.name,
+        "edbParts": [dict(part) for part in (edb_parts or [])],
+        "edbPartCount": len(edb_parts or []) or 1,
+        "edbSplit": bool(edb_parts and len(edb_parts) > 1),
         "expectedRecordCount": expected_record_count,
         "expectedCoreProblemCount": int(ui_session.get("core_problem_count") or 0),
         "expectedSupplementalItemCount": int(ui_session.get("supplemental_item_count") or 0),
         "detectedProblemCount": int(ui_session.get("detected_problem_count") or expected_record_count),
         "sourcePageCount": int(ui_session.get("source_page_count") or 0),
-        "classinPageCountHint": int(template.board_page_count),
+        "classinPageCountHint": actual_edb_page_count_hint,
+        "globalBoardPageCountEstimate": int(template.board_page_count),
         "recordMode": str(summary.get("record_mode") or ui_session.get("record_mode") or ""),
         "cropFormat": str(summary.get("crop_format") or ui_session.get("crop_format") or ""),
         "boardTheme": str(summary.get("board_theme") or ui_session.get("board_theme") or ""),
@@ -5247,6 +5504,10 @@ def write_classin_handoff_manifest(
             + (f" [{issue.get('problemId')}]" if issue.get("problemId") else "")
             for issue in classin_preflight["issues"]
         ]
+    edb_part_lines = [
+        f"- Part {part.get('partIndex') or part.get('part_index')}: `{part.get('edbPath') or part.get('edb_path')}`"
+        for part in payload["edbParts"]
+    ]
     markdown_path.write_text(
         "\n".join(
             [
@@ -5255,6 +5516,11 @@ def write_classin_handoff_manifest(
                 f"- Handoff status: `{payload['status']}`",
                 f"- Ready for ClassIn: {'yes' if payload['readyForClassIn'] else 'no'}",
                 f"- EDB: `{payload['edbPath']}`",
+                *(
+                    ["", "## EDB Parts", *edb_part_lines]
+                    if len(edb_part_lines) > 1
+                    else []
+                ),
                 f"- Expected records: {payload['expectedRecordCount']}",
                 f"- Core problems: {payload['expectedCoreProblemCount']}",
                 f"- Supplemental items: {payload['expectedSupplementalItemCount']}",
@@ -5385,6 +5651,9 @@ def placement_inputs(
                 },
                 "risk_flags": list(entry.risk_flags),
                 "processing_step": _normalize_processing_step(entry.processing_step),
+                "placement_scale_ratio": _clamp_placement_scale_ratio(entry.placement_scale_ratio) or 1.0,
+                "input_intent": entry.input_intent,
+                "force_full_page_bounds": entry.force_full_page_bounds,
             },
         )
         for entry in problem_entries
@@ -5447,6 +5716,64 @@ def _ensure_template_board_capacity(
     template.board_page_count = max(template.board_page_count, int(math.ceil(required_pages)))
 
 
+def template_with_board_page_count(template: LayoutTemplate, board_page_count: int) -> LayoutTemplate:
+    return LayoutTemplate(
+        name=template.name,
+        board_page_count=max(1, int(board_page_count)),
+        base_slot_height_pages=template.base_slot_height_pages,
+        fixed_left_zone_ratio=template.fixed_left_zone_ratio,
+        preserve_right_writing_zone=template.preserve_right_writing_zone,
+        default_overflow_subjects=set(template.default_overflow_subjects),
+        metadata=dict(template.metadata),
+    )
+
+
+def _entries_flow_end_pages(problem_entries: list[ProblemEntry], template: LayoutTemplate) -> float:
+    placements = place_problems(placement_inputs(problem_entries), template=template)
+    if not placements:
+        return 0.0
+    return max(
+        max(placement.actual_bottom_y_pages, placement.snapped_next_start_y_pages)
+        for placement in placements
+    )
+
+
+def split_problem_entries_for_classin_page_limit(
+    problem_entries: list[ProblemEntry],
+    template: LayoutTemplate,
+    *,
+    max_page_count: int = CLASSIN_MAX_BOARD_PAGE_COUNT,
+) -> list[list[ProblemEntry]]:
+    max_pages = max(1, int(max_page_count))
+    if not problem_entries:
+        return []
+    limited_template = template_with_board_page_count(template, max_pages)
+    chunks: list[list[ProblemEntry]] = []
+    current: list[ProblemEntry] = []
+
+    for entry in problem_entries:
+        candidate = [*current, entry]
+        if not current or _entries_flow_end_pages(candidate, limited_template) <= max_pages + 1e-6:
+            current = candidate
+            continue
+        chunks.append(current)
+        current = [entry]
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def edb_part_file_name(edb_name: str, part_index: int, part_count: int) -> str:
+    if part_count <= 1:
+        return edb_name
+    path = Path(edb_name)
+    suffix = path.suffix or ".edb"
+    stem = path.stem or "classin"
+    width = max(2, len(str(part_count)))
+    return f"{stem}_part{part_index + 1:0{width}d}{suffix}"
+
+
 def _resize_to_target_width(image: Image.Image, target_width_px: int) -> Image.Image:
     if target_width_px <= 0 or image.width == target_width_px:
         return image
@@ -5482,6 +5809,105 @@ def _v1_default_display_width_px(template: LayoutTemplate) -> float:
     legacy_width = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
     max_width = CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX
     return max(legacy_width, min(V1_DEFAULT_DISPLAY_WIDTH_PX, max_width))
+
+
+def _build_image_only_record_image(
+    placement: Any,
+    entry: ProblemEntry,
+    *,
+    dark_board: bool,
+    board_theme: str,
+    crop_format: str,
+    target_image_width_px: float,
+    continuous_flow: bool,
+) -> _ImageOnlyRecordImage:
+    processing_step = _normalize_processing_step(
+        entry.processing_step or placement.metadata.get("processing_step")
+    )
+    crop_path = Path(str(placement.metadata["crop_path"]))
+    board_render_path = Path(str(placement.metadata["board_render_path"]))
+    with Image.open(crop_path) as loaded_crop:
+        crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
+    if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
+        board_image = _build_transparent_reconstruction_image(
+            crop_image,
+            board_theme=board_theme,
+        )
+    elif dark_board:
+        board_image = _load_board_export_image(
+            board_render_path,
+            crop_image,
+            board_theme=board_theme,
+            target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
+        )
+    else:
+        board_image = crop_image
+
+    if target_image_width_px > 0:
+        board_image = _resize_to_target_width(board_image, int(target_image_width_px))
+
+    scale_ratio: float | None = None
+    if crop_format == CROP_FORMAT_V2:
+        scale_ratio = _problem_scale_ratio(
+            entry,
+            placement,
+            float(board_image.width),
+            float(board_image.height),
+            ignore_height_limit=continuous_flow,
+        )
+        if abs(scale_ratio - 1.0) > 0.001:
+            scaled_width = max(1, int(round(board_image.width * scale_ratio)))
+            scaled_height = max(1, int(round(board_image.height * scale_ratio)))
+            board_image = board_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+
+    image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
+    if crop_format == CROP_FORMAT_V2:
+        secondary_bytes = build_tight_crop_image_bytes(
+            image_bytes, format_hint=image_format, quality=88
+        )
+    else:
+        secondary_bytes = build_preview_image_bytes(
+            image_bytes, max_size=(768, 768), format_hint=image_format, quality=88
+        )
+    return _ImageOnlyRecordImage(
+        crop_path=crop_path,
+        board_render_path=board_render_path,
+        image_bytes=image_bytes,
+        secondary_bytes=secondary_bytes,
+        width_px=int(board_image.width),
+        height_px=int(board_image.height),
+        scale_ratio=scale_ratio,
+    )
+
+
+def _build_image_only_record_images(
+    placements: list[Any],
+    entries_by_problem_id: dict[str, ProblemEntry],
+    *,
+    source_layout: tuple[float, float, float] | None,
+    dark_board: bool,
+    board_theme: str,
+    crop_format: str,
+    target_image_width_px: float,
+) -> list[_ImageOnlyRecordImage]:
+    def _build(placement: Any) -> _ImageOnlyRecordImage:
+        entry = entries_by_problem_id[placement.problem_id]
+        continuous_flow = _entry_uses_continuous_page_flow(entry) and source_layout is None
+        return _build_image_only_record_image(
+            placement,
+            entry,
+            dark_board=dark_board,
+            board_theme=board_theme,
+            crop_format=crop_format,
+            target_image_width_px=target_image_width_px,
+            continuous_flow=continuous_flow,
+        )
+
+    worker_count = _resolve_image_record_worker_count(len(placements))
+    if worker_count <= 1:
+        return [_build(placement) for placement in placements]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(_build, placements))
 
 
 def build_image_only_records(
@@ -5523,41 +5949,23 @@ def build_image_only_records(
         if crop_format == CROP_FORMAT_V1 and preserve_source_layout
         else None
     )
+    image_payloads = _build_image_only_record_images(
+        placements,
+        entries_by_problem_id,
+        source_layout=source_layout,
+        dark_board=dark_board,
+        board_theme=board_theme,
+        crop_format=crop_format,
+        target_image_width_px=target_image_width_px,
+    )
+    continuous_cursor_pages: float | None = None
 
-    for placement in placements:
+    for placement, image_payload in zip(placements, image_payloads):
         entry = entries_by_problem_id[placement.problem_id]
+        continuous_flow = _entry_uses_continuous_page_flow(entry) and source_layout is None
         processing_step = _normalize_processing_step(
             entry.processing_step or placement.metadata.get("processing_step")
         )
-        crop_path = Path(str(placement.metadata["crop_path"]))
-        board_render_path = Path(str(placement.metadata["board_render_path"]))
-        loaded_crop = Image.open(crop_path)
-        crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
-        if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
-            board_image = _build_transparent_reconstruction_image(
-                crop_image,
-                board_theme=board_theme,
-            )
-        elif dark_board:
-            board_image = _load_board_export_image(
-                board_render_path,
-                crop_image,
-                board_theme=board_theme,
-                target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
-            )
-        else:
-            board_image = crop_image
-        if target_image_width_px > 0:
-            board_image = _resize_to_target_width(board_image, int(target_image_width_px))
-        image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
-        if crop_format == CROP_FORMAT_V2:
-            secondary_bytes = build_tight_crop_image_bytes(
-                image_bytes, format_hint=image_format, quality=88
-            )
-        else:
-            secondary_bytes = build_preview_image_bytes(
-                image_bytes, max_size=(768, 768), format_hint=image_format, quality=88
-            )
 
         if source_layout is not None:
             layout_left, layout_top, layout_scale = source_layout
@@ -5569,40 +5977,26 @@ def build_image_only_records(
             width_hint = normalize_width_px(rendered_width_px)
             height_hint = normalize_height_px(rendered_height_px, page_count_hint=template.board_page_count)
         elif crop_format == CROP_FORMAT_V2:
-            base_rendered_width_px = float(board_image.width)
-            base_rendered_height_px = float(board_image.height)
-            scale_ratio = _problem_scale_ratio(
-                entry,
-                placement,
-                base_rendered_width_px,
-                base_rendered_height_px,
-            )
-            if abs(scale_ratio - 1.0) > 0.001:
-                scaled_width = max(1, int(round(board_image.width * scale_ratio)))
-                scaled_height = max(1, int(round(board_image.height * scale_ratio)))
-                board_image = board_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
-                image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
-                secondary_bytes = build_tight_crop_image_bytes(
-                    image_bytes, format_hint=image_format, quality=88
-                )
-            width_hint = normalize_width_px(float(board_image.width))
+            scale_ratio = float(image_payload.scale_ratio if image_payload.scale_ratio is not None else 1.0)
+            width_hint = normalize_width_px(float(image_payload.width_px))
             height_hint = normalize_height_px(
-                float(board_image.height), page_count_hint=template.board_page_count
+                float(image_payload.height_px), page_count_hint=template.board_page_count
             )
-            rendered_width_px = float(board_image.width)
-            rendered_height_px = float(board_image.height)
+            rendered_width_px = float(image_payload.width_px)
+            rendered_height_px = float(image_payload.height_px)
             x_px = _problem_origin_x_px(entry, rendered_width_px)
             y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
         else:
             base_rendered_width_px = available_width_px
             base_rendered_height_px = available_width_px * (
-                float(board_image.height) / max(float(board_image.width), 1.0)
+                float(image_payload.height_px) / max(float(image_payload.width_px), 1.0)
             )
             scale_ratio = _problem_scale_ratio(
                 entry,
                 placement,
                 base_rendered_width_px,
                 base_rendered_height_px,
+                ignore_height_limit=continuous_flow,
             )
             height_px = base_rendered_height_px * scale_ratio
             width_hint = normalize_width_px(available_width_px * scale_ratio)
@@ -5612,13 +6006,36 @@ def build_image_only_records(
             x_px = _problem_origin_x_px(entry, rendered_width_px)
             y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
 
+        if continuous_flow:
+            start_y_pages = continuous_cursor_pages if continuous_cursor_pages is not None else placement.start_y_pages
+            actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
+            rendered_height_pages = rendered_height_px / CANVAS_WIDTH
+            actual_bottom_y_pages = start_y_pages + actual_height_pages
+            snapped_next_start_y_pages = start_y_pages + rendered_height_pages
+            overflow_amount_pages = max(0.0, rendered_height_pages - template.base_slot_height_pages)
+            slot_span_count = max(
+                1,
+                math.ceil((snapped_next_start_y_pages - start_y_pages - 1e-9) / template.base_slot_height_pages),
+            )
+            x_px = _problem_origin_x_px(entry, rendered_width_px)
+            y_px = start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
+            continuous_cursor_pages = snapped_next_start_y_pages
+        else:
+            start_y_pages = placement.start_y_pages
+            actual_height_pages = placement.actual_content_height_pages
+            actual_bottom_y_pages = placement.actual_bottom_y_pages
+            snapped_next_start_y_pages = placement.snapped_next_start_y_pages
+            overflow_amount_pages = placement.overflow_amount_pages
+            slot_span_count = placement.slot_span_count
+            continuous_cursor_pages = None
+
         parent_record_id = next_record_id
         records.append(
             build_image_record(
                 ImageRecordSpec(
                     record_id=parent_record_id,
-                    image_primary=image_bytes,
-                    image_secondary=secondary_bytes,
+                    image_primary=image_payload.image_bytes,
+                    image_secondary=image_payload.secondary_bytes,
                     x=normalize_x_px(x_px),
                     y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
                     width_hint=width_hint,
@@ -5635,18 +6052,18 @@ def build_image_only_records(
                 "title": placement.metadata["title"],
                 "problem_number": placement.metadata.get("problem_number"),
                 "subject": str(placement.subject),
-                "crop_path": str(crop_path),
-                "board_render_path": str(board_render_path),
+                "crop_path": str(image_payload.crop_path),
+                "board_render_path": str(image_payload.board_render_path),
                 "source_page_id": placement.metadata["source_page_id"],
                 "source_path": placement.metadata["source_path"],
-                "start_y_pages": placement.start_y_pages,
-                "actual_content_height_pages": placement.actual_content_height_pages,
-                "actual_bottom_y_pages": placement.actual_bottom_y_pages,
-                "snapped_next_start_y_pages": placement.snapped_next_start_y_pages,
+                "start_y_pages": round(start_y_pages, 6),
+                "actual_content_height_pages": round(actual_height_pages, 6),
+                "actual_bottom_y_pages": round(actual_bottom_y_pages, 6),
+                "snapped_next_start_y_pages": round(snapped_next_start_y_pages, 6),
                 "overflow_allowed": placement.overflow_allowed,
-                "overflow_amount_pages": placement.overflow_amount_pages,
-                "overflow_violation": placement.overflow_violation,
-                "slot_span_count": placement.slot_span_count,
+                "overflow_amount_pages": round(overflow_amount_pages, 6),
+                "overflow_violation": overflow_amount_pages > 0 and not placement.overflow_allowed,
+                "slot_span_count": slot_span_count,
                 "bbox": placement.metadata["bbox"],
                 "risk_flags": list(placement.metadata.get("risk_flags") or []),
                 "record_mode": "image-only",
@@ -5656,8 +6073,8 @@ def build_image_only_records(
                 "image_record_count": image_record_count,
                 "board_theme": _resolve_board_theme(board_theme),
                 "crop_format": crop_format,
-                "image_pixel_width": int(board_image.width),
-                "image_pixel_height": int(board_image.height),
+                "image_pixel_width": int(image_payload.width_px),
+                "image_pixel_height": int(image_payload.height_px),
                 "rendered_width_px": float(rendered_width_px),
                 "rendered_height_px": float(rendered_height_px),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
@@ -5878,6 +6295,125 @@ def build_records(
     return records, placement_summaries, header_flag
 
 
+def write_classin_limited_edb_files(
+    problem_entries: list[ProblemEntry],
+    template: LayoutTemplate,
+    output_dir: Path,
+    edb_name: str,
+    *,
+    record_mode: str,
+    text_confidence_threshold: float,
+    dark_board: bool,
+    board_theme: str,
+    crop_format: str,
+    existing_records: list[bytes] | None = None,
+    existing_header_flag: int | None = None,
+) -> list[dict[str, Any]]:
+    chunks = split_problem_entries_for_classin_page_limit(problem_entries, template)
+    if not chunks:
+        return []
+    part_count = len(chunks)
+    part_template = template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
+    parts: list[dict[str, Any]] = []
+
+    for part_index, chunk_entries in enumerate(chunks):
+        can_reuse_existing = (
+            part_count == 1
+            and existing_records is not None
+            and existing_header_flag is not None
+            and int(template.board_page_count) == CLASSIN_MAX_BOARD_PAGE_COUNT
+        )
+        if can_reuse_existing:
+            part_records = list(existing_records or [])
+            part_placements = []
+            part_header_flag = int(existing_header_flag or 0)
+        else:
+            part_records, part_placements, part_header_flag = build_records(
+                chunk_entries,
+                part_template,
+                record_mode=record_mode,
+                output_dir=output_dir,
+                text_confidence_threshold=text_confidence_threshold,
+                dark_board=dark_board,
+                board_theme=board_theme,
+                crop_format=crop_format,
+            )
+
+        part_name = edb_part_file_name(edb_name, part_index, part_count)
+        part_path = output_dir / part_name
+        write_edb(
+            part_path,
+            build_edb(
+                part_records,
+                header_flag=part_header_flag,
+                version=version_string_for_crop_format(crop_format),
+                page_count_hint=part_template.board_page_count,
+            ),
+        )
+        problem_ids = [entry.problem_id for entry in chunk_entries]
+        parts.append(
+            {
+                "partIndex": part_index + 1,
+                "part_index": part_index + 1,
+                "partCount": part_count,
+                "part_count": part_count,
+                "edbFileName": part_path.name,
+                "edb_file_name": part_path.name,
+                "edbPath": str(part_path.resolve()),
+                "edb_path": str(part_path.resolve()),
+                "recordCount": len(part_records),
+                "record_count": len(part_records),
+                "placementCount": len(part_placements),
+                "placement_count": len(part_placements),
+                "pageCountHint": int(part_template.board_page_count),
+                "page_count_hint": int(part_template.board_page_count),
+                "problemIds": problem_ids,
+                "problem_ids": problem_ids,
+                "placements": part_placements,
+            }
+        )
+    return parts
+
+
+def annotate_ui_session_with_edb_part_metadata(ui_session: dict[str, Any], edb_parts: list[dict[str, Any]]) -> None:
+    if not isinstance(ui_session, dict) or not edb_parts:
+        return
+    part_by_problem_id: dict[str, dict[str, Any]] = {}
+    placement_by_problem_id: dict[str, dict[str, Any]] = {}
+    for part in edb_parts:
+        if not isinstance(part, dict):
+            continue
+        problem_ids = part.get("problemIds") if isinstance(part.get("problemIds"), list) else part.get("problem_ids")
+        for problem_id in problem_ids or []:
+            part_by_problem_id[str(problem_id)] = part
+        placements = part.get("placements") if isinstance(part.get("placements"), list) else []
+        for placement in placements:
+            if not isinstance(placement, dict):
+                continue
+            problem_id = str(placement.get("problem_id") or placement.get("problemId") or "")
+            if problem_id:
+                placement_by_problem_id[problem_id] = placement
+
+    for problem in ui_session.get("problems", []) or []:
+        if not isinstance(problem, dict):
+            continue
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "")
+        part = part_by_problem_id.get(problem_id)
+        if not part:
+            continue
+        part_index = int(part.get("partIndex") or part.get("part_index") or 1)
+        problem["edbPartIndex"] = part_index
+        problem["edb_part_index"] = part_index
+        problem["edbPartFileName"] = part.get("edbFileName") or part.get("edb_file_name") or ""
+        problem["edb_part_file_name"] = problem["edbPartFileName"]
+        placement = placement_by_problem_id.get(problem_id)
+        if placement:
+            problem["edbLocalStartYPages"] = placement.get("start_y_pages")
+            problem["edb_local_start_y_pages"] = placement.get("start_y_pages")
+            problem["edbLocalBottomYPages"] = placement.get("actual_bottom_y_pages")
+            problem["edb_local_bottom_y_pages"] = placement.get("actual_bottom_y_pages")
+
+
 def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object]]) -> None:
     payload = {
         "problems": [
@@ -5974,7 +6510,11 @@ def run_problem_export(
     template = LayoutTemplate(
         name="academy-default",
         base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
-        metadata={"placement_mode": "one-problem-per-page"},
+        metadata={
+            "placement_mode": "continuous-page-as-is"
+            if resolved_input_intent == "page-as-is"
+            else "one-problem-per-page"
+        },
     )
     ai_fallback_config = _build_ai_fallback_config(
         enabled=ai_fallback_enabled,
@@ -6095,20 +6635,29 @@ def run_problem_export(
     placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     edb_path: Path | None = None
+    edb_parts: list[dict[str, Any]] = []
     if export_edb:
-        edb_path = out_dir / edb_name
         edb_write_started_at = time.perf_counter()
-        write_edb(
-            edb_path,
-            build_edb(
-                records,
-                header_flag=header_flag,
-                version=version_string_for_crop_format(resolved_crop_format),
-                page_count_hint=template.board_page_count,
-            ),
+        edb_parts = write_classin_limited_edb_files(
+            problem_entries,
+            template,
+            out_dir,
+            edb_name,
+            record_mode=record_mode,
+            text_confidence_threshold=text_confidence_threshold,
+            dark_board=dark_board,
+            board_theme=resolved_board_theme,
+            crop_format=resolved_crop_format,
+            existing_records=records,
+            existing_header_flag=header_flag,
         )
+        edb_path = Path(str(edb_parts[0]["edbPath"])) if edb_parts else None
         timing_ms["edb_write"] = _elapsed_ms(edb_write_started_at)
-        summary["edb_path"] = str(edb_path.resolve())
+        summary["edb_path"] = str(edb_path.resolve()) if edb_path else None
+        summary["edb_paths"] = [str(Path(str(part["edbPath"])).resolve()) for part in edb_parts]
+        summary["edb_parts"] = edb_parts
+        summary["edb_part_count"] = len(edb_parts)
+        summary["edb_split"] = len(edb_parts) > 1
         summary["timing_ms"] = dict(timing_ms)
         placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -6129,6 +6678,7 @@ def run_problem_export(
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
     )
+    annotate_ui_session_with_edb_part_metadata(ui_session, edb_parts)
     timing_ms["ui_session"] = _elapsed_ms(ui_session_started_at)
     classin_handoff_path: Path | None = None
     classin_handoff_markdown_path: Path | None = None
@@ -6137,6 +6687,7 @@ def run_problem_export(
             out_dir,
             source_paths=source_paths,
             edb_path=edb_path,
+            edb_parts=edb_parts,
             ui_session=ui_session,
             summary=summary,
             template=template,
@@ -6150,6 +6701,12 @@ def run_problem_export(
         ui_session["classinHandoffPath"] = str(classin_handoff_path)
         ui_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
         ui_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
+        ui_session["edb_parts"] = edb_parts
+        ui_session["edbParts"] = edb_parts
+        ui_session["edb_part_count"] = len(edb_parts)
+        ui_session["edbPartCount"] = len(edb_parts)
+        ui_session["edb_split"] = len(edb_parts) > 1
+        ui_session["edbSplit"] = len(edb_parts) > 1
         ui_session.update(handoff_session_fields)
     timing_ms["total"] = _elapsed_ms(run_started_at)
     summary["timing_ms"] = dict(timing_ms)
@@ -6160,6 +6717,8 @@ def run_problem_export(
     return {
         "output_dir": out_dir.resolve(),
         "edb_path": edb_path.resolve() if edb_path and edb_path.exists() else None,
+        "edb_paths": [Path(str(part["edbPath"])).resolve() for part in edb_parts],
+        "edb_parts": edb_parts,
         "pages_json_path": (out_dir / "pages.json").resolve(),
         "placements_json_path": placements_path.resolve(),
         "classin_handoff_path": classin_handoff_path,
@@ -6269,6 +6828,11 @@ def main() -> int:
         name=args.template_name,
         board_page_count=args.board_pages,
         base_slot_height_pages=args.slot_height,
+        metadata={
+            "placement_mode": "continuous-page-as-is"
+            if resolved_input_intent == "page-as-is"
+            else "one-problem-per-page"
+        },
     )
     problem_entries = build_problem_entries(
         prepared_pages,

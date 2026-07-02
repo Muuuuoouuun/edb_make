@@ -9,6 +9,7 @@ from structured_schema import PageModel, ProblemUnit, Subject
 
 
 EPSILON = 1e-9
+CONTINUOUS_PLACEMENT_MODES = {"continuous", "continuous-page-as-is"}
 
 
 def snap_up_to_slot(value_pages: float, base_slot_height_pages: float) -> float:
@@ -18,6 +19,47 @@ def snap_up_to_slot(value_pages: float, base_slot_height_pages: float) -> float:
         return 0.0
     snapped_units = math.ceil((value_pages - EPSILON) / base_slot_height_pages)
     return round(snapped_units * base_slot_height_pages, 6)
+
+
+def _metadata_float(metadata: dict[str, object], *keys: str, default: float = 1.0) -> float:
+    for key in keys:
+        try:
+            value = metadata.get(key)
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _is_continuous_problem(problem: ProblemLayoutInput, template: LayoutTemplate) -> bool:
+    metadata = problem.metadata or {}
+    input_intent = (
+        str(metadata.get("input_intent") or metadata.get("inputIntent") or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+    )
+    if input_intent:
+        return input_intent == "page-as-is"
+    mode = str(metadata.get("placement_mode") or metadata.get("placementMode") or "")
+    return mode in CONTINUOUS_PLACEMENT_MODES
+
+
+def _rendered_flow_height_pages(problem: ProblemLayoutInput, actual_height_pages: float, *, continuous: bool) -> float:
+    if not continuous:
+        return actual_height_pages
+    scale_ratio = max(
+        0.0,
+        _metadata_float(
+            problem.metadata or {},
+            "placement_scale_ratio",
+            "placementScaleRatio",
+            "scaleRatio",
+            default=1.0,
+        ),
+    )
+    return max(actual_height_pages, actual_height_pages * scale_ratio)
 
 
 def resolve_overflow_allowed(problem: ProblemLayoutInput, template: LayoutTemplate) -> bool:
@@ -36,24 +78,30 @@ def place_problem(
 ) -> ProblemPlacement:
     nominal_slot_height_pages = template.base_slot_height_pages
     actual_height_pages = max(problem.actual_content_height_pages, 0.0)
+    continuous = _is_continuous_problem(problem, template)
+    flow_height_pages = _rendered_flow_height_pages(
+        problem,
+        actual_height_pages,
+        continuous=continuous,
+    )
     overflow_allowed = resolve_overflow_allowed(problem, template)
 
     actual_bottom_y_pages = round(start_y_pages + actual_height_pages, 6)
-    snapped_next_start_y_pages = snap_up_to_slot(
-        actual_bottom_y_pages,
-        nominal_slot_height_pages,
+    snapped_next_start_y_pages = (
+        round(start_y_pages + flow_height_pages, 6)
+        if continuous
+        else snap_up_to_slot(
+            actual_bottom_y_pages,
+            nominal_slot_height_pages,
+        )
     )
-    overflow_amount_pages = max(0.0, actual_height_pages - nominal_slot_height_pages)
+    overflow_amount_pages = max(0.0, flow_height_pages - nominal_slot_height_pages)
     overflow_violation = overflow_amount_pages > 0 and not overflow_allowed
     slot_span_count = max(
         1,
-        int(
-            round(
-                (snapped_next_start_y_pages - start_y_pages) / nominal_slot_height_pages
-            )
-        ),
+        int(math.ceil((snapped_next_start_y_pages - start_y_pages - EPSILON) / nominal_slot_height_pages)),
     )
-    board_capacity_exceeded = actual_bottom_y_pages > template.board_page_count
+    board_capacity_exceeded = max(actual_bottom_y_pages, snapped_next_start_y_pages) > template.board_page_count
 
     return ProblemPlacement(
         problem_id=problem.problem_id,
@@ -79,15 +127,17 @@ def place_problems(
     start_y_pages: float = 0.0,
 ) -> list[ProblemPlacement]:
     placements: list[ProblemPlacement] = []
-    cursor_y_pages = snap_up_to_slot(
-        max(start_y_pages, 0.0),
-        template.base_slot_height_pages,
-    )
+    cursor_y_pages = max(start_y_pages, 0.0)
 
     for problem in problems:
+        problem_start_y_pages = (
+            round(cursor_y_pages, 6)
+            if _is_continuous_problem(problem, template)
+            else snap_up_to_slot(cursor_y_pages, template.base_slot_height_pages)
+        )
         placement = place_problem(
             problem,
-            start_y_pages=cursor_y_pages,
+            start_y_pages=problem_start_y_pages,
             template=template,
         )
         placements.append(placement)

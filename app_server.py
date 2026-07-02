@@ -48,6 +48,7 @@ CROP_FORMAT_V1 = "v1"
 CROP_FORMAT_V2 = "v2"
 DEFAULT_BOARD_THEME = "charcoal"
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
+CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 넘김 긴 지문",
@@ -139,12 +140,24 @@ def build_records(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "build_records", *args, **kwargs)
 
 
+def split_problem_entries_for_classin_page_limit(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "split_problem_entries_for_classin_page_limit", *args, **kwargs)
+
+
+def write_classin_limited_edb_files(*args: Any, **kwargs: Any) -> Any:
+    return _write_classin_limited_edb_files_local(*args, **kwargs)
+
+
 def build_ui_session(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "build_ui_session", *args, **kwargs)
 
 
 def estimate_height_pages(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "estimate_height_pages", *args, **kwargs)
+
+
+def estimate_page_as_is_height_pages(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "estimate_page_as_is_height_pages", *args, **kwargs)
 
 
 def recrop_problem(*args: Any, **kwargs: Any) -> Any:
@@ -957,6 +970,22 @@ def sanitize_upload_file_name(value: str | None) -> str:
     return f"{trimmed_stem}_{digest}{extension}"
 
 
+def sanitize_edb_file_name(value: str | None, *, fallback_stem: str = "classin") -> str:
+    def _clean_stem(raw: str | None, fallback: str) -> str:
+        candidate = Path(str(raw or "")).name.strip()
+        if candidate.lower().endswith(".edb"):
+            candidate = candidate[:-4]
+        candidate = candidate.strip(" .")
+        if not candidate:
+            return fallback
+        safe = sanitize_output_dir_name(candidate).strip(" ._")
+        return (safe[:150].rstrip(" ._") or fallback)
+
+    fallback = _clean_stem(fallback_stem, "classin")
+    stem = _clean_stem(value, fallback) if value is not None else fallback
+    return f"{stem}.edb"
+
+
 def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dict[str, Any]:
     """Fast structural check for the EDB envelope we write.
 
@@ -1014,6 +1043,228 @@ def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dic
         "recordCountHint": record_count_hint,
         "recordCountActual": actual_records,
     }
+
+
+def _normalize_edb_part_payload(part: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(part)
+    part_path = Path(str(normalized.get("edbPath") or normalized.get("edb_path") or "")).resolve()
+    part_index = int(normalized.get("partIndex") or normalized.get("part_index") or 1)
+    part_count = int(normalized.get("partCount") or normalized.get("part_count") or 1)
+    record_count = int(normalized.get("recordCount") or normalized.get("record_count") or 0)
+    page_count_hint = int(normalized.get("pageCountHint") or normalized.get("page_count_hint") or 0)
+    normalized.update({
+        "partIndex": part_index,
+        "part_index": part_index,
+        "partCount": part_count,
+        "part_count": part_count,
+        "edbFileName": normalized.get("edbFileName") or normalized.get("edb_file_name") or part_path.name,
+        "edb_file_name": normalized.get("edbFileName") or normalized.get("edb_file_name") or part_path.name,
+        "edbPath": str(part_path),
+        "edb_path": str(part_path),
+        "edbFileUri": path_to_api_url(part_path),
+        "edb_file_uri": path_to_api_url(part_path),
+        "edbFileExists": part_path.is_file(),
+        "edb_file_exists": part_path.is_file(),
+        "recordCount": record_count,
+        "record_count": record_count,
+        "pageCountHint": page_count_hint,
+        "page_count_hint": page_count_hint,
+    })
+    return normalized
+
+
+def _validate_edb_parts(edb_parts: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    normalized_parts: list[dict[str, Any]] = []
+    total_outer_size = 0
+    total_inner_size = 0
+    total_record_hint = 0
+    total_record_actual = 0
+    max_page_count_hint = 0
+    for raw_part in edb_parts:
+        part = _normalize_edb_part_payload(raw_part)
+        expected_records = max(1, int(part.get("recordCount") or part.get("record_count") or 0))
+        validation = validate_edb_file(part["edbPath"], expected_min_records=expected_records)
+        part["edbValidation"] = dict(validation)
+        part["edb_validation"] = dict(validation)
+        part["pageCountHint"] = int(validation.get("pageCountHint") or part["pageCountHint"])
+        part["page_count_hint"] = part["pageCountHint"]
+        if part["pageCountHint"] > CLASSIN_MAX_BOARD_PAGE_COUNT:
+            raise ValueError(
+                f"{part['edbFileName']} pageCountHint {part['pageCountHint']} exceeds "
+                f"ClassIn limit {CLASSIN_MAX_BOARD_PAGE_COUNT}"
+            )
+        part["recordCountActual"] = int(validation.get("recordCountActual") or part["recordCount"])
+        part["record_count_actual"] = part["recordCountActual"]
+        part["outerSize"] = int(validation.get("outerSize") or 0)
+        part["outer_size"] = part["outerSize"]
+        part["innerSize"] = int(validation.get("innerSize") or 0)
+        part["inner_size"] = part["innerSize"]
+        total_outer_size += part["outerSize"]
+        total_inner_size += part["innerSize"]
+        total_record_hint += int(validation.get("recordCountHint") or 0)
+        total_record_actual += part["recordCountActual"]
+        max_page_count_hint = max(max_page_count_hint, part["pageCountHint"])
+        normalized_parts.append(part)
+    aggregate = {
+        "outerSize": total_outer_size,
+        "innerSize": total_inner_size,
+        "pageCountHint": max_page_count_hint,
+        "recordCountHint": total_record_hint,
+        "recordCountActual": total_record_actual,
+        "edbPartCount": len(normalized_parts),
+        "edbSplit": len(normalized_parts) > 1,
+        "edbParts": normalized_parts,
+    }
+    return aggregate, normalized_parts
+
+
+def _template_with_board_page_count(template: LayoutTemplate, board_page_count: int) -> LayoutTemplate:
+    return LayoutTemplate(
+        name=template.name,
+        board_page_count=max(1, int(board_page_count)),
+        base_slot_height_pages=template.base_slot_height_pages,
+        fixed_left_zone_ratio=template.fixed_left_zone_ratio,
+        preserve_right_writing_zone=template.preserve_right_writing_zone,
+        default_overflow_subjects=set(template.default_overflow_subjects),
+        metadata=dict(template.metadata),
+    )
+
+
+def _edb_part_file_name(edb_name: str, part_index: int, part_count: int) -> str:
+    if part_count <= 1:
+        return edb_name
+    path = Path(edb_name)
+    suffix = path.suffix or ".edb"
+    stem = path.stem or "classin"
+    width = max(2, len(str(part_count)))
+    return f"{stem}_part{part_index + 1:0{width}d}{suffix}"
+
+
+def _write_classin_limited_edb_files_local(
+    problem_entries: list[Any],
+    template: LayoutTemplate,
+    output_dir: Path,
+    edb_name: str,
+    *,
+    record_mode: str,
+    text_confidence_threshold: float,
+    dark_board: bool,
+    board_theme: str,
+    crop_format: str,
+    existing_records: list[Any] | None = None,
+    existing_header_flag: int | None = None,
+) -> list[dict[str, Any]]:
+    chunks = split_problem_entries_for_classin_page_limit(
+        problem_entries,
+        template,
+        max_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
+    )
+    if not chunks:
+        return []
+
+    part_count = len(chunks)
+    part_template = _template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
+    parts: list[dict[str, Any]] = []
+
+    for part_index, chunk_entries in enumerate(chunks):
+        can_reuse_existing = (
+            part_count == 1
+            and existing_records is not None
+            and existing_header_flag is not None
+            and int(template.board_page_count) == CLASSIN_MAX_BOARD_PAGE_COUNT
+        )
+        if can_reuse_existing:
+            part_records = list(existing_records or [])
+            part_placements = []
+            part_header_flag = int(existing_header_flag or 0)
+        else:
+            part_records, part_placements, part_header_flag = build_records(
+                chunk_entries,
+                part_template,
+                record_mode=record_mode,
+                output_dir=output_dir,
+                text_confidence_threshold=text_confidence_threshold,
+                dark_board=dark_board,
+                board_theme=board_theme,
+                crop_format=crop_format,
+            )
+
+        part_name = _edb_part_file_name(edb_name, part_index, part_count)
+        part_path = output_dir / part_name
+        write_edb(
+            part_path,
+            build_edb(
+                part_records,
+                header_flag=part_header_flag,
+                version=version_string_for_crop_format(crop_format),
+                page_count_hint=part_template.board_page_count,
+            ),
+        )
+        problem_ids = [
+            str(getattr(entry, "problem_id", "") or "")
+            for entry in chunk_entries
+        ]
+        parts.append(
+            {
+                "partIndex": part_index + 1,
+                "part_index": part_index + 1,
+                "partCount": part_count,
+                "part_count": part_count,
+                "edbFileName": part_path.name,
+                "edb_file_name": part_path.name,
+                "edbPath": str(part_path.resolve()),
+                "edb_path": str(part_path.resolve()),
+                "recordCount": len(part_records),
+                "record_count": len(part_records),
+                "placementCount": len(part_placements),
+                "placement_count": len(part_placements),
+                "pageCountHint": int(part_template.board_page_count),
+                "page_count_hint": int(part_template.board_page_count),
+                "problemIds": problem_ids,
+                "problem_ids": problem_ids,
+                "placements": part_placements,
+            }
+        )
+    return parts
+
+
+def _annotate_session_with_edb_part_metadata(session: dict[str, Any], edb_parts: list[dict[str, Any]]) -> None:
+    if not isinstance(session, dict) or not edb_parts:
+        return
+    part_by_problem_id: dict[str, dict[str, Any]] = {}
+    placement_by_problem_id: dict[str, dict[str, Any]] = {}
+    for part in edb_parts:
+        if not isinstance(part, dict):
+            continue
+        raw_problem_ids = part.get("problemIds") if isinstance(part.get("problemIds"), list) else part.get("problem_ids")
+        for problem_id in raw_problem_ids or []:
+            part_by_problem_id[str(problem_id)] = part
+        raw_placements = part.get("placements") if isinstance(part.get("placements"), list) else []
+        for placement in raw_placements:
+            if not isinstance(placement, dict):
+                continue
+            problem_id = str(placement.get("problem_id") or placement.get("problemId") or "")
+            if problem_id:
+                placement_by_problem_id[problem_id] = placement
+
+    for problem in session.get("problems", []) or []:
+        if not isinstance(problem, dict):
+            continue
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "")
+        part = part_by_problem_id.get(problem_id)
+        if not part:
+            continue
+        part_index = int(part.get("partIndex") or part.get("part_index") or 1)
+        problem["edbPartIndex"] = part_index
+        problem["edb_part_index"] = part_index
+        problem["edbPartFileName"] = part.get("edbFileName") or part.get("edb_file_name") or ""
+        problem["edb_part_file_name"] = problem["edbPartFileName"]
+        placement = placement_by_problem_id.get(problem_id)
+        if placement:
+            problem["edbLocalStartYPages"] = placement.get("start_y_pages")
+            problem["edb_local_start_y_pages"] = placement.get("start_y_pages")
+            problem["edbLocalBottomYPages"] = placement.get("actual_bottom_y_pages")
+            problem["edb_local_bottom_y_pages"] = placement.get("actual_bottom_y_pages")
 
 
 def decode_file_reference(value: str | None) -> Path | None:
@@ -1142,6 +1393,20 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
     )
     edb_exists = _path_exists(edb_path)
     output_exists = _path_exists(output_dir, directory=True)
+    raw_parts = annotated.get("edbParts") if isinstance(annotated.get("edbParts"), list) else annotated.get("edb_parts")
+    edb_parts = [
+        _normalize_edb_part_payload(part)
+        for part in (raw_parts or [])
+        if isinstance(part, dict)
+    ]
+    if edb_parts:
+        edb_exists = any(bool(part.get("edbFileExists")) for part in edb_parts)
+        annotated["edbParts"] = edb_parts
+        annotated["edb_parts"] = edb_parts
+        annotated["edbPartCount"] = len(edb_parts)
+        annotated["edb_part_count"] = len(edb_parts)
+        annotated["edbSplit"] = len(edb_parts) > 1
+        annotated["edb_split"] = len(edb_parts) > 1
     annotated["edbFileExists"] = edb_exists
     annotated["outputDirExists"] = output_exists
     annotated["edb_file_exists"] = edb_exists
@@ -1481,6 +1746,7 @@ def _session_publish_summary(
     source_problem_overlap_groups: list[dict[str, Any]] | None = None,
     source_problem_overlap_group_count: int | None = None,
     layout_diagnostics: dict[str, Any] | None = None,
+    edb_parts: list[dict[str, Any]] | None = None,
     published_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_edb_path = Path(edb_path).resolve()
@@ -1494,6 +1760,21 @@ def _session_publish_summary(
     record_count_actual = int(edb_validation.get("recordCountActual") or record_count or 0)
     record_count_hint = int(edb_validation.get("recordCountHint") or record_count_actual or 0)
     page_count_hint = int(edb_validation.get("pageCountHint") or 0)
+    normalized_edb_parts = [
+        _normalize_edb_part_payload(part)
+        for part in (edb_parts or [])
+        if isinstance(part, dict)
+    ]
+    if not normalized_edb_parts:
+        normalized_edb_parts = [
+            _normalize_edb_part_payload({
+                "partIndex": 1,
+                "partCount": 1,
+                "edbPath": str(resolved_edb_path),
+                "recordCount": record_count_actual,
+                "pageCountHint": page_count_hint,
+            })
+        ]
     supplemental_count = max(0, int(supplemental_item_count or 0))
     if core_problem_count is None:
         core_count = max(0, int(record_count or record_count_actual) - supplemental_count)
@@ -1571,6 +1852,9 @@ def _session_publish_summary(
         "edbFileName": resolved_edb_path.name,
         "edbPath": str(resolved_edb_path),
         "edbFileUri": path_to_api_url(resolved_edb_path),
+        "edbParts": normalized_edb_parts,
+        "edbPartCount": len(normalized_edb_parts),
+        "edbSplit": len(normalized_edb_parts) > 1,
         "outputDir": str(resolved_output_dir),
         "classinHandoffPath": str(resolved_classin_handoff_path) if resolved_classin_handoff_path else None,
         "classinHandoffUri": path_to_api_url(resolved_classin_handoff_path),
@@ -1620,6 +1904,9 @@ def _session_publish_summary(
         "edb_file_name": summary["edbFileName"],
         "edb_path": summary["edbPath"],
         "edb_file_uri": summary["edbFileUri"],
+        "edb_parts": summary["edbParts"],
+        "edb_part_count": summary["edbPartCount"],
+        "edb_split": summary["edbSplit"],
         "output_dir": summary["outputDir"],
         "classin_handoff_path": summary["classinHandoffPath"],
         "classin_handoff_uri": summary["classinHandoffUri"],
@@ -1933,6 +2220,14 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         if resolved and resolved.exists():
             paths.add(str(resolved.resolve()))
 
+    def add_edb_part_paths(summary: dict[str, Any]) -> None:
+        raw_parts = summary.get("edbParts") if isinstance(summary.get("edbParts"), list) else summary.get("edb_parts")
+        for part in raw_parts or []:
+            if not isinstance(part, dict):
+                continue
+            for key in ("edbPath", "edb_path", "edbFileUri", "edb_file_uri"):
+                add_path(part.get(key))
+
     for key in (
         "edb_path",
         "edbPath",
@@ -1952,6 +2247,7 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         "classin_handoff_markdown_uri",
     ):
         add_path(session.get(key))
+    add_edb_part_paths(session)
 
     for summary_key in ("publishSummary", "publish_summary"):
         summary = session.get(summary_key)
@@ -1972,6 +2268,7 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
             "classin_handoff_markdown_uri",
         ):
             add_path(summary.get(key))
+        add_edb_part_paths(summary)
 
     for history_key in ("publishHistory", "publish_history"):
         for summary in session.get(history_key, []) or []:
@@ -1992,6 +2289,7 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
                 "classin_handoff_markdown_uri",
             ):
                 add_path(summary.get(key))
+            add_edb_part_paths(summary)
 
     for value in session.get("rendered_page_paths", []):
         add_path(value)
@@ -2099,6 +2397,14 @@ def _actual_height_pages_from_problem_image(
         from PIL import Image
 
         with Image.open(crop_path) as image:
+            problem_intent = (
+                str(problem.get("inputIntent") or problem.get("input_intent") or "")
+                .strip()
+                .lower()
+                .replace("_", "-")
+            )
+            if problem_intent == "page-as-is":
+                return float(estimate_page_as_is_height_pages(image.size, template))
             return float(estimate_height_pages(image.size, template))
     except Exception:
         return float(fallback or template.base_slot_height_pages or 1.2)
@@ -2154,6 +2460,14 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                     or problem.get("processing_step")
                     or problem.get("step")
                 ),
+                input_intent=(
+                    str(problem.get("inputIntent") or problem.get("input_intent") or "")
+                    .strip()
+                    .lower()
+                    .replace("_", "-")
+                    or None
+                ),
+                force_full_page_bounds=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
             )
         )
     return entries
@@ -2169,7 +2483,18 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
         kwargs["preserve_right_writing_zone"] = bool(template_data["preserve_right_writing_zone"])
     template = LayoutTemplate(**kwargs)
     template.base_slot_height_pages = ONE_PROBLEM_SLOT_HEIGHT_PAGES
-    template.metadata["placement_mode"] = "one-problem-per-page"
+    metadata = template_data.get("metadata") if isinstance(template_data.get("metadata"), dict) else {}
+    template.metadata.update(metadata)
+    session_intent = (
+        str(session.get("inputIntent") or session.get("input_intent") or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+    )
+    template.metadata.setdefault(
+        "placement_mode",
+        "continuous-page-as-is" if session_intent == "page-as-is" else "one-problem-per-page",
+    )
     return template
 
 
@@ -4592,19 +4917,31 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        edb_name = (session.get("session_name") or "classin") + f"-published-{stamp}.edb"
-        edb_path = output_dir / edb_name
+        requested_edb_name = payload.get("edbName") if "edbName" in payload else payload.get("edb_name")
+        edb_name = sanitize_edb_file_name(
+            str(requested_edb_name) if requested_edb_name is not None else None,
+            fallback_stem=f"{session.get('session_name') or 'classin'}-published-{stamp}",
+        )
+        edb_parts: list[dict[str, Any]] = []
+        edb_path: Path | None = None
         try:
-            write_edb(
-                edb_path,
-                build_edb(
-                    records,
-                    header_flag=header_flag,
-                    version=version_string_for_crop_format(crop_format),
-                    page_count_hint=template.board_page_count,
-                ),
+            edb_parts = write_classin_limited_edb_files(
+                entries,
+                template,
+                output_dir,
+                edb_name,
+                record_mode="image-only",
+                text_confidence_threshold=0.78,
+                dark_board=True,
+                board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
+                crop_format=crop_format,
+                existing_records=records,
+                existing_header_flag=header_flag,
             )
-            edb_validation = validate_edb_file(edb_path, expected_min_records=len(records))
+            if not edb_parts:
+                raise ValueError("no EDB parts were generated")
+            edb_validation, edb_parts = _validate_edb_parts(edb_parts)
+            edb_path = Path(str(edb_parts[0]["edbPath"]))
         except Exception as exc:  # noqa: BLE001
             self._send_json({"ok": False, "error": f"failed to write edb: {exc}"},
                             status=HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -4673,6 +5010,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 scale_ratio = _coerce_placement_scale_ratio(prior)
                 if scale_ratio is not None:
                     problem["placementScaleRatio"] = scale_ratio
+        _annotate_session_with_edb_part_metadata(new_session, edb_parts)
         _refresh_session_problem_counts(new_session)
 
         source_paths_for_handoff = [
@@ -4685,6 +5023,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 output_dir,
                 source_paths=source_paths_for_handoff,
                 edb_path=edb_path,
+                edb_parts=edb_parts,
                 ui_session=new_session,
                 summary={
                     "record_count": len(records),
@@ -4692,6 +5031,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     "crop_format": crop_format,
                     "board_theme": session.get("board_theme") or DEFAULT_BOARD_THEME,
                     "placements": placements,
+                    "edb_parts": edb_parts,
+                    "edb_split": len(edb_parts) > 1,
                 },
                 template=template,
             )
@@ -4714,6 +5055,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         new_session["classinHandoffPath"] = str(classin_handoff_path)
         new_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
         new_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
+        new_session["edb_parts"] = edb_parts
+        new_session["edbParts"] = edb_parts
+        new_session["edb_part_count"] = len(edb_parts)
+        new_session["edbPartCount"] = len(edb_parts)
+        new_session["edb_split"] = len(edb_parts) > 1
+        new_session["edbSplit"] = len(edb_parts) > 1
         new_session["classin_preflight"] = classin_preflight
         new_session["classinPreflight"] = classin_preflight
         if isinstance(handoff_payload.get("passageReviewItems"), list):
@@ -4862,6 +5209,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             source_problem_overlap_groups=source_problem_overlap_groups,
             source_problem_overlap_group_count=source_problem_overlap_group_count,
             layout_diagnostics=layout_diagnostics,
+            edb_parts=edb_parts,
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
@@ -5490,7 +5838,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "skip_crop": skip_crop,
                 "max_dimension": int(payload["maxDimension"]) if payload.get("maxDimension") else int(payload["max_dimension"]) if payload.get("max_dimension") else None,
                 "export_edb": _coerce_bool(payload.get("export_edb") if "export_edb" in payload else payload.get("exportEdb"), default=True),
-                "edb_name": str(payload.get("edbName") or payload.get("edb_name") or "mvp_board.edb"),
+                "edb_name": sanitize_edb_file_name(
+                    str(payload.get("edbName") or payload.get("edb_name"))
+                    if (payload.get("edbName") or payload.get("edb_name")) is not None
+                    else None,
+                    fallback_stem="mvp_board",
+                ),
                 "sync_ui": False,
             }
             common_kwargs.update(_extract_ai_fallback_kwargs(payload))
@@ -5520,13 +5873,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         _refresh_session_problem_counts(session)
         edb_validation = None
         edb_path = result.get("edb_path")
-        if edb_path:
+        raw_edb_parts = result.get("edb_parts") if isinstance(result.get("edb_parts"), list) else []
+        normalized_parts: list[dict[str, Any]] = []
+        if raw_edb_parts:
             try:
-                expected_records = len((result.get("summary") or {}).get("placements") or [])
-                edb_validation = validate_edb_file(edb_path, expected_min_records=max(1, expected_records))
+                edb_validation, normalized_parts = _validate_edb_parts(raw_edb_parts)
+                result["edb_parts"] = normalized_parts
+                result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
+        elif edb_path:
+            try:
+                expected_records = len((result.get("summary") or {}).get("placements") or [])
+                edb_validation, normalized_parts = _validate_edb_parts([
+                    {
+                        "partIndex": 1,
+                        "partCount": 1,
+                        "edbPath": str(edb_path),
+                        "recordCount": max(1, expected_records),
+                    }
+                ])
+                result["edb_parts"] = normalized_parts
+                result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        if normalized_parts:
+            session["edb_parts"] = normalized_parts
+            session["edbParts"] = normalized_parts
+            session["edb_part_count"] = len(normalized_parts)
+            session["edbPartCount"] = len(normalized_parts)
+            session["edb_split"] = len(normalized_parts) > 1
+            session["edbSplit"] = len(normalized_parts) > 1
+            _annotate_session_with_edb_part_metadata(session, normalized_parts)
         if preview_only:
             self.app_server.allowed_files |= collect_session_file_paths(session)
         else:
@@ -5552,6 +5932,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "uiSessionPath": str(result["ui_session_path"]),
                 "edb_path": str(result["edb_path"]) if result["edb_path"] else None,
                 "edbPath": str(result["edb_path"]) if result["edb_path"] else None,
+                "edb_paths": [str(path) for path in (result.get("edb_paths") or [])],
+                "edbPaths": [str(path) for path in (result.get("edb_paths") or [])],
+                "edb_parts": result.get("edb_parts") or [],
+                "edbParts": result.get("edb_parts") or [],
+                "edb_part_count": len(result.get("edb_parts") or []),
+                "edbPartCount": len(result.get("edb_parts") or []),
+                "edb_split": len(result.get("edb_parts") or []) > 1,
+                "edbSplit": len(result.get("edb_parts") or []) > 1,
                 "edb_validation": edb_validation,
                 "edbValidation": edb_validation,
                 "classin_preflight": classin_preflight,
