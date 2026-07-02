@@ -5419,6 +5419,33 @@ def _entries_flow_end_pages(problem_entries: list[ProblemEntry], template: Layou
     )
 
 
+def _placement_summary_end_pages(placement: dict[str, object]) -> float:
+    values: list[float] = []
+    for key in (
+        "record_bottom_y_pages",
+        "actual_bottom_y_pages",
+        "snapped_next_start_y_pages",
+    ):
+        try:
+            raw_value = placement.get(key)
+            if raw_value is not None:
+                values.append(float(raw_value))
+        except (TypeError, ValueError):
+            continue
+    return max(values, default=0.0)
+
+
+def _placement_summaries_flow_end_pages(placements: list[dict[str, object]]) -> float:
+    return max((_placement_summary_end_pages(placement) for placement in placements), default=0.0)
+
+
+def _first_placement_over_page_limit(placements: list[dict[str, object]], max_pages: int) -> int | None:
+    for index, placement in enumerate(placements):
+        if _placement_summary_end_pages(placement) > max_pages + 1e-6:
+            return index
+    return None
+
+
 def split_problem_entries_for_classin_page_limit(
     problem_entries: list[ProblemEntry],
     template: LayoutTemplate,
@@ -5732,6 +5759,9 @@ def build_image_only_records(
                 "actual_content_height_pages": round(actual_height_pages, 6),
                 "actual_bottom_y_pages": round(actual_bottom_y_pages, 6),
                 "snapped_next_start_y_pages": round(snapped_next_start_y_pages, 6),
+                "record_top_y_pages": round(y_px / CANVAS_WIDTH, 6),
+                "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
+                "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),
                 "overflow_violation": overflow_amount_pages > 0 and not placement.overflow_allowed,
@@ -5787,12 +5817,13 @@ def build_mixed_records(
             placement.actual_content_height_pages * CANVAS_WIDTH,
         )
         scaled_available_width_px = available_width_px * scale_ratio
+        rendered_problem_height_px = placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio
         scale = scaled_available_width_px / max(entry.bounds.width, 1.0)
         problem_origin_x_px = _problem_origin_x_px(entry, scaled_available_width_px)
         problem_origin_y_px = _problem_origin_y_px(
             entry,
             placement,
-            placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio,
+            rendered_problem_height_px,
         )
         block_summaries: list[dict[str, object]] = []
         text_record_count = 0
@@ -5881,7 +5912,7 @@ def build_mixed_records(
                         y=normalize_y_px(problem_origin_y_px, page_count_hint=template.board_page_count),
                         width_hint=normalize_width_px(scaled_available_width_px),
                         height_hint=normalize_height_px(
-                            placement.actual_content_height_pages * CANVAS_WIDTH * scale_ratio,
+                            rendered_problem_height_px,
                             page_count_hint=template.board_page_count,
                         ),
                     )
@@ -5904,6 +5935,9 @@ def build_mixed_records(
                 "actual_content_height_pages": placement.actual_content_height_pages,
                 "actual_bottom_y_pages": placement.actual_bottom_y_pages,
                 "snapped_next_start_y_pages": placement.snapped_next_start_y_pages,
+                "record_top_y_pages": round(problem_origin_y_px / CANVAS_WIDTH, 6),
+                "record_bottom_y_pages": round((problem_origin_y_px + rendered_problem_height_px) / CANVAS_WIDTH, 6),
+                "rendered_height_pages": round(rendered_problem_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": placement.overflow_amount_pages,
                 "overflow_violation": placement.overflow_violation,
@@ -5978,25 +6012,31 @@ def write_classin_limited_edb_files(
     board_theme: str,
     crop_format: str,
     existing_records: list[bytes] | None = None,
+    existing_placements: list[dict[str, object]] | None = None,
     existing_header_flag: int | None = None,
 ) -> list[dict[str, Any]]:
     chunks = split_problem_entries_for_classin_page_limit(problem_entries, template)
     if not chunks:
         return []
-    part_count = len(chunks)
     part_template = template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
-    parts: list[dict[str, Any]] = []
+    rendered_chunks: list[dict[str, Any]] = []
 
-    for part_index, chunk_entries in enumerate(chunks):
+    def build_rendered_chunk(
+        chunk_entries: list[ProblemEntry],
+        *,
+        allow_existing: bool = False,
+    ) -> dict[str, Any]:
         can_reuse_existing = (
-            part_count == 1
+            allow_existing
+            and len(chunk_entries) == len(problem_entries)
             and existing_records is not None
+            and existing_placements is not None
             and existing_header_flag is not None
             and int(template.board_page_count) == CLASSIN_MAX_BOARD_PAGE_COUNT
         )
         if can_reuse_existing:
             part_records = list(existing_records or [])
-            part_placements = []
+            part_placements = [dict(placement) for placement in (existing_placements or [])]
             part_header_flag = int(existing_header_flag or 0)
         else:
             part_records, part_placements, part_header_flag = build_records(
@@ -6009,7 +6049,52 @@ def write_classin_limited_edb_files(
                 board_theme=board_theme,
                 crop_format=crop_format,
             )
+        return {
+            "entries": list(chunk_entries),
+            "records": part_records,
+            "placements": part_placements,
+            "header_flag": part_header_flag,
+            "flow_end_pages": _placement_summaries_flow_end_pages(part_placements),
+        }
 
+    def render_chunk(chunk_entries: list[ProblemEntry], *, allow_existing: bool = False) -> None:
+        rendered_chunk = build_rendered_chunk(chunk_entries, allow_existing=allow_existing)
+        part_placements = list(rendered_chunk["placements"])
+        flow_end_pages = float(rendered_chunk["flow_end_pages"])
+        if flow_end_pages > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6 and len(chunk_entries) > 1:
+            split_index = _first_placement_over_page_limit(part_placements, CLASSIN_MAX_BOARD_PAGE_COUNT)
+            if split_index is None or split_index <= 0:
+                split_index = 1
+            render_chunk(chunk_entries[:split_index])
+            render_chunk(chunk_entries[split_index:])
+            return
+
+        rendered_chunks.append(rendered_chunk)
+
+    for chunk_entries in chunks:
+        render_chunk(chunk_entries, allow_existing=len(chunks) == 1)
+
+    compacted_chunks: list[dict[str, Any]] = []
+    for rendered_chunk in rendered_chunks:
+        if compacted_chunks:
+            candidate_entries = [
+                *list(compacted_chunks[-1]["entries"]),
+                *list(rendered_chunk["entries"]),
+            ]
+            candidate = build_rendered_chunk(candidate_entries)
+            if float(candidate["flow_end_pages"]) <= CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+                compacted_chunks[-1] = candidate
+                continue
+        compacted_chunks.append(rendered_chunk)
+    rendered_chunks = compacted_chunks
+
+    part_count = len(rendered_chunks)
+    parts: list[dict[str, Any]] = []
+    for part_index, rendered_chunk in enumerate(rendered_chunks):
+        chunk_entries = list(rendered_chunk["entries"])
+        part_records = list(rendered_chunk["records"])
+        part_placements = list(rendered_chunk["placements"])
+        part_header_flag = int(rendered_chunk["header_flag"])
         part_name = edb_part_file_name(edb_name, part_index, part_count)
         part_path = output_dir / part_name
         write_edb(
@@ -6038,6 +6123,8 @@ def write_classin_limited_edb_files(
                 "placement_count": len(part_placements),
                 "pageCountHint": int(part_template.board_page_count),
                 "page_count_hint": int(part_template.board_page_count),
+                "flowEndPages": float(rendered_chunk.get("flow_end_pages") or 0.0),
+                "flow_end_pages": float(rendered_chunk.get("flow_end_pages") or 0.0),
                 "problemIds": problem_ids,
                 "problem_ids": problem_ids,
                 "placements": part_placements,
@@ -6081,8 +6168,10 @@ def annotate_ui_session_with_edb_part_metadata(ui_session: dict[str, Any], edb_p
         if placement:
             problem["edbLocalStartYPages"] = placement.get("start_y_pages")
             problem["edb_local_start_y_pages"] = placement.get("start_y_pages")
-            problem["edbLocalBottomYPages"] = placement.get("actual_bottom_y_pages")
-            problem["edb_local_bottom_y_pages"] = placement.get("actual_bottom_y_pages")
+            problem["edbLocalBottomYPages"] = placement.get("record_bottom_y_pages") or placement.get("actual_bottom_y_pages")
+            problem["edb_local_bottom_y_pages"] = placement.get("record_bottom_y_pages") or placement.get("actual_bottom_y_pages")
+            problem["edbLocalRecordBottomYPages"] = placement.get("record_bottom_y_pages")
+            problem["edb_local_record_bottom_y_pages"] = placement.get("record_bottom_y_pages")
 
 
 def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object]]) -> None:
@@ -6320,6 +6409,7 @@ def run_problem_export(
             board_theme=resolved_board_theme,
             crop_format=resolved_crop_format,
             existing_records=records,
+            existing_placements=placements,
             existing_header_flag=header_flag,
         )
         edb_path = Path(str(edb_parts[0]["edbPath"])) if edb_parts else None
