@@ -1378,7 +1378,6 @@ def _session_publish_blocking_preflight(
     ]
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
-    issues.extend(dict(issue) for issue in _classin_board_placement_overlap_issues(checked_problems))
     issues.extend(
         _session_passage_review_queue_issues(
             session,
@@ -1481,6 +1480,7 @@ def _session_publish_summary(
     passage_group_source_reuse_group_count: int | None = None,
     source_problem_overlap_groups: list[dict[str, Any]] | None = None,
     source_problem_overlap_group_count: int | None = None,
+    layout_diagnostics: dict[str, Any] | None = None,
     published_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_edb_path = Path(edb_path).resolve()
@@ -1555,6 +1555,12 @@ def _session_publish_summary(
         normalized_source_problem_overlap_groups,
         group_count=source_problem_overlap_group_count,
     )
+    normalized_layout_diagnostics = (
+        dict(layout_diagnostics)
+        if isinstance(layout_diagnostics, dict)
+        else {}
+    )
+    layout_diagnostics_label = str(normalized_layout_diagnostics.get("label") or "").strip()
     handoff_status, ready_for_classin = _classin_handoff_readiness(resolved_classin_handoff_path)
     if ready_for_classin is None and handoff_status:
         ready_for_classin = handoff_status == "ready_for_classin_review"
@@ -1593,6 +1599,8 @@ def _session_publish_summary(
         "sourceProblemOverlapGroups": normalized_source_problem_overlap_groups,
         "sourceProblemOverlapGroupCount": max(0, int(source_problem_overlap_group_count or 0)),
         "sourceProblemOverlapLabel": source_problem_overlap_label,
+        "layoutDiagnostics": normalized_layout_diagnostics,
+        "layoutDiagnosticsLabel": layout_diagnostics_label,
         "edbFileExists": resolved_edb_path.is_file(),
         "outputDirExists": resolved_output_dir.is_dir(),
         "recordCount": int(record_count or record_count_actual),
@@ -1636,6 +1644,8 @@ def _session_publish_summary(
         "source_problem_overlap_groups": summary["sourceProblemOverlapGroups"],
         "source_problem_overlap_group_count": summary["sourceProblemOverlapGroupCount"],
         "source_problem_overlap_label": summary["sourceProblemOverlapLabel"],
+        "layout_diagnostics": summary["layoutDiagnostics"],
+        "layout_diagnostics_label": summary["layoutDiagnosticsLabel"],
         "edb_file_exists": summary["edbFileExists"],
         "output_dir_exists": summary["outputDirExists"],
         "record_count": summary["recordCount"],
@@ -4533,7 +4543,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if scale_ratio is None:
                 scale_ratio = _coerce_placement_scale_ratio(problem_copy)
             if scale_ratio is not None:
-                problem_copy["placementScaleRatio"] = max(1.0, scale_ratio)
+                problem_copy["placementScaleRatio"] = scale_ratio
             sequence_with_placements.append(problem_copy)
         sequence = sequence_with_placements
 
@@ -4787,6 +4797,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     break
             if source_problem_overlap_group_count is not None:
                 break
+        layout_diagnostics = None
+        for source in (handoff_payload, new_session):
+            for key in ("layoutDiagnostics", "layout_diagnostics"):
+                value = source.get(key)
+                if isinstance(value, dict):
+                    layout_diagnostics = value
+                    break
+            if layout_diagnostics is not None:
+                break
 
         publish_summary = _session_publish_summary(
             edb_path=edb_path,
@@ -4842,6 +4861,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             passage_group_source_reuse_group_count=passage_group_source_reuse_group_count,
             source_problem_overlap_groups=source_problem_overlap_groups,
             source_problem_overlap_group_count=source_problem_overlap_group_count,
+            layout_diagnostics=layout_diagnostics,
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
@@ -5453,14 +5473,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             input_intent = _extract_input_intent(payload)
             input_notes = _extract_input_notes(payload)
             crop_format = _extract_crop_format(payload)
+            detect_perspective = _coerce_bool(payload.get("detectPerspective") if "detectPerspective" in payload else payload.get("detect_perspective"))
+            skip_deskew = _coerce_bool(payload.get("skipDeskew") if "skipDeskew" in payload else payload.get("skip_deskew"))
+            skip_crop = _coerce_bool(payload.get("skipCrop") if "skipCrop" in payload else payload.get("skip_crop"))
+            if input_intent == "page-as-is":
+                detect_perspective = False
+                skip_deskew = True
+                skip_crop = True
             common_kwargs = {
                 "output_dir": output_dir,
                 "subject_name": str(payload.get("subject") or "unknown"),
                 "ocr": str(payload.get("ocr") or "auto"),
                 "pdf_dpi": int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
-                "detect_perspective": _coerce_bool(payload.get("detectPerspective") if "detectPerspective" in payload else payload.get("detect_perspective")),
-                "skip_deskew": _coerce_bool(payload.get("skipDeskew") if "skipDeskew" in payload else payload.get("skip_deskew")),
-                "skip_crop": _coerce_bool(payload.get("skipCrop") if "skipCrop" in payload else payload.get("skip_crop")),
+                "detect_perspective": detect_perspective,
+                "skip_deskew": skip_deskew,
+                "skip_crop": skip_crop,
                 "max_dimension": int(payload["maxDimension"]) if payload.get("maxDimension") else int(payload["max_dimension"]) if payload.get("max_dimension") else None,
                 "export_edb": _coerce_bool(payload.get("export_edb") if "export_edb" in payload else payload.get("exportEdb"), default=True),
                 "edb_name": str(payload.get("edbName") or payload.get("edb_name") or "mvp_board.edb"),

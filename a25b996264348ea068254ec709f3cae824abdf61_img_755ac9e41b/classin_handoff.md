@@ -2,7 +2,7 @@
 
 - Handoff status: `ready_for_classin_review`
 - Ready for ClassIn: yes
-- EDB: `/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-published-20260616-140135.edb`
+- EDB: `/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-published-20260630-181139.edb`
 - Expected records: 5
 - Core problems: 5
 - Supplemental items: 0

@@ -329,50 +329,65 @@ function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   return Math.ceil((value - 0.001) / slotHeight) * slotHeight;
 }
 
+function itemHeightPages(item){
+  return Math.max(0.12, item?.heightFrac || item?.actualHeightPages || item?.actual_height_pages || 0.8);
+}
+
+function itemRenderedHeightPages(item, scaleRatio = item?.placementScaleRatio){
+  const heightPages = itemHeightPages(item);
+  const rawScale = Number.isFinite(Number(scaleRatio)) ? Number(scaleRatio) : DEFAULT_PLACEMENT_SCALE_RATIO;
+  const scale = Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, rawScale));
+  return heightPages * scale;
+}
+
 function placementSlotHeightPages(item){
   if (!item) return 0;
-  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const heightPages = itemHeightPages(item);
+  const renderedHeightPages = itemRenderedHeightPages(item);
   const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
   const snappedNext = Number.isFinite(item.snappedNextStartYPages)
-    ? Math.max(startPages + heightPages, item.snappedNextStartYPages)
-    : snapUpPages(startPages + heightPages);
-  return Math.max(heightPages, snappedNext - startPages);
+    ? Math.max(startPages + renderedHeightPages, item.snappedNextStartYPages)
+    : snapUpPages(startPages + renderedHeightPages);
+  return Math.max(heightPages, renderedHeightPages, snappedNext - startPages);
 }
 
 function maxPlacementScaleRatio(item){
   if (!item) return PLACEMENT_SCALE_MAX;
-  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const heightPages = itemHeightPages(item);
   const slotHeightPages = placementSlotHeightPages(item);
   return Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, slotHeightPages / heightPages));
 }
 
 function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio){
   if (!item) return 0;
-  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const heightPages = itemHeightPages(item);
   const scale = normalizePlacementScaleRatio(scaleRatio, maxPlacementScaleRatio(item));
   return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
 }
 
 function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!item) return slotHeight;
-  const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+  const heightPages = itemHeightPages(item);
+  const renderedHeightPages = itemRenderedHeightPages(item);
   const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
   const snappedNext = Number.isFinite(item.snappedNextStartYPages) ? Math.max(0, item.snappedNextStartYPages) : null;
   const savedSpan = startPages !== null && snappedNext !== null && snappedNext > startPages
     ? snappedNext - startPages
     : 0;
-  return Math.max(heightPages, savedSpan || snapUpPages(heightPages, slotHeight));
+  return Math.max(heightPages, renderedHeightPages, savedSpan || snapUpPages(renderedHeightPages, slotHeight));
 }
 
 function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!Array.isArray(items)) return items;
   let cursorPages = 0;
   return items.map(item => {
-    const heightPages = Math.max(0.12, item.heightFrac || 0.8);
+    const heightPages = itemHeightPages(item);
+    const renderedHeightPages = itemRenderedHeightPages(item);
     const startPages = snapUpPages(cursorPages, slotHeight);
     const slotSpanPages = itemSlotSpanPages(item, slotHeight);
-    const snappedNextStartYPages = snapUpPages(startPages + Math.max(heightPages, slotSpanPages), slotHeight);
+    const snappedNextStartYPages = snapUpPages(startPages + Math.max(renderedHeightPages, slotSpanPages), slotHeight);
     const actualBottomPages = startPages + heightPages;
+    const renderedBottomPages = startPages + renderedHeightPages;
     const slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - startPages) / slotHeight));
     cursorPages = snappedNextStartYPages;
     return {
@@ -381,8 +396,9 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES)
       startYPages: Number(startPages.toFixed(6)),
       snappedNextStartYPages: Number(snappedNextStartYPages.toFixed(6)),
       actualBottomYPages: Number(actualBottomPages.toFixed(6)),
+      renderedBottomYPages: Number(renderedBottomPages.toFixed(6)),
       slotSpanCount,
-      overflowAmountPages: Math.max(0, heightPages - slotHeight),
+      overflowAmountPages: Math.max(0, renderedHeightPages - slotHeight),
     };
   });
 }
@@ -502,6 +518,20 @@ function clampReviewZoom(value){
   return Math.max(REVIEW_ZOOM_MIN, Math.min(REVIEW_ZOOM_MAX, next));
 }
 
+function reviewZoomPercent(value){
+  return Math.round(clampReviewZoom(value) * 100);
+}
+
+function ReviewCanvasZoomShell({ children }){
+  return (
+    <div className="review-canvas-scroll">
+      <div className="review-canvas-zoom-shell">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ManualSplitEditor({
   page,
   regions,
@@ -549,65 +579,67 @@ function ManualSplitEditor({
   return (
     <div className="manual-split-layout">
       <div className="manual-split-canvas-shell">
-        <div
-          className={`review-page-canvas manual-split-canvas ${activeMode === 'stamp' ? 'stamp-mode' : 'draw-mode'}`}
-          onMouseDown={(evt) => onCanvasMouseDown?.(evt, page)}
-          onMouseMove={(evt) => onCanvasMouseMove?.(evt, page)}
-          onMouseLeave={(evt) => onCanvasMouseLeave?.(evt, page)}
-        >
-          {page.sourceImageUri ? (
-            <img src={page.sourceImageUri} alt={page.id} draggable={false} />
-          ) : (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
-              페이지 이미지를 불러올 수 없어요.
-            </div>
-          )}
-          {regionList.map(region => {
-            const isSelected = selectedRegionIds?.has(region.id);
-            return (
+        <ReviewCanvasZoomShell>
+          <div
+            className={`review-page-canvas manual-split-canvas ${activeMode === 'stamp' ? 'stamp-mode' : 'draw-mode'}`}
+            onMouseDown={(evt) => onCanvasMouseDown?.(evt, page)}
+            onMouseMove={(evt) => onCanvasMouseMove?.(evt, page)}
+            onMouseLeave={(evt) => onCanvasMouseLeave?.(evt, page)}
+          >
+            {page.sourceImageUri ? (
+              <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+            ) : (
+              <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
+                페이지 이미지를 불러올 수 없어요.
+              </div>
+            )}
+            {regionList.map(region => {
+              const isSelected = selectedRegionIds?.has(region.id);
+              return (
+                <div
+                  key={region.id}
+                  className={[
+                    'manual-split-box',
+                    isSelected ? 'selected' : '',
+                    focusShadeRegionId === region.id ? 'focus-shade' : '',
+                  ].filter(Boolean).join(' ')}
+                  style={manualSplitBoxStyle(region.bbox, page)}
+                  onMouseDown={(evt) => onRegionMouseDown?.(region.id, evt)}
+                  title={`${region.title} · ${Math.round(region.bbox.width)}×${Math.round(region.bbox.height)}`}
+                >
+                  <div className="review-bbox-label manual-split-badge">
+                    {String(region.order || 0).padStart(2, '0')}
+                  </div>
+                  {isSelected && (
+                    <>
+                      <div className="crop-frame-label">영역</div>
+                      {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`crop-frame-handle ${mode}`}
+                          aria-label={`수동 분할 영역 ${mode}`}
+                          onMouseDown={(evt) => onHandleMouseDown?.(region.id, mode, evt)}
+                          onClick={(evt) => evt.stopPropagation()}
+                        />
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+            {draftBox && (
               <div
-                key={region.id}
-                className={[
-                  'manual-split-box',
-                  isSelected ? 'selected' : '',
-                  focusShadeRegionId === region.id ? 'focus-shade' : '',
-                ].filter(Boolean).join(' ')}
-                style={manualSplitBoxStyle(region.bbox, page)}
-                onMouseDown={(evt) => onRegionMouseDown?.(region.id, evt)}
-                title={`${region.title} · ${Math.round(region.bbox.width)}×${Math.round(region.bbox.height)}`}
+                className={`manual-split-box draft focus-shade ${activeMode === 'stamp' ? 'stamp-preview' : ''}`}
+                style={manualSplitBoxStyle(draftBox, page)}
               >
                 <div className="review-bbox-label manual-split-badge">
-                  {String(region.order || 0).padStart(2, '0')}
+                  {activeMode === 'stamp' ? '스탬프' : '새 영역'}
                 </div>
-                {isSelected && (
-                  <>
-                    <div className="crop-frame-label">영역</div>
-                    {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={`crop-frame-handle ${mode}`}
-                        aria-label={`수동 분할 영역 ${mode}`}
-                        onMouseDown={(evt) => onHandleMouseDown?.(region.id, mode, evt)}
-                        onClick={(evt) => evt.stopPropagation()}
-                      />
-                    ))}
-                  </>
-                )}
               </div>
-            );
-          })}
-          {draftBox && (
-            <div
-              className={`manual-split-box draft focus-shade ${activeMode === 'stamp' ? 'stamp-preview' : ''}`}
-              style={manualSplitBoxStyle(draftBox, page)}
-            >
-              <div className="review-bbox-label manual-split-badge">
-                {activeMode === 'stamp' ? '스탬프' : '새 영역'}
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </ReviewCanvasZoomShell>
       </div>
       <aside className="manual-split-panel" aria-label="수동 분할 영역 목록">
         <div className="manual-split-panel-head">
@@ -1043,6 +1075,17 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <button
           className="btn ghost icon"
           type="button"
+          title={canReset ? '초기화' : '초기화할 내용이 없습니다'}
+          data-tooltip={canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
+          aria-label="초기화"
+          onClick={onReset}
+          disabled={!canReset}
+        >
+          {Icon.reset}
+        </button>
+        <button
+          className="btn ghost icon"
+          type="button"
           title={canExportImages ? '이미지 다운로드 · PNG ZIP' : '다운로드할 이미지가 없습니다'}
           data-tooltip={canExportImages ? '수정된 문제 이미지를 PNG ZIP으로 다운로드' : '다운로드할 이미지가 없습니다'}
           aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
@@ -1129,6 +1172,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [reviewFilter, setReviewFilter] = useState('all');
   const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
+  const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
+  const [reviewScopePageIds, setReviewScopePageIds] = useState([]);
   const [reviewZoom, setReviewZoom] = useState(1);
   const splitDraggingRef = useRef(false);
   const splitBoxRef = useRef(null);
@@ -1137,6 +1182,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const manualSplitDragRef = useRef(null);
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
+  const reviewWrapRef = useRef(null);
 
   // Cancel split mode if the session changes underneath (e.g. after a mutation).
   useEffect(() => {
@@ -1150,16 +1196,55 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     setReviewRiskFilter(null);
   }, [session]);
   useEffect(() => {
+    if (reviewFocus === null) {
+      setReviewScopeProblemIds([]);
+      setReviewScopePageIds([]);
+      return;
+    }
     const nextFilter = String(reviewFocus?.filter || '').trim();
     const focusedProblemIds = Array.isArray(reviewFocus?.problemIds)
       ? reviewFocus.problemIds.map(id => String(id || '').trim()).filter(Boolean)
       : [];
-    if (!nextFilter && !focusedProblemIds.length) return;
+    const scopedProblemIds = Array.isArray(reviewFocus?.scopeProblemIds)
+      ? listUnique(reviewFocus.scopeProblemIds.map(id => String(id || '').trim()).filter(Boolean))
+      : [];
+    const scopedPageIds = Array.isArray(reviewFocus?.scopePageIds)
+      ? listUnique(reviewFocus.scopePageIds.map(id => String(id || '').trim()).filter(Boolean))
+      : [];
+    if (!nextFilter && !focusedProblemIds.length && !scopedProblemIds.length && !scopedPageIds.length) return;
+    if (scopedProblemIds.length || scopedPageIds.length) {
+      setReviewScopeProblemIds(scopedProblemIds);
+      setReviewScopePageIds(scopedPageIds);
+    } else {
+      setReviewScopeProblemIds([]);
+      setReviewScopePageIds([]);
+    }
     setReviewFilter(nextFilter || 'all');
     setReviewRiskFilter(null);
     setSelectedIds(new Set(focusedProblemIds));
     if (focusedProblemIds.length && setActive) setActive(focusedProblemIds[0]);
   }, [reviewFocus, setActive]);
+
+  const reviewScopeProblemIdSet = useMemo(() => new Set(reviewScopeProblemIds), [reviewScopeProblemIds]);
+  const reviewScopePageIdSet = useMemo(() => new Set(reviewScopePageIds), [reviewScopePageIds]);
+  const reviewScopeActive = reviewScopeProblemIdSet.size > 0 || reviewScopePageIdSet.size > 0;
+  const problemInReviewScope = useCallback((problem) => {
+    if (!reviewScopeActive) return true;
+    const problemId = String(problem?.id || problem?.problem_id || '').trim();
+    const pageId = String(problem?.sourcePageId || problem?.source_page_id || '').trim();
+    return Boolean(
+      (problemId && reviewScopeProblemIdSet.has(problemId))
+      || (pageId && reviewScopePageIdSet.has(pageId))
+    );
+  }, [reviewScopeActive, reviewScopeProblemIdSet, reviewScopePageIdSet]);
+  const scopedProblems = useMemo(
+    () => (session?.problems || []).filter(problemInReviewScope),
+    [session, problemInReviewScope]
+  );
+  const clearReviewScope = useCallback(() => {
+    setReviewScopeProblemIds([]);
+    setReviewScopePageIds([]);
+  }, []);
 
   const onBoxClick = (probId, evt) => {
     if (manualSplit) return;
@@ -1187,11 +1272,11 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
   const statusCounts = useMemo(() => {
-    const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(session?.problems || []);
+    const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(scopedProblems);
     if (helperCounts) return helperCounts;
     const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
     const passageGroups = new Set();
-    (session?.problems || []).forEach(problem => {
+    scopedProblems.forEach(problem => {
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
@@ -1201,11 +1286,14 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
         passageGroups.add(passageGroupId);
       }
     });
-    counts.supplemental = (session?.problems || []).filter(isSupplementalProblem).length;
+    counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
     counts.passageGroups = passageGroups.size;
     return counts;
-  }, [session]);
-  const sessionCounts = useMemo(() => sessionProblemCounts(session), [session]);
+  }, [scopedProblems]);
+  const sessionCounts = useMemo(
+    () => reviewScopeActive ? countSessionProblems(scopedProblems) : sessionProblemCounts(session),
+    [reviewScopeActive, scopedProblems, session]
+  );
   const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
   const passageReviewProblemIds = useMemo(
     () => new Set(reviewSummary.passageReviewProblemIds || []),
@@ -1213,25 +1301,30 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   );
   const riskFilterHasProblemMatches = useMemo(() => {
     if (!reviewRiskFilter) return false;
-    return (session?.problems || []).some(problem => hasRiskFlag(problem, reviewRiskFilter));
-  }, [session, reviewRiskFilter]);
+    return scopedProblems.some(problem => hasRiskFlag(problem, reviewRiskFilter));
+  }, [scopedProblems, reviewRiskFilter]);
   const pageRetryIds = useMemo(() => {
     const ids = [];
     const byId = problemsById;
     pages.forEach(page => {
-      const pageFlags = riskFlagsFor(page);
-      const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
-      const hasProblemRisk = (page.problemIds || [])
+      const pageId = String(page?.id || '').trim();
+      const scopedPageProblems = (page.problemIds || [])
         .map(pid => byId.get(pid))
         .filter(Boolean)
+        .filter(problemInReviewScope);
+      const pageInScope = !reviewScopeActive || reviewScopePageIdSet.has(pageId) || scopedPageProblems.length > 0;
+      if (!pageInScope) return;
+      const pageFlags = riskFlagsFor(page);
+      const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
+      const hasProblemRisk = scopedPageProblems
         .some(problem => deriveProblemStatus(problem) !== 'normal');
-      if (pageStatus === 'failed' || (Array.isArray(pageFlags) && pageFlags.length) || !(page.problemIds || []).length || hasProblemRisk) {
+      if (pageStatus === 'failed' || (Array.isArray(pageFlags) && pageFlags.length) || !scopedPageProblems.length || hasProblemRisk) {
         ids.push(page.id);
       }
     });
     return listUnique(ids.filter(Boolean));
-  }, [pages, problemsById]);
-  const activeReviewFilter = reviewFilter !== 'all' || Boolean(reviewRiskFilter);
+  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
+  const activeReviewFilter = reviewFilter !== 'all' || Boolean(reviewRiskFilter) || reviewScopeActive;
   const visibleReviewScope = useMemo(() => {
     const retryPageIdSet = new Set();
     const problemIdSet = new Set();
@@ -1239,7 +1332,11 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     pages.forEach(page => {
       const allPageProblems = (page.problemIds || [])
         .map(pid => problemsById.get(pid))
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter(problemInReviewScope);
+      const pageId = String(page?.id || '').trim();
+      const pageInScope = !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
+      if (!pageInScope) return;
       const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
         ? hasRiskFlag(page, reviewRiskFilter)
         : false;
@@ -1259,10 +1356,10 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       problemIds: Array.from(problemIdSet),
       retryPageIds: Array.from(retryPageIdSet),
     };
-  }, [pages, problemsById, pageRetryIds, passageReviewProblemIds, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches]);
-  const actionableProblemIds = useMemo(() => (session?.problems || [])
+  }, [pages, problemsById, pageRetryIds, passageReviewProblemIds, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
+  const actionableProblemIds = useMemo(() => scopedProblems
     .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
-    .map(problem => problem.id), [session]);
+    .map(problem => problem.id), [scopedProblems]);
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
   const selectedCanBoxEdit = Boolean(
@@ -1407,9 +1504,39 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     beginManualPageSplit(selectedSourcePage, selectedList);
   };
 
+  const centerReviewZoomScrollers = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        reviewWrapRef.current?.querySelectorAll?.('.review-canvas-scroll').forEach(scroller => {
+          const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+          if (maxScrollLeft > 1) scroller.scrollLeft = maxScrollLeft / 2;
+        });
+      });
+    });
+  }, []);
+
+  const setReviewZoomValue = useCallback((value) => {
+    setReviewZoom(clampReviewZoom(value));
+    centerReviewZoomScrollers();
+  }, [centerReviewZoomScrollers]);
+
   const adjustReviewZoom = useCallback((delta) => {
     setReviewZoom(prev => clampReviewZoom(prev + delta));
-  }, []);
+    centerReviewZoomScrollers();
+  }, [centerReviewZoomScrollers]);
+
+  const resetReviewZoom = useCallback(() => {
+    setReviewZoomValue(1);
+  }, [setReviewZoomValue]);
+
+  const updateReviewZoomPercent = useCallback((event) => {
+    setReviewZoomValue(Number(event.target.value) / 100);
+  }, [setReviewZoomValue]);
+
+  useEffect(() => {
+    if (Math.abs(reviewZoom - 1) < 0.001) return;
+    centerReviewZoomScrollers();
+  }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
     if (!evt.ctrlKey && !evt.metaKey) return;
@@ -2224,6 +2351,12 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
         </span>
       )}
+      {reviewScopeActive && (
+        <span className="review-risk-filter-active">
+          최근 추가 묶음 · {formatProblemCount(sessionCounts)}
+          <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
+        </span>
+      )}
       <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
       <div className="spacer" />
       {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
@@ -2400,17 +2533,36 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
             <button
               type="button"
               className="icon-btn"
-              title="검수 화면 축소"
+              title="문제 이미지 축소"
               onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
               disabled={reviewZoom <= REVIEW_ZOOM_MIN}
             >
               {Icon.zoomOut}
             </button>
-            <span>{Math.round(reviewZoom * 100)}%</span>
+            <input
+              className="review-zoom-range"
+              type="range"
+              min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
+              max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
+              step="1"
+              value={reviewZoomPercent(reviewZoom)}
+              aria-label="검수 이미지 확대율"
+              title="문제 이미지만 확대/축소"
+              onChange={updateReviewZoomPercent}
+            />
+            <button
+              type="button"
+              className="review-zoom-reset"
+              title="100%로 되돌리기"
+              onClick={resetReviewZoom}
+              disabled={Math.abs(reviewZoom - 1) < 0.001}
+            >
+              {reviewZoomPercent(reviewZoom)}%
+            </button>
             <button
               type="button"
               className="icon-btn"
-              title="검수 화면 확대"
+              title="문제 이미지 확대"
               onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
               disabled={reviewZoom >= REVIEW_ZOOM_MAX}
             >
@@ -2422,6 +2574,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           className={`review-wrap ${manualSplit ? 'manual-split-open' : ''}`}
           style={{ '--review-zoom': String(reviewZoom) }}
           onWheel={handleReviewWheel}
+          ref={reviewWrapRef}
         >
           {actionBar}
           <div className="review-summary-strip">
@@ -2576,7 +2729,11 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
           {pages.map(page => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
-              .filter(Boolean);
+              .filter(Boolean)
+              .filter(problemInReviewScope);
+            const pageId = String(page?.id || '').trim();
+            const pageInScope = !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
+            if (!pageInScope) return null;
             if (manualSplit && page.id !== manualSplit.pageId) return null;
             const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
               ? hasRiskFlag(page, reviewRiskFilter)
@@ -2588,7 +2745,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
             const pageCounts = countSessionProblems(allPageProblems);
             const pageRiskFlags = riskFlagsFor(page);
             const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status)
-              || (!(page.problemIds || []).length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
+              || (!allPageProblems.length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
             const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
             const pageCanRetry = pageRetryIds.includes(page.id);
             return (
@@ -2659,15 +2816,16 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                     onStampSizeChange={updateManualSplitStampSize}
                   />
                 ) : (
-                  <div className="review-page-canvas">
-                  {page.sourceImageUri ? (
-                    <img src={page.sourceImageUri} alt={page.id} draggable={false} />
-                  ) : (
-                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
-                      페이지 이미지를 불러올 수 없어요.
-                    </div>
-                  )}
-                  {pageProblems.map(prob => {
+                  <ReviewCanvasZoomShell>
+                    <div className="review-page-canvas">
+                    {page.sourceImageUri ? (
+                      <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                    ) : (
+                      <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
+                        페이지 이미지를 불러올 수 없어요.
+                      </div>
+                    )}
+                    {pageProblems.map(prob => {
                     const isEditing = boxEdit?.problemId === prob.id;
                     const bbox = isEditing ? boxEdit.box : (prob.bbox || {});
                     const w = page.width || 1;
@@ -2753,8 +2911,9 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                         )}
                       </div>
                     );
-                  })}
-                  </div>
+                    })}
+                    </div>
+                  </ReviewCanvasZoomShell>
                 )}
               </div>
             );
@@ -3320,15 +3479,16 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     let cursorPages = 0;
     let maxBottom = 0;
     items.forEach((it) => {
-      const heightPages = Math.max(0.12, it.heightFrac || 0.8);
+      const heightPages = itemHeightPages(it);
+      const renderedHeightPages = itemRenderedHeightPages(it);
       const startPages = usesPlacement && Number.isFinite(it.startYPages)
         ? Math.max(0, it.startYPages)
         : cursorPages;
       const top = startPages * pageH;
       const height = heightPages * pageH;
       const snappedNext = Number.isFinite(it.snappedNextStartYPages)
-        ? Math.max(startPages + heightPages, it.snappedNextStartYPages)
-        : snapUpPages(startPages + heightPages);
+        ? Math.max(startPages + renderedHeightPages, it.snappedNextStartYPages)
+        : snapUpPages(startPages + renderedHeightPages);
       positions.push({
         top,
         height,
@@ -3336,10 +3496,11 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
         spans: Math.max(1, Math.ceil(height / pageH)),
         startPages,
         heightPages,
+        renderedHeightPages,
         snappedNext,
       });
       cursorPages = snappedNext;
-      maxBottom = Math.max(maxBottom, snappedNext * pageH, top + height);
+      maxBottom = Math.max(maxBottom, snappedNext * pageH, top + renderedHeightPages * pageH);
     });
     const endTop = items.length === 0 ? 0 : Math.ceil(maxBottom / pageH - EPS) * pageH;
     const endH = pageH * 0.42;
@@ -3730,10 +3891,20 @@ function openClassinHandoff(target){
 function PublishResultPanel({ session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages }){
   const summary = useMemo(() => visible ? sessionPublishSummary(session) : null, [session, visible]);
   const history = useMemo(() => visible ? sessionPublishHistory(session) : [], [session, visible]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (summary) setOpen(false);
+  }, [summary?.edbFileName, summary?.publishedAt]);
   if (!summary) return null;
   return (
-    <div className="publish-result-panel">
-      <div className="publish-result-head">
+    <div className={`publish-result-panel ${open ? 'open' : 'is-collapsed'}`}>
+      <button
+        className="publish-result-head"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+        title={open ? '제작 결과 접기' : '제작 결과 펼치기'}
+      >
         <div className="publish-result-title">
           <strong>제작 결과</strong>
           <span>{summary.statusLabel} · {summary.recordCountLabel || `${summary.recordCount || summary.recordCountActual}개 자료`}</span>
@@ -3741,114 +3912,120 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
         <span className={`publish-result-status ${summary.validated ? 'ok' : 'warn'}`}>
           {summary.validated ? '검증 완료' : '확인 필요'}
         </span>
-      </div>
-      <div className="publish-result-file" title={summary.edbPath || summary.edbFileName}>
-        {summary.edbFileName}
-      </div>
-      <div className="publish-result-metrics">
-        <span>{summary.recordCountActual || summary.recordCount} records</span>
-        {summary.pageCountHint > 0 && <span>{summary.pageCountHint}p hint</span>}
-        {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
-        {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
-        {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
-        {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
-        {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
-        {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
-        {summary.passageReviewReasonLabel && <span title="긴 지문 검수 사유">{summary.passageReviewReasonLabel}</span>}
-        {summary.sourceProblemOverlapLabel && <span title="원본 문제 영역 겹침">{summary.sourceProblemOverlapLabel}</span>}
-        {summary.passageGroupSourceReuseLabel && <span title="지문 원본 중복">{summary.passageGroupSourceReuseLabel}</span>}
-        {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
-      </div>
-      <div className="publish-result-actions">
-        <button
-          className="btn"
-          type="button"
-          onClick={() => downloadPublishSummary(summary)}
-          disabled={!summary.canDownload}
-          title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'EDB 다시 다운로드'}
-        >
-          {Icon.download}<span>{summary.edbFileExists === false ? '파일 없음' : '다운로드'}</span>
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={() => openPublishedEdb(summary)}
-          disabled={!summary.canOpenEdbFile}
-          title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
-        >
-          {Icon.board}<span>ClassIn 열기</span>
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={() => summary.outputDir && openOutputFolder(summary.outputDir)}
-          disabled={!summary.canOpenOutputDir}
-          title={summary.outputDirExists === false ? '출력 폴더가 없습니다' : '출력 폴더 열기'}
-        >
-          {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더'}</span>
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={() => openClassinHandoff(summary)}
-          disabled={!summary.canOpenClassinHandoff}
-          title={summary.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
-        >
-          {Icon.check}<span>ClassIn 검수</span>
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={() => onExportImages?.()}
-          disabled={!canExportImages || exportingImages || !onExportImages}
-          title={canExportImages ? '현재 문제 이미지를 PNG 묶음으로 다운로드' : '다운로드할 이미지가 없습니다'}
-        >
-          {Icon.download}<span>{exportingImages ? '준비 중' : 'PNG 묶음'}</span>
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={() => onClassinReviewComplete?.()}
-          disabled={!summary.canMarkClassinReviewComplete || !onClassinReviewComplete}
-          title={summary.classinReviewPassed ? '이미 ClassIn 검수를 완료했습니다' : 'ClassIn에서 확인한 결과를 완료로 저장'}
-        >
-          {Icon.check}<span>{summary.classinReviewPassed ? '검수 완료됨' : '검수 완료'}</span>
-        </button>
-      </div>
-      {history.length > 1 && (
-        <div className="publish-history">
-          <div className="publish-history-title">최근 제작</div>
-          {history.slice(0, 5).map((item, index) => (
-            <div className="publish-history-row" key={`${item.edbPath || item.edbFileName}-${index}`}>
-              <div className="publish-history-main" title={item.edbPath || item.edbFileName}>
-                <strong>{index === 0 ? '최신' : `${index + 1}`}</strong>
-                <span>{item.edbFileName}</span>
-              </div>
-              <small>{formatPublishHistoryMeta(item)}{item.classinReviewStatusLabel ? ` · ${item.classinReviewStatusLabel}` : ''}</small>
-              <button
-                className="icon-btn"
-                type="button"
-                title="이 제작본 다운로드"
-                disabled={!item.canDownload}
-                onClick={() => downloadPublishSummary(item)}
-              >{Icon.download}</button>
-              <button
-                className="icon-btn"
-                type="button"
-                title="ClassIn 또는 기본 앱으로 열기"
-                disabled={!item.canOpenEdbFile}
-                onClick={() => openPublishedEdb(item)}
-              >{Icon.board}</button>
-              <button
-                className="icon-btn"
-                type="button"
-                title="ClassIn 검수 파일 열기"
-                disabled={!item.canOpenClassinHandoff}
-                onClick={() => openClassinHandoff(item)}
-              >{Icon.check}</button>
+        <span className="publish-result-state">{open ? '접기' : '펼치기'}</span>
+      </button>
+      {open && (
+        <>
+          <div className="publish-result-file" title={summary.edbPath || summary.edbFileName}>
+            {summary.edbFileName}
+          </div>
+          <div className="publish-result-metrics">
+            <span>{summary.recordCountActual || summary.recordCount} records</span>
+            {summary.pageCountHint > 0 && <span>{summary.pageCountHint}p hint</span>}
+            {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
+            {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
+            {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
+            {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
+            {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
+            {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
+            {summary.passageReviewReasonLabel && <span title="긴 지문 검수 사유">{summary.passageReviewReasonLabel}</span>}
+            {summary.sourceProblemOverlapLabel && <span title="원본 문제 영역 겹침">{summary.sourceProblemOverlapLabel}</span>}
+            {summary.passageGroupSourceReuseLabel && <span title="지문 원본 중복">{summary.passageGroupSourceReuseLabel}</span>}
+            {summary.layoutDiagnosticsLabel && <span title="긴 이미지 배치 진단">{summary.layoutDiagnosticsLabel}</span>}
+            {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
+          </div>
+          <div className="publish-result-actions">
+            <button
+              className="btn"
+              type="button"
+              onClick={() => downloadPublishSummary(summary)}
+              disabled={!summary.canDownload}
+              title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'EDB 다시 다운로드'}
+            >
+              {Icon.download}<span>{summary.edbFileExists === false ? '파일 없음' : '다운로드'}</span>
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => openPublishedEdb(summary)}
+              disabled={!summary.canOpenEdbFile}
+              title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
+            >
+              {Icon.board}<span>ClassIn 열기</span>
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => summary.outputDir && openOutputFolder(summary.outputDir)}
+              disabled={!summary.canOpenOutputDir}
+              title={summary.outputDirExists === false ? '출력 폴더가 없습니다' : '출력 폴더 열기'}
+            >
+              {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더'}</span>
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => openClassinHandoff(summary)}
+              disabled={!summary.canOpenClassinHandoff}
+              title={summary.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
+            >
+              {Icon.check}<span>ClassIn 검수</span>
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => onExportImages?.()}
+              disabled={!canExportImages || exportingImages || !onExportImages}
+              title={canExportImages ? '현재 문제 이미지를 PNG 묶음으로 다운로드' : '다운로드할 이미지가 없습니다'}
+            >
+              {Icon.download}<span>{exportingImages ? '준비 중' : 'PNG 묶음'}</span>
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => onClassinReviewComplete?.()}
+              disabled={!summary.canMarkClassinReviewComplete || !onClassinReviewComplete}
+              title={summary.classinReviewPassed ? '이미 ClassIn 검수를 완료했습니다' : 'ClassIn에서 확인한 결과를 완료로 저장'}
+            >
+              {Icon.check}<span>{summary.classinReviewPassed ? '검수 완료됨' : '검수 완료'}</span>
+            </button>
+          </div>
+          {history.length > 1 && (
+            <div className="publish-history">
+              <div className="publish-history-title">최근 제작</div>
+              {history.slice(0, 5).map((item, index) => (
+                <div className="publish-history-row" key={`${item.edbPath || item.edbFileName}-${index}`}>
+                  <div className="publish-history-main" title={item.edbPath || item.edbFileName}>
+                    <strong>{index === 0 ? '최신' : `${index + 1}`}</strong>
+                    <span>{item.edbFileName}</span>
+                  </div>
+                  <small>{formatPublishHistoryMeta(item)}{item.classinReviewStatusLabel ? ` · ${item.classinReviewStatusLabel}` : ''}</small>
+                  <button
+                    className="icon-btn"
+                    type="button"
+                    title="이 제작본 다운로드"
+                    disabled={!item.canDownload}
+                    onClick={() => downloadPublishSummary(item)}
+                  >{Icon.download}</button>
+                  <button
+                    className="icon-btn"
+                    type="button"
+                    title="ClassIn 또는 기본 앱으로 열기"
+                    disabled={!item.canOpenEdbFile}
+                    onClick={() => openPublishedEdb(item)}
+                  >{Icon.board}</button>
+                  <button
+                    className="icon-btn"
+                    type="button"
+                    title="ClassIn 검수 파일 열기"
+                    disabled={!item.canOpenClassinHandoff}
+                    onClick={() => openClassinHandoff(item)}
+                  >{Icon.check}</button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -3932,6 +4109,19 @@ function SidePanel({
   const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
   const maxScale = maxPlacementScaleRatio(item);
   const placementScale = item ? normalizePlacementScaleRatio(item.placementScaleRatio, maxScale) : DEFAULT_PLACEMENT_SCALE_RATIO;
+  const placementScalePercent = Math.round(placementScale * 100);
+  const maxScalePercent = Math.round(maxScale * 100);
+  const scaleRangeProgress = item
+    ? Math.round(
+        ((placementScale - PLACEMENT_SCALE_MIN) / Math.max(0.01, maxScale - PLACEMENT_SCALE_MIN)) * 100
+      )
+    : 0;
+  const scaleLimitBySlot = item && maxScale < PLACEMENT_SCALE_MAX - 0.001;
+  const scaleLimitLabel = item
+    ? scaleLimitBySlot
+      ? `현재 칸 높이 기준 최대 ${maxScalePercent}%까지 확대됩니다`
+      : `최대 ${maxScalePercent}%까지 확대됩니다`
+    : '자료를 선택하면 확대 범위가 표시됩니다';
   const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
   const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
@@ -4157,7 +4347,7 @@ function SidePanel({
                     </span>
                     <span className="detail-settings-state">
                       {savedCropActive && <em>crop</em>}
-                      {Math.abs(placementScale - DEFAULT_PLACEMENT_SCALE_RATIO) >= 0.001 && <em>{Math.round(placementScale * 100)}%</em>}
+                      {Math.abs(placementScale - DEFAULT_PLACEMENT_SCALE_RATIO) >= 0.001 && <em>{placementScalePercent}%</em>}
                       <i aria-hidden="true">{advancedSettingsOpen ? '접기' : '펼치기'}</i>
                     </span>
                   </button>
@@ -4189,7 +4379,23 @@ function SidePanel({
                           onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}
                         >{Icon.zoomIn}</button>
                         <div className="spacer" />
-                        <span className="scale">{Math.round(placementScale * 100)}%</span>
+                        <span className="scale">{placementScalePercent}%</span>
+                      </div>
+                      <div className="quick-scale-control">
+                        <input
+                          className="scale-range compact"
+                          type="range"
+                          min={Math.round(PLACEMENT_SCALE_MIN * 100)}
+                          max={Math.round(maxScale * 100)}
+                          value={placementScalePercent}
+                          style={{ '--range-progress': `${Math.max(0, Math.min(100, scaleRangeProgress))}%` }}
+                          title={scaleLimitLabel}
+                          data-tooltip={scaleLimitLabel}
+                          aria-label={`선택 자료 빠른 크기 조절 ${placementScalePercent}%`}
+                          onChange={e => updatePlacement({ scaleRatio: Number(e.target.value) / 100 })}
+                        />
+                        <strong>{placementScalePercent}%</strong>
+                        <small>{scaleLimitBySlot ? `최대 ${maxScalePercent}% · 칸 제한` : `최대 ${maxScalePercent}%`}</small>
                       </div>
 
                       <div className="panel-section-hd">
@@ -4355,17 +4561,26 @@ function SidePanel({
                             />
                             <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
                           </label>
-                          <label>
+                          <label className="scale-slider-row">
                             <span>크기</span>
                             <input
+                              className="scale-range"
                               type="range"
                               min={Math.round(PLACEMENT_SCALE_MIN * 100)}
                               max={Math.round(maxScale * 100)}
-                              value={Math.round(placementScale * 100)}
+                              value={placementScalePercent}
+                              style={{ '--range-progress': `${Math.max(0, Math.min(100, scaleRangeProgress))}%` }}
+                              title={scaleLimitLabel}
+                              data-tooltip={scaleLimitLabel}
+                              aria-label={`선택 자료 크기 ${placementScalePercent}%`}
                               onChange={e => updatePlacement({ scaleRatio: Number(e.target.value) / 100 })}
                             />
-                            <strong>{Math.round(placementScale * 100)}%</strong>
+                            <strong>{placementScalePercent}%</strong>
                           </label>
+                          <div className={`scale-limit-note ${scaleLimitBySlot ? 'limited' : ''}`}>
+                            <span>최대 {maxScalePercent}%</span>
+                            <small>{scaleLimitBySlot ? '칸 높이 제한' : '전체 허용 한도'}</small>
+                          </div>
                           <div className="scale-actions">
                             <button
                               className="icon-btn"
@@ -5052,6 +5267,7 @@ function applyItemStateToProblem(problem, item){
     ? normalizePlacementYRatio(item.placementYRatio)
     : DEFAULT_PLACEMENT_Y_RATIO;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
+  const renderedHeightPages = actualHeightPages * next.placementScaleRatio;
   next.actualHeightPages = actualHeightPages;
   next.actual_height_pages = actualHeightPages;
   if (startYPages !== null) {
@@ -5067,8 +5283,10 @@ function applyItemStateToProblem(problem, item){
   if (startYPages !== null) {
     next.actualBottomYPages = Number((startYPages + actualHeightPages).toFixed(6));
     next.actual_bottom_y_pages = next.actualBottomYPages;
+    next.renderedBottomYPages = Number((startYPages + renderedHeightPages).toFixed(6));
+    next.rendered_bottom_y_pages = next.renderedBottomYPages;
   }
-  next.overflowAmountPages = Math.max(0, actualHeightPages - DEFAULT_SLOT_HEIGHT_PAGES);
+  next.overflowAmountPages = Math.max(0, renderedHeightPages - DEFAULT_SLOT_HEIGHT_PAGES);
   next.overflow_amount_pages = next.overflowAmountPages;
   return next;
 }
@@ -5214,6 +5432,30 @@ function mergeSessions(baseSession, incomingSession, fileName){
   };
   applyProblemCounts(merged, mergedProblems);
   return merged;
+}
+
+function reviewScopeForNewSession(baseSession, nextSession){
+  const existingProblemIds = new Set((baseSession?.problems || []).map(problem => String(problem?.id || '').trim()).filter(Boolean));
+  const existingPageIds = new Set((baseSession?.pages || []).map(page => String(page?.id || '').trim()).filter(Boolean));
+  const scopeProblemIds = (nextSession?.problems || [])
+    .map(problem => String(problem?.id || '').trim())
+    .filter(id => id && !existingProblemIds.has(id));
+  const scopePageIds = (nextSession?.pages || [])
+    .map(page => String(page?.id || '').trim())
+    .filter(id => id && !existingPageIds.has(id));
+  return {
+    scopeProblemIds: listUnique(scopeProblemIds),
+    scopePageIds: listUnique(scopePageIds),
+  };
+}
+
+function reviewFocusForNewSession(baseSession, nextSession, source){
+  const scope = reviewScopeForNewSession(baseSession, nextSession);
+  if (!scope.scopeProblemIds.length && !scope.scopePageIds.length) return null;
+  return {
+    ...scope,
+    source,
+  };
 }
 
 const KIND_BY_SUBJECT = {
@@ -6586,6 +6828,45 @@ function normalizePublishSummary(raw, session = null){
         .join(' · ')
       : '')
   ).trim();
+  const layoutDiagnostics = (
+    raw.layoutDiagnostics
+    || raw.layout_diagnostics
+    || session?.layoutDiagnostics
+    || session?.layout_diagnostics
+    || {}
+  );
+  const layoutAutoExtendedCount = Number(
+    layoutDiagnostics.autoExtendedCount
+    ?? layoutDiagnostics.auto_extended_count
+    ?? 0
+  );
+  const layoutOverlapRiskCount = Number(
+    layoutDiagnostics.overlapRiskCount
+    ?? layoutDiagnostics.overlap_risk_count
+    ?? 0
+  );
+  const layoutMaxRenderedPages = Number(
+    layoutDiagnostics.maxRenderedHeightPages
+    ?? layoutDiagnostics.max_rendered_height_pages
+    ?? 0
+  );
+  const layoutDiagnosticsFallbackLabel = [
+    Number.isFinite(layoutAutoExtendedCount) && layoutAutoExtendedCount > 0 ? `긴 이미지 자동 확장 ${layoutAutoExtendedCount}` : '',
+    (Number.isFinite(layoutAutoExtendedCount) && layoutAutoExtendedCount > 0
+      || Number.isFinite(layoutOverlapRiskCount) && layoutOverlapRiskCount > 0)
+      && Number.isFinite(layoutMaxRenderedPages)
+      && layoutMaxRenderedPages > 0
+      ? `최대 ${layoutMaxRenderedPages.toFixed(2)}p`
+      : '',
+    Number.isFinite(layoutOverlapRiskCount) && layoutOverlapRiskCount > 0 ? `겹침 위험 ${layoutOverlapRiskCount}` : '',
+  ].filter(Boolean).join(' · ');
+  const layoutDiagnosticsLabel = String(
+    raw.layoutDiagnosticsLabel
+    || raw.layout_diagnostics_label
+    || layoutDiagnostics.label
+    || layoutDiagnosticsFallbackLabel
+    || ''
+  ).trim();
   const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
   const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
   if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -6634,6 +6915,8 @@ function normalizePublishSummary(raw, session = null){
     passageGroupSourceReuseGroups,
     passageGroupSourceReuseGroupCount: normalizedPassageGroupSourceReuseGroupCount,
     passageGroupSourceReuseLabel,
+    layoutDiagnostics,
+    layoutDiagnosticsLabel,
     edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
     outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
     recordCount: fallbackRecordCount,
@@ -7368,7 +7651,7 @@ function App(){
     if (!rawSession || !Array.isArray(rawSession.problems) || rawSession.problems.length === 0) {
       return false;
     }
-    const mapped = rawSession.problems.map((p, idx) => mapProblemToItem(p, idx));
+    const mapped = reflowItemsForBoardOrder(rawSession.problems.map((p, idx) => mapProblemToItem(p, idx)));
     setItems(mapped);
     setActiveId(mapped[0].id);
     setSession(rawSession);
@@ -7428,7 +7711,7 @@ function App(){
       }
     }
     const orderedProblems = orderedIds.map(id => nextProblemsById.get(id)).filter(Boolean);
-    const mapped = orderedProblems.map((p, idx) => mapProblemToItem(p, idx));
+    const mapped = reflowItemsForBoardOrder(orderedProblems.map((p, idx) => mapProblemToItem(p, idx)));
     setItems(mapped);
     setSession(nextSession);
     setPublished(false);
@@ -7797,6 +8080,7 @@ function App(){
         setRecentSessions(Array.isArray(result?.history) ? result.history : []);
       }
       setPendingFiles([]);
+      setReviewFocus(null);
       hideMockItems('초기화 완료 · 빈 세션');
     } catch (e) {
       showToast('초기화 실패: ' + e.message);
@@ -7847,6 +8131,7 @@ function App(){
       if (Array.isArray(result.history)) setRecentSessions(result.history);
       applySession(result.session);
       setHistoryStack([]);
+      setReviewFocus(null);
       showToast('최근 작업을 열었어요');
     } catch (e) {
       showToast('작업 열기 실패: ' + e.message);
@@ -7969,19 +8254,20 @@ function App(){
     try {
       const s = await postExport(files, aiFallback, resolvedInputIntent);
       let sessionToApply = s;
+      let baseSnapshotForReviewScope = null;
       if (session && !usingMock) {
         const currentSnapshot = materializeSessionForItems(session, items, fileName);
+        baseSnapshotForReviewScope = currentSnapshot;
         const merged = mergeSessions(currentSnapshot, s, fileName);
         sessionToApply = await postRestore(merged);
       }
       applySession(sessionToApply);
+      setReviewFocus(reviewFocusForNewSession(baseSnapshotForReviewScope, sessionToApply, 'queue-register'));
       refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
       setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
       const intentLabel = isRecognition ? '문항 AI 인식' : '페이지 PNG 등록';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
-      const folder = sessionToApply?.output_dir || sessionToApply?.outputDir || s?.output_dir || s?.outputDir;
-      if (folder) openOutputFolder(folder);
     } catch (e) {
       showToast(`${isRecognition ? '문제 인식' : '등록'} 실패: ${e.message}`);
     } finally {
@@ -8011,13 +8297,13 @@ function App(){
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
         applySession(restored);
+        setReviewFocus(reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition'));
         refreshSessionHistory();
         setView('review');
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
         showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
-        if (review.outputFolder) openOutputFolder(review.outputFolder);
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
           ? (materializeSessionForItems(session, items, fileName) || cloneSession(session))
@@ -8072,24 +8358,28 @@ function App(){
     showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요`);
   };
   const setPlacement = (id, patch) => {
-    setItems(it => it.map(x => {
-      if (x.id !== id) return x;
-      const next = { ...x };
-      if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
-        next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
-        next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
-      }
-      if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
-        next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
-          ? normalizePlacementYRatio(patch.yRatio)
-          : DEFAULT_PLACEMENT_Y_RATIO;
-      } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
-        next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
-      }
-      return next;
-    }));
+    setItems(it => {
+      const scaleChanged = Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio');
+      const nextItems = it.map(x => {
+        if (x.id !== id) return x;
+        const next = { ...x };
+        if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
+          next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
+        }
+        if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
+          next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
+        }
+        if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
+          next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
+            ? normalizePlacementYRatio(patch.yRatio)
+            : DEFAULT_PLACEMENT_Y_RATIO;
+        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
+          next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
+        }
+        return next;
+      });
+      return scaleChanged ? reflowItemsForBoardOrder(nextItems) : nextItems;
+    });
     setPublished(false);
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {

@@ -82,6 +82,42 @@ class TestUiReorderHelper(unittest.TestCase):
             """
         )
 
+    def test_board_reflow_reserves_scaled_long_image_height(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const DEFAULT_SLOT_HEIGHT_PAGES =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n'
+                + 'globalThis.placementSlotHeightPages = placementSlotHeightPages;\n',
+              sandbox
+            );
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'p13', heightFrac: 1.1, placementScaleRatio: 1.4 },
+              { id: 'p14', heightFrac: 0.8, placementScaleRatio: 1.0 },
+            ]);
+            if (reflowed[0].snappedNextStartYPages !== 2.4) {
+              throw new Error(`expected scaled long image to reserve 2.4 pages, got ${reflowed[0].snappedNextStartYPages}`);
+            }
+            if (reflowed[0].renderedBottomYPages !== 1.54) {
+              throw new Error(`expected rendered bottom 1.54 pages, got ${reflowed[0].renderedBottomYPages}`);
+            }
+            if (reflowed[1].startYPages !== 2.4) {
+              throw new Error(`expected following item to start at 2.4 pages, got ${reflowed[1].startYPages}`);
+            }
+            if (sandbox.placementSlotHeightPages(reflowed[0]) < 1.54) {
+              throw new Error('slot height should include scaled rendered height');
+            }
+            """
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

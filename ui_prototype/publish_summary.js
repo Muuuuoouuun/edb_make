@@ -265,6 +265,29 @@
     return parts.join(" · ");
   }
 
+  function normalizeLayoutDiagnostics(raw, session = null) {
+    const diag = raw?.layoutDiagnostics
+      || raw?.layout_diagnostics
+      || session?.layoutDiagnostics
+      || session?.layout_diagnostics
+      || {};
+    return diag && typeof diag === "object" ? diag : {};
+  }
+
+  function formatLayoutDiagnosticsLabel(diag) {
+    if (!diag || typeof diag !== "object") return "";
+    const explicit = String(diag.label || "").trim();
+    if (explicit) return explicit;
+    const autoExtendedCount = positiveNumber(diag.autoExtendedCount ?? diag.auto_extended_count);
+    const overlapRiskCount = positiveNumber(diag.overlapRiskCount ?? diag.overlap_risk_count);
+    const maxRendered = positiveNumber(diag.maxRenderedHeightPages ?? diag.max_rendered_height_pages);
+    const parts = [];
+    if (autoExtendedCount > 0) parts.push(`긴 이미지 자동 확장 ${autoExtendedCount}`);
+    if ((autoExtendedCount > 0 || overlapRiskCount > 0) && maxRendered > 0) parts.push(`최대 ${maxRendered.toFixed(2)}p`);
+    if (overlapRiskCount > 0) parts.push(`겹침 위험 ${overlapRiskCount}`);
+    return parts.join(" · ");
+  }
+
   function normalizePublishSummary(raw, session = null) {
     if (!raw || typeof raw !== "object") return null;
     const recordCount = positiveNumber(raw.recordCount ?? raw.record_count ?? raw.recordCountActual ?? raw.record_count_actual);
@@ -446,6 +469,12 @@
         groups: passageGroupSourceReuseGroups,
       })
     ).trim();
+    const layoutDiagnostics = normalizeLayoutDiagnostics(raw, session);
+    const layoutDiagnosticsLabel = String(
+      raw.layoutDiagnosticsLabel
+      || raw.layout_diagnostics_label
+      || formatLayoutDiagnosticsLabel(layoutDiagnostics)
+    ).trim();
     const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
     const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
     if (!edbFileName && !edbPath && !edbFileUri) return null;
@@ -490,6 +519,8 @@
       passageGroupSourceReuseGroups,
       passageGroupSourceReuseGroupCount,
       passageGroupSourceReuseLabel,
+      layoutDiagnostics,
+      layoutDiagnosticsLabel,
       edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
       outputDirExists: outputDirExists === undefined ? Boolean(outputDir) : outputDirExists !== false,
       recordCount,
@@ -537,6 +568,7 @@
     formatPassageGroupLabel,
     formatSourceProblemOverlapLabel,
     formatPassageGroupSourceReuseLabel,
+    formatLayoutDiagnosticsLabel,
     normalizePublishSummary,
   };
 });

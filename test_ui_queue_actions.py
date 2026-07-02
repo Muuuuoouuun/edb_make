@@ -22,7 +22,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-item-download", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-scaled-reflow", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -31,6 +31,41 @@ class TestUiQueueActions(unittest.TestCase):
 
         self.assertIn("setView('review');", queue_branch)
         self.assertIn("검수로 이동", queue_branch)
+        self.assertIn("reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition')", queue_branch)
+        self.assertNotIn("openOutputFolder(", queue_branch)
+
+    def test_page_png_registration_does_not_auto_open_output_folder(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent);", 1)[1]
+        register_branch = register_branch.split("} catch (e) {", 1)[0]
+
+        self.assertIn("페이지 PNG 등록", register_branch)
+        self.assertIn("reviewFocusForNewSession(baseSnapshotForReviewScope, sessionToApply, 'queue-register')", register_branch)
+        self.assertNotIn("openOutputFolder(", register_branch)
+
+    def test_review_scope_limits_all_tab_to_recently_added_batch(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("function ItemsRail", 1)[0]
+
+        self.assertIn("reviewScopeProblemIds", review_stage)
+        self.assertIn("reviewScopePageIds", review_stage)
+        self.assertIn("const scopedProblems = useMemo", review_stage)
+        self.assertIn("countReviewFilters?.(scopedProblems)", review_stage)
+        self.assertIn(".filter(problemInReviewScope)", review_stage)
+        self.assertIn("최근 추가 묶음", review_stage)
+        self.assertIn("전체 세션 보기", review_stage)
+
+    def test_topbar_exposes_reset_icon_outside_more_menu(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        topbar = source.split("function TopBar", 1)[1]
+        topbar = topbar.split("function ReviewStage", 1)[0]
+        actions = topbar.split('<div className="topbar-actions"', 1)[1]
+        actions = actions.split('<div className="topbar-more"', 1)[0]
+
+        self.assertIn('aria-label="초기화"', actions)
+        self.assertIn("onClick={onReset}", actions)
+        self.assertIn("{Icon.reset}", actions)
 
     def test_queue_recognition_review_copy_points_to_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

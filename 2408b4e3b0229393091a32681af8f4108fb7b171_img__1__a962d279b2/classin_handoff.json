@@ -1,0 +1,83 @@
+{
+  "status": "ready_for_classin_review",
+  "readyForClassIn": true,
+  "manualReviewRequired": true,
+  "generatedAt": "2026-06-30T10:37:26+09:00",
+  "sourcePaths": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2.jpg"
+  ],
+  "outputDir": "/Users/clmagi/Desktop/Projects/edb_mak/2408b4e3b0229393091a32681af8f4108fb7b171_img__1__a962d279b2",
+  "edbPath": "/Users/clmagi/Desktop/Projects/edb_mak/2408b4e3b0229393091a32681af8f4108fb7b171_img__1__a962d279b2/mvp_board.edb",
+  "edbFileName": "mvp_board.edb",
+  "expectedRecordCount": 1,
+  "expectedCoreProblemCount": 1,
+  "expectedSupplementalItemCount": 0,
+  "detectedProblemCount": 1,
+  "sourcePageCount": 1,
+  "classinPageCountHint": 50,
+  "recordMode": "image-only",
+  "cropFormat": "v1",
+  "boardTheme": "charcoal",
+  "duplicateProblemNumberGroups": [],
+  "blockingDuplicateProblemNumberGroups": [],
+  "duplicateProblemNumberNote": "",
+  "passageGroupSourceReuseGroups": [],
+  "passageGroupSourceReuseGroupCount": 0,
+  "passageGroups": [],
+  "passageGroupCount": 0,
+  "passageProblemCount": 0,
+  "crossPagePassageGroupCount": 0,
+  "passageReviewItems": [],
+  "passageReviewItemCount": 0,
+  "crossPagePassageReviewItemCount": 0,
+  "classinPreflight": {
+    "status": "passed",
+    "passed": true,
+    "checkedProblemCount": 1,
+    "issueCount": 0,
+    "issues": [],
+    "thresholds": {
+      "minProblemImageWidth": 240,
+      "minProblemImageHeight": 120,
+      "minDarkPixelRatio": 0.002,
+      "darkPixelThreshold": 245,
+      "placementOverlapTolerancePages": 0.01,
+      "passageGroupSourceReuseRatio": 0.65,
+      "sourceBboxOverlapRatio": 0.65
+    }
+  },
+  "classin_preflight": {
+    "status": "passed",
+    "passed": true,
+    "checkedProblemCount": 1,
+    "issueCount": 0,
+    "issues": [],
+    "thresholds": {
+      "minProblemImageWidth": 240,
+      "minProblemImageHeight": 120,
+      "minDarkPixelRatio": 0.002,
+      "darkPixelThreshold": 245,
+      "placementOverlapTolerancePages": 0.01,
+      "passageGroupSourceReuseRatio": 0.65,
+      "sourceBboxOverlapRatio": 0.65
+    }
+  },
+  "reviewRiskCounts": {},
+  "classinReviewChecklist": [
+    "ClassIn에서 EDB 파일 열기",
+    "문항 수와 순서가 기대값과 일치하는지 확인",
+    "각 문항 이미지가 잘리지 않고 읽히는지 확인",
+    "긴 지문/공통 지문 그룹이 하위 문항과 함께 자연스럽게 배치됐는지 확인",
+    "보충 자료/이어지는 자료가 문항 뒤에 자연스럽게 배치됐는지 확인",
+    "확대/축소와 페이지 이동 시 썸네일/보드가 깨지지 않는지 확인"
+  ],
+  "manualReviewResult": {
+    "classinOpened": null,
+    "recordCountOk": null,
+    "orderOk": null,
+    "readabilityOk": null,
+    "supplementalItemsOk": null,
+    "notes": ""
+  },
+  "classinHandoffMarkdownPath": "/Users/clmagi/Desktop/Projects/edb_mak/2408b4e3b0229393091a32681af8f4108fb7b171_img__1__a962d279b2/classin_handoff.md"
+}

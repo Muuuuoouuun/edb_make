@@ -66,8 +66,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2310,
           "ocr_line_count": 2,
@@ -149,8 +149,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2748,
           "ocr_line_count": 3,
@@ -233,8 +233,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2301,
           "ocr_line_count": 3,
@@ -279,8 +279,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2844,
           "ocr_line_count": 0,
@@ -352,8 +352,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2616,
           "ocr_line_count": 2,
@@ -436,8 +436,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2820,
           "ocr_line_count": 3,
@@ -520,8 +520,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2166,
           "ocr_line_count": 3,
@@ -583,8 +583,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 1975,
           "ocr_line_count": 1,
@@ -676,8 +676,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2395,
           "ocr_line_count": 4,
@@ -749,8 +749,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2658,
           "ocr_line_count": 2,
@@ -843,8 +843,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2269,
           "ocr_line_count": 4,
@@ -926,8 +926,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2634,
           "ocr_line_count": 3,
@@ -1010,8 +1010,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2352,
           "ocr_line_count": 3,
@@ -1103,8 +1103,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2408,
           "ocr_line_count": 4,
@@ -1167,8 +1167,8 @@
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": false,
-          "ocr_cache_miss": true,
+          "ocr_cache_hit": true,
+          "ocr_cache_miss": false,
           "ocr_backend": "gemini",
           "ocr_latency_ms": 2633,
           "ocr_line_count": 1,
@@ -1185,191 +1185,34 @@
       {
         "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-1",
         "subject": "korean",
-        "title": "다음 그림에서 두 점 M, N은 각각 \\overline{\\mathrm{AB}}, \\overline{\\mathrm{BC}}의 중점이\n고, \\overline{\\mathrm{MP}}=2 \\overline{\\mathrm{PN}}이다. \\overline{\\mathrm{AB}}=a, \\overline{\\mathrm{BC}}=b\\text{일 때, } \\overline{\\mathrm{PC}}\\text{의 길}\n이를 a, b를 사용하여 나타낸 것은?",
+        "title": "페이지 1",
         "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-002"
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-001",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-002",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-003",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-004",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-005",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-006",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-007",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-008",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-009",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-010",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-011",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-012",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-013",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-014",
+          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-015"
         ],
         "choice_block_ids": [],
         "explanation_block_ids": [],
         "figure_block_ids": [],
         "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 1,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 21
-        }
-      },
-      {
-        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-2",
-        "subject": "korean",
-        "title": "22\n다음 그림과 같은 오각기둥에서 교선의 개수를 a, 교점\n의 개수를 b라 할 때, 2a+b의 값을 구하여라.",
-        "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-003"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-004"
-        ],
-        "metadata": {
-          "problem_number": 22,
-          "problem_number_source": "ocr_top_left",
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 2,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          }
-        }
-      },
-      {
-        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-3",
-        "subject": "korean",
-        "title": "다음 그림에서 점 B, C는 \\overline{\\text{AD}}의 삼등분점이다.\n\\overline{\\text{AC}}=6\\text{cm}일 때, \\overline{\\text{AD}}의 길이는 몇 \\text{cm}인지 구하여라.",
-        "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-005"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 3,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 23
-        }
-      },
-      {
-        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-4",
-        "subject": "korean",
-        "title": "다음 그림과 같이 ∠BOC = 50° 이고 ∠AOB와\n∠COD가 모두 직각일 때, 색칠한 부분인 ∠AOD의\n크기는 몇 도인지 구하여라.",
-        "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-006"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-007"
-        ],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 4,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 24
-        }
-      },
-      {
-        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-5",
-        "subject": "korean",
-        "title": "다음 그림과 같이 세 직선이 한 점에서 만날 때,\n\\angle y - \\angle x의 크기는 몇 도인지 구하여라.",
-        "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-010"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-011"
-        ],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 5,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 25
-        }
-      },
-      {
-        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-6",
-        "subject": "korean",
-        "title": "아래 그림과 같이 직선 l 위에 네 점 A, B, C, D가 있\n을 때, 다음 |보기| 중 BC를 포함하는 것은 모두 몇 개\n인지 구하여라.",
-        "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-012"
-        ],
-        "choice_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-013"
-        ],
-        "explanation_block_ids": [],
-        "figure_block_ids": [],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 6,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 26
-        }
-      },
-      {
-        "unit_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-problem-7",
-        "subject": "korean",
-        "title": "다음 그림과 같이 직선 l 위에 있는 네 점 A, B, C, D\n중 두 점을 이어 만들 수 있는 서로 다른 직선의 개수를\nx, 점 C를 지나는 반직선의 개수를 y, 선분의 개수를 z\n라 할 때, x + y + z의 값을 구하여라.",
-        "stem_block_ids": [
-          "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001-block-014"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 7,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 27
+          "grouping_source": "user_intent",
+          "grouping_reason": [
+            "page-as-is"
+          ],
+          "force_full_page_bounds": true,
+          "input_intent": "page-as-is"
         }
       }
     ],
@@ -1400,6 +1243,7 @@
       "document_continuation_merge_count": 0,
       "document_grid_row_alignment_count": 0,
       "document_terminal_tail_extension_count": 0,
+      "document_visual_column_reassign_applied": false,
       "document_row_band_count": 15,
       "document_split_block_count": 15,
       "document_split_applied": false,
@@ -1435,15 +1279,15 @@
       "ocr_mode": "auto",
       "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/.pipeline_cache",
       "recognition_timing_ms": {
-        "segmentation": 73,
-        "block_ocr": 13345,
-        "total_before_repair": 13418
+        "segmentation": 62,
+        "block_ocr": 15,
+        "total_before_repair": 77
       },
       "ocr_block_worker_count": 3,
       "ocr_eligible_block_count": 15,
       "ocr_skipped_block_count": 0,
-      "ocr_cache_hit_count": 0,
-      "ocr_cache_miss_count": 15,
+      "ocr_cache_hit_count": 15,
+      "ocr_cache_miss_count": 0,
       "ocr_escalation_attempted_block_count": 0,
       "ocr_escalation_cache_hit_count": 0,
       "ocr_escalated_block_count": 0,
@@ -1457,9 +1301,9 @@
           "ai_powered": true,
           "eligible_block_count": 15,
           "processed_block_count": 15,
-          "api_call_block_count": 15,
-          "cache_hit_count": 0,
-          "cache_miss_count": 15,
+          "api_call_block_count": 0,
+          "cache_hit_count": 15,
+          "cache_miss_count": 0,
           "skipped_block_count": 0
         },
         "ocr_escalation": {
@@ -1478,11 +1322,11 @@
           "stage": "page_repair",
           "order": 3,
           "label": "3단계 문항 경계 보정",
-          "status": "not_needed",
+          "status": "disabled",
           "provider": "gemini",
           "model": "gemini-3.1-pro-preview",
           "model_used": "gemini-3.1-pro-preview",
-          "enabled": true,
+          "enabled": false,
           "attempted": false,
           "applied": false,
           "cache_hit": false,
@@ -1758,8 +1602,8 @@
         ],
         "problem_number_source": "ocr_top_left"
       },
-      "grouping_source": "marker_grouping",
-      "grouping_mode": "marker",
+      "grouping_source": "user_intent",
+      "grouping_mode": "single_page",
       "marker_counts": {
         "problem_marker_block_count": 0,
         "choice_marker_block_count": 0,
@@ -1820,8 +1664,8 @@
             "low_confidence_ratio": 0.0,
             "avg_confidence": 0.9616666666666666,
             "recognized_line_count": 38,
-            "ocr_cache_hit_count": 0,
-            "ocr_cache_miss_count": 15,
+            "ocr_cache_hit_count": 15,
+            "ocr_cache_miss_count": 0,
             "backend_counts": {
               "gemini": 15
             },
@@ -1846,80 +1690,9 @@
           }
         }
       },
-      "route_decision": {
-        "page_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001",
-        "route": "local_only",
-        "should_use_ai": false,
-        "next_best_action": null,
-        "quality_status": "trusted",
-        "recommended_action": "skip_ai",
-        "trigger_reasons": [],
-        "profile": {
-          "page_id": "2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2-page-001",
-          "segmentation_risk": 0.0,
-          "ocr_risk": 0.0,
-          "grouping_risk": 0.0,
-          "overall_risk": 0.0,
-          "tier": "green",
-          "reasons": [],
-          "diagnostics": {
-            "segmentation": {
-              "segmenter": "document-bands",
-              "segmentation_mode": "document",
-              "block_count": 15,
-              "large_block_count": 0,
-              "large_block_ratio": 0.0,
-              "fallback_reasons": [],
-              "content_box_area_ratio": 1.0,
-              "board_region_area_ratio": 0.0,
-              "document_split_block_count": 15,
-              "document_split_applied": false,
-              "candidate_count": 0,
-              "expanded_candidate_count": 0,
-              "merged_candidate_count": 0,
-              "max_block_area_ratio": 0.088988,
-              "pdf_text_marker_count": 0,
-              "pdf_text_markers_reliable": null
-            },
-            "ocr": {
-              "ocr_mode": "auto",
-              "text_block_count": 12,
-              "empty_text_block_count": 0,
-              "empty_text_ratio": 0.0,
-              "low_confidence_block_count": 0,
-              "low_confidence_ratio": 0.0,
-              "avg_confidence": 0.9616666666666666,
-              "recognized_line_count": 38,
-              "ocr_cache_hit_count": 0,
-              "ocr_cache_miss_count": 15,
-              "backend_counts": {
-                "gemini": 15
-              },
-              "backend_latency_ms_avg": 2475.266666666667,
-              "all_text_from_trusted_pdf_markers": false
-            },
-            "grouping": {
-              "segmenter": "document-bands",
-              "grouping_source": "marker_grouping",
-              "grouping_mode": "marker",
-              "problem_count": 7,
-              "block_count": 15,
-              "problem_marker_count": 7,
-              "choice_marker_count": 0,
-              "marker_conflict_count": 0,
-              "fallback_grouping_problem_count": 0,
-              "problem_number_source_counts": {
-                "ocr_top_left": 1
-              },
-              "excess_problem_marker_block_count": 0,
-              "excess_problem_marker_total": 0
-            }
-          }
-        }
-      },
       "ai_fallback": {
-        "enabled": true,
-        "mode": "auto",
+        "enabled": false,
+        "mode": "off",
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
         "max_tokens": 4096,
@@ -1927,7 +1700,7 @@
         "attempted": false,
         "applied": false,
         "cache_hit": false,
-        "status": "not_needed",
+        "status": "disabled",
         "route": "local_only",
         "route_tier": "green",
         "trigger_reasons": [],
@@ -1936,7 +1709,9 @@
         "stage": "page_repair",
         "stage_label": "3단계 문항 경계 보정"
       },
-      "recognition_page_worker_count": 1
+      "recognition_page_worker_count": 1,
+      "input_intent": "page-as-is",
+      "forced_single_problem": true
     }
   }
 ]

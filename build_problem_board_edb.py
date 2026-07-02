@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
@@ -1066,6 +1066,7 @@ class _ProblemAssetTask:
     text_payload: str | None = None
     text_title: str | None = None
     trim_edge_guides: bool = True
+    pad_edges: bool = True
 
 
 @dataclass(slots=True)
@@ -1208,7 +1209,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
     )
     if task.trim_edge_guides:
         crop = _trim_source_page_chrome(crop)
-    crop = _pad_problem_crop_edges(crop)
+    if task.pad_edges:
+        crop = _pad_problem_crop_edges(crop)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(task.crop_path)
     enhanced_crop = _enhance_problem_crop(crop)
@@ -2691,7 +2693,12 @@ def build_problem_entries(
                 problem_number = int(raw_problem_number)
             else:
                 problem_number = None
-            if problem.metadata.get("force_full_page_bounds"):
+            force_full_page_bounds = bool(problem.metadata.get("force_full_page_bounds"))
+            preserve_page_as_is = (
+                force_full_page_bounds
+                and str(problem.metadata.get("input_intent") or page.metadata.get("input_intent") or "") == "page-as-is"
+            )
+            if force_full_page_bounds:
                 blocks = list(page.sorted_blocks())
                 merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
             else:
@@ -2816,7 +2823,8 @@ def build_problem_entries(
                         chalk_color=chalk_color,
                         text_payload=text_fallback_payload or None,
                         text_title=problem_title if text_fallback_payload else None,
-                        trim_edge_guides=not trusted_pdf_marker_problem,
+                        trim_edge_guides=not trusted_pdf_marker_problem and not preserve_page_as_is,
+                        pad_edges=not preserve_page_as_is,
                     ),
                 )
             )
@@ -4349,6 +4357,130 @@ def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) 
     return issues
 
 
+def _round_layout_pages(value: float) -> float:
+    return round(float(value), 6)
+
+
+def _layout_diagnostic_from_placement(placement: Mapping[str, Any]) -> dict[str, Any]:
+    actual_height_pages = max(0.0, float(placement.get("actual_content_height_pages") or 0.0))
+    scale_ratio = max(0.0, float(placement.get("placement_scale_ratio") or 1.0))
+    rendered_height_pages = actual_height_pages * scale_ratio
+    start_y_pages = max(0.0, float(placement.get("start_y_pages") or 0.0))
+    snapped_next_start_y_pages = max(start_y_pages, float(placement.get("snapped_next_start_y_pages") or start_y_pages))
+    reserved_span_pages = max(0.0, snapped_next_start_y_pages - start_y_pages)
+    placement_y_ratio = _clamp_placement_y_ratio(placement.get("placement_y_ratio"))
+    if placement_y_ratio is None:
+        placement_y_ratio = 0.0
+    vertical_room_pages = max(0.0, reserved_span_pages - rendered_height_pages)
+    rendered_top_y_pages = start_y_pages + vertical_room_pages * placement_y_ratio
+    rendered_bottom_y_pages = rendered_top_y_pages + rendered_height_pages
+    overlap_amount_pages = max(
+        0.0,
+        rendered_bottom_y_pages
+        - snapped_next_start_y_pages
+        - CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES,
+    )
+    long_image = rendered_height_pages > ONE_PROBLEM_SLOT_HEIGHT_PAGES + CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES
+    auto_extended = reserved_span_pages > ONE_PROBLEM_SLOT_HEIGHT_PAGES + CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES
+    scale_adjusted = abs(scale_ratio - 1.0) > 0.001
+    payload = {
+        "actualHeightPages": _round_layout_pages(actual_height_pages),
+        "actual_height_pages": _round_layout_pages(actual_height_pages),
+        "placementScaleRatio": _round_layout_pages(scale_ratio),
+        "placement_scale_ratio": _round_layout_pages(scale_ratio),
+        "renderedHeightPages": _round_layout_pages(rendered_height_pages),
+        "rendered_height_pages": _round_layout_pages(rendered_height_pages),
+        "startYPages": _round_layout_pages(start_y_pages),
+        "start_y_pages": _round_layout_pages(start_y_pages),
+        "renderedTopYPages": _round_layout_pages(rendered_top_y_pages),
+        "rendered_top_y_pages": _round_layout_pages(rendered_top_y_pages),
+        "renderedBottomYPages": _round_layout_pages(rendered_bottom_y_pages),
+        "rendered_bottom_y_pages": _round_layout_pages(rendered_bottom_y_pages),
+        "snappedNextStartYPages": _round_layout_pages(snapped_next_start_y_pages),
+        "snapped_next_start_y_pages": _round_layout_pages(snapped_next_start_y_pages),
+        "reservedSpanPages": _round_layout_pages(reserved_span_pages),
+        "reserved_span_pages": _round_layout_pages(reserved_span_pages),
+        "verticalRoomPages": _round_layout_pages(vertical_room_pages),
+        "vertical_room_pages": _round_layout_pages(vertical_room_pages),
+        "scaleExtraPages": _round_layout_pages(max(0.0, rendered_height_pages - actual_height_pages)),
+        "scale_extra_pages": _round_layout_pages(max(0.0, rendered_height_pages - actual_height_pages)),
+        "reservedExtraPages": _round_layout_pages(max(0.0, reserved_span_pages - ONE_PROBLEM_SLOT_HEIGHT_PAGES)),
+        "reserved_extra_pages": _round_layout_pages(max(0.0, reserved_span_pages - ONE_PROBLEM_SLOT_HEIGHT_PAGES)),
+        "overlapAmountPages": _round_layout_pages(overlap_amount_pages),
+        "overlap_amount_pages": _round_layout_pages(overlap_amount_pages),
+        "longImage": long_image,
+        "long_image": long_image,
+        "autoExtended": auto_extended,
+        "auto_extended": auto_extended,
+        "scaleAdjusted": scale_adjusted,
+        "scale_adjusted": scale_adjusted,
+        "overlapRisk": overlap_amount_pages > 0,
+        "overlap_risk": overlap_amount_pages > 0,
+    }
+    return payload
+
+
+def _layout_diagnostics_from_problems(problems: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    all_items: list[dict[str, Any]] = []
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        diag = problem.get("layoutDiagnostics") or problem.get("layout_diagnostics") or {}
+        if not isinstance(diag, dict):
+            continue
+        item = {
+            "problemId": str(problem.get("id") or problem.get("problem_id") or ""),
+            "problem_id": str(problem.get("id") or problem.get("problem_id") or ""),
+            "title": str(problem.get("title") or ""),
+            "actualHeightPages": float(diag.get("actualHeightPages") or diag.get("actual_height_pages") or 0.0),
+            "renderedHeightPages": float(diag.get("renderedHeightPages") or diag.get("rendered_height_pages") or 0.0),
+            "reservedSpanPages": float(diag.get("reservedSpanPages") or diag.get("reserved_span_pages") or 0.0),
+            "reservedExtraPages": float(diag.get("reservedExtraPages") or diag.get("reserved_extra_pages") or 0.0),
+            "placementScaleRatio": float(diag.get("placementScaleRatio") or diag.get("placement_scale_ratio") or 1.0),
+            "overlapAmountPages": float(diag.get("overlapAmountPages") or diag.get("overlap_amount_pages") or 0.0),
+            "longImage": bool(diag.get("longImage") or diag.get("long_image")),
+            "autoExtended": bool(diag.get("autoExtended") or diag.get("auto_extended")),
+            "scaleAdjusted": bool(diag.get("scaleAdjusted") or diag.get("scale_adjusted")),
+            "overlapRisk": bool(diag.get("overlapRisk") or diag.get("overlap_risk")),
+        }
+        all_items.append(item)
+        if item["longImage"] or item["autoExtended"] or item["scaleAdjusted"] or item["overlapRisk"]:
+            items.append(item)
+    long_image_count = sum(1 for item in all_items if item["longImage"])
+    auto_extended_count = sum(1 for item in all_items if item["autoExtended"])
+    scaled_item_count = sum(1 for item in all_items if item["scaleAdjusted"])
+    overlap_risk_count = sum(1 for item in all_items if item["overlapRisk"])
+    max_rendered_height_pages = max((item["renderedHeightPages"] for item in all_items), default=0.0)
+    max_reserved_span_pages = max((item["reservedSpanPages"] for item in all_items), default=0.0)
+    label_parts = []
+    if auto_extended_count:
+        label_parts.append(f"긴 이미지 자동 확장 {auto_extended_count}")
+    if (auto_extended_count or long_image_count or overlap_risk_count) and max_rendered_height_pages > 0:
+        label_parts.append(f"최대 {max_rendered_height_pages:.2f}p")
+    if overlap_risk_count:
+        label_parts.append(f"겹침 위험 {overlap_risk_count}")
+    payload = {
+        "itemCount": len(all_items),
+        "item_count": len(all_items),
+        "longImageCount": long_image_count,
+        "long_image_count": long_image_count,
+        "autoExtendedCount": auto_extended_count,
+        "auto_extended_count": auto_extended_count,
+        "scaledItemCount": scaled_item_count,
+        "scaled_item_count": scaled_item_count,
+        "overlapRiskCount": overlap_risk_count,
+        "overlap_risk_count": overlap_risk_count,
+        "maxRenderedHeightPages": _round_layout_pages(max_rendered_height_pages),
+        "max_rendered_height_pages": _round_layout_pages(max_rendered_height_pages),
+        "maxReservedSpanPages": _round_layout_pages(max_reserved_span_pages),
+        "max_reserved_span_pages": _round_layout_pages(max_reserved_span_pages),
+        "label": " · ".join(label_parts),
+        "items": items,
+    }
+    return payload
+
+
 def _classin_missing_passage_child_question_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     problems_by_id = {
         str(problem.get("id") or problem.get("problem_id") or "").strip(): problem
@@ -4713,6 +4845,7 @@ def build_ui_session(
         processing_step = _normalize_processing_step(
             placement.get("processing_step") or placement.get("step")
         )
+        layout_diagnostics = _layout_diagnostic_from_placement(placement)
         problems.append(
             {
                 "id": problem_id,
@@ -4729,13 +4862,18 @@ def build_ui_session(
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
+                "renderedHeightPages": layout_diagnostics["renderedHeightPages"],
                 "overflowAllowed": bool(placement["overflow_allowed"]),
                 "readingHeavy": bool(placement["overflow_allowed"]),
                 "sourcePageId": source_page_id,
                 "startYPages": float(placement["start_y_pages"]),
+                "renderedTopYPages": layout_diagnostics["renderedTopYPages"],
+                "renderedBottomYPages": layout_diagnostics["renderedBottomYPages"],
                 "snappedNextStartYPages": float(placement["snapped_next_start_y_pages"]),
                 "overflowAmountPages": float(placement["overflow_amount_pages"]),
                 "overflowViolation": bool(placement["overflow_violation"]),
+                "layoutDiagnostics": layout_diagnostics,
+                "layout_diagnostics": layout_diagnostics,
                 "slotSpanCount": int(placement["slot_span_count"]),
                 "placementXRatio": float(placement.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(placement.get("placement_y_ratio") or 0.0),
@@ -4820,6 +4958,7 @@ def build_ui_session(
     cross_page_passage_review_item_count = sum(
         1 for item in passage_review_items if item.get("continuesAcrossPages")
     )
+    layout_diagnostics = _layout_diagnostics_from_problems(problems)
 
     return {
         "session_name": output_dir.name,
@@ -4863,6 +5002,8 @@ def build_ui_session(
         "passageReviewItemCount": len(passage_review_items),
         "cross_page_passage_review_item_count": cross_page_passage_review_item_count,
         "crossPagePassageReviewItemCount": cross_page_passage_review_item_count,
+        "layout_diagnostics": layout_diagnostics,
+        "layoutDiagnostics": layout_diagnostics,
         "export_mode": "question",
         "record_mode": record_mode,
         "board_theme": _resolve_board_theme(board_theme),
@@ -4955,6 +5096,13 @@ def write_classin_handoff_manifest(
     cross_page_passage_review_item_count = sum(
         1 for item in passage_review_items if isinstance(item, dict) and item.get("continuesAcrossPages")
     )
+    layout_diagnostics = (
+        ui_session.get("layoutDiagnostics")
+        or ui_session.get("layout_diagnostics")
+        or _layout_diagnostics_from_problems(problems)
+    )
+    if not isinstance(layout_diagnostics, dict):
+        layout_diagnostics = _layout_diagnostics_from_problems(problems)
     ready_for_classin = bool(classin_preflight.get("passed")) and not blocking_duplicate_problem_number_groups
     handoff_status = "ready_for_classin_review" if ready_for_classin else "needs_attention_before_classin"
     payload = {
@@ -4987,6 +5135,8 @@ def write_classin_handoff_manifest(
         "passageReviewItems": passage_review_items,
         "passageReviewItemCount": len(passage_review_items),
         "crossPagePassageReviewItemCount": cross_page_passage_review_item_count,
+        "layoutDiagnostics": layout_diagnostics,
+        "layout_diagnostics": layout_diagnostics,
         "classinPreflight": classin_preflight,
         "classin_preflight": classin_preflight,
         "reviewRiskCounts": review_summary.get("riskFlagCounts", {}) if isinstance(review_summary, dict) else {},
@@ -4995,6 +5145,7 @@ def write_classin_handoff_manifest(
             "문항 수와 순서가 기대값과 일치하는지 확인",
             "각 문항 이미지가 잘리지 않고 읽히는지 확인",
             "긴 지문/공통 지문 그룹이 하위 문항과 함께 자연스럽게 배치됐는지 확인",
+            "긴 이미지 자동 확장 항목이 다음 문항을 침범하지 않는지 확인",
             "보충 자료/이어지는 자료가 문항 뒤에 자연스럽게 배치됐는지 확인",
             "확대/축소와 페이지 이동 시 썸네일/보드가 깨지지 않는지 확인",
         ],
@@ -5069,6 +5220,25 @@ def write_classin_handoff_manifest(
                 + (f" · missing: {missing_numbers}" if missing_numbers else "")
                 + (f" · reasons: {reasons}" if reasons else "")
             )
+    layout_lines: list[str] = ["", "## Layout Diagnostics"]
+    layout_label = str(layout_diagnostics.get("label") or "").strip()
+    layout_lines.append(f"- Summary: {layout_label or 'no long-image expansion detected'}")
+    layout_lines.append(f"- Auto-extended items: {int(layout_diagnostics.get('autoExtendedCount') or layout_diagnostics.get('auto_extended_count') or 0)}")
+    layout_lines.append(f"- Overlap risks after reflow: {int(layout_diagnostics.get('overlapRiskCount') or layout_diagnostics.get('overlap_risk_count') or 0)}")
+    layout_items = layout_diagnostics.get("items") if isinstance(layout_diagnostics.get("items"), list) else []
+    for item in layout_items[:12]:
+        if not isinstance(item, dict):
+            continue
+        problem_id = str(item.get("problemId") or item.get("problem_id") or "").strip()
+        title = str(item.get("title") or "").strip()
+        rendered_pages = float(item.get("renderedHeightPages") or item.get("rendered_height_pages") or 0.0)
+        reserved_pages = float(item.get("reservedSpanPages") or item.get("reserved_span_pages") or 0.0)
+        scale_ratio = float(item.get("placementScaleRatio") or item.get("placement_scale_ratio") or 1.0)
+        risk_label = " · overlap risk" if item.get("overlapRisk") or item.get("overlap_risk") else ""
+        layout_lines.append(
+            f"- `{problem_id}` {title} · rendered {rendered_pages:.2f}p"
+            f" · reserved {reserved_pages:.2f}p · scale {scale_ratio:.2f}x{risk_label}"
+        )
     if classin_preflight["passed"]:
         preflight_lines = ["- OK: no automatic asset issues found."]
     else:
@@ -5092,6 +5262,7 @@ def write_classin_handoff_manifest(
                 *duplicate_problem_number_lines,
                 *passage_group_lines,
                 *passage_review_lines,
+                *layout_lines,
                 "",
                 "## Manual Checklist",
                 checklist,
@@ -5129,6 +5300,13 @@ def _classin_handoff_session_fields(path: Path | None) -> dict[str, Any]:
     )
     preflight = payload.get("classinPreflight") if isinstance(payload.get("classinPreflight"), dict) else {}
     issue_count = int(preflight.get("issueCount") or preflight.get("issue_count") or 0)
+    layout_diagnostics = (
+        payload.get("layoutDiagnostics")
+        if isinstance(payload.get("layoutDiagnostics"), dict)
+        else payload.get("layout_diagnostics")
+        if isinstance(payload.get("layout_diagnostics"), dict)
+        else {}
+    )
     return {
         "classinHandoffStatus": status,
         "classin_handoff_status": status,
@@ -5140,6 +5318,8 @@ def _classin_handoff_session_fields(path: Path | None) -> dict[str, Any]:
         "classin_preflight_status": str(preflight.get("status") or ""),
         "classinPreflightIssueCount": issue_count,
         "classin_preflight_issue_count": issue_count,
+        "layoutDiagnostics": layout_diagnostics,
+        "layout_diagnostics": layout_diagnostics,
     }
 
 
@@ -5173,12 +5353,21 @@ def resolve_font_size(block: ContentBlock, scale: float) -> int:
     return int(max(10, min(40, round(scaled))))
 
 
-def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutInput]:
+def placement_inputs(
+    problem_entries: list[ProblemEntry],
+    *,
+    actual_height_pages_by_problem_id: Mapping[str, float] | None = None,
+) -> list[ProblemLayoutInput]:
     return [
         ProblemLayoutInput(
             problem_id=entry.problem_id,
             subject=entry.subject,
-            actual_content_height_pages=entry.actual_height_pages,
+            actual_content_height_pages=(
+                float(actual_height_pages_by_problem_id[entry.problem_id])
+                if actual_height_pages_by_problem_id is not None
+                and entry.problem_id in actual_height_pages_by_problem_id
+                else entry.actual_height_pages
+            ),
             overflow_allowed=entry.overflow_allowed,
             reading_heavy=entry.reading_heavy,
             metadata={
@@ -5200,6 +5389,62 @@ def placement_inputs(problem_entries: list[ProblemEntry]) -> list[ProblemLayoutI
         )
         for entry in problem_entries
     ]
+
+
+def _image_only_layout_height_pages(
+    entry: ProblemEntry,
+    template: LayoutTemplate,
+    *,
+    crop_format: str,
+) -> float:
+    """Return the height the EDB image record will occupy before user scaling."""
+
+    if crop_format == CROP_FORMAT_V2:
+        rendered_width_px = float(V2_TARGET_IMAGE_WIDTH_PX)
+    else:
+        rendered_width_px = _v1_default_display_width_px(template)
+
+    try:
+        with Image.open(entry.crop_path) as image:
+            width_px, height_px = image.size
+    except OSError:
+        return entry.actual_height_pages
+
+    estimated = rendered_width_px * (float(height_px) / max(float(width_px), 1.0)) / CANVAS_WIDTH
+    return max(MIN_HEIGHT_PAGES, min(MAX_HEIGHT_PAGES, estimated))
+
+
+def _image_only_layout_heights_by_problem_id(
+    problem_entries: list[ProblemEntry],
+    template: LayoutTemplate,
+    *,
+    crop_format: str,
+) -> dict[str, float]:
+    if crop_format == CROP_FORMAT_V1 and template.metadata.get("preserve_source_layout"):
+        return {}
+    return {
+        entry.problem_id: _image_only_layout_height_pages(entry, template, crop_format=crop_format)
+        for entry in problem_entries
+    }
+
+
+def _ensure_template_board_capacity(
+    template: LayoutTemplate,
+    placements: Sequence[Any],
+) -> None:
+    required_pages = max(
+        (
+            max(
+                float(getattr(placement, "snapped_next_start_y_pages", 0.0) or 0.0),
+                float(getattr(placement, "actual_bottom_y_pages", 0.0) or 0.0),
+            )
+            for placement in placements
+        ),
+        default=0.0,
+    )
+    if required_pages <= 0:
+        return
+    template.board_page_count = max(template.board_page_count, int(math.ceil(required_pages)))
 
 
 def _resize_to_target_width(image: Image.Image, target_width_px: int) -> Image.Image:
@@ -5247,7 +5492,16 @@ def build_image_only_records(
     board_theme: str = DEFAULT_BOARD_THEME,
     crop_format: str = DEFAULT_CROP_FORMAT,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
-    placements = place_problems(placement_inputs(problem_entries), template=template)
+    layout_heights = _image_only_layout_heights_by_problem_id(
+        problem_entries,
+        template,
+        crop_format=crop_format,
+    )
+    placements = place_problems(
+        placement_inputs(problem_entries, actual_height_pages_by_problem_id=layout_heights),
+        template=template,
+    )
+    _ensure_template_board_capacity(template, placements)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
     if crop_format == CROP_FORMAT_V2:
         # v2 displays every problem at a fixed pixel width on the board, so
@@ -5425,6 +5679,7 @@ def build_mixed_records(
     board_theme: str = DEFAULT_BOARD_THEME,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     placements = place_problems(placement_inputs(problem_entries), template=template)
+    _ensure_template_board_capacity(template, placements)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
     available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
     block_crop_dir = output_dir / "block_crops"

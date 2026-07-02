@@ -30,6 +30,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("summary.passageReviewLabel", panel)
         self.assertIn("summary.passageReviewReasonLabel", panel)
         self.assertIn("summary.passageGroupSourceReuseLabel", panel)
+        self.assertIn("summary.layoutDiagnosticsLabel", panel)
+        self.assertIn("긴 이미지 배치 진단", panel)
         self.assertIn("지문 원본 중복", panel)
         self.assertIn("사전점검", panel)
         self.assertIn("긴 지문", panel)
@@ -77,6 +79,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("passageReviewReasonLabel", helper)
         self.assertIn("passageGroupSourceReuseGroups", helper)
         self.assertIn("passageGroupSourceReuseLabel", helper)
+        self.assertIn("layoutDiagnostics", helper)
+        self.assertIn("layoutDiagnosticsLabel", helper)
         self.assertIn("canMarkClassinReviewComplete", helper)
 
     def test_app_posts_classin_review_completion(self) -> None:
@@ -117,8 +121,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
     def test_board_uses_publish_artifact_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("publish_summary.js?v=source-overlap-summary-20260614", html)
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-item-download", html)
+        self.assertIn("publish_summary.js?v=layout-diagnostics-20260701", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-scaled-reflow", html)
 
 
 if __name__ == "__main__":

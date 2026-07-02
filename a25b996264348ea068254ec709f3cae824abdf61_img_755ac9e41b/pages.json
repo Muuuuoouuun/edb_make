@@ -951,136 +951,30 @@
       {
         "unit_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1",
         "subject": "unknown",
-        "title": "다음 그림과 같은 직육면체에서 \\overline{\\mathrm{AD}}와 평행한 면의 개수\n를 구하여라.",
+        "title": "페이지 1",
         "stem_block_ids": [
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-002"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 1,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 21
-        }
-      },
-      {
-        "unit_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-2",
-        "subject": "unknown",
-        "title": "22\n다음 그림과 같은 직육면체에서 대각선 AG와 꼬인 위치\n에 있는 모서리의 개수를 구하여라.",
-        "stem_block_ids": [
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-003"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-001",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-002",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-003",
           "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-004",
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-005"
-        ],
-        "metadata": {
-          "problem_number": 22,
-          "problem_number_source": "ocr_top_left",
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 2,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          }
-        }
-      },
-      {
-        "unit_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-3",
-        "subject": "unknown",
-        "title": "23\n다음 그림에서 l // m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
-        "stem_block_ids": [
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-006"
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-005",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-006",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-007",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-008",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-009",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-010",
+          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-011"
         ],
         "choice_block_ids": [],
         "explanation_block_ids": [],
         "figure_block_ids": [],
         "metadata": {
-          "problem_number": 23,
-          "problem_number_source": "ocr_top_left",
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 3,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          }
-        }
-      },
-      {
-        "unit_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-4",
-        "subject": "unknown",
-        "title": "기 단원평가\n위치관계\n윤자매놀이학습(fillthevoid82.com)\n24\n다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
-        "stem_block_ids": [
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-008"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [],
-        "metadata": {
-          "problem_number": 24,
-          "problem_number_source": "ocr_internal_line",
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 4,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          }
-        }
-      },
-      {
-        "unit_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-5",
-        "subject": "unknown",
-        "title": "다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
-        "stem_block_ids": [
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-009"
-        ],
-        "choice_block_ids": [],
-        "explanation_block_ids": [],
-        "figure_block_ids": [
-          "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-010"
-        ],
-        "metadata": {
-          "grouping_mode": "marker",
-          "grouping_source": "marker_grouping",
-          "grouping_index": 5,
-          "marker_conflict": false,
-          "problem_marker": false,
-          "choice_marker": false,
-          "problem_number_source": null,
-          "marker_counts": {
-            "problem_marker": 0,
-            "choice_marker": 0,
-            "marker_conflict": 0
-          },
-          "problem_number": 25
+          "grouping_source": "user_intent",
+          "grouping_reason": [
+            "page-as-is"
+          ],
+          "force_full_page_bounds": true,
+          "input_intent": "page-as-is"
         }
       }
     ],
@@ -1111,6 +1005,7 @@
       "document_continuation_merge_count": 0,
       "document_grid_row_alignment_count": 0,
       "document_terminal_tail_extension_count": 0,
+      "document_visual_column_reassign_applied": false,
       "document_row_band_count": 11,
       "document_split_block_count": 11,
       "document_split_applied": false,
@@ -1146,9 +1041,9 @@
       "ocr_mode": "auto",
       "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/.pipeline_cache",
       "recognition_timing_ms": {
-        "segmentation": 60,
-        "block_ocr": 11,
-        "total_before_repair": 72
+        "segmentation": 47,
+        "block_ocr": 17,
+        "total_before_repair": 64
       },
       "ocr_block_worker_count": 3,
       "ocr_eligible_block_count": 11,
@@ -1189,11 +1084,11 @@
           "stage": "page_repair",
           "order": 3,
           "label": "3단계 문항 경계 보정",
-          "status": "not_needed",
+          "status": "disabled",
           "provider": "gemini",
           "model": "gemini-3.1-pro-preview",
           "model_used": "gemini-3.1-pro-preview",
-          "enabled": true,
+          "enabled": false,
           "attempted": false,
           "applied": false,
           "cache_hit": false,
@@ -1414,8 +1309,8 @@
         ],
         "problem_number_source": "ocr_top_left"
       },
-      "grouping_source": "marker_grouping",
-      "grouping_mode": "marker",
+      "grouping_source": "user_intent",
+      "grouping_mode": "single_page",
       "marker_counts": {
         "problem_marker_block_count": 0,
         "choice_marker_block_count": 0,
@@ -1504,81 +1399,9 @@
           }
         }
       },
-      "route_decision": {
-        "page_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001",
-        "route": "local_only",
-        "should_use_ai": false,
-        "next_best_action": null,
-        "quality_status": "trusted",
-        "recommended_action": "skip_ai",
-        "trigger_reasons": [],
-        "profile": {
-          "page_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001",
-          "segmentation_risk": 0.0,
-          "ocr_risk": 0.0,
-          "grouping_risk": 0.0,
-          "overall_risk": 0.0,
-          "tier": "green",
-          "reasons": [],
-          "diagnostics": {
-            "segmentation": {
-              "segmenter": "document-bands",
-              "segmentation_mode": "document",
-              "block_count": 11,
-              "large_block_count": 0,
-              "large_block_ratio": 0.0,
-              "fallback_reasons": [],
-              "content_box_area_ratio": 1.0,
-              "board_region_area_ratio": 0.0,
-              "document_split_block_count": 11,
-              "document_split_applied": false,
-              "candidate_count": 0,
-              "expanded_candidate_count": 0,
-              "merged_candidate_count": 0,
-              "max_block_area_ratio": 0.0777,
-              "pdf_text_marker_count": 0,
-              "pdf_text_markers_reliable": null
-            },
-            "ocr": {
-              "ocr_mode": "auto",
-              "text_block_count": 8,
-              "empty_text_block_count": 0,
-              "empty_text_ratio": 0.0,
-              "low_confidence_block_count": 0,
-              "low_confidence_ratio": 0.0,
-              "avg_confidence": 0.9724999999999999,
-              "recognized_line_count": 35,
-              "ocr_cache_hit_count": 11,
-              "ocr_cache_miss_count": 0,
-              "backend_counts": {
-                "gemini": 11
-              },
-              "backend_latency_ms_avg": 2337.0,
-              "all_text_from_trusted_pdf_markers": false
-            },
-            "grouping": {
-              "segmenter": "document-bands",
-              "grouping_source": "marker_grouping",
-              "grouping_mode": "marker",
-              "problem_count": 5,
-              "block_count": 11,
-              "problem_marker_count": 5,
-              "choice_marker_count": 0,
-              "marker_conflict_count": 0,
-              "fallback_grouping_problem_count": 0,
-              "problem_number_source_counts": {
-                "ocr_top_left": 2,
-                "ocr_internal_line": 1
-              },
-              "excess_problem_marker_block_count": 0,
-              "excess_problem_marker_total": 0
-            }
-          }
-        }
-      },
       "ai_fallback": {
-        "enabled": true,
-        "mode": "auto",
+        "enabled": false,
+        "mode": "off",
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
         "max_tokens": 4096,
@@ -1586,7 +1409,7 @@
         "attempted": false,
         "applied": false,
         "cache_hit": false,
-        "status": "not_needed",
+        "status": "disabled",
         "route": "local_only",
         "route_tier": "green",
         "trigger_reasons": [],
@@ -1595,7 +1418,9 @@
         "stage": "page_repair",
         "stage_label": "3단계 문항 경계 보정"
       },
-      "recognition_page_worker_count": 1
+      "recognition_page_worker_count": 1,
+      "input_intent": "page-as-is",
+      "forced_single_problem": true
     }
   }
 ]

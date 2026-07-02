@@ -116,8 +116,6 @@
         firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
       );
       const startYPages = snapUpPages(cursorPages, slotHeightPages);
-      const snappedNextStartYPages = snapUpPages(startYPages + heightPages, slotHeightPages);
-      const slotSpanPages = Math.max(heightPages, snappedNextStartYPages - startYPages);
       const requestedScale = Math.max(
         0,
         Math.min(
@@ -126,6 +124,18 @@
         )
       );
       const renderedHeightPages = heightPages * requestedScale;
+      const savedStartYPages = numberOrNull(item.startYPages ?? item.start_y_pages);
+      const savedSnappedNextYPages = numberOrNull(item.snappedNextStartYPages ?? item.snapped_next_start_y_pages);
+      const savedSpanPages = savedStartYPages !== null
+        && savedSnappedNextYPages !== null
+        && savedSnappedNextYPages > savedStartYPages
+        ? savedSnappedNextYPages - savedStartYPages
+        : 0;
+      const snappedNextStartYPages = snapUpPages(
+        startYPages + Math.max(renderedHeightPages, savedSpanPages),
+        slotHeightPages
+      );
+      const slotSpanPages = Math.max(renderedHeightPages, snappedNextStartYPages - startYPages);
       const verticalRoomPages = Math.max(0, slotSpanPages - renderedHeightPages);
       const yRatio = verticalRoomPages > 0.001
         ? clamp01(firstNumber(item, ["placementYRatio", "placement_y_ratio", "yRatio"], 0))

@@ -55,6 +55,28 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_layout_diagnostics_label(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              recordCount: 1,
+              layoutDiagnostics: {
+                autoExtendedCount: 1,
+                overlapRiskCount: 0,
+                maxRenderedHeightPages: 1.54,
+              },
+            });
+            if (summary.layoutDiagnosticsLabel !== '긴 이미지 자동 확장 1 · 최대 1.54p') {
+              throw new Error(`unexpected layout label: ${summary.layoutDiagnosticsLabel}`);
+            }
+            if (summary.layoutDiagnostics.autoExtendedCount !== 1) {
+              throw new Error('layout diagnostics were not preserved');
+            }
+            """
+        )
+
     def test_normalize_publish_summary_exposes_artifact_availability(self) -> None:
         run_node(
             """

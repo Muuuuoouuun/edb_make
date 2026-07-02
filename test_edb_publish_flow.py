@@ -2043,6 +2043,107 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("35-45 x2", handoff["duplicateProblemNumberNote"])
             self.assertIn("Duplicate problem numbers: 35-45 x2", markdown)
 
+    def test_ui_session_exposes_long_image_layout_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            crop = root / "p13.png"
+            source.write_bytes(b"source")
+            crop.write_bytes(b"crop")
+
+            session = build_problem_ui_session(
+                prepared_pages=[],
+                placements=[
+                    {
+                        "problem_id": "p13",
+                        "title": "13. long passage",
+                        "problem_number": 13,
+                        "subject": "korean",
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "source_page_id": "page-1",
+                        "source_path": str(source),
+                        "start_y_pages": 0.0,
+                        "actual_content_height_pages": 1.1,
+                        "snapped_next_start_y_pages": 2.4,
+                        "overflow_allowed": True,
+                        "overflow_amount_pages": 0.34,
+                        "overflow_violation": False,
+                        "slot_span_count": 2,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.4,
+                        "bbox": {"left": 0, "top": 0, "width": 100, "height": 100},
+                        "risk_flags": [],
+                    }
+                ],
+                output_dir=root,
+                edb_path=None,
+                source_paths=[source],
+                record_mode="image-only",
+                template=LayoutTemplate(name="academy-default", board_page_count=50),
+            )
+
+            diagnostics = session["layoutDiagnostics"]
+            problem_diag = session["problems"][0]["layoutDiagnostics"]
+            self.assertEqual(1, diagnostics["autoExtendedCount"])
+            self.assertEqual(1, diagnostics["longImageCount"])
+            self.assertEqual(0, diagnostics["overlapRiskCount"])
+            self.assertEqual("긴 이미지 자동 확장 1 · 최대 1.54p", diagnostics["label"])
+            self.assertEqual(1.54, problem_diag["renderedHeightPages"])
+            self.assertEqual(2.4, problem_diag["reservedSpanPages"])
+            self.assertEqual(1.4, problem_diag["placementScaleRatio"])
+
+    def test_classin_handoff_manifest_includes_layout_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.pdf"
+            edb_path = root / "lesson.edb"
+            source.write_bytes(b"pdf")
+            edb_path.write_bytes(b"edb")
+            layout_diagnostics = {
+                "autoExtendedCount": 1,
+                "auto_extended_count": 1,
+                "overlapRiskCount": 0,
+                "overlap_risk_count": 0,
+                "maxRenderedHeightPages": 1.54,
+                "max_rendered_height_pages": 1.54,
+                "label": "긴 이미지 자동 확장 1 · 최대 1.54p",
+                "items": [
+                    {
+                        "problemId": "p13",
+                        "title": "13. long passage",
+                        "renderedHeightPages": 1.54,
+                        "reservedSpanPages": 2.4,
+                        "placementScaleRatio": 1.4,
+                    }
+                ],
+            }
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "core_problem_count": 1,
+                    "supplemental_item_count": 0,
+                    "detected_problem_count": 1,
+                    "source_page_count": 1,
+                    "reviewSummary": {},
+                    "layoutDiagnostics": layout_diagnostics,
+                    "problems": [],
+                },
+                summary={"record_count": 1, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=50),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            self.assertEqual(layout_diagnostics, handoff["layoutDiagnostics"])
+            self.assertIn("Layout Diagnostics", markdown)
+            self.assertIn("긴 이미지 자동 확장 1 · 최대 1.54p", markdown)
+            self.assertIn("`p13`", markdown)
+
     def test_classin_handoff_manifest_summarizes_passage_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2933,6 +3034,38 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(2, summary["classinPreflightIssueCount"])
             self.assertFalse(summary["classinPreflightPassed"])
 
+    def test_publish_summary_exposes_layout_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            edb_path = root / "lesson.edb"
+            edb_path.write_bytes(b"placeholder")
+            diagnostics = {
+                "autoExtendedCount": 1,
+                "overlapRiskCount": 0,
+                "maxRenderedHeightPages": 1.54,
+                "label": "긴 이미지 자동 확장 1 · 최대 1.54p",
+            }
+
+            summary = _session_publish_summary(
+                edb_path=edb_path,
+                output_dir=root,
+                edb_validation={
+                    "outerSize": 1234,
+                    "innerSize": 987,
+                    "pageCountHint": 50,
+                    "recordCountHint": 1,
+                    "recordCountActual": 1,
+                },
+                record_count=1,
+                layout_diagnostics=diagnostics,
+                published_at="2026-06-13T12:00:00+09:00",
+            )
+
+            self.assertEqual(diagnostics, summary["layoutDiagnostics"])
+            self.assertEqual("긴 이미지 자동 확장 1 · 최대 1.54p", summary["layoutDiagnosticsLabel"])
+            self.assertEqual(diagnostics, summary["layout_diagnostics"])
+            self.assertEqual("긴 이미지 자동 확장 1 · 최대 1.54p", summary["layout_diagnostics_label"])
+
     def test_publish_summary_exposes_passage_group_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3110,6 +3243,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             ]
             template = LayoutTemplate(
                 name="academy-default",
+                board_page_count=2,
                 base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
             )
 
@@ -3130,6 +3264,45 @@ class TestEdbPublishFlow(unittest.TestCase):
                 placements[0]["rendered_height_px"],
                 V1_DEFAULT_DISPLAY_WIDTH_PX * (300 / 380),
                 places=6,
+            )
+
+    def test_v1_image_only_layout_reserves_actual_rendered_height(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = [
+                self._make_problem_entry(root, "long-problem", Box(0, 40, 380, 1600)),
+                self._make_problem_entry(root, "next-problem", Box(0, 40, 380, 300)),
+            ]
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+
+            _records, placements = build_image_only_records(
+                entries,
+                template,
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            expected_height_pages = V1_DEFAULT_DISPLAY_WIDTH_PX * (1600 / 380) / 590
+            self.assertAlmostEqual(
+                placements[0]["actual_content_height_pages"],
+                expected_height_pages,
+                places=6,
+            )
+            self.assertAlmostEqual(
+                placements[0]["rendered_height_px"],
+                V1_DEFAULT_DISPLAY_WIDTH_PX * (1600 / 380),
+                places=6,
+            )
+            self.assertGreater(placements[0]["snapped_next_start_y_pages"], 1.2)
+            self.assertEqual(
+                placements[0]["snapped_next_start_y_pages"],
+                placements[1]["start_y_pages"],
+            )
+            self.assertGreaterEqual(
+                template.board_page_count,
+                placements[-1]["snapped_next_start_y_pages"],
             )
 
     def test_v1_reconstruct_step_exports_transparent_high_res_png(self):
@@ -5082,6 +5255,54 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(problem_source.suffix.lower(), ".png")
             self.assertTrue(page_source.exists())
             self.assertTrue(problem_source.exists())
+
+    def test_page_as_is_full_page_crop_preserves_source_edges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "page.png"
+            image = Image.new("RGB", (180, 140), "white")
+            draw = ImageDraw.Draw(image)
+            draw.text((12, 28), "page as is", fill="black")
+            draw.line((179, 0, 179, 139), fill="black", width=1)
+            image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=image,
+                original_size=image.size,
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=image.width,
+                height_px=image.height,
+                subject=Subject.UNKNOWN,
+                source_path=str(source),
+                blocks=[],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-problem-1",
+                        subject=Subject.UNKNOWN,
+                        title="페이지 1",
+                        metadata={
+                            "force_full_page_bounds": True,
+                            "input_intent": "page-as-is",
+                        },
+                    ),
+                ],
+                metadata={"input_intent": "page-as-is"},
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            crop = Image.open(entries[0].crop_path).convert("RGB")
+            self.assertEqual(image.size, crop.size)
+            self.assertEqual((0, 0, 0), crop.getpixel((179, 70)))
 
 
 if __name__ == "__main__":

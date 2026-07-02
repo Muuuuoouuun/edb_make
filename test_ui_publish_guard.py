@@ -115,8 +115,8 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-item-download", html)
-        self.assertIn("publish_guard.js?v=preflight-focus-20260614", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-scaled-reflow", html)
+        self.assertIn("publish_guard.js?v=preflight-scaled-reflow-20260630", html)
 
 
 if __name__ == "__main__":

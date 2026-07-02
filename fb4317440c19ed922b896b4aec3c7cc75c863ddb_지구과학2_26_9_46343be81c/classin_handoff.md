@@ -2,7 +2,7 @@
 
 - Handoff status: `ready_for_classin_review`
 - Ready for ClassIn: yes
-- EDB: `/Users/clmagi/Desktop/Projects/edb_mak/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c-published-20260617-174855.edb`
+- EDB: `/Users/clmagi/Desktop/Projects/edb_mak/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c-published-20260629-171245.edb`
 - Expected records: 20
 - Core problems: 20
 - Supplemental items: 0

@@ -121,26 +121,26 @@ class TestUiPublishGuardHelper(unittest.TestCase):
             """
         )
 
-    def test_detects_requested_scale_overlap_before_publish(self) -> None:
+    def test_reserves_requested_scale_height_before_publish(self) -> None:
         run_node(
             """
-            const { findBoardPlacementOverlaps } = require('./ui_prototype/publish_guard.js');
+            const { findBoardPlacementOverlaps, simulatedBoardPlacements } = require('./ui_prototype/publish_guard.js');
             const overlaps = findBoardPlacementOverlaps([
               { id: 'p13', name: '13. 긴 지문', heightFrac: 1.1, placementScaleRatio: 1.4 },
               { id: 'p14', name: '14. 하위 문항', heightFrac: 0.8, placementScaleRatio: 1.0 },
             ]);
-            if (overlaps.length !== 1) {
-              throw new Error(`expected 1 overlap, got ${overlaps.length}`);
+            if (overlaps.length !== 0) {
+              throw new Error(`expected auto-reserved scale height, got ${JSON.stringify(overlaps)}`);
             }
-            const issue = overlaps[0];
-            if (issue.type !== 'board_placement_overlap') {
-              throw new Error(`unexpected issue type ${issue.type}`);
+            const placements = simulatedBoardPlacements([
+              { id: 'p13', name: '13. 긴 지문', heightFrac: 1.1, placementScaleRatio: 1.4 },
+              { id: 'p14', name: '14. 하위 문항', heightFrac: 0.8, placementScaleRatio: 1.0 },
+            ]);
+            if (placements[0].snappedNextStartYPages !== 2.4) {
+              throw new Error(`expected first item to reserve 2.4 pages, got ${placements[0].snappedNextStartYPages}`);
             }
-            if (issue.problemId !== 'p13' || issue.nextProblemId !== 'p14') {
-              throw new Error(`unexpected ids ${issue.problemId}/${issue.nextProblemId}`);
-            }
-            if (!(issue.renderedBottomYPages > issue.nextTopYPages)) {
-              throw new Error('rendered bottom should exceed next top');
+            if (placements[1].startYPages !== 2.4) {
+              throw new Error(`expected next item to start at 2.4 pages, got ${placements[1].startYPages}`);
             }
             """
         )

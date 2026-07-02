@@ -1106,6 +1106,57 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertEqual(2, len(responses))
             self.assertTrue(all(response[0]["ok"] for response in responses))
 
+    def test_page_as_is_export_forces_source_preserving_preprocessing(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            output_dir = tmpdir / "out"
+            payload = {
+                "files": [str(source)],
+                "outputDir": str(output_dir),
+                "inputIntent": "page-as-is",
+                "preview": True,
+                "exportEdb": False,
+                "detectPerspective": True,
+                "skipCrop": False,
+                "skipDeskew": False,
+            }
+            captured_kwargs = {}
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                captured_kwargs.update(kwargs)
+                resolved_output = Path(kwargs.get("output_dir") or output_dir)
+                return {
+                    "ok": True,
+                    "ui_session": {"pages": [], "problems": []},
+                    "output_dir": str(resolved_output),
+                    "ui_session_path": str(resolved_output / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            self.assertEqual("page-as-is", captured_kwargs["input_intent"])
+            self.assertFalse(captured_kwargs["detect_perspective"])
+            self.assertTrue(captured_kwargs["skip_crop"])
+            self.assertTrue(captured_kwargs["skip_deskew"])
+            self.assertTrue(responses[0][0]["ok"])
+
     def test_export_response_exposes_classin_preflight_from_session(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -1306,8 +1357,9 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(["p7-a", "p7-b"], body["blocking_problem_ids"])
             entries.assert_not_called()
 
-    def test_session_publish_blocks_board_placement_overlap_before_build(self):
+    def test_session_publish_reflows_board_placement_overlap_before_build(self):
         with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
             session = {
                 "session_name": "placement-overlap",
                 "output_dir": raw_tmp,
@@ -1341,16 +1393,125 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                 {"placements": {"p13": {"placementScaleRatio": 1.4}}},
             )
 
-            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+            def fake_problems_to_entries(problems, **_kwargs):
+                self.assertEqual(["p13", "p14"], [problem["id"] for problem in problems])
+                self.assertEqual(1.4, problems[0]["placementScaleRatio"])
+                return [
+                    app_server.ProblemEntry(
+                        problem_id=problem["id"],
+                        title=problem["title"],
+                        problem_number=problem["problemNumber"],
+                        subject=app_server.resolve_subject("math"),
+                        source_page_id=problem["sourcePageId"],
+                        source_path=problem["sourcePageId"],
+                        prepared_page=None,
+                        bounds=Box(left=0, top=0, width=100, height=100),
+                        crop_path=root / f"{problem['id']}.png",
+                        board_render_path=root / f"{problem['id']}.png",
+                        blocks=[],
+                        actual_height_pages=problem["actualHeightPages"],
+                        overflow_allowed=True,
+                        reading_heavy=False,
+                        risk_flags=[],
+                        placement_scale_ratio=problem.get("placementScaleRatio"),
+                    )
+                    for problem in problems
+                ]
+
+            def fake_build_records(entries, _template, **_kwargs):
+                self.assertEqual(["p13", "p14"], [entry.problem_id for entry in entries])
+                return (
+                    [{"record": "p13"}, {"record": "p14"}],
+                    [
+                        {
+                            "problem_id": "p13",
+                            "title": "13.",
+                            "record_index": 0,
+                            "crop_path": str(root / "p13.png"),
+                            "board_render_path": str(root / "p13.png"),
+                            "start_y_pages": 0.0,
+                            "snapped_next_start_y_pages": 2.4,
+                            "actual_height_pages": 1.1,
+                            "placement_scale_ratio": 1.4,
+                        },
+                        {
+                            "problem_id": "p14",
+                            "title": "14.",
+                            "record_index": 1,
+                            "crop_path": str(root / "p14.png"),
+                            "board_render_path": str(root / "p14.png"),
+                            "start_y_pages": 2.4,
+                            "snapped_next_start_y_pages": 3.6,
+                            "actual_height_pages": 0.8,
+                            "placement_scale_ratio": 1.0,
+                        },
+                    ],
+                    0,
+                )
+
+            def fake_build_ui_session(**kwargs):
+                placements = kwargs["placements"]
+                return {
+                    "session_name": "published",
+                    "output_dir": str(root),
+                    "problems": [
+                        {
+                            "id": placement["problem_id"],
+                            "title": placement["title"],
+                            "problemNumber": 13 + index,
+                            "sourcePageId": f"page-{index + 1}",
+                            "imagePath": (root / f"p{13 + index}.png").resolve().as_uri(),
+                            "bbox": {},
+                            "riskFlags": [],
+                            "startYPages": placement["start_y_pages"],
+                            "snappedNextStartYPages": placement["snapped_next_start_y_pages"],
+                            "actualHeightPages": placement["actual_height_pages"],
+                            "placementScaleRatio": placement["placement_scale_ratio"],
+                        }
+                        for index, placement in enumerate(placements)
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_handoff(output_dir, *, ui_session, **_kwargs):
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps({
+                        "status": "ready_for_classin_review",
+                        "readyForClassIn": True,
+                        "classinPreflight": {"status": "passed", "passed": True, "issueCount": 0, "issues": []},
+                    }),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "_problems_to_entries", side_effect=fake_problems_to_entries) as entries,
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "build_edb", return_value=b"edb"),
+                patch.object(app_server, "write_edb", side_effect=lambda path, data: Path(path).write_bytes(data)),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": 2,
+                    "recordCountActual": 2,
+                }),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
                 handler._handle_session_publish()
 
             body, kwargs = responses[0]
-            self.assertFalse(body["ok"])
-            self.assertEqual("publish_preflight_blocked", body["errorKind"])
-            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
-            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
-            self.assertIn("board_placement_overlap", issue_types)
-            entries.assert_not_called()
+            self.assertTrue(body["ok"], body)
+            self.assertNotEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            entries.assert_called_once()
+            remembered = handler.server.remembered_session
+            self.assertEqual(0.0, remembered["problems"][0]["startYPages"])
+            self.assertEqual(2.4, remembered["problems"][1]["startYPages"])
+            self.assertEqual(1.4, remembered["problems"][0]["placementScaleRatio"])
 
     def test_session_publish_blocks_unresolved_passage_review_queue_before_build(self):
         with TemporaryDirectory() as raw_tmp:

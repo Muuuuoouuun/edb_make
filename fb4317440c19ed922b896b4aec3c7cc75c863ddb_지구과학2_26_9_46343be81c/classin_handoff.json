@@ -2,13 +2,13 @@
   "status": "ready_for_classin_review",
   "readyForClassIn": true,
   "manualReviewRequired": true,
-  "generatedAt": "2026-06-17T17:48:55+09:00",
+  "generatedAt": "2026-06-29T17:12:45+09:00",
   "sourcePaths": [
     "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2 26.9_46343be81c.pdf"
   ],
   "outputDir": "/Users/clmagi/Desktop/Projects/edb_mak/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c",
-  "edbPath": "/Users/clmagi/Desktop/Projects/edb_mak/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c-published-20260617-174855.edb",
-  "edbFileName": "fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c-published-20260617-174855.edb",
+  "edbPath": "/Users/clmagi/Desktop/Projects/edb_mak/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c/fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c-published-20260629-171245.edb",
+  "edbFileName": "fb4317440c19ed922b896b4aec3c7cc75c863ddb_지구과학2_26_9_46343be81c-published-20260629-171245.edb",
   "expectedRecordCount": 20,
   "expectedCoreProblemCount": 20,
   "expectedSupplementalItemCount": 0,

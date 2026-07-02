@@ -87,6 +87,43 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".ui-tooltip", html)
         self.assertIn("position: fixed", html)
 
+    def test_review_zoom_only_scales_problem_canvas(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("function ItemsRail", 1)[0]
+
+        self.assertIn("function ReviewCanvasZoomShell", source)
+        self.assertIn("centerReviewZoomScrollers", review_stage)
+        self.assertIn("reviewWrapRef.current?.querySelectorAll?.('.review-canvas-scroll')", review_stage)
+        self.assertIn("className=\"review-zoom-range\"", review_stage)
+        self.assertIn("문제 이미지만 확대/축소", review_stage)
+        self.assertIn("<ReviewCanvasZoomShell>", review_stage)
+        self.assertIn(".review-page{\n    width: 100%;", html)
+        self.assertIn(".review-canvas-zoom-shell", html)
+        self.assertIn("width: calc(100% * var(--review-zoom, 1))", html)
+
+    def test_side_panel_scale_control_explains_dynamic_maximum(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        publish_panel = source.split("function PublishResultPanel", 1)[1]
+        publish_panel = publish_panel.split("function SidePanel", 1)[0]
+
+        self.assertIn("scaleLimitBySlot", side_panel)
+        self.assertIn("현재 칸 높이 기준 최대", side_panel)
+        self.assertIn("className=\"scale-range\"", side_panel)
+        self.assertIn("quick-scale-control", side_panel)
+        self.assertIn("scale-limit-note", side_panel)
+        self.assertIn("--range-progress", side_panel)
+        self.assertIn("publish-result-panel ${open ? 'open' : 'is-collapsed'}", publish_panel)
+        self.assertIn("제작 결과 펼치기", publish_panel)
+        self.assertIn(".position-sliders input.scale-range", html)
+        self.assertIn(".quick-scale-control", html)
+        self.assertIn(".scale-limit-note.limited", html)
+        self.assertIn(".publish-result-panel.is-collapsed", html)
+
     def test_reorder_reflows_saved_board_page_positions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         self.assertIn("function reflowItemsForBoardOrder", source)
@@ -334,7 +371,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-item-download", board_html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260630-scaled-reflow", board_html)
         self.assertNotIn("vendor/babel.min.js", board_html)
         self.assertNotIn('type="text/babel"', board_html)
         self.assertIn("EDB_REPORT_RUNTIME_ERROR", board_html)

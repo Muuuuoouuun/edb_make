@@ -2,13 +2,17 @@
   "status": "ready_for_classin_review",
   "readyForClassIn": true,
   "manualReviewRequired": true,
-  "generatedAt": "2026-06-16T14:01:35+09:00",
+  "generatedAt": "2026-06-30T18:11:40+09:00",
   "sourcePaths": [
-    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b.jpg"
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b.jpg",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/710d9bd1ca90aa6380dd1fb5e4c7d5ae5374b7c1_1_b5984368ea.webp",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/2408b4e3b0229393091a32681af8f4108fb7b171_img (1)_a962d279b2.jpg",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/7e4a0ffee49d6cce86fdee14d1abcb79abc85660_25수능 국어_7f0db7ddbd.pdf",
+    "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/c3aaafcb87d4bc611238555ab0ee86a2944a49d1_클래스인 회원가입_pc_15c960feea.pdf"
   ],
   "outputDir": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b",
-  "edbPath": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-published-20260616-140135.edb",
-  "edbFileName": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-published-20260616-140135.edb",
+  "edbPath": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-published-20260630-181139.edb",
+  "edbFileName": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-published-20260630-181139.edb",
   "expectedRecordCount": 5,
   "expectedCoreProblemCount": 5,
   "expectedSupplementalItemCount": 0,
