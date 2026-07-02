@@ -4264,7 +4264,7 @@ function SidePanel({
     setAdvancedSettingsOpen(true);
     setPreviewMode('raw');
     window.requestAnimationFrame(() => {
-      cropControlRef.current?.scrollIntoView({ block: 'nearest' });
+      cropControlRef.current?.scrollIntoView({ block: 'center', inline: 'nearest' });
     });
   };
   const applyManualCrop = (nextCrop = cropDraft) => {

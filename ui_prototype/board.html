@@ -826,9 +826,13 @@
     overflow-y: auto;
     min-height: 0;
     overscroll-behavior: contain;
-    padding: 14px 14px 18px;
+    padding: 14px 14px 30px;
+    scroll-padding: 18px 0 34px;
     display: flex; flex-direction: column;
     gap: 14px;
+  }
+  .tab-body > *{
+    flex-shrink: 0;
   }
   .publish-result-panel{
     flex: 0 0 auto;
@@ -1211,6 +1215,7 @@
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--surface-2);
+    scroll-margin: 18px 0 34px;
   }
   .manual-crop-note{
     color: var(--muted);
