@@ -353,6 +353,13 @@ function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio
   return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
 }
 
+function isContinuousPlacementItem(item){
+  if (!item) return false;
+  const intent = item.inputIntent ? normalizeInputIntent(item.inputIntent) : null;
+  if (intent) return intent === 'page-as-is';
+  return item.placementMode === 'continuous-page-as-is';
+}
+
 function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!item) return slotHeight;
   const heightPages = Math.max(0.12, item.heightFrac || 0.8);
@@ -361,6 +368,10 @@ function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   const savedSpan = startPages !== null && snappedNext !== null && snappedNext > startPages
     ? snappedNext - startPages
     : 0;
+  if (isContinuousPlacementItem(item)) {
+    const scale = normalizePlacementScaleRatio(item.placementScaleRatio, PLACEMENT_SCALE_MAX);
+    return Math.max(heightPages, savedSpan, heightPages * scale);
+  }
   return Math.max(heightPages, savedSpan || snapUpPages(heightPages, slotHeight));
 }
 
@@ -369,11 +380,13 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES)
   let cursorPages = 0;
   return items.map(item => {
     const heightPages = Math.max(0.12, item.heightFrac || 0.8);
-    const startPages = snapUpPages(cursorPages, slotHeight);
+    const continuous = isContinuousPlacementItem(item);
+    const startPages = continuous ? cursorPages : snapUpPages(cursorPages, slotHeight);
     const slotSpanPages = itemSlotSpanPages(item, slotHeight);
-    const snappedNextStartYPages = snapUpPages(startPages + Math.max(heightPages, slotSpanPages), slotHeight);
+    const flowEndPages = startPages + Math.max(heightPages, slotSpanPages);
+    const snappedNextStartYPages = continuous ? flowEndPages : snapUpPages(flowEndPages, slotHeight);
     const actualBottomPages = startPages + heightPages;
-    const slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - startPages) / slotHeight));
+    const slotSpanCount = Math.max(1, Math.ceil((snappedNextStartYPages - startPages - 0.001) / slotHeight));
     cursorPages = snappedNextStartYPages;
     return {
       ...item,
@@ -449,6 +462,10 @@ const Icon = {
   split:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M5 12h14M9 8h6M9 16h6"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
+  scan:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M7 9h10M7 13h7M7 17h5"/></svg>,
+  fileText:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3.5h7l4 4V19a1.8 1.8 0 0 1-1.8 1.8H7A1.8 1.8 0 0 1 5.2 19V5.3A1.8 1.8 0 0 1 7 3.5z"/><path d="M14 3.7v4h4M8.5 12h7M8.5 15.2h5.5"/></svg>,
+  rows3:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="3.8" width="14" height="4.4" rx="1.2"/><rect x="5" y="9.8" width="14" height="4.4" rx="1.2"/><rect x="5" y="15.8" width="14" height="4.4" rx="1.2"/></svg>,
+  stretchHorizontal:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4M10 5h4M10 19h4"/></svg>,
   arrowUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>,
   arrowDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>,
   arrowLeft:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>,
@@ -1161,6 +1178,13 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     if (focusedProblemIds.length && setActive) setActive(focusedProblemIds[0]);
   }, [reviewFocus, setActive]);
 
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const filtered = Array.from(prev).filter(id => problemsById.has(id));
+      return filtered.length === prev.size ? prev : new Set(filtered);
+    });
+  }, [problemsById]);
+
   const onBoxClick = (probId, evt) => {
     if (manualSplit) return;
     if (splitTarget) return;  // ignore clicks while splitting
@@ -1178,7 +1202,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     if (setActive) setActive(probId);
   };
 
-  const selectedList = Array.from(selectedIds);
+  const selectedList = Array.from(selectedIds).filter(id => problemsById.has(id));
   const selectedProblems = selectedList.map(id => problemsById.get(id)).filter(Boolean);
   const selectedSingleProblem = selectedProblems.length === 1 ? selectedProblems[0] : null;
   const selectedSinglePage = selectedSingleProblem
@@ -3386,6 +3410,15 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     setActive(id);
   };
 
+  const fitActiveTileInView = () => {
+    const container = scrollRef.current;
+    const idx = items.findIndex(x => x.id === activeId);
+    if (!container || idx < 0) return;
+    const target = Math.max(0, layout.positions[idx].top - 8);
+    syncLock.current = Date.now();
+    smoothScrollTo(container, target);
+  };
+
   const setCurrentBoardDropTarget = (target) => {
     boardDropTargetRef.current = target;
     setBoardDropTarget(prev => (
@@ -3554,7 +3587,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
 
   // page-boundary divider lines (between page N and N+1)
   const dividers = [];
-  for (let i = 1; i < Math.min(layout.totalPages, 50); i++){
+  for (let i = 1; i < Math.min(layout.totalPages, 200); i++){
     dividers.push(i * pageH);
   }
 
@@ -3565,7 +3598,14 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
           <span className="name">실시간 칠판 미리보기</span>
           <span className="pill"><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
           <div className="spacer" />
-          <button className="btn ghost stage-fit-btn" title="화면 맞춤" data-tooltip="현재 칠판을 화면 안에 맞춰 보기">화면 맞춤</button>
+          <button
+            className="btn ghost stage-fit-btn"
+            type="button"
+            title="화면 맞춤"
+            data-tooltip="현재 칠판을 화면 안에 맞춰 보기"
+            disabled={!items.length}
+            onClick={fitActiveTileInView}
+          >화면 맞춤</button>
         </div>
 
         <div className="stage-wrap">
@@ -3651,7 +3691,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                 >
                   <span className="plus">＋</span>
                   자료 추가
-                  <small>최대 50 페이지</small>
+                  <small>{layout.totalPages > 50 ? `${layout.totalPages}p` : 'auto pages'}</small>
                 </div>
               </div>
             </div>
@@ -3696,21 +3736,34 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
 
 function downloadPublishSummary(target){
   if (!target?.canDownload) return;
-  const a = document.createElement('a');
-  a.href = target.edbFileUri;
-  a.download = target.edbFileName || 'classin.edb';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const parts = Array.isArray(target.edbParts) && target.edbParts.length
+    ? target.edbParts
+    : [target];
+  parts
+    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false)
+    .forEach((part, index) => {
+      window.setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = part.edbFileUri || part.edb_file_uri;
+        a.download = part.edbFileName || part.edb_file_name || target.edbFileName || 'classin.edb';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, index * 150);
+    });
 }
 
 async function openPublishedEdb(target){
-  if (!target?.canOpenEdbFile || !target.edbPath) return;
+  const firstPart = Array.isArray(target?.edbParts)
+    ? target.edbParts.find(part => (part.edbPath || part.edb_path) && (part.edbFileExists ?? part.edb_file_exists) !== false)
+    : null;
+  const edbPath = firstPart?.edbPath || firstPart?.edb_path || target?.edbPath;
+  if (!target?.canOpenEdbFile || !edbPath) return;
   try {
     const resp = await fetch('/api/system/open-file', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: target.edbPath }),
+      body: JSON.stringify({ path: edbPath }),
     });
     const json = await readJsonResponse(resp, '파일 열기 실패').catch(() => ({}));
     if (!resp.ok || !json.ok) {
@@ -3743,10 +3796,11 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
         </span>
       </div>
       <div className="publish-result-file" title={summary.edbPath || summary.edbFileName}>
-        {summary.edbFileName}
+        {summary.edbSplit ? `${summary.edbFileName} + ${summary.edbPartCount - 1} parts` : summary.edbFileName}
       </div>
       <div className="publish-result-metrics">
         <span>{summary.recordCountActual || summary.recordCount} records</span>
+        {summary.edbSplit && <span>{summary.edbPartCount} EDB files</span>}
         {summary.pageCountHint > 0 && <span>{summary.pageCountHint}p hint</span>}
         {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
         {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
@@ -3935,6 +3989,10 @@ function SidePanel({
   const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
   const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
+  const currentInputIntent = normalizeInputIntent(session?.inputIntent || session?.input_intent || inputIntent);
+  const itemInputIntent = normalizeInputIntent(item?.inputIntent || currentInputIntent);
+  const itemIntentMeta = inputIntentMeta(itemInputIntent);
+  const showFitWidth = !!item && itemInputIntent === 'page-as-is';
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
@@ -3993,6 +4051,14 @@ function SidePanel({
   };
   const resetScale = () => {
     updatePlacement({ scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO });
+  };
+  const fitPlacementWidth = () => {
+    updatePlacement({
+      xRatio: DEFAULT_PLACEMENT_X_RATIO,
+      yRatio: DEFAULT_PLACEMENT_Y_RATIO,
+      scaleRatio: PLACEMENT_SCALE_MAX,
+      fitWidth: true,
+    });
   };
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
@@ -4064,6 +4130,10 @@ function SidePanel({
                     <div className="t">{item.name}</div>
                     <div className="s">
                       <span className={`status-badge ${reviewStatusClass(item.reviewStatus)}`}>{item.statusLabel}</span>
+                      <span className={`intent-badge intent-${itemInputIntent}`} title={itemIntentMeta.description}>
+                        {Icon[itemIntentMeta.icon] || Icon.scan}
+                        {itemIntentMeta.badgeLabel || itemIntentMeta.label}
+                      </span>
                       {item.source} · {item.type.toUpperCase()}
                     </div>
                   </div>
@@ -4188,6 +4258,15 @@ function SidePanel({
                           disabled={!canZoomIn}
                           onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}
                         >{Icon.zoomIn}</button>
+                        {showFitWidth && (
+                          <button
+                            className="btn fit-width-action"
+                            type="button"
+                            title="페이지 너비 맞춤"
+                            disabled={!item}
+                            onClick={fitPlacementWidth}
+                          >{Icon.stretchHorizontal} 너비 맞춤</button>
+                        )}
                         <div className="spacer" />
                         <span className="scale">{Math.round(placementScale * 100)}%</span>
                       </div>
@@ -4463,7 +4542,7 @@ function SidePanel({
             </div>
 
             <div className="row-control">
-              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤 (최대 50p)</small></div>
+              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
               <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
             </div>
 
@@ -4581,8 +4660,16 @@ function SidePanel({
                   onClick={() => setInputIntent?.(option.value)}
                   title={option.description}
                 >
-                  <span>{option.label}</span>
+                  <span className="intent-choice-head">
+                    <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
+                    <strong>{option.label}</strong>
+                  </span>
                   <small>{option.description}</small>
+                  {Array.isArray(option.pills) && option.pills.length > 0 && (
+                    <em className="intent-choice-pills">
+                      {option.pills.map(pill => <b key={pill}>{pill}</b>)}
+                    </em>
+                  )}
                 </button>
               ))}
             </div>
@@ -4880,6 +4967,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
         </div>
 
         <div className="recognition-summary">
+          {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
           <span>{summary.pages} 페이지</span>
           <span>{summary.problemLabel}</span>
           <span className={summary.riskCount ? 'warn' : ''}>
@@ -5047,6 +5135,14 @@ function applyItemStateToProblem(problem, item){
   next.step = normalizeProcessingStep(item.step);
   next.processingStep = next.step;
   next.processing_step = next.step;
+  next.inputIntent = normalizeInputIntent(item.inputIntent || next.inputIntent || next.input_intent);
+  next.input_intent = next.inputIntent;
+  next.forceFullPageBounds = Boolean(item.forceFullPageBounds || next.forceFullPageBounds || next.force_full_page_bounds);
+  next.force_full_page_bounds = next.forceFullPageBounds;
+  if (item.placementMode || next.placementMode || next.placement_mode) {
+    next.placementMode = item.placementMode || next.placementMode || next.placement_mode;
+    next.placement_mode = next.placementMode;
+  }
   next.placementXRatio = normalizePlacementXRatio(item.placementXRatio);
   next.placementYRatio = verticalPlacementRoomPages(item) > 0.001
     ? normalizePlacementYRatio(item.placementYRatio)
@@ -5192,6 +5288,10 @@ function mergeSessions(baseSession, incomingSession, fileName){
   });
 
   const mergedProblems = [...(base.problems || []), ...incomingProblems];
+  const mergedProblemsById = new Map(mergedProblems.map(problem => [problem.id, problem]));
+  const reflowedProblems = reflowItemsForBoardOrder(
+    mergedProblems.map((problem, idx) => mapProblemToItem(problem, idx))
+  ).map(item => applyItemStateToProblem(mergedProblemsById.get(item.id) || {}, item));
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
   const merged = {
@@ -5205,14 +5305,14 @@ function mergeSessions(baseSession, incomingSession, fileName){
     rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
     rendered_page_file_uris: concatUnique(base.rendered_page_file_uris || [], incoming.rendered_page_file_uris || []),
     warning_messages: [...(base.warning_messages || base.warningMessages || []), ...(incoming.warning_messages || incoming.warningMessages || [])],
-    problems: mergedProblems,
+    problems: reflowedProblems,
     pages: mergedPages,
     edb_path: null,
     edb_file_uri: null,
     edbPath: null,
     edbFileUri: null,
   };
-  applyProblemCounts(merged, mergedProblems);
+  applyProblemCounts(merged, reflowedProblems);
   return merged;
 }
 
@@ -5236,6 +5336,7 @@ function mapProblemToItem(problem, idx){
   const initialScale = normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio);
   const step = normalizeProcessingStep(problem.step || problem.processingStep || problem.processing_step);
   const manualCrop = normalizeManualCrop(problem.manualCrop || problem.manual_crop || problem.cropAdjustments || problem);
+  const problemInputIntent = problem.inputIntent || problem.input_intent;
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -5258,6 +5359,9 @@ function mapProblemToItem(problem, idx){
     parseConfidence: typeof problem.parseConfidence === 'number' ? problem.parseConfidence : null,
     confidence: problem.confidence || null,
     aiStatus: problem.aiStatus || 'unknown',
+    inputIntent: problemInputIntent ? normalizeInputIntent(problemInputIntent) : null,
+    forceFullPageBounds: Boolean(problem.forceFullPageBounds || problem.force_full_page_bounds),
+    placementMode: problem.placementMode || problem.placement_mode || null,
     startYPages: typeof problem.startYPages === 'number' ? problem.startYPages : null,
     snappedNextStartYPages: typeof problem.snappedNextStartYPages === 'number' ? problem.snappedNextStartYPages : null,
     overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
@@ -5313,27 +5417,28 @@ const AI_MODEL_LABELS = {
 const DEFAULT_INPUT_INTENT = 'multi-problem';
 const INPUT_INTENT_OPTIONS = [
   {
-    value: 'auto',
-    label: '자동 판별',
-    description: '사진 내용에 맞춰 문항 경계를 판단',
+    value: 'multi-problem',
+    label: '문항 자동 분리',
+    description: '문항을 찾아 각각 잘라 배치',
+    icon: 'scan',
+    badgeLabel: '자동 분리',
     exportMode: 'question',
   },
   {
     value: 'single-problem',
-    label: '한 문제',
-    description: '한 이미지나 페이지를 한 문항으로 처리',
-    exportMode: 'question',
-  },
-  {
-    value: 'multi-problem',
-    label: '여러 문제',
-    description: '한 페이지 안의 여러 문항을 분리',
+    label: '한 페이지를 한 문제로',
+    description: '페이지 전체를 한 문제 칸에 배치',
+    icon: 'fileText',
+    badgeLabel: '페이지 한 문제',
     exportMode: 'question',
   },
   {
     value: 'page-as-is',
-    label: '페이지 그대로',
-    description: '문항 분리 없이 페이지 단위로 변환',
+    label: '원본 페이지 이어붙이기',
+    description: '너비 맞춤 고화질 페이지를 아래로 이어 배치',
+    icon: 'rows3',
+    badgeLabel: '원본 이어붙임',
+    pills: ['3단계 고화질', '너비 맞춤', '연속 이어붙이기'],
     exportMode: 'question',
   },
 ];
@@ -5343,10 +5448,26 @@ const INPUT_INTENT_BY_VALUE = Object.freeze(
     return acc;
   }, {})
 );
+const INPUT_INTENT_META_BY_VALUE = Object.freeze({
+  auto: {
+    value: 'auto',
+    label: '문항 자동 분리',
+    description: '문항을 찾아 각각 잘라 배치',
+    icon: 'scan',
+    badgeLabel: '자동 분리',
+    exportMode: 'question',
+  },
+  ...INPUT_INTENT_BY_VALUE,
+});
 
 function normalizeInputIntent(value){
   const normalized = String(value || DEFAULT_INPUT_INTENT).trim().toLowerCase().replace(/_/g, '-');
-  return INPUT_INTENT_BY_VALUE[normalized] ? normalized : DEFAULT_INPUT_INTENT;
+  if (normalized === 'auto') return DEFAULT_INPUT_INTENT;
+  return INPUT_INTENT_META_BY_VALUE[normalized] ? normalized : DEFAULT_INPUT_INTENT;
+}
+
+function inputIntentMeta(value){
+  return INPUT_INTENT_META_BY_VALUE[normalizeInputIntent(value)] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
 }
 
 const REVIEW_STATUS_META = {
@@ -6331,6 +6452,69 @@ function publishReviewWarningMessage(session, publishReviewSummary){
   };
 }
 
+function normalizeEdbParts(raw, fallback = {}){
+  const rawParts = Array.isArray(raw?.edbParts)
+    ? raw.edbParts
+    : Array.isArray(raw?.edb_parts)
+      ? raw.edb_parts
+      : [];
+  const parts = rawParts
+    .filter(part => part && typeof part === 'object')
+    .map((part, index) => {
+      const edbPath = String(part.edbPath || part.edb_path || '').trim();
+      const edbFileUri = String(part.edbFileUri || part.edb_file_uri || '').trim();
+      const edbFileName = String(
+        part.edbFileName
+        || part.edb_file_name
+        || (edbPath ? edbPath.split(/[\\/]/).pop() : '')
+        || `classin_part${String(index + 1).padStart(2, '0')}.edb`
+      ).trim();
+      const exists = part.edbFileExists ?? part.edb_file_exists;
+      return {
+        ...part,
+        partIndex: Number(part.partIndex ?? part.part_index ?? index + 1) || index + 1,
+        part_index: Number(part.partIndex ?? part.part_index ?? index + 1) || index + 1,
+        partCount: Number(part.partCount ?? part.part_count ?? rawParts.length) || rawParts.length,
+        part_count: Number(part.partCount ?? part.part_count ?? rawParts.length) || rawParts.length,
+        edbFileName,
+        edb_file_name: edbFileName,
+        edbPath,
+        edb_path: edbPath,
+        edbFileUri,
+        edb_file_uri: edbFileUri,
+        edbFileExists: exists === undefined ? true : exists !== false,
+        edb_file_exists: exists === undefined ? true : exists !== false,
+        recordCount: Math.max(0, Number(part.recordCount ?? part.record_count ?? 0) || 0),
+        record_count: Math.max(0, Number(part.recordCount ?? part.record_count ?? 0) || 0),
+        pageCountHint: Math.max(0, Number(part.pageCountHint ?? part.page_count_hint ?? 0) || 0),
+        page_count_hint: Math.max(0, Number(part.pageCountHint ?? part.page_count_hint ?? 0) || 0),
+      };
+    });
+  if (!parts.length && (fallback.edbFileName || fallback.edbPath || fallback.edbFileUri)) {
+    const fallbackName = fallback.edbFileName || (fallback.edbPath ? fallback.edbPath.split(/[\\/]/).pop() : 'classin.edb');
+    const fallbackExists = fallback.edbFileExists ?? fallback.edb_file_exists;
+    parts.push({
+      partIndex: 1,
+      part_index: 1,
+      partCount: 1,
+      part_count: 1,
+      edbFileName: fallbackName,
+      edb_file_name: fallbackName,
+      edbPath: fallback.edbPath || '',
+      edb_path: fallback.edbPath || '',
+      edbFileUri: fallback.edbFileUri || '',
+      edb_file_uri: fallback.edbFileUri || '',
+      edbFileExists: fallbackExists === undefined ? true : fallbackExists !== false,
+      edb_file_exists: fallbackExists === undefined ? true : fallbackExists !== false,
+      recordCount: Math.max(0, Number(fallback.recordCount || 0) || 0),
+      record_count: Math.max(0, Number(fallback.recordCount || 0) || 0),
+      pageCountHint: Math.max(0, Number(fallback.pageCountHint || 0) || 0),
+      page_count_hint: Math.max(0, Number(fallback.pageCountHint || 0) || 0),
+    });
+  }
+  return parts;
+}
+
 function normalizePublishSummary(raw, session = null){
   const helper = globalThis.EDB_PUBLISH_SUMMARY?.normalizePublishSummary;
   if (typeof helper === 'function') return helper(raw, session);
@@ -6345,6 +6529,15 @@ function normalizePublishSummary(raw, session = null){
   const edbPath = String(raw.edbPath || raw.edb_path || '').trim();
   const outputDir = String(raw.outputDir || raw.output_dir || session?.output_dir || session?.outputDir || '').trim();
   const edbFileUri = String(raw.edbFileUri || raw.edb_file_uri || session?.edb_file_uri || session?.edbFileUri || '').trim();
+  const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
+  const edbParts = normalizeEdbParts(raw, {
+    edbFileName,
+    edbPath,
+    edbFileUri,
+    edbFileExists,
+    recordCount: recordCountActual || recordCount,
+    pageCountHint,
+  });
   const classinReview = raw.classinReview || raw.classin_review || session?.classinReview || session?.classin_review || {};
   const classinReviewStatus = String(
     raw.classinReviewStatus
@@ -6586,19 +6779,27 @@ function normalizePublishSummary(raw, session = null){
         .join(' · ')
       : '')
   ).trim();
-  const edbFileExists = raw.edbFileExists ?? raw.edb_file_exists;
   const outputDirExists = raw.outputDirExists ?? raw.output_dir_exists;
-  if (!edbFileName && !edbPath && !edbFileUri) return null;
+  if (!edbFileName && !edbPath && !edbFileUri && !edbParts.length) return null;
   const normalizedCore = Number.isFinite(coreProblemCount) ? Math.max(0, coreProblemCount) : 0;
   const normalizedSupplemental = Number.isFinite(supplementalItemCount) ? Math.max(0, supplementalItemCount) : 0;
   const fallbackRecordCount = Number.isFinite(recordCount) ? Math.max(0, recordCount) : 0;
   const explicitRecordCountLabel = String(raw.recordCountLabel || raw.record_count_label || '').trim();
+  const normalizedEdbPartCount = edbParts.length
+    ? edbParts.length
+    : Math.max(0, Number(raw.edbPartCount ?? raw.edb_part_count) || 0);
+  const normalizedEdbSplit = edbParts.length
+    ? edbParts.length > 1
+    : Boolean(raw.edbSplit ?? raw.edb_split);
   const summary = {
     validated: raw.validated !== false,
     statusLabel: String(raw.statusLabel || raw.status_label || '제작 완료'),
     edbFileName: edbFileName || (edbPath ? edbPath.split('/').pop() : 'classin.edb'),
     edbPath,
     edbFileUri,
+    edbParts,
+    edbPartCount: normalizedEdbPartCount,
+    edbSplit: normalizedEdbSplit,
     outputDir,
     classinReview,
     classinReviewStatus,
@@ -6645,8 +6846,10 @@ function normalizePublishSummary(raw, session = null){
     outerSize: Number.isFinite(outerSize) ? Math.max(0, outerSize) : 0,
     publishedAt: String(raw.publishedAt || raw.published_at || '').trim(),
   };
-  summary.canDownload = Boolean(summary.edbFileUri) && summary.edbFileExists !== false;
-  summary.canOpenEdbFile = Boolean(summary.edbPath) && summary.edbFileExists !== false;
+  summary.canDownload = summary.edbParts.some(part => Boolean(part.edbFileUri) && part.edbFileExists !== false)
+    || (Boolean(summary.edbFileUri) && summary.edbFileExists !== false);
+  summary.canOpenEdbFile = summary.edbParts.some(part => Boolean(part.edbPath) && part.edbFileExists !== false)
+    || (Boolean(summary.edbPath) && summary.edbFileExists !== false);
   summary.canOpenOutputDir = Boolean(summary.outputDir) && summary.outputDirExists !== false;
   summary.canOpenClassinHandoff = Boolean(summary.classinHandoffMarkdownUri || summary.classinHandoffUri);
   summary.canMarkClassinReviewComplete = summary.canOpenEdbFile && !summary.classinReviewPassed;
@@ -6942,6 +7145,20 @@ function assertOkJson(resp, json, fallbackMessage){
   return json;
 }
 
+function edbFileNameFromSessionName(value, fallback = 'classin'){
+  const raw = String(value || fallback || 'classin').trim();
+  const baseName = raw.split(/[\\/]/).pop() || fallback || 'classin';
+  const withoutSuffix = baseName.toLowerCase().endsWith('.edb')
+    ? baseName.slice(0, -4)
+    : baseName;
+  const safeStem = withoutSuffix
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/^[ ._]+|[ ._]+$/g, '')
+    .slice(0, 150) || 'classin';
+  return `${safeStem}.edb`;
+}
+
 async function expectOkJson(resp, fallbackMessage){
   const json = await readJsonResponse(resp, fallbackMessage);
   return assertOkJson(resp, json, fallbackMessage);
@@ -6954,6 +7171,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
     fileName: f.name,
     fileDataBase64: await fileToBase64(f),
   })));
+  const edbName = edbFileNameFromSessionName(options.edbName, files[0]?.name || 'classin');
   const resp = await fetch('/api/export', {
     method: 'POST',
     signal: options.signal,
@@ -6968,6 +7186,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       source_mode: 'auto',
       subject: 'unknown',
       ocr: 'auto',
+      edbName,
       exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
       detectPerspective: files.some(f => !isDocumentLikeFile(f)),
       maxDimension: 2400,
@@ -7204,6 +7423,9 @@ function App(){
   const [historyStack, setHistoryStack] = useState([]);
   const fileInputRef = useRef(null);
   const jobControllersRef = useRef(new Map());
+  const sessionHistoryRequestRef = useRef(0);
+  const pendingFileKeysRef = useRef(new Set());
+  const queueGenerationRef = useRef(0);
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
   // auto-revert to board view if the session is cleared or never had pages
@@ -7224,6 +7446,25 @@ function App(){
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
+
+  const setPendingFilesTracked = useCallback((updater) => {
+    setPendingFiles(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      pendingFileKeysRef.current = new Set((next || []).map(fileQueueKey));
+      queueGenerationRef.current += 1;
+      return next || [];
+    });
+  }, []);
+
+  const queueRequestIsCurrent = useCallback((generation, fileKeys) => (
+    generation === queueGenerationRef.current
+    && (fileKeys || []).every(key => pendingFileKeysRef.current.has(key))
+  ), []);
+
+  const setRecentSessionsAuthoritative = useCallback((history) => {
+    sessionHistoryRequestRef.current += 1;
+    setRecentSessions(Array.isArray(history) ? history : []);
+  }, []);
 
   const updateStatusToast = (info) => {
     if (!info) return '업데이트 정보를 확인하지 못했습니다';
@@ -7275,9 +7516,13 @@ function App(){
   }, [updateInfo, updateBusy, checkForUpdates]);
 
   const refreshSessionHistory = useCallback(async () => {
+    const requestId = sessionHistoryRequestRef.current + 1;
+    sessionHistoryRequestRef.current = requestId;
     try {
       const history = await fetchSessionHistory();
-      setRecentSessions(history);
+      if (requestId === sessionHistoryRequestRef.current) {
+        setRecentSessions(history);
+      }
       return history;
     } catch (e) {
       console.warn('[board] session history skipped:', e.message);
@@ -7341,6 +7586,7 @@ function App(){
 
   const showMockItems = (message = '더미 자료를 표시했어요') => {
     const mockItems = freshInitialItems();
+    setRecognitionReview(null);
     setSession(null);
     setItems(mockItems);
     setActiveId(mockItems[0]?.id || null);
@@ -7353,6 +7599,7 @@ function App(){
   };
 
   const hideMockItems = (message = '빈 세션으로 전환했어요') => {
+    setRecognitionReview(null);
     setSession(null);
     setItems([]);
     setActiveId(null);
@@ -7792,16 +8039,21 @@ function App(){
     }
     if (!window.confirm('세션을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 모두 사라집니다.')) return;
     try {
+      jobControllersRef.current.forEach(controller => controller.abort());
+      jobControllersRef.current.clear();
+      setBackgroundJobs([]);
+      setRecognitionReview(null);
+      setConfirmingRecognition(false);
       if (session || recentSessions.length) {
         const result = await clearSession();
-        setRecentSessions(Array.isArray(result?.history) ? result.history : []);
+        setRecentSessionsAuthoritative(result?.history);
       }
-      setPendingFiles([]);
+      setPendingFilesTracked([]);
       hideMockItems('초기화 완료 · 빈 세션');
     } catch (e) {
       showToast('초기화 실패: ' + e.message);
     }
-  }, [loading, session, items.length, pendingFiles.length, recentSessions.length]);
+  }, [loading, session, items.length, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative]);
 
   const shutdownApp = useCallback(async () => {
     if (!window.confirm('로컬 앱을 종료할까요? 브라우저 창은 직접 닫으면 됩니다.')) return;
@@ -7844,7 +8096,8 @@ function App(){
     setLoading({ label: '최근 작업을 여는 중…', startedAt: Date.now() });
     try {
       const result = await postRestoreSessionHistory(id);
-      if (Array.isArray(result.history)) setRecentSessions(result.history);
+      if (Array.isArray(result.history)) setRecentSessionsAuthoritative(result.history);
+      setRecognitionReview(null);
       applySession(result.session);
       setHistoryStack([]);
       showToast('최근 작업을 열었어요');
@@ -7854,14 +8107,15 @@ function App(){
       setRestoringSessionId(null);
       setLoading(null);
     }
-  }, [applySession, restoringSessionId]);
+  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
   const handleFiles = (fileList) => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    setPendingFiles(prev => {
+    setRecognitionReview(null);
+    setPendingFilesTracked(prev => {
       const seen = new Set(prev.map(fileQueueKey));
       const next = [...prev];
       files.forEach(file => {
@@ -7878,13 +8132,21 @@ function App(){
   };
 
   const removePendingFile = useCallback((key) => {
-    setPendingFiles(prev => prev.filter(file => fileQueueKey(file) !== key));
-  }, []);
+    setPendingFilesTracked(prev => prev.filter(file => fileQueueKey(file) !== key));
+  }, [setPendingFilesTracked]);
 
   const clearPendingFiles = useCallback(() => {
-    setPendingFiles([]);
+    setRecognitionReview(null);
+    setPendingFilesTracked([]);
     showToast('업로드 대기열을 비웠어요');
-  }, []);
+  }, [setPendingFilesTracked]);
+
+  useEffect(() => {
+    if (recognitionReview?.kind !== 'queue-recognition') return;
+    if (!queueRequestIsCurrent(recognitionReview.queueGeneration, recognitionReview.fileKeys || [])) {
+      setRecognitionReview(null);
+    }
+  }, [recognitionReview, pendingFiles, queueRequestIsCurrent]);
 
   const processQueuedFiles = useCallback(async (mode, targetKey = null) => {
     const files = targetKey
@@ -7901,6 +8163,7 @@ function App(){
       : AI_FALLBACK_OFF;
     if (isRecognition) {
       const fileKeys = files.map(fileQueueKey);
+      const queueGeneration = queueGenerationRef.current;
       const job = startBackgroundJob({
         scope: 'queue-recognition',
         label: files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`,
@@ -7912,8 +8175,17 @@ function App(){
         const incomingSession = await postExport(files, aiFallback, resolvedInputIntent, {
           signal: job.controller.signal,
           preview: true,
+          edbName: fileName,
         });
         if (job.controller.signal.aborted) return;
+        if (!queueRequestIsCurrent(queueGeneration, fileKeys)) {
+          settleBackgroundJob(job.id, {
+            status: 'canceled',
+            label: 'AI recognition skipped',
+            hint: 'Upload queue changed before this result was reviewed.',
+          }, 2200);
+          return;
+        }
         const fallbackMessage = aiModelFallbackToast(incomingSession);
         if (fallbackMessage) showToast(fallbackMessage);
         const summary = summarizeRecognitionSession(incomingSession);
@@ -7932,6 +8204,7 @@ function App(){
           session: incomingSession,
           incomingSession,
           fileKeys,
+          queueGeneration,
           fileCount: files.length,
           outputFolder: incomingSession?.output_dir || incomingSession?.outputDir,
         });
@@ -7966,18 +8239,21 @@ function App(){
         : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 하나의 PNG 자료로 등록합니다.',
       startedAt: Date.now(),
     });
+    const previousItemIds = new Set(items.map(item => item.id).filter(Boolean));
     try {
-      const s = await postExport(files, aiFallback, resolvedInputIntent);
+      const s = await postExport(files, aiFallback, resolvedInputIntent, { edbName: fileName });
       let sessionToApply = s;
       if (session && !usingMock) {
         const currentSnapshot = materializeSessionForItems(session, items, fileName);
         const merged = mergeSessions(currentSnapshot, s, fileName);
         sessionToApply = await postRestore(merged);
       }
-      applySession(sessionToApply);
+      const firstInserted = (sessionToApply?.problems || []).find(problem => problem?.id && !previousItemIds.has(problem.id));
+      const applied = applySession(sessionToApply);
+      if (applied && firstInserted?.id) setActiveId(firstInserted.id);
       refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
-      setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
+      setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
       const intentLabel = isRecognition ? '문항 AI 인식' : '페이지 PNG 등록';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
       const folder = sessionToApply?.output_dir || sessionToApply?.outputDir || s?.output_dir || s?.outputDir;
@@ -7988,7 +8264,7 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory]);
+  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent]);
 
   const cancelRecognitionReview = useCallback(() => {
     if (confirmingRecognition) return;
@@ -8002,6 +8278,11 @@ function App(){
     setConfirmingRecognition(true);
     try {
       if (review.kind === 'queue-recognition') {
+        if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
+          setRecognitionReview(null);
+          showToast('Upload queue changed. Please run recognition again.');
+          return;
+        }
         const incomingSession = review.incomingSession || review.session;
         const currentSnapshot = session && !usingMock
           ? materializeSessionForItems(session, items, fileName)
@@ -8014,7 +8295,7 @@ function App(){
         refreshSessionHistory();
         setView('review');
         const appliedKeys = new Set(review.fileKeys || []);
-        setPendingFiles(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
+        setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
         showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
         if (review.outputFolder) openOutputFolder(review.outputFolder);
@@ -8054,6 +8335,8 @@ function App(){
     applySession,
     adoptMutatedSession,
     refreshSessionHistory,
+    queueRequestIsCurrent,
+    setPendingFilesTracked,
   ]);
 
   const setStep = (id, step) => {
@@ -8072,24 +8355,39 @@ function App(){
     showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요`);
   };
   const setPlacement = (id, patch) => {
-    setItems(it => it.map(x => {
-      if (x.id !== id) return x;
-      const next = { ...x };
-      if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
-        next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
-        next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
-      }
-      if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
-        next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
-          ? normalizePlacementYRatio(patch.yRatio)
-          : DEFAULT_PLACEMENT_Y_RATIO;
-      } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
-        next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
-      }
-      return next;
-    }));
+    const wantsFitWidth = !!patch?.fitWidth;
+    setItems(it => {
+      const nextItems = it.map(x => {
+        if (x.id !== id) return x;
+        const next = { ...x };
+        if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
+          next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
+        }
+        if (wantsFitWidth) {
+          const heightPages = Math.max(0.12, next.heightFrac || 0.8);
+          const startPages = Number.isFinite(next.startYPages) ? Math.max(0, next.startYPages) : 0;
+          const targetScale = normalizePlacementScaleRatio(
+            Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') ? patch.scaleRatio : PLACEMENT_SCALE_MAX,
+            PLACEMENT_SCALE_MAX
+          );
+          const slotSpanPages = Math.max(itemSlotSpanPages(next), heightPages * targetScale);
+          next.snappedNextStartYPages = Number(snapUpPages(startPages + slotSpanPages).toFixed(6));
+          next.slotSpanCount = Math.max(1, Math.round((next.snappedNextStartYPages - startPages) / DEFAULT_SLOT_HEIGHT_PAGES));
+          next.placementScaleRatio = targetScale;
+        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
+          next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
+        }
+        if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
+          next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
+            ? normalizePlacementYRatio(patch.yRatio)
+            : DEFAULT_PLACEMENT_Y_RATIO;
+        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
+          next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
+        }
+        return next;
+      });
+      return wantsFitWidth ? reflowItemsForBoardOrder(nextItems) : nextItems;
+    });
     setPublished(false);
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
@@ -8313,6 +8611,7 @@ function App(){
           order,
           excluded,
           placements,
+          edbName: edbFileNameFromSessionName(fileName, sessionForPublish?.session_name || 'classin'),
           session: sessionForPublish,
         }),
       });
@@ -8333,14 +8632,9 @@ function App(){
       setSession(json.session);
       refreshSessionHistory();
       const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
-      const url = publishSummary?.edbFileUri || publishSummary?.edb_file_uri || json.session?.edb_file_uri;
-      if (url) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = publishSummary?.edbFileName || publishSummary?.edb_file_name || (json.session.session_name || 'classin') + '.edb';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+      const normalizedPublishSummary = normalizePublishSummary(publishSummary, json.session);
+      if (normalizedPublishSummary?.canDownload) {
+        downloadPublishSummary(normalizedPublishSummary);
       }
       setPublished(true);
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
@@ -8456,7 +8750,7 @@ function App(){
           inputIntent={inputIntent}
           setInputIntent={setInputIntent}
           onRecognizeSession={recognizeCurrentSession}
-          canRecognizeSession={!!session && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
+          canRecognizeSession={!!session && pendingFiles.length === 0 && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
           session={session}
           published={published}
           onClassinReviewComplete={markClassinReviewComplete}

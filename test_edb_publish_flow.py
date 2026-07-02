@@ -1,6 +1,7 @@
 import json
 import threading
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ import build_problem_board_edb as problem_board
 from app_server import (
     _problems_to_entries,
     _session_publish_history,
+    _session_publish_blocking_preflight,
     _session_publish_summary,
     content_disposition_attachment,
     validate_edb_file,
@@ -28,6 +30,7 @@ from build_problem_board_edb import (
     build_ui_session as build_problem_ui_session,
     build_image_only_records,
     run_problem_export,
+    split_problem_entries_for_classin_page_limit,
     _pad_problem_crop_edges,
     _pad_problem_crop_bottom,
     _hwp_conversion_has_pdf_problem_markers,
@@ -35,7 +38,8 @@ from build_problem_board_edb import (
     _trim_source_page_chrome,
 )
 from edb_builder import CROP_FORMAT_V1
-from layout_template_schema import LayoutTemplate
+from layout_template_schema import LayoutTemplate, ProblemLayoutInput
+from placement_engine import place_problems
 from preprocess import PreparedPage
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject
 
@@ -143,6 +147,56 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["problem-1", "problem-2"], [entry.problem_id for entry in entries])
             self.assertTrue(all(entry.crop_path.exists() for entry in entries))
             self.assertTrue(all(entry.board_render_path.exists() for entry in entries))
+
+    def test_page_as_is_problem_entries_default_to_reconstruct_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "page.png"
+            Image.new("RGB", (640, 900), "white").save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=Image.open(source).convert("RGB"),
+                original_size=(640, 900),
+            )
+            block = ContentBlock(
+                block_id="b-1",
+                block_type=BlockType.STEM,
+                bbox=Box(80, 120, 420, 280),
+                reading_order=0,
+                text="1. full page problem",
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=640,
+                height_px=900,
+                subject=Subject.MATH,
+                source_path=str(source),
+                blocks=[block],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-as-is-1",
+                        subject=Subject.MATH,
+                        title="1.",
+                        stem_block_ids=["b-1"],
+                        metadata={
+                            "problem_number": 1,
+                            "force_full_page_bounds": True,
+                            "input_intent": "page-as-is",
+                        },
+                    )
+                ],
+            )
+
+            with mock.patch.object(problem_board, "_extract_problem_cutout", side_effect=lambda crop, **_kwargs: crop.convert("RGBA")):
+                entries = build_problem_entries([prepared], [page], root / "out", LayoutTemplate(name="academy-default"))
+
+            self.assertEqual(PROCESSING_STEP_RECONSTRUCT, entries[0].processing_step)
+            self.assertEqual(problem_board.PLACEMENT_SCALE_MAX, entries[0].placement_scale_ratio)
+            self.assertEqual("page-as-is", entries[0].input_intent)
+            self.assertTrue(entries[0].force_full_page_bounds)
+            self.assertEqual(Box(left=0.0, top=0.0, width=640.0, height=900.0), entries[0].bounds)
 
     def test_pdf_marker_problem_crop_does_not_pull_in_page_header(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,6 +406,65 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(validation["recordCountActual"], 1)
             self.assertGreater(validation["outerSize"], 0)
 
+    def test_classin_split_chunks_keep_each_edb_at_or_below_fifty_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = []
+            for index in range(42):
+                entry = self._make_problem_entry(root, f"p{index:02d}", Box(0, 0, 640, 640))
+                entry.actual_height_pages = 1.2
+                entries.append(entry)
+
+            chunks = split_problem_entries_for_classin_page_limit(
+                entries,
+                LayoutTemplate(name="academy-default", board_page_count=80),
+            )
+
+            self.assertEqual([41, 1], [len(chunk) for chunk in chunks])
+
+    def test_problem_export_writes_real_split_edbs_with_fifty_page_hints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            self._make_source_image(source)
+            entries = []
+            for index in range(42):
+                entry = self._make_problem_entry(root, f"p{index:02d}", Box(0, 0, 640, 640))
+                entry.actual_height_pages = 1.2
+                entries.append(entry)
+
+            with mock.patch.object(problem_board, "build_problem_entries", return_value=entries):
+                result = run_problem_export(
+                    source,
+                    output_dir=root / "out",
+                    input_intent="single-problem",
+                    ocr="noop",
+                    record_mode="image-only",
+                    export_edb=True,
+                    edb_name="lesson.edb",
+                )
+
+            self.assertEqual(2, result["summary"]["edb_part_count"])
+            self.assertTrue(result["summary"]["edb_split"])
+            self.assertEqual(["lesson_part01.edb", "lesson_part02.edb"], [
+                Path(part["edbPath"]).name for part in result["summary"]["edb_parts"]
+            ])
+            validations = [
+                validate_edb_file(part["edbPath"], expected_min_records=part["recordCount"])
+                for part in result["summary"]["edb_parts"]
+            ]
+            self.assertTrue(all(validation["pageCountHint"] <= 50 for validation in validations))
+            self.assertEqual([41, 1], [validation["recordCountActual"] for validation in validations])
+            self.assertEqual(2, result["ui_session"]["edbPartCount"])
+            by_id = {problem["id"]: problem for problem in result["ui_session"]["problems"]}
+            self.assertEqual(1, by_id["p00"]["edbPartIndex"])
+            self.assertEqual(2, by_id["p41"]["edbPartIndex"])
+            self.assertEqual(0.0, by_id["p41"]["edbLocalStartYPages"])
+
+            handoff = json.loads(Path(result["classin_handoff_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(50, handoff["classinPageCountHint"])
+            self.assertEqual(84, handoff["globalBoardPageCountEstimate"])
+
     def test_problem_export_records_stage_timing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -523,6 +636,75 @@ class TestEdbPublishFlow(unittest.TestCase):
             for problem in ui_session["problems"]:
                 self.assertNotIn("duplicate_problem_number", problem["riskFlags"])
                 self.assertEqual("normal", problem["reviewStatus"])
+
+    def test_problem_ui_session_marks_math_common_and_elective_duplicate_ranges_nonblocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.pdf"
+            source.write_bytes(b"%PDF-1.4")
+            crop = root / "crop.png"
+            Image.new("RGB", (320, 240), "white").save(crop)
+
+            placements = []
+            problem_numbers = (
+                list(range(1, 31))
+                + list(range(23, 31)) * 2
+                + list(range(1, 31))
+                + list(range(23, 31)) * 2
+            )
+            for index, number in enumerate(problem_numbers, start=1):
+                placements.append(
+                    {
+                        "problem_id": f"problem-{index}",
+                        "title": f"{number}.",
+                        "problem_number": number,
+                        "subject": Subject.MATH,
+                        "source_page_id": f"page-{index:03d}",
+                        "source_path": str(source),
+                        "crop_path": str(crop),
+                        "board_render_path": str(crop),
+                        "bbox": {"left": 0, "top": 0, "width": 320, "height": 240},
+                        "actual_content_height_pages": 0.8,
+                        "overflow_allowed": False,
+                        "start_y_pages": float(index),
+                        "snapped_next_start_y_pages": float(index + 1),
+                        "overflow_amount_pages": 0.0,
+                        "overflow_violation": False,
+                        "slot_span_count": 1,
+                        "placement_x_ratio": 0.0,
+                        "placement_y_ratio": 0.0,
+                        "placement_scale_ratio": 1.0,
+                        "record_mode": "image-only",
+                        "text_record_count": 0,
+                        "image_record_count": 1,
+                        "risk_flags": [],
+                    }
+                )
+
+            ui_session = build_problem_ui_session(
+                [],
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+            )
+
+            groups = ui_session["duplicateProblemNumberGroups"]
+            self.assertEqual(1, len(groups))
+            self.assertEqual(1, groups[0]["numberStart"])
+            self.assertEqual(30, groups[0]["numberEnd"])
+            self.assertEqual("alternate_section", groups[0]["classification"])
+            self.assertFalse(groups[0]["blocking"])
+            self.assertEqual([], ui_session["blockingDuplicateProblemNumberGroups"])
+            for problem in ui_session["problems"]:
+                self.assertNotIn("duplicate_problem_number", problem["riskFlags"])
+                self.assertEqual("normal", problem["reviewStatus"])
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(ui_session["problems"], session=ui_session)
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual([], duplicate_groups)
 
     def test_problem_ui_session_flags_duplicate_problem_numbers_for_review(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3131,6 +3313,187 @@ class TestEdbPublishFlow(unittest.TestCase):
                 V1_DEFAULT_DISPLAY_WIDTH_PX * (300 / 380),
                 places=6,
             )
+
+    def test_build_image_only_records_parallelizes_encoding_without_reordering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = [
+                self._make_problem_entry(root, f"problem-{index}", Box(0, 40, 380, 300))
+                for index in range(1, 5)
+            ]
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+            lock = threading.Lock()
+            active_count = 0
+            max_active_count = 0
+            completion_order: list[str] = []
+            delays = {
+                "problem-1": 0.04,
+                "problem-2": 0.03,
+                "problem-3": 0.02,
+                "problem-4": 0.01,
+            }
+
+            def fake_build_image(placement, entry, **_kwargs):
+                nonlocal active_count, max_active_count
+                with lock:
+                    active_count += 1
+                    max_active_count = max(max_active_count, active_count)
+                time.sleep(delays[entry.problem_id])
+                with lock:
+                    active_count -= 1
+                    completion_order.append(entry.problem_id)
+                return problem_board._ImageOnlyRecordImage(
+                    crop_path=entry.crop_path,
+                    board_render_path=entry.board_render_path,
+                    image_bytes=f"primary-{entry.problem_id}".encode("ascii"),
+                    secondary_bytes=f"secondary-{entry.problem_id}".encode("ascii"),
+                    width_px=380,
+                    height_px=300,
+                    scale_ratio=1.0,
+                )
+
+            with (
+                mock.patch.object(problem_board, "_resolve_image_record_worker_count", return_value=4),
+                mock.patch.object(problem_board, "_build_image_only_record_image", side_effect=fake_build_image),
+            ):
+                records, placements = build_image_only_records(
+                    entries,
+                    template,
+                    crop_format=CROP_FORMAT_V1,
+                )
+
+            self.assertGreater(max_active_count, 1)
+            self.assertEqual(["problem-4", "problem-3", "problem-2", "problem-1"], completion_order)
+            self.assertEqual([entry.problem_id for entry in entries], [item["problem_id"] for item in placements])
+            self.assertEqual(len(entries), len(records))
+
+    def test_v2_image_only_record_encoding_keeps_target_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "problem-1", Box(0, 40, 380, 300))
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+
+            records, placements = build_image_only_records(
+                [entry],
+                template,
+                crop_format=problem_board.CROP_FORMAT_V2,
+            )
+
+            self.assertEqual(1, len(records))
+            self.assertEqual(problem_board.CROP_FORMAT_V2, placements[0]["crop_format"])
+            self.assertEqual(problem_board.V2_TARGET_IMAGE_WIDTH_PX, placements[0]["image_pixel_width"])
+            self.assertEqual(1.0, placements[0]["placement_scale_ratio"])
+
+    def test_v1_page_as_is_export_uses_fit_width_continuous_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = [
+                self._make_problem_entry(root, "page-1", Box(0, 0, 400, 620)),
+                self._make_problem_entry(root, "page-2", Box(0, 0, 400, 620)),
+            ]
+            for entry in entries:
+                image = Image.open(entry.crop_path).convert("RGB")
+                draw = ImageDraw.Draw(image)
+                draw.rectangle((32, 36, 368, 584), outline="black", width=4)
+                draw.text((58, 70), entry.title, fill="black")
+                image.save(entry.crop_path)
+                entry.processing_step = PROCESSING_STEP_RECONSTRUCT
+                entry.placement_scale_ratio = problem_board.PLACEMENT_SCALE_MAX
+                entry.input_intent = "page-as-is"
+                entry.force_full_page_bounds = True
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+                metadata={"placement_mode": "continuous-page-as-is"},
+            )
+            for entry in entries:
+                entry.actual_height_pages = problem_board.estimate_page_as_is_height_pages(
+                    Image.open(entry.crop_path).size,
+                    template,
+                )
+
+            _records, placements = build_image_only_records(
+                entries,
+                template,
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            expected_span = round(placements[0]["actual_content_height_pages"] * problem_board.PLACEMENT_SCALE_MAX, 6)
+            self.assertEqual(0.0, placements[0]["start_y_pages"])
+            self.assertAlmostEqual(expected_span, placements[0]["snapped_next_start_y_pages"], places=5)
+            self.assertAlmostEqual(expected_span, placements[1]["start_y_pages"], places=5)
+            self.assertEqual(
+                [problem_board.PLACEMENT_SCALE_MAX, problem_board.PLACEMENT_SCALE_MAX],
+                [item["placement_scale_ratio"] for item in placements],
+            )
+
+    def test_v1_single_problem_full_page_bounds_stays_slot_based(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = [
+                self._make_problem_entry(root, "single-1", Box(0, 0, 400, 620)),
+                self._make_problem_entry(root, "single-2", Box(0, 0, 400, 620)),
+            ]
+            for entry in entries:
+                entry.input_intent = "single-problem"
+                entry.force_full_page_bounds = True
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+                metadata={"placement_mode": "continuous-page-as-is"},
+            )
+
+            _records, placements = build_image_only_records(
+                entries,
+                template,
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            self.assertEqual([0.0, 1.2], [item["start_y_pages"] for item in placements])
+            self.assertEqual([1.2, 2.4], [item["snapped_next_start_y_pages"] for item in placements])
+            self.assertEqual([1.0, 1.0], [item["placement_scale_ratio"] for item in placements])
+            self.assertEqual(
+                [problem_board.PROCESSING_STEP_RAW, problem_board.PROCESSING_STEP_RAW],
+                [item["processing_step"] for item in placements],
+            )
+
+    def test_layout_input_intent_overrides_stale_continuous_mode(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            metadata={"placement_mode": "continuous-page-as-is"},
+        )
+        problems = [
+            ProblemLayoutInput(
+                problem_id="single-1",
+                actual_content_height_pages=0.72,
+                metadata={
+                    "input_intent": "single-problem",
+                    "placement_mode": "continuous-page-as-is",
+                    "force_full_page_bounds": True,
+                },
+            ),
+            ProblemLayoutInput(
+                problem_id="single-2",
+                actual_content_height_pages=0.72,
+                metadata={
+                    "input_intent": "single-problem",
+                    "placement_mode": "continuous-page-as-is",
+                    "force_full_page_bounds": True,
+                },
+            ),
+        ]
+
+        placements = place_problems(problems, template=template)
+
+        self.assertEqual([0.0, 1.2], [placement.start_y_pages for placement in placements])
+        self.assertEqual([1.2, 2.4], [placement.snapped_next_start_y_pages for placement in placements])
 
     def test_v1_reconstruct_step_exports_transparent_high_res_png(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -79,6 +79,51 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_summary_exposes_split_edb_parts(self) -> None:
+        run_node(
+            """
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const summary = normalizePublishSummary({
+              edbParts: [
+                {
+                  partIndex: 1,
+                  partCount: 2,
+                  edbFileName: 'lesson_part01.edb',
+                  edbPath: '/tmp/lesson_part01.edb',
+                  edbFileUri: '/api/file?path=part1',
+                  edbFileExists: true,
+                  recordCount: 41,
+                  pageCountHint: 50,
+                },
+                {
+                  part_index: 2,
+                  part_count: 2,
+                  edb_file_name: 'lesson_part02.edb',
+                  edb_path: '/tmp/lesson_part02.edb',
+                  edb_file_uri: '/api/file?path=part2',
+                  edb_file_exists: true,
+                  record_count: 1,
+                  page_count_hint: 50,
+                },
+              ],
+              edbSplit: false,
+              edbPartCount: 1,
+            });
+            if (!summary.edbSplit || summary.edbPartCount !== 2 || summary.edbParts.length !== 2) {
+              throw new Error('split EDB metadata was not normalized');
+            }
+            if (!summary.canDownload || !summary.canOpenEdbFile) {
+              throw new Error('existing split EDB parts should enable artifact actions');
+            }
+            if (summary.edbParts[1].partIndex !== 2 || summary.edbParts[1].edbFileName !== 'lesson_part02.edb') {
+              throw new Error('snake_case split part payload was not normalized');
+            }
+            if (summary.edbParts.some(part => part.pageCountHint > 50)) {
+              throw new Error('test fixture should model ClassIn-safe 50-page parts');
+            }
+            """
+        )
+
     def test_normalize_publish_summary_enables_local_edb_open_when_path_exists(self) -> None:
         run_node(
             """

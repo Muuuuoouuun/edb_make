@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import math
+import concurrent.futures
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -46,6 +47,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
+PDF_NORMALIZED_CACHE_VERSION = 1
 HWP_NORMALIZED_CACHE_VERSION = 5
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
@@ -2249,6 +2251,243 @@ def _save_hwp_normalized_pages_cache(
         return
 
 
+def _pdf_normalized_cache_options(
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> dict[str, Any]:
+    return {
+        "dpi": int(dpi),
+        "enable_perspective": False,
+        "enable_deskew": bool(enable_deskew),
+        "enable_margin_crop": bool(enable_margin_crop),
+        "max_dimension": int(max_dimension) if max_dimension is not None else None,
+    }
+
+
+def _pdf_normalized_pages_cache_path(
+    target_dir: Path,
+    source_path: Path,
+    source_sha1: str | None = None,
+) -> Path:
+    cache_key = source_sha1 or source_path.stem
+    return target_dir / f".{cache_key}.pdf-normalized-pages.json"
+
+
+def _pdf_normalized_output_dir(
+    target_dir: Path,
+    source_path: Path,
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> Path:
+    try:
+        source_key = _file_sha1(source_path)[:16]
+    except OSError:
+        source_key = re.sub(r"[^A-Za-z0-9_.-]+", "-", source_path.stem).strip("-") or "source"
+    options = _pdf_normalized_cache_options(
+        dpi=dpi,
+        enable_deskew=enable_deskew,
+        enable_margin_crop=enable_margin_crop,
+        max_dimension=max_dimension,
+    )
+    option_key = hashlib.sha1(
+        json.dumps(options, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    return target_dir / "normalized" / f"{source_key}-{option_key}"
+
+
+def _load_cached_pdf_normalized_pages(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> list[NormalizedPageImage]:
+    target_root = target_dir.resolve()
+    try:
+        source_sha1 = _file_sha1(source_path)
+    except OSError:
+        return []
+    cache_path = _pdf_normalized_pages_cache_path(target_dir, source_path, source_sha1)
+    if not cache_path.exists():
+        return []
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    expected_options = _pdf_normalized_cache_options(
+        dpi=dpi,
+        enable_deskew=enable_deskew,
+        enable_margin_crop=enable_margin_crop,
+        max_dimension=max_dimension,
+    )
+    if payload.get("source_sha1") != source_sha1:
+        return []
+    if payload.get("version") != PDF_NORMALIZED_CACHE_VERSION:
+        return []
+    if payload.get("source_suffix") != source_path.suffix.lower():
+        return []
+    if payload.get("options") != expected_options:
+        return []
+
+    pages: list[NormalizedPageImage] = []
+    for index, item in enumerate(payload.get("pages") or []):
+        if not isinstance(item, dict):
+            return []
+        normalized_name = str(item.get("normalized_name") or "")
+        if not normalized_name:
+            return []
+        normalized_path = target_root / normalized_name
+        try:
+            if not normalized_path.exists() or normalized_path.stat().st_size <= 0:
+                return []
+        except OSError:
+            return []
+
+        source_name = str(item.get("source_name") or "")
+        candidate_source_path = target_root / source_name if source_name else source_path
+        page_source_path = str(candidate_source_path) if candidate_source_path.exists() else str(source_path)
+        metadata = dict(item.get("metadata") or {})
+        metadata["pdf_normalized_cache_hit"] = True
+        metadata["source_pdf_path"] = str(source_path)
+        metadata.setdefault("source_type", "pdf")
+        metadata.setdefault("document_like", True)
+        pages.append(
+            NormalizedPageImage(
+                page_id=str(item.get("page_id") or f"{source_path.stem}-page-{index + 1:03d}"),
+                source_path=page_source_path,
+                normalized_path=str(normalized_path),
+                page_index=int(item.get("page_index") if item.get("page_index") is not None else index),
+                width_px=int(item.get("width_px") or 0),
+                height_px=int(item.get("height_px") or 0),
+                metadata=metadata,
+            )
+        )
+    return pages
+
+
+def _save_pdf_normalized_pages_cache(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+    pages: list[NormalizedPageImage],
+) -> None:
+    if not pages:
+        return
+
+    cache_pages: list[dict[str, Any]] = []
+    try:
+        source_sha1 = _file_sha1(source_path)
+        target_root = target_dir.resolve()
+        for page in pages:
+            normalized_name = Path(page.normalized_path).resolve().relative_to(target_root).as_posix()
+            try:
+                source_name = Path(page.source_path).resolve().relative_to(target_root).as_posix()
+            except ValueError:
+                source_name = ""
+            metadata = dict(page.metadata)
+            metadata.pop("pdf_normalized_cache_hit", None)
+            cache_pages.append(
+                {
+                    "page_id": page.page_id,
+                    "source_name": source_name,
+                    "normalized_name": normalized_name,
+                    "page_index": page.page_index,
+                    "width_px": page.width_px,
+                    "height_px": page.height_px,
+                    "metadata": metadata,
+                }
+            )
+    except (OSError, ValueError):
+        return
+
+    payload = {
+        "version": PDF_NORMALIZED_CACHE_VERSION,
+        "source_name": source_path.name,
+        "source_suffix": source_path.suffix.lower(),
+        "source_sha1": source_sha1,
+        "options": _pdf_normalized_cache_options(
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        ),
+        "pages": cache_pages,
+    }
+    try:
+        _pdf_normalized_pages_cache_path(target_dir, source_path, source_sha1).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def _resolve_preprocess_page_worker_count(page_count: int) -> int:
+    if page_count <= 1:
+        return 1
+    max_workers = max(1, min(4, page_count, os.cpu_count() or 2))
+    raw_worker_count = os.environ.get("EDB_PREPROCESS_PAGE_WORKERS", "").strip()
+    if raw_worker_count:
+        try:
+            requested_workers = int(raw_worker_count)
+        except ValueError:
+            requested_workers = max_workers
+        if requested_workers <= 0:
+            return 1
+        return max(1, min(max_workers, requested_workers))
+    return max_workers
+
+
+def _normalize_pdf_rendered_pages(
+    source_path: Path,
+    rendered: list[NormalizedPageImage],
+    normalized_output_dir: Path,
+    *,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> list[NormalizedPageImage]:
+    def _normalize(page: NormalizedPageImage) -> NormalizedPageImage:
+        normalized = normalize_image(
+            page.normalized_path,
+            normalized_output_dir,
+            page_id=page.page_id,
+            page_index=page.page_index,
+            enable_perspective=False,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+            base_metadata=dict(page.metadata),
+        )
+        normalized.metadata.setdefault("source_pdf_path", str(source_path))
+        normalized.metadata["source_type"] = "pdf"
+        normalized.metadata["document_like"] = True
+        return normalized
+
+    worker_count = _resolve_preprocess_page_worker_count(len(rendered))
+    if worker_count <= 1:
+        normalized_pages = [_normalize(page) for page in rendered]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            normalized_pages = list(executor.map(_normalize, rendered))
+    for page in normalized_pages:
+        page.metadata["pdf_preprocess_page_worker_count"] = worker_count
+    return normalized_pages
+
+
 def _run_hwp_pdf_converter_commands(
     source_path: Path,
     target_dir: Path,
@@ -3100,24 +3339,42 @@ def prepare_pages(
     normalized_dir.mkdir(parents=True, exist_ok=True)
 
     if suffix == ".pdf":
+        cached_pdf_pages = _load_cached_pdf_normalized_pages(
+            source_path,
+            normalized_dir,
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        )
+        if cached_pdf_pages:
+            return cached_pdf_pages
+
         rendered = render_pdf_pages(source_path, normalized_dir / "rendered", dpi=dpi)
-        normalized_pages: list[NormalizedPageImage] = []
-        for page in rendered:
-            normalized = normalize_image(
-                page.normalized_path,
-                normalized_dir / "normalized",
-                page_id=page.page_id,
-                page_index=page.page_index,
-                enable_perspective=False,
+        normalized_pages = _normalize_pdf_rendered_pages(
+            source_path,
+            rendered,
+            _pdf_normalized_output_dir(
+                normalized_dir,
+                source_path,
+                dpi=dpi,
                 enable_deskew=enable_deskew,
                 enable_margin_crop=enable_margin_crop,
                 max_dimension=max_dimension,
-                base_metadata=dict(page.metadata),
-            )
-            normalized.metadata.setdefault("source_pdf_path", str(source_path))
-            normalized.metadata["source_type"] = "pdf"
-            normalized.metadata["document_like"] = True
-            normalized_pages.append(normalized)
+            ),
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        )
+        _save_pdf_normalized_pages_cache(
+            source_path,
+            normalized_dir,
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+            pages=normalized_pages,
+        )
         return normalized_pages
 
     if suffix in HWP_DOCUMENT_EXTENSIONS:
@@ -3302,6 +3559,9 @@ def prepare_source_pages(
     prepared: list[PreparedPage] = []
     for page in normalized_pages:
         image = Image.open(page.normalized_path).convert("RGB")
+        original_source_path = page.source_path
+        if page.metadata.get("source_type") == "pdf" and page.metadata.get("source_pdf_path"):
+            original_source_path = str(page.metadata["source_pdf_path"])
         if max_dimension:
             width, height = image.size
             scale = min(max_dimension / max(width, height), 1.0)
@@ -3317,7 +3577,7 @@ def prepare_source_pages(
                 original_size=(page.width_px, page.height_px),
                 metadata={
                     **dict(page.metadata),
-                    "original_source_path": str(Path(page.source_path).resolve()),
+                    "original_source_path": str(Path(original_source_path).resolve()),
                     "normalized_path": str(Path(page.normalized_path).resolve()),
                 },
             )

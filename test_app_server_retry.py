@@ -28,6 +28,14 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("https://example.test/update.json", app_server._normalize_update_url("https://example.test/update.json"))
         self.assertEqual("http://127.0.0.1:9999/update.json", app_server._normalize_update_url("http://127.0.0.1:9999/update.json"))
 
+    def test_sanitize_edb_file_name_normalizes_requested_name(self):
+        self.assertEqual("Lesson_1.edb", app_server.sanitize_edb_file_name("Lesson 1"))
+        self.assertEqual("고1_샘플.edb", app_server.sanitize_edb_file_name("../고1 샘플.edb"))
+        self.assertEqual(
+            "fallback_name.edb",
+            app_server.sanitize_edb_file_name("", fallback_stem="fallback name"),
+        )
+
     def test_same_origin_guard_rejects_cross_site_browser_posts(self):
         self.assertTrue(app_server._request_is_same_origin({
             "Host": "127.0.0.1:8765",
@@ -1106,6 +1114,52 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertEqual(2, len(responses))
             self.assertTrue(all(response[0]["ok"] for response in responses))
 
+    def test_export_passes_sanitized_requested_edb_name(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "sample.hwp"
+            source.write_bytes(b"hwp")
+            output_dir = tmpdir / "out"
+            captured_kwargs: dict[str, object] = {}
+            payload = {
+                "files": [str(source)],
+                "outputDir": str(output_dir),
+                "edbName": "../Renamed Lesson?.edb",
+                "preview": True,
+                "exportEdb": False,
+            }
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                captured_kwargs.update(kwargs)
+                resolved_output = Path(kwargs.get("output_dir") or output_dir)
+                return {
+                    "ok": True,
+                    "ui_session": {"pages": [], "problems": []},
+                    "output_dir": str(resolved_output),
+                    "ui_session_path": str(resolved_output / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            self.assertEqual("Renamed_Lesson.edb", captured_kwargs["edb_name"])
+            self.assertEqual(1, len(responses))
+            self.assertTrue(responses[0][0]["ok"])
+
     def test_export_response_exposes_classin_preflight_from_session(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -1163,6 +1217,83 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertEqual(1, body["classinPreflightIssueCount"])
             self.assertFalse(body["classinPreflightPassed"])
 
+    def test_export_response_synthesizes_single_edb_part_metadata(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "sample.hwp"
+            source.write_bytes(b"hwp")
+            output_dir = tmpdir / "out"
+            edb_path = output_dir / "lesson.edb"
+            payload = {
+                "files": [str(source)],
+                "outputDir": str(output_dir),
+                "preview": True,
+            }
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                resolved_output = Path(kwargs.get("output_dir") or output_dir)
+                resolved_output.mkdir(parents=True, exist_ok=True)
+                edb_path.write_bytes(b"edb")
+                return {
+                    "ok": True,
+                    "ui_session": {"pages": [], "problems": [{"id": "p1"}]},
+                    "output_dir": str(resolved_output),
+                    "ui_session_path": str(resolved_output / "ui_session.json"),
+                    "edb_path": edb_path,
+                    "summary": {"placements": [{"problem_id": "p1"}]},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with (
+                patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": 1,
+                    "recordCountActual": 1,
+                }),
+            ):
+                handler._handle_export()
+
+            body = responses[0][0]
+            self.assertTrue(body["ok"], body)
+            self.assertFalse(body["edbSplit"])
+            self.assertEqual(1, body["edbPartCount"])
+            self.assertEqual("lesson.edb", body["edbParts"][0]["edbFileName"])
+            self.assertFalse(body["session"]["edbSplit"])
+            self.assertEqual(1, body["session"]["edbPartCount"])
+
+    def test_validate_edb_parts_rejects_page_hint_over_classin_limit(self):
+        with TemporaryDirectory() as raw_tmp:
+            edb_path = Path(raw_tmp) / "too-long.edb"
+            edb_path.write_bytes(b"edb")
+
+            with patch.object(app_server, "validate_edb_file", return_value={
+                "outerSize": 10,
+                "innerSize": 8,
+                "pageCountHint": 51,
+                "recordCountHint": 1,
+                "recordCountActual": 1,
+            }):
+                with self.assertRaises(ValueError) as ctx:
+                    app_server._validate_edb_parts([
+                        {"edbPath": str(edb_path), "edbFileName": edb_path.name, "recordCount": 1}
+                    ])
+
+            self.assertIn("exceeds ClassIn limit 50", str(ctx.exception))
+
 
 class TestSessionPublishPreflightGuard(unittest.TestCase):
     def _publish(self, session: dict, payload: dict | None = None):
@@ -1181,6 +1312,133 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
         handler._read_json_body = lambda: dict(payload or {})
         handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
         return handler, responses
+
+    def test_session_publish_uses_requested_name_and_splits_over_fifty_pages(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = {
+                "session_name": "fallback lesson",
+                "output_dir": str(root),
+                "input_files": [],
+                "pages": [],
+                "problems": [
+                    {
+                        "id": f"p{i}",
+                        "title": f"{i + 1}.",
+                        "bbox": {},
+                        "riskFlags": [],
+                    }
+                    for i in range(26)
+                ],
+            }
+            handler, responses = self._publish(session, {"edbName": "../Renamed Lesson?.edb"})
+            captured: dict[str, object] = {}
+            entries = [object() for _ in range(26)]
+
+            def fake_build_records(received_entries, template, **_kwargs):
+                captured["entry_count"] = len(received_entries)
+                captured["board_page_count"] = template.board_page_count
+                return ([b"record"] * len(received_entries), [], 3)
+
+            def fake_write_classin_limited_edb_files(received_entries, template, output_dir, edb_name, **_kwargs):
+                captured["split_entry_count"] = len(received_entries)
+                captured["split_board_page_count"] = template.board_page_count
+                captured["split_edb_name"] = edb_name
+                paths = [
+                    Path(output_dir) / "Renamed_Lesson_part01.edb",
+                    Path(output_dir) / "Renamed_Lesson_part02.edb",
+                ]
+                for path in paths:
+                    path.write_bytes(b"edb")
+                return [
+                    {
+                        "partIndex": 1,
+                        "partCount": 2,
+                        "edbPath": str(paths[0]),
+                        "edbFileName": paths[0].name,
+                        "recordCount": 13,
+                        "pageCountHint": 50,
+                    },
+                    {
+                        "partIndex": 2,
+                        "partCount": 2,
+                        "edbPath": str(paths[1]),
+                        "edbFileName": paths[1].name,
+                        "recordCount": 13,
+                        "pageCountHint": 50,
+                    },
+                ]
+
+            def fake_validate(path, *, expected_min_records=1):
+                captured.setdefault("validated_paths", []).append(Path(path).name)
+                captured.setdefault("expected_min_records", []).append(expected_min_records)
+                return {
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": expected_min_records,
+                    "recordCountActual": expected_min_records,
+                }
+
+            def fake_build_ui_session(**_kwargs):
+                return {
+                    "session_name": "published",
+                    "output_dir": str(root),
+                    "problems": [
+                        {"id": f"p{i}", "title": f"{i + 1}.", "riskFlags": [], "bbox": {}}
+                        for i in range(26)
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_handoff(output_dir, **_kwargs):
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps({
+                        "classinPreflight": {
+                            "status": "passed",
+                            "passed": True,
+                            "issueCount": 0,
+                            "issues": [],
+                        }
+                    }),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "_problems_to_entries", return_value=entries),
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "write_classin_limited_edb_files", side_effect=fake_write_classin_limited_edb_files),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "validate_edb_file", side_effect=fake_validate),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
+                handler._handle_session_publish()
+
+            self.assertEqual(1, len(responses))
+            body, _kwargs = responses[0]
+            self.assertTrue(body["ok"], body)
+            self.assertEqual(26, captured["entry_count"])
+            self.assertEqual(52, captured["board_page_count"])
+            self.assertEqual(26, captured["split_entry_count"])
+            self.assertEqual(52, captured["split_board_page_count"])
+            self.assertEqual("Renamed_Lesson.edb", captured["split_edb_name"])
+            self.assertEqual(["Renamed_Lesson_part01.edb", "Renamed_Lesson_part02.edb"], captured["validated_paths"])
+            self.assertEqual([13, 13], captured["expected_min_records"])
+            self.assertEqual("Renamed_Lesson_part01.edb", body["publishSummary"]["edbFileName"])
+            self.assertEqual(50, body["publishSummary"]["pageCountHint"])
+            self.assertTrue(body["publishSummary"]["edbSplit"])
+            self.assertEqual(2, body["publishSummary"]["edbPartCount"])
+            self.assertEqual(["Renamed_Lesson_part01.edb", "Renamed_Lesson_part02.edb"], [
+                part["edbFileName"] for part in body["publishSummary"]["edbParts"]
+            ])
+            self.assertEqual(
+                "Renamed_Lesson_part01.edb",
+                handler.server.remembered_session["publishSummary"]["edbFileName"],
+            )
 
     def test_session_publish_blocks_source_bbox_overlap_before_build(self):
         with TemporaryDirectory() as raw_tmp:
