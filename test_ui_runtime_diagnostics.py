@@ -136,11 +136,11 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         remove_flow = source.split("const removeItem = (id) =>", 1)[1]
         remove_flow = remove_flow.split("const addMockSample", 1)[0]
 
-        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(items)", materialize)
+        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", materialize)
         self.assertIn("next.startYPages", apply_state)
         self.assertIn("next.snappedNextStartYPages", apply_state)
-        self.assertIn("const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered)", reorder_flow)
-        self.assertIn("materializeSessionForItems(session, nextItems, fileName)", reorder_flow)
+        self.assertIn("const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", reorder_flow)
+        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", reorder_flow)
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
@@ -371,7 +371,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-scaled-reflow-edb-split", board_html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-board-columns-magnet", board_html)
         self.assertNotIn("vendor/babel.min.js", board_html)
         self.assertNotIn('type="text/babel"', board_html)
         self.assertIn("EDB_REPORT_RUNTIME_ERROR", board_html)

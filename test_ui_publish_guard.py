@@ -115,7 +115,7 @@ class TestUiPublishGuard(unittest.TestCase):
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-scaled-reflow-edb-split", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-board-columns-magnet", html)
         self.assertIn("publish_guard.js?v=preflight-scaled-reflow-20260702", html)
 
 

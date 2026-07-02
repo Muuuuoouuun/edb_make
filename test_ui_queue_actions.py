@@ -22,7 +22,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-scaled-reflow-edb-split", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-board-columns-magnet", html)
 
     def test_ai_recognition_application_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -143,7 +143,7 @@ class TestUiQueueActions(unittest.TestCase):
 
         mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
-        self.assertIn("materializeSessionForItems(session, items, fileName) || session", mutation_source)
+        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || session", mutation_source)
         self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
 
     def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:
@@ -191,6 +191,14 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("void applyManualPageSplit();", source)
         self.assertIn("manual-split-box", bundle)
         self.assertIn("스탬프", bundle)
+
+    def test_input_intent_choices_use_readable_single_column_layout(self) -> None:
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        intent_control = html.split(".intent-control{", 1)[1].split("}", 1)[0]
+        intent_title = html.split(".intent-choice-head strong{", 1)[1].split("}", 1)[0]
+
+        self.assertIn("grid-template-columns: 1fr", intent_control)
+        self.assertIn("word-break: keep-all", intent_title)
 
     def test_undo_restores_server_snapshot_order_directly(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

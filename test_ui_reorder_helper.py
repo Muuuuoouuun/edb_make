@@ -88,7 +88,7 @@ class TestUiReorderHelper(unittest.TestCase):
             const fs = require('fs');
             const vm = require('vm');
             const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
-            const start = source.indexOf('const DEFAULT_SLOT_HEIGHT_PAGES =');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
             const end = source.indexOf('const INITIAL_ITEMS =');
             if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
             const sandbox = {};
@@ -116,6 +116,83 @@ class TestUiReorderHelper(unittest.TestCase):
               throw new Error('slot height should include scaled rendered height');
             }
             """
+        )
+
+    def test_board_reflow_places_items_across_columns_with_shared_row_height(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'p1', heightFrac: 0.5, placementScaleRatio: 1.0 },
+              { id: 'p2', heightFrac: 1.4, placementScaleRatio: 1.0 },
+              { id: 'p3', heightFrac: 0.7, placementScaleRatio: 1.0 },
+            ], 1.2, 2);
+
+            if (reflowed[0].startYPages !== 0 || reflowed[1].startYPages !== 0) {
+              throw new Error(`first row should share start page, got ${reflowed[0].startYPages}/${reflowed[1].startYPages}`);
+            }
+            if (reflowed[0].placementXRatio !== 0 || reflowed[1].placementXRatio !== 1) {
+              throw new Error(`expected two column x ratios 0/1, got ${reflowed[0].placementXRatio}/${reflowed[1].placementXRatio}`);
+            }
+            if (reflowed[0].snappedNextStartYPages !== 2.4 || reflowed[1].snappedNextStartYPages !== 2.4) {
+              throw new Error(`row height should follow taller neighbor, got ${reflowed[0].snappedNextStartYPages}/${reflowed[1].snappedNextStartYPages}`);
+            }
+            if (reflowed[2].startYPages !== 2.4) {
+              throw new Error(`next row should start after shared row height, got ${reflowed[2].startYPages}`);
+            }
+            const magnetReflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'p4', heightFrac: 0.5, placementScaleRatio: 1.0, placementXEdited: true, placementXRatio: 0.5, placementMagnetColumnIndex: 1 },
+            ], 1.2, 3);
+            if (magnetReflowed[0].placementMagnetColumnIndex !== 1 || magnetReflowed[0].placementXRatio !== 0.5) {
+              throw new Error(`manual magnet column should survive reflow, got ${JSON.stringify(magnetReflowed[0])}`);
+            }
+          """
+        )
+
+    def test_board_column_magnet_snaps_near_guides(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.nearestBoardColumnMagnet = nearestBoardColumnMagnet;\n'
+                + 'globalThis.boardColumnRatios = boardColumnRatios;\n',
+              sandbox
+            );
+
+            const ratios = sandbox.boardColumnRatios(3).join(',');
+            if (ratios !== '0,0.5,1') {
+              throw new Error(`unexpected 3-column ratios: ${ratios}`);
+            }
+            const snapped = sandbox.nearestBoardColumnMagnet(0.96, 3, 640, 200);
+            if (!snapped.snapped || snapped.ratio !== 1 || snapped.index !== 2) {
+              throw new Error(`expected snap to right column, got ${JSON.stringify(snapped)}`);
+            }
+            const free = sandbox.nearestBoardColumnMagnet(0.73, 3, 640, 200);
+            if (free.snapped || free.ratio !== 0.73) {
+              throw new Error(`expected free placement away from guides, got ${JSON.stringify(free)}`);
+            }
+          """
         )
 
 

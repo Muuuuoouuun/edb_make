@@ -496,6 +496,41 @@
     letter-spacing: .12em;
     border-radius: 3px;
   }
+  .stage-column-guide{
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px dashed rgba(246,211,101,.18);
+    border-right: 1px dashed rgba(246,211,101,.08);
+    background: linear-gradient(90deg, rgba(246,211,101,.045), rgba(246,211,101,.012));
+    pointer-events: none;
+    z-index: 1;
+    opacity: .72;
+  }
+  .stage-column-guide span{
+    position: sticky;
+    top: 10px;
+    display: inline-flex;
+    margin-left: 7px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.28);
+    color: rgba(244,237,224,.48);
+    font-size: 9.5px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: .04em;
+  }
+  .stage-column-guide.active{
+    border-left-color: rgba(246,211,101,.9);
+    border-right-color: rgba(246,211,101,.42);
+    background: linear-gradient(90deg, rgba(246,211,101,.16), rgba(246,211,101,.035));
+    box-shadow: inset 0 0 0 1px rgba(246,211,101,.14);
+    opacity: 1;
+  }
+  .stage-column-guide.active span{
+    background: rgba(246,211,101,.18);
+    color: var(--chalk-warm);
+  }
   .board-pageind{
     position: absolute;
     top: 16px; right: 22px;
@@ -676,13 +711,23 @@
     opacity: .9;
     flex: 1;
   }
-  .stage-tile .tile-hd .span-mark{
+  .stage-tile .tile-hd .span-mark,
+  .stage-tile .tile-hd .column-mark,
+  .stage-tile .tile-hd .row-mark{
     font-family: 'JetBrains Mono', monospace;
     font-size: 9.5px; font-weight: 700;
     padding: 2px 6px; border-radius: 3px;
     background: rgba(244,237,224,.14);
     color: var(--chalk-warm);
     letter-spacing: .04em;
+  }
+  .stage-tile .tile-hd .column-mark{
+    color: var(--chalk-blue);
+    background: rgba(158,201,240,.16);
+  }
+  .stage-tile .tile-hd .row-mark{
+    color: rgba(244,237,224,.72);
+    background: rgba(244,237,224,.1);
   }
   .stage-tile .tile-hd .step-mark{
     font-family: 'JetBrains Mono', monospace;
@@ -2397,18 +2442,18 @@
   .check input{ accent-color: var(--accent); }
   .intent-control{
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    grid-template-columns: 1fr;
+    gap: 7px;
   }
   .intent-choice{
     display: grid;
-    grid-template-rows: auto minmax(30px, auto) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: flex-start;
-    gap: 6px;
-    min-height: 106px;
-    padding: 10px 11px;
+    gap: 4px 10px;
+    min-height: 0;
+    padding: 9px 10px;
     border: 1px solid var(--line);
-    border-radius: 9px;
+    border-radius: 8px;
     background: var(--surface);
     text-align: left;
     transition: background .12s, border-color .12s, box-shadow .12s;
@@ -2450,13 +2495,18 @@
     color: var(--ink);
     line-height: 1.25;
     min-width: 0;
+    word-break: keep-all;
+    overflow-wrap: normal;
   }
   .intent-choice small{
+    grid-column: 1;
     font-size: 10.5px;
     line-height: 1.35;
     color: var(--muted);
+    word-break: keep-all;
   }
   .intent-choice-pills{
+    grid-column: 1 / -1;
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
@@ -3943,6 +3993,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-scaled-reflow-20260702"></script>
-<script src="app.bundle.js?v=frontend-bundle-20260702-scaled-reflow-edb-split"></script>
+<script src="app.bundle.js?v=frontend-bundle-20260702-board-columns-magnet"></script>
 </body>
 </html>

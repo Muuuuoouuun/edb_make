@@ -124,6 +124,9 @@ const HEIGHT_BY_KIND = {
 };
 const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
+const BOARD_COLUMN_MIN = 1;
+const BOARD_COLUMN_MAX = 3;
+const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
 const DEFAULT_PLACEMENT_X_RATIO = 0;
 const DEFAULT_PLACEMENT_Y_RATIO = 0;
@@ -173,6 +176,46 @@ function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
   return Number.isFinite(n)
     ? Math.max(PLACEMENT_SCALE_MIN, Math.min(resolvedMax, n))
     : Math.min(DEFAULT_PLACEMENT_SCALE_RATIO, resolvedMax);
+}
+
+function normalizeBoardColumns(value){
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return BOARD_COLUMN_MIN;
+  return Math.max(BOARD_COLUMN_MIN, Math.min(BOARD_COLUMN_MAX, n));
+}
+
+function boardColumnXRatio(columnIndex, columnCount){
+  const resolvedCount = normalizeBoardColumns(columnCount);
+  if (resolvedCount <= 1) return DEFAULT_PLACEMENT_X_RATIO;
+  const resolvedIndex = Math.max(0, Math.min(resolvedCount - 1, Math.round(Number(columnIndex) || 0)));
+  return Number((resolvedIndex / (resolvedCount - 1)).toFixed(6));
+}
+
+function boardColumnRatios(columnCount){
+  const resolvedCount = normalizeBoardColumns(columnCount);
+  return Array.from({ length: resolvedCount }, (_, index) => boardColumnXRatio(index, resolvedCount));
+}
+
+function nearestBoardColumnMagnet(xRatio, columnCount, contentWidthPx = 0, tileWidthPx = 0){
+  const ratios = boardColumnRatios(columnCount);
+  if (ratios.length <= 1) {
+    return { index: 0, ratio: DEFAULT_PLACEMENT_X_RATIO, snapped: false, distancePx: 0 };
+  }
+  const travelPx = Math.max(1, Number(contentWidthPx || 0) - Number(tileWidthPx || 0));
+  const thresholdRatio = BOARD_COLUMN_MAGNET_THRESHOLD_PX / travelPx;
+  const normalized = normalizePlacementXRatio(xRatio);
+  let nearest = { index: 0, ratio: ratios[0], distance: Math.abs(normalized - ratios[0]) };
+  ratios.forEach((ratio, index) => {
+    const distance = Math.abs(normalized - ratio);
+    if (distance < nearest.distance) nearest = { index, ratio, distance };
+  });
+  const snapped = nearest.distance <= thresholdRatio;
+  return {
+    index: nearest.index,
+    ratio: snapped ? nearest.ratio : normalized,
+    snapped,
+    distancePx: Math.round(nearest.distance * travelPx),
+  };
 }
 
 function normalizeManualCropEdgeRatio(value){
@@ -321,6 +364,7 @@ function resetItemPlacement(item){
     placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
     placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
     placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
+    placementXEdited: false,
   };
 }
 
@@ -387,32 +431,82 @@ function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   return Math.max(heightPages, renderedHeightPages, savedSpan || snapUpPages(renderedHeightPages, slotHeight));
 }
 
-function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
   if (!Array.isArray(items)) return items;
+  const columnCount = normalizeBoardColumns(boardColumns);
   let cursorPages = 0;
-  return items.map(item => {
-    const heightPages = itemHeightPages(item);
-    const renderedHeightPages = itemRenderedHeightPages(item);
-    const continuous = isContinuousPlacementItem(item);
-    const startPages = continuous ? cursorPages : snapUpPages(cursorPages, slotHeight);
-    const slotSpanPages = itemSlotSpanPages(item, slotHeight);
-    const flowEndPages = startPages + Math.max(renderedHeightPages, slotSpanPages);
-    const snappedNextStartYPages = continuous ? flowEndPages : snapUpPages(flowEndPages, slotHeight);
-    const actualBottomPages = startPages + heightPages;
-    const renderedBottomPages = startPages + renderedHeightPages;
-    const slotSpanCount = Math.max(1, Math.ceil((snappedNextStartYPages - startPages - 0.001) / slotHeight));
+  const reflowed = [];
+  let index = 0;
+
+  while (index < items.length) {
+    const first = items[index];
+    const firstContinuous = isContinuousPlacementItem(first);
+    const rowItems = [];
+    if (firstContinuous) {
+      rowItems.push(first);
+      index += 1;
+    } else {
+      while (index < items.length && rowItems.length < columnCount) {
+        const candidate = items[index];
+        if (rowItems.length > 0 && isContinuousPlacementItem(candidate)) break;
+        rowItems.push(candidate);
+        index += 1;
+      }
+    }
+
+    const rowContinuous = rowItems.length === 1 && isContinuousPlacementItem(rowItems[0]);
+    const rowStartPages = rowContinuous ? cursorPages : snapUpPages(cursorPages, slotHeight);
+    const rowMetrics = rowItems.map(item => {
+      const heightPages = itemHeightPages(item);
+      const renderedHeightPages = itemRenderedHeightPages(item);
+      const slotSpanPages = itemSlotSpanPages(item, slotHeight);
+      return { heightPages, renderedHeightPages, slotSpanPages };
+    });
+    const rowFlowSpanPages = Math.max(
+      0,
+      ...rowMetrics.map(metric => Math.max(metric.renderedHeightPages, metric.slotSpanPages))
+    );
+    const flowEndPages = rowStartPages + rowFlowSpanPages;
+    const snappedNextStartYPages = rowContinuous ? flowEndPages : snapUpPages(flowEndPages, slotHeight);
+    const boardRowHeightPages = Math.max(0, snappedNextStartYPages - rowStartPages);
+    const rowColumnCount = rowContinuous ? BOARD_COLUMN_MIN : columnCount;
+
+    rowItems.forEach((item, rowColumnIndex) => {
+      const metric = rowMetrics[rowColumnIndex];
+      const actualBottomPages = rowStartPages + metric.heightPages;
+      const renderedBottomPages = rowStartPages + metric.renderedHeightPages;
+      const slotSpanCount = Math.max(1, Math.ceil((snappedNextStartYPages - rowStartPages - 0.001) / slotHeight));
+      const autoXRatio = boardColumnXRatio(rowColumnIndex, rowColumnCount);
+      const xEdited = Boolean(item.placementXEdited || item.placement_x_edited);
+      const rawMagnetColumnIndex = Number(item.placementMagnetColumnIndex ?? item.placement_magnet_column_index);
+      const magnetColumnIndex = Number.isFinite(rawMagnetColumnIndex)
+        ? Math.max(0, Math.min(rowColumnCount - 1, Math.round(rawMagnetColumnIndex)))
+        : null;
+      const resolvedXRatio = xEdited ? normalizePlacementXRatio(item.placementXRatio) : autoXRatio;
+      reflowed.push({
+        ...item,
+        heightFrac: metric.heightPages,
+        startYPages: Number(rowStartPages.toFixed(6)),
+        snappedNextStartYPages: Number(snappedNextStartYPages.toFixed(6)),
+        actualBottomYPages: Number(actualBottomPages.toFixed(6)),
+        renderedBottomYPages: Number(renderedBottomPages.toFixed(6)),
+        slotSpanCount,
+        overflowAmountPages: Math.max(0, metric.renderedHeightPages - slotHeight),
+        boardColumns: rowColumnCount,
+        boardColumnCount: rowColumnCount,
+        boardColumnIndex: rowColumnIndex,
+        boardColumnXRatio: autoXRatio,
+        boardRowHeightPages: Number(boardRowHeightPages.toFixed(6)),
+        placementXRatio: resolvedXRatio,
+        placementXEdited: xEdited,
+        placementMagnetColumnIndex: xEdited ? magnetColumnIndex : null,
+      });
+    });
+
     cursorPages = snappedNextStartYPages;
-    return {
-      ...item,
-      heightFrac: heightPages,
-      startYPages: Number(startPages.toFixed(6)),
-      snappedNextStartYPages: Number(snappedNextStartYPages.toFixed(6)),
-      actualBottomYPages: Number(actualBottomPages.toFixed(6)),
-      renderedBottomYPages: Number(renderedBottomPages.toFixed(6)),
-      slotSpanCount,
-      overflowAmountPages: Math.max(0, renderedHeightPages - slotHeight),
-    };
-  });
+  }
+
+  return reflowed;
 }
 
 const INITIAL_ITEMS = Array.from({ length: 12 }).map((_, i) => {
@@ -3457,8 +3551,8 @@ function ItemsRail({
   );
 }
 
-// ─── CENTER: big scrollable board stage (page-flow: 1 problem per page) ──
-function BoardStage({ items, activeId, setActive, boardColor, fileName, addSample, setPlacement, reorder }){
+// ─── CENTER: big scrollable board stage ──
+function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder }){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -3469,8 +3563,10 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   const autoScrollRef = useRef({ raf: null, clientY: null });
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
+  const [dragMagnet, setDragMagnet] = useState(null);
   const [pageH, setPageH] = useState(400);
   const [contentW, setContentW] = useState(0);
+  const columnCount = normalizeBoardColumns(boardColumns);
 
   // measure page (viewport) height
   useEffect(() => {
@@ -3493,26 +3589,23 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     return () => ro.disconnect();
   }, []);
 
-  // compute page-flow positions: each item starts at next page boundary
-  // after the previous item ends.  e.g. item ending at 1.8p → next at 2p.
+  // Compute board positions with row height shared by neighboring columns.
   const layout = useMemo(() => {
     const EPS = 0.001;
-    const positions = [];
-    const usesPlacement = items.some(it => Number.isFinite(it.startYPages));
-    let cursorPages = 0;
-    let maxBottom = 0;
-    items.forEach((it) => {
+    const layoutItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, columnCount);
+    const positions = layoutItems.map((it) => {
+      const startPages = Math.max(0, it.startYPages || 0);
       const heightPages = itemHeightPages(it);
       const renderedHeightPages = itemRenderedHeightPages(it);
-      const startPages = usesPlacement && Number.isFinite(it.startYPages)
-        ? Math.max(0, it.startYPages)
-        : cursorPages;
+      const snappedNext = Math.max(startPages + renderedHeightPages, it.snappedNextStartYPages || 0);
       const top = startPages * pageH;
       const height = heightPages * pageH;
-      const snappedNext = Number.isFinite(it.snappedNextStartYPages)
-        ? Math.max(startPages + renderedHeightPages, it.snappedNextStartYPages)
-        : snapUpPages(startPages + renderedHeightPages);
-      positions.push({
+      const rowHeightPages = Math.max(0, snappedNext - startPages);
+      const rawMagnetColumnIndex = Number(it.placementMagnetColumnIndex ?? it.placement_magnet_column_index);
+      const displayColumnIndex = Number.isFinite(rawMagnetColumnIndex)
+        ? Math.max(0, Math.min((it.boardColumnCount || columnCount) - 1, Math.round(rawMagnetColumnIndex)))
+        : (it.boardColumnIndex || 0);
+      return {
         top,
         height,
         page: Math.floor(top / pageH) + 1,
@@ -3521,16 +3614,27 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
         heightPages,
         renderedHeightPages,
         snappedNext,
-      });
-      cursorPages = snappedNext;
-      maxBottom = Math.max(maxBottom, snappedNext * pageH, top + renderedHeightPages * pageH);
+        rowHeightPages,
+        columnIndex: displayColumnIndex,
+        columnCount: it.boardColumnCount || columnCount,
+        xRatio: normalizePlacementXRatio(it.placementXRatio),
+        yRatio: normalizePlacementYRatio(it.placementYRatio),
+      };
+    });
+    let maxBottom = 0;
+    positions.forEach((placement) => {
+      maxBottom = Math.max(
+        maxBottom,
+        placement.snappedNext * pageH,
+        placement.top + placement.renderedHeightPages * pageH
+      );
     });
     const endTop = items.length === 0 ? 0 : Math.ceil(maxBottom / pageH - EPS) * pageH;
     const endH = pageH * 0.42;
     const totalH = endTop + endH;
     const totalPages = Math.max(1, Math.ceil(totalH / pageH));
-    return { positions, endTop, endH, totalH, totalPages, usesPlacement };
-  }, [items, pageH]);
+    return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
+  }, [items, pageH, columnCount]);
 
   const [scrollTop, setScrollTop] = useState(0);
   const currentPage = Math.min(layout.totalPages, Math.floor(scrollTop / pageH) + 1);
@@ -3665,8 +3769,8 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     const tileRect = evt.currentTarget.getBoundingClientRect();
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
     const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
-    const startXRatio = normalizePlacementXRatio(item.placementXRatio);
-    const startYRatio = normalizePlacementYRatio(item.placementYRatio);
+    const startXRatio = normalizePlacementXRatio(placement.xRatio);
+    const startYRatio = normalizePlacementYRatio(placement.yRatio);
     positionDragRef.current = {
       id: item.id,
       pointerId: evt.pointerId,
@@ -3676,6 +3780,8 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
       startTopOffset: startYRatio * maxTopOffset,
       maxLeft,
       maxTopOffset,
+      tileWidth: tileRect.width,
+      columnCount: placement.columnCount || columnCount,
       lastXRatio: startXRatio,
       lastYRatio: startYRatio,
       moved: false,
@@ -3699,8 +3805,15 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     updateBoardDropTarget(evt.clientY, drag.id);
     const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
     const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
-    const nextXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
+    const rawXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
+    const magnet = nearestBoardColumnMagnet(rawXRatio, drag.columnCount, contentW, drag.tileWidth);
+    const nextXRatio = magnet.ratio;
     const nextYRatio = drag.maxTopOffset > 0 ? nextTopOffset / drag.maxTopOffset : DEFAULT_PLACEMENT_Y_RATIO;
+    setDragMagnet(magnet.snapped ? {
+      index: magnet.index,
+      ratio: magnet.ratio,
+      distancePx: magnet.distancePx,
+    } : null);
     if (
       Math.abs(nextXRatio - drag.lastXRatio) < 0.002 &&
       Math.abs(nextYRatio - drag.lastYRatio) < 0.002
@@ -3712,6 +3825,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     setPlacement?.(drag.id, {
       xRatio: nextXRatio,
       yRatio: nextYRatio,
+      magnetColumnIndex: magnet.snapped ? magnet.index : null,
     });
   };
 
@@ -3735,6 +3849,7 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
+    setDragMagnet(null);
     stopBoardAutoScroll();
   };
 
@@ -3744,6 +3859,16 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
   const rawCount = items.filter(i => i.step === 'raw').length;
   const s1Count = items.filter(i => i.step === 's1').length;
   const leftZonePercent = `${FIXED_LEFT_ZONE_RATIO * 100}%`;
+  const activePlacement = layout.positions[items.findIndex(x => x.id === activeId)] || null;
+  const columnGuideWidth = contentW > 0 ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10) : 0;
+  const columnGuides = contentW > 0
+    ? boardColumnRatios(columnCount).map((ratio, index) => ({
+        index,
+        ratio,
+        left: ratio * Math.max(0, contentW - columnGuideWidth),
+        width: columnGuideWidth,
+      }))
+    : [];
 
   // page-boundary divider lines (between page N and N+1)
   const dividers = [];
@@ -3784,7 +3909,18 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                   </div>
                 ))}
 
-                {items.map((it, i) => {
+                {columnGuides.map(guide => (
+                  <div
+                    key={`column-guide-${guide.index}`}
+                    className={`stage-column-guide ${dragMagnet?.index === guide.index ? 'active' : ''}`}
+                    style={{ left: guide.left, width: guide.width }}
+                    aria-hidden="true"
+                  >
+                    <span>{guide.index + 1}열</span>
+                  </div>
+                ))}
+
+                {layout.items.map((it, i) => {
                   const p = layout.positions[i];
                   if (!p) return null;
                   const tileWidth = contentW > 0
@@ -3805,8 +3941,8 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                   const scaledHeight = p.height * scaleRatio;
                   const maxLeft = scaledWidth ? Math.max(0, contentW - scaledWidth) : 0;
                   const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - scaledHeight);
-                  const xRatio = normalizePlacementXRatio(it.placementXRatio);
-                  const yRatio = normalizePlacementYRatio(it.placementYRatio);
+                  const xRatio = normalizePlacementXRatio(p.xRatio);
+                  const yRatio = normalizePlacementYRatio(p.yRatio);
                   const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
@@ -3831,6 +3967,12 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
                         <span className="nm">{it.name}</span>
                         {p.spans > 1 && (
                           <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
+                        )}
+                        {p.columnCount > 1 && (
+                          <span className="column-mark">{p.columnIndex + 1}열</span>
+                        )}
+                        {p.rowHeightPages > p.renderedHeightPages + 0.05 && (
+                          <span className="row-mark">{p.rowHeightPages.toFixed(1)}p</span>
                         )}
                         <span className={`step-mark ${it.step}`}>
                           {it.step === 's1' ? '1' : it.step === 's2' ? 'AI' : it.step === 's3' ? 'HQ' : '··'}
@@ -3869,6 +4011,15 @@ function BoardStage({ items, activeId, setActive, boardColor, fileName, addSampl
 
         <div className="stage-status">
           <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
+          <span className="chip">
+            <span className="pip" />
+            {columnCount}열
+          </span>
+          {activePlacement && (
+            <span className="chip">
+              행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
+            </span>
+          )}
           <span className="chip">
             <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
             1단계 {s1Count}
@@ -4760,6 +4911,16 @@ function SidePanel({
               <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
             </div>
 
+            <div className="row-control">
+              <div className="lbl">드래그 마그넷<small>열 가이드 자동 정렬</small></div>
+              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+            </div>
+
+            <div className="row-control">
+              <div className="lbl">주변 사진 높이<small>같은 행의 가장 큰 자료 기준</small></div>
+              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+            </div>
+
             <div className="panel-section-hd" style={{marginTop:4}}>칠판 색상 <span className="line" /></div>
 
             <div className="row-control">
@@ -5358,10 +5519,27 @@ function applyItemStateToProblem(problem, item){
     next.placement_mode = next.placementMode;
   }
   next.placementXRatio = normalizePlacementXRatio(item.placementXRatio);
+  next.placement_x_ratio = next.placementXRatio;
+  next.placementXEdited = Boolean(item.placementXEdited || item.placement_x_edited);
+  next.placement_x_edited = next.placementXEdited;
+  next.boardColumns = normalizeBoardColumns(item.boardColumnCount || item.boardColumns || BOARD_COLUMN_MIN);
+  next.board_columns = next.boardColumns;
+  next.boardColumnIndex = Math.max(0, Number.isFinite(Number(item.boardColumnIndex)) ? Math.round(Number(item.boardColumnIndex)) : 0);
+  next.board_column_index = next.boardColumnIndex;
+  const rawMagnetColumnIndex = Number(item.placementMagnetColumnIndex ?? item.placement_magnet_column_index);
+  const placementMagnetColumnIndex = Number.isFinite(rawMagnetColumnIndex)
+    ? Math.max(0, Math.min(next.boardColumns - 1, Math.round(rawMagnetColumnIndex)))
+    : null;
+  next.placementMagnetColumnIndex = next.placementXEdited ? placementMagnetColumnIndex : null;
+  next.placement_magnet_column_index = next.placementMagnetColumnIndex;
+  next.boardRowHeightPages = Number.isFinite(Number(item.boardRowHeightPages)) ? Number(Number(item.boardRowHeightPages).toFixed(6)) : null;
+  next.board_row_height_pages = next.boardRowHeightPages;
   next.placementYRatio = verticalPlacementRoomPages(item) > 0.001
     ? normalizePlacementYRatio(item.placementYRatio)
     : DEFAULT_PLACEMENT_Y_RATIO;
+  next.placement_y_ratio = next.placementYRatio;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
+  next.placement_scale_ratio = next.placementScaleRatio;
   const renderedHeightPages = actualHeightPages * next.placementScaleRatio;
   next.actualHeightPages = actualHeightPages;
   next.actual_height_pages = actualHeightPages;
@@ -5439,11 +5617,11 @@ function markSessionProblemsConfirmed(rawSession, targetIds){
   return snapshot;
 }
 
-function materializeSessionForItems(rawSession, items, fileName){
+function materializeSessionForItems(rawSession, items, fileName, boardColumns = BOARD_COLUMN_MIN){
   const snapshot = cloneSession(rawSession);
   if (!snapshot || !Array.isArray(snapshot.problems)) return null;
   const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
-  const reflowedItems = reflowItemsForBoardOrder(items);
+  const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
   const orderedProblems = reflowedItems
     .filter(item => byId.has(item.id))
     .map(item => applyItemStateToProblem(byId.get(item.id), item));
@@ -5467,7 +5645,7 @@ function materializeSessionForItems(rawSession, items, fileName){
   return snapshot;
 }
 
-function mergeSessions(baseSession, incomingSession, fileName){
+function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BOARD_COLUMN_MIN){
   const base = cloneSession(baseSession);
   const incoming = cloneSession(incomingSession);
   if (!base) return incoming;
@@ -5507,7 +5685,9 @@ function mergeSessions(baseSession, incomingSession, fileName){
   const mergedProblems = [...(base.problems || []), ...incomingProblems];
   const mergedProblemsById = new Map(mergedProblems.map(problem => [problem.id, problem]));
   const reflowedProblems = reflowItemsForBoardOrder(
-    mergedProblems.map((problem, idx) => mapProblemToItem(problem, idx))
+    mergedProblems.map((problem, idx) => mapProblemToItem(problem, idx)),
+    DEFAULT_SLOT_HEIGHT_PAGES,
+    boardColumns
   ).map(item => applyItemStateToProblem(mergedProblemsById.get(item.id) || {}, item));
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
@@ -5609,8 +5789,19 @@ function mapProblemToItem(problem, idx){
     overflowViolation: Boolean(problem.overflowViolation),
     slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
+    placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
     placementScaleRatio: initialScale < 0.95 ? DEFAULT_PLACEMENT_SCALE_RATIO : initialScale,
+    boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
+    boardColumnIndex: Number.isFinite(Number(problem.boardColumnIndex ?? problem.board_column_index))
+      ? Math.max(0, Math.round(Number(problem.boardColumnIndex ?? problem.board_column_index)))
+      : 0,
+    placementMagnetColumnIndex: Number.isFinite(Number(problem.placementMagnetColumnIndex ?? problem.placement_magnet_column_index))
+      ? Math.max(0, Math.round(Number(problem.placementMagnetColumnIndex ?? problem.placement_magnet_column_index)))
+      : null,
+    boardRowHeightPages: Number.isFinite(Number(problem.boardRowHeightPages ?? problem.board_row_height_pages))
+      ? Number(problem.boardRowHeightPages ?? problem.board_row_height_pages)
+      : null,
     manualCrop,
   };
 }
@@ -7703,6 +7894,7 @@ function App(){
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
   const [historyStack, setHistoryStack] = useState([]);
+  const boardColumns = normalizeBoardColumns(t.boardColumns);
   const fileInputRef = useRef(null);
   const jobControllersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
@@ -7897,7 +8089,11 @@ function App(){
     if (!rawSession || !Array.isArray(rawSession.problems) || rawSession.problems.length === 0) {
       return false;
     }
-    const mapped = reflowItemsForBoardOrder(rawSession.problems.map((p, idx) => mapProblemToItem(p, idx)));
+    const mapped = reflowItemsForBoardOrder(
+      rawSession.problems.map((p, idx) => mapProblemToItem(p, idx)),
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns
+    );
     setItems(mapped);
     setActiveId(mapped[0].id);
     setSession(rawSession);
@@ -7910,7 +8106,7 @@ function App(){
       initialViewConsumedRef.current = true;
     }
     return true;
-  }, []);
+  }, [boardColumns]);
 
   // Replace state from a mutation response: similar to applySession but
   // tries to preserve the user's current item ordering when the mutation
@@ -7957,7 +8153,11 @@ function App(){
       }
     }
     const orderedProblems = orderedIds.map(id => nextProblemsById.get(id)).filter(Boolean);
-    const mapped = reflowItemsForBoardOrder(orderedProblems.map((p, idx) => mapProblemToItem(p, idx)));
+    const mapped = reflowItemsForBoardOrder(
+      orderedProblems.map((p, idx) => mapProblemToItem(p, idx)),
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns
+    );
     setItems(mapped);
     setSession(nextSession);
     setPublished(false);
@@ -7966,7 +8166,7 @@ function App(){
         .find(id => nextProblemsById.has(id));
       setActiveId(replacementActiveId || mapped[0]?.id || null);
     }
-  }, [items, activeId]);
+  }, [items, activeId, boardColumns]);
 
   // Run a server-side mutation (split / merge / crop / exclude). Captures the
   // current session into the undo history *before* the request goes out
@@ -7986,7 +8186,7 @@ function App(){
         : '변경 중…',
       startedAt: Date.now(),
     });
-    const snapshotBefore = materializeSessionForItems(session, items, fileName) || session;
+    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || session;
     try {
       await postRestore(snapshotBefore);
       const next = await postMutate(action, args);
@@ -8008,7 +8208,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [session, items, fileName, adoptMutatedSession, refreshSessionHistory]);
+  }, [session, items, fileName, boardColumns, adoptMutatedSession, refreshSessionHistory]);
 
   const retryAiSession = useCallback(async (args) => {
     if (!session) {
@@ -8027,7 +8227,7 @@ function App(){
         .map(id => (session.problems || []).find(problem => problem?.id === id)?.sourcePageId)
         .filter(Boolean))
       : pageIds;
-    const snapshotBefore = materializeSessionForItems(session, items, fileName) || cloneSession(session);
+    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session);
     const job = startBackgroundJob({
       scope: 'session-recognition',
       label: isPartialRetry
@@ -8081,7 +8281,7 @@ function App(){
       }, 5000);
       showToast(`AI 재인식 실패: ${e.message}`);
     }
-  }, [session, userSettings, items, fileName, startBackgroundJob, settleBackgroundJob]);
+  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
@@ -8273,7 +8473,7 @@ function App(){
       showToast('업스케일할 문항을 선택해 주세요');
       return;
     }
-    const snapshotBefore = materializeSessionForItems(session, items, fileName) || cloneSession(session);
+    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session);
     const job = startBackgroundJob({
       scope: 'image-enhance',
       label: ids.length === 1 ? 'AI 업스케일 재구성 중' : `${ids.length}개 문항 AI 업스케일 중`,
@@ -8308,7 +8508,7 @@ function App(){
       }, 5000);
       showToast(`AI 업스케일 실패: ${e.message}`);
     }
-  }, [session, userSettings, items, fileName, startBackgroundJob, settleBackgroundJob, adoptMutatedSession]);
+  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession]);
 
   const resetSession = useCallback(async () => {
     if (loading) {
@@ -8529,9 +8729,9 @@ function App(){
       let sessionToApply = s;
       let baseSnapshotForReviewScope = null;
       if (session && !usingMock) {
-        const currentSnapshot = materializeSessionForItems(session, items, fileName);
+        const currentSnapshot = materializeSessionForItems(session, items, fileName, boardColumns);
         baseSnapshotForReviewScope = currentSnapshot;
-        const merged = mergeSessions(currentSnapshot, s, fileName);
+        const merged = mergeSessions(currentSnapshot, s, fileName, boardColumns);
         sessionToApply = await postRestore(merged);
       }
       const firstInserted = (sessionToApply?.problems || []).find(problem => problem?.id && !previousItemIds.has(problem.id));
@@ -8549,7 +8749,7 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent]);
+  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent]);
 
   const cancelRecognitionReview = useCallback(() => {
     if (confirmingRecognition) return;
@@ -8570,10 +8770,10 @@ function App(){
         }
         const incomingSession = review.incomingSession || review.session;
         const currentSnapshot = session && !usingMock
-          ? materializeSessionForItems(session, items, fileName)
+          ? materializeSessionForItems(session, items, fileName, boardColumns)
           : null;
         const candidate = currentSnapshot
-          ? mergeSessions(currentSnapshot, incomingSession, fileName)
+          ? mergeSessions(currentSnapshot, incomingSession, fileName, boardColumns)
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
         applySession(restored);
@@ -8586,7 +8786,7 @@ function App(){
         showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
-          ? (materializeSessionForItems(session, items, fileName) || cloneSession(session))
+          ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
           : cloneSession(review.snapshotBefore);
         const candidate = mergeRetryCandidateIntoCurrent(currentSnapshot, review.session, review.pageIds, {
           partial: !!review.partial,
@@ -8617,6 +8817,7 @@ function App(){
     usingMock,
     items,
     fileName,
+    boardColumns,
     applySession,
     adoptMutatedSession,
     refreshSessionHistory,
@@ -8648,6 +8849,10 @@ function App(){
         const next = { ...x };
         if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
           next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
+          next.placementXEdited = patch.xEdited === false ? false : true;
+          if (Object.prototype.hasOwnProperty.call(patch || {}, 'magnetColumnIndex')) {
+            next.placementMagnetColumnIndex = patch.magnetColumnIndex;
+          }
         }
         if (wantsFitWidth) {
           const heightPages = Math.max(0.12, next.heightFrac || 0.8);
@@ -8672,7 +8877,7 @@ function App(){
         }
         return next;
       });
-      return scaleChanged ? reflowItemsForBoardOrder(nextItems) : nextItems;
+      return scaleChanged ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns) : nextItems;
     });
     setPublished(false);
   };
@@ -8680,17 +8885,17 @@ function App(){
     const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
     if (reordered === items) return;
     const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
-    const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered);
+    const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
     if (session) {
-      const nextSession = materializeSessionForItems(session, nextItems, fileName) || session;
+      const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns) || session;
       setSession(nextSession);
       postRestore(nextSession).catch(e => console.warn('[board] reorder persist failed:', e.message));
     }
     setPublished(false);
   };
   const removeItem = (id) => {
-    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id));
+    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
     if (activeId === id) {
       setActiveId(nextItems[0]?.id || null);
@@ -8752,7 +8957,7 @@ function App(){
     ));
     const confirmedSession = markSessionProblemsConfirmed(session, confirmedIds);
     const nextSession = confirmedSession
-      ? (materializeSessionForItems(confirmedSession, nextItemsForSnapshot, fileName) || confirmedSession)
+      ? (materializeSessionForItems(confirmedSession, nextItemsForSnapshot, fileName, boardColumns) || confirmedSession)
       : null;
     setItems(prev => prev.map(item => (
       confirmedIds.has(item.id) ? confirmedItemState(item) : item
@@ -8797,7 +9002,8 @@ function App(){
     const currentIds = items.map(i => i.id);
     const order = currentIds.filter(id => sessionIds.has(id));
     const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
-    const sessionForPublish = materializeSessionForItems(session, items, fileName) || session;
+    const itemsForPublish = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const sessionForPublish = materializeSessionForItems(session, itemsForPublish, fileName, boardColumns) || session;
     const publishReviewSummary = sessionReviewSummary(sessionForPublish);
     const duplicateProblemNumberGroups = Array.isArray(publishReviewSummary.blockingDuplicateProblemNumberGroups)
       ? publishReviewSummary.blockingDuplicateProblemNumberGroups
@@ -8872,7 +9078,7 @@ function App(){
       }
     }
     const placements = Object.fromEntries(
-      items
+      itemsForPublish
         .filter(item => sessionIds.has(item.id))
         .map(item => [item.id, {
           xRatio: normalizePlacementXRatio(item.placementXRatio),
@@ -9000,7 +9206,7 @@ function App(){
             activeId={activeId}
             setActive={setActiveId}
             boardColor={t.boardColor}
-            boardColumns={t.boardColumns}
+            boardColumns={boardColumns}
             fileName={fileName}
             addSample={addSample}
             setPlacement={setPlacement}
@@ -9018,7 +9224,7 @@ function App(){
           setPlacement={setPlacement}
           mutateSession={mutateSession}
           mutating={mutating}
-          boardColumns={t.boardColumns}
+          boardColumns={boardColumns}
           setBoardColumns={v => setTweak('boardColumns', v)}
           boardColor={t.boardColor}
           setBoardColor={v => setTweak('boardColor', v)}
