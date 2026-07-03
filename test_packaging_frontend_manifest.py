@@ -738,6 +738,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("function Assert-EDBZipContainsEntry", ps_source)
         self.assertIn('Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"', ps_source)
         self.assertIn('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"', ps_source)
+        self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName.exe"', ps_source)
         self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"', ps_source)
         self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "source-package/app_update_config.json"', ps_source)
         self.assertLess(
@@ -753,7 +754,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             ps_source.index("& $PythonExe -m PyInstaller @PyInstallerArgs"),
         )
         self.assertLess(
-            ps_source.index('if ($BuiltWithPyInstaller -and -not $OneFile)'),
+            ps_source.index('if ($BuiltWithPyInstaller -and $OneFile)'),
+            ps_source.index('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName.exe"'),
+        )
+        self.assertLess(
+            ps_source.index('} elseif ($BuiltWithPyInstaller)'),
             ps_source.index('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"'),
         )
         self.assertLess(

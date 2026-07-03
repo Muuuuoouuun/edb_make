@@ -330,7 +330,9 @@ if ($Zip) {
     if (Test-Path $PackageRoot) {
         Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
         Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"
-        if ($BuiltWithPyInstaller -and -not $OneFile) {
+        if ($BuiltWithPyInstaller -and $OneFile) {
+            Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName.exe"
+        } elseif ($BuiltWithPyInstaller) {
             Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"
         } elseif (-not $BuiltWithPyInstaller) {
             Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "source-package/app_update_config.json"
