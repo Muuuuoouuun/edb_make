@@ -219,6 +219,36 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("macos download URL must use https or loopback http", result.stderr)
 
+    def test_rejects_non_https_metadata_urls(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--update-feed-url",
+                    "http://example.test/update.json",
+                    "--manifest-url",
+                    "https://example.test/manifest.json",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("update feed URL must use https or loopback http", result.stderr)
+
     def test_allows_loopback_http_download_url_for_local_testing(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -232,6 +262,12 @@ class TestUpdateFeedBuilder(unittest.TestCase):
                     str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
                     "--version",
                     "0.1.1",
+                    "--update-feed-url",
+                    "http://localhost:8000/update.json",
+                    "--manifest-output",
+                    str(tmpdir / "manifest.json"),
+                    "--manifest-url",
+                    "http://127.0.0.1:8000/manifest.json",
                     "--macos-url",
                     "http://127.0.0.1:8000/ClassInEDBMVP-macOS.dmg",
                     "--macos-file",
@@ -244,8 +280,11 @@ class TestUpdateFeedBuilder(unittest.TestCase):
             )
 
             feed = json.loads(output.read_text(encoding="utf-8"))
+            manifest = json.loads((tmpdir / "manifest.json").read_text(encoding="utf-8"))
 
         self.assertEqual("http://127.0.0.1:8000/ClassInEDBMVP-macOS.dmg", feed["platforms"]["macos"]["downloadUrl"])
+        self.assertEqual("http://127.0.0.1:8000/manifest.json", feed["manifestUrl"])
+        self.assertEqual("http://localhost:8000/update.json", manifest["updateFeedUrl"])
 
     def test_rejects_reusing_same_artifact_for_multiple_platforms(self) -> None:
         with TemporaryDirectory() as raw_tmp:

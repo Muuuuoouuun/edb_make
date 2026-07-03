@@ -90,6 +90,13 @@ def validate_update_url(label: str, value: str) -> str:
     raise ValueError(f"{label} must use https or loopback http")
 
 
+def validate_optional_update_url(label: str, value: str) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    return validate_update_url(label, url)
+
+
 def validate_distinct_artifact_files(platform_paths: dict[str, str]) -> None:
     seen: dict[Path, str] = {}
     for platform, raw_path in platform_paths.items():
@@ -297,6 +304,9 @@ def main() -> int:
     try:
         args = parse_args()
         args.version = validate_version(args.version)
+        args.update_feed_url = validate_optional_update_url("update feed URL", args.update_feed_url)
+        args.release_notes_url = validate_optional_update_url("release notes URL", args.release_notes_url)
+        args.manifest_url = validate_optional_update_url("manifest URL", args.manifest_url)
         expected_manifest_sha256 = ""
         if args.manifest_sha256:
             expected_manifest_sha256 = validate_sha256("manifestSha256", args.manifest_sha256)
