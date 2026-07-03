@@ -279,6 +279,7 @@ LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
 GENERATED_SESSION_JS = RUNTIME_DIR / "generated_session.js"
 APP_LOG_FILE = RUNTIME_DIR / "app.log"
+EMPTY_GENERATED_SESSION_JS = "window.EDB_UI_SESSION = null;\n"
 DEFAULT_OUTPUT_ROOT_NAME = "outputs"
 
 
@@ -637,22 +638,15 @@ def hydrate_user_settings_env() -> None:
 
 
 def write_placeholder_generated_session() -> None:
-    if GENERATED_SESSION_JS.exists():
-        return
     try:
         GENERATED_SESSION_JS.parent.mkdir(parents=True, exist_ok=True)
-        GENERATED_SESSION_JS.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
+        GENERATED_SESSION_JS.write_text(EMPTY_GENERATED_SESSION_JS, encoding="utf-8")
     except OSError:
         pass
 
 
 def read_generated_session_js() -> str:
-    try:
-        if GENERATED_SESSION_JS.exists():
-            return GENERATED_SESSION_JS.read_text(encoding="utf-8")
-    except OSError:
-        pass
-    return "window.EDB_UI_SESSION = null;\n"
+    return EMPTY_GENERATED_SESSION_JS
 
 
 def configure_app_logging(log_file: str | Path | None = None) -> None:
@@ -2160,25 +2154,6 @@ def content_disposition_attachment(filename: str) -> str:
         fallback = "download.edb"
     encoded = quote(filename, safe="")
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
-
-
-def load_generated_session() -> dict[str, Any] | None:
-    if not GENERATED_SESSION_JS.exists():
-        return None
-    try:
-        raw = GENERATED_SESSION_JS.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    prefix = "window.EDB_UI_SESSION = "
-    if not raw.startswith(prefix):
-        return None
-    payload = raw[len(prefix):].rstrip(";\n ")
-    if not payload or payload == "null":
-        return None
-    try:
-        return json.loads(payload)
-    except json.JSONDecodeError:
-        return None
 
 
 def load_latest_session() -> dict[str, Any] | None:
@@ -5610,7 +5585,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # also blank out the generated_session.js bridge so a refresh shows empty state
         try:
             GENERATED_SESSION_JS.parent.mkdir(parents=True, exist_ok=True)
-            GENERATED_SESSION_JS.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
+            GENERATED_SESSION_JS.write_text(EMPTY_GENERATED_SESSION_JS, encoding="utf-8")
         except OSError:
             pass
         self._send_json({"ok": True, "history": []})

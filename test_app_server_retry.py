@@ -267,10 +267,13 @@ class TestStaticAssetCaching(unittest.TestCase):
 
         self.assertEqual(["/app.bundle.js"], served_paths)
 
-    def test_generated_session_script_is_served_from_runtime_file(self):
+    def test_generated_session_script_is_always_empty_bridge(self):
         with TemporaryDirectory() as raw_tmp:
             generated_path = Path(raw_tmp) / "generated_session.js"
-            generated_path.write_text("window.EDB_UI_SESSION = null;\n", encoding="utf-8")
+            generated_path.write_text(
+                'window.EDB_UI_SESSION = {"problems":[{"id":"stale-session"}]};\n',
+                encoding="utf-8",
+            )
             handler = object.__new__(app_server.AppRequestHandler)
             handler.path = "/generated_session.js"
             statuses = []
@@ -286,6 +289,19 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual([app_server.HTTPStatus.OK], statuses)
             self.assertIn(("Content-Type", "application/javascript; charset=utf-8"), headers)
             self.assertEqual(b"window.EDB_UI_SESSION = null;\n", handler.wfile.getvalue())
+
+    def test_generated_session_placeholder_overwrites_stale_bridge(self):
+        with TemporaryDirectory() as raw_tmp:
+            generated_path = Path(raw_tmp) / "generated_session.js"
+            generated_path.write_text(
+                'window.EDB_UI_SESSION = {"problems":[{"id":"stale-session"}]};\n',
+                encoding="utf-8",
+            )
+
+            with patch.object(app_server, "GENERATED_SESSION_JS", generated_path):
+                app_server.write_placeholder_generated_session()
+
+            self.assertEqual("window.EDB_UI_SESSION = null;\n", generated_path.read_text(encoding="utf-8"))
 
     def test_latest_session_does_not_fallback_to_generated_session_bridge(self):
         with TemporaryDirectory() as raw_tmp:
