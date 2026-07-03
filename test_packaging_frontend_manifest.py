@@ -225,6 +225,18 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertLess(verifier_index, source.index("if ($Sign -and $SkipAppBuild)"))
         self.assertLess(verifier_index, source.index("$Iscc = Find-InnoSetupCompiler"))
 
+    def test_ci_installer_workflow_uses_packaging_wrappers(self) -> None:
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
+        self.assertIn("actions/setup-node@v4", workflow)
+        self.assertIn("./package_macos_app.sh", workflow)
+        self.assertIn(".\\package_windows_installer.ps1", workflow)
+        self.assertNotIn("-SkipFrontendBuild", workflow)
+        self.assertNotIn("-SkipAppBuild", workflow)
+        self.assertLess(workflow.index("./package_macos_app.sh"), workflow.index("dist/ClassInEDBMVP-macOS.dmg"))
+        self.assertLess(workflow.index(".\\package_windows_installer.ps1"), workflow.index("dist/ClassInEDBMVP-Setup.exe"))
+        self.assertLess(workflow.index("- macos"), workflow.index("python scripts/build_update_feed.py"))
+        self.assertLess(workflow.index("- windows"), workflow.index("python scripts/build_update_feed.py"))
+
 
 if __name__ == "__main__":
     unittest.main()
