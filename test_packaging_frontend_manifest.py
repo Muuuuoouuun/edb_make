@@ -242,6 +242,48 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("missing appId" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_invalid_update_metadata_urls(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                "{"
+                '"appId":"ClassInEDBMVP",'
+                '"appName":"ClassInEDBMVP",'
+                '"version":"test",'
+                '"updateFeedUrl":"http://example.test/update.json",'
+                '"downloadUrl":"not-a-url",'
+                '"releaseNotesUrl":"ftp://example.test/releases/test"'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("updateFeedUrl must use https or loopback http" in error for error in errors))
+        self.assertTrue(any("downloadUrl must be an absolute URL" in error for error in errors))
+        self.assertTrue(any("releaseNotesUrl must use https or loopback http" in error for error in errors))
+
+    def test_packaged_app_layout_allows_loopback_update_metadata_url(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                "{"
+                '"appId":"ClassInEDBMVP",'
+                '"appName":"ClassInEDBMVP",'
+                '"version":"test",'
+                '"updateFeedUrl":"http://127.0.0.1:8765/update.json",'
+                '"downloadUrl":"http://localhost:8765/ClassInEDBMVP-macOS.zip",'
+                '"releaseNotesUrl":"https://example.test/releases/test"'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertEqual([], errors)
+
     def test_packaged_app_layout_rejects_legacy_browser_runtime(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"

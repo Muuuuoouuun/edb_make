@@ -7,6 +7,7 @@ import plistlib
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     from .verify_frontend_package import (
@@ -80,6 +81,23 @@ def _read(path: Path) -> str:
 
 def _read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    host = (hostname or "").strip().lower()
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
+def _packaged_update_url_error(field_name: str, value: object) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return f"packaged app_update_config.json {field_name} must be an absolute URL"
+    if parsed.scheme == "https" or (parsed.scheme == "http" and _is_loopback_hostname(parsed.hostname)):
+        return ""
+    return f"packaged app_update_config.json {field_name} must use https or loopback http"
 
 
 def _resource_root_candidates(package_root: Path) -> list[Path]:
@@ -179,6 +197,16 @@ def collect_package_errors(
                         "packaged app_update_config.json version mismatch: "
                         f"expected {expected_version!r}, found {version!r}"
                     )
+                for field_name in (
+                    "updateFeedUrl",
+                    "update_feed_url",
+                    "downloadUrl",
+                    "download_url",
+                    "releaseNotesUrl",
+                    "release_notes_url",
+                ):
+                    if url_error := _packaged_update_url_error(field_name, update_config.get(field_name)):
+                        errors.append(url_error)
 
     for rel_path in FORBIDDEN_PACKAGED_FRONTEND_FILES:
         if (resource_root / rel_path).exists():
