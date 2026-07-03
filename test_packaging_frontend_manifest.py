@@ -542,13 +542,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn("require_nonempty_file()", shell_source)
         self.assertIn("require_zip_entry()", shell_source)
+        self.assertIn("verify_dmg_contains_app()", shell_source)
         self.assertIn('require_nonempty_file "$ZIP_PATH" "Zip archive"', shell_source)
         self.assertIn('require_zip_entry "$ZIP_PATH" "$APP_NAME.app/Contents/Info.plist"', shell_source)
         self.assertIn('require_nonempty_file "$DMG_PATH" "DMG installer"', shell_source)
+        self.assertIn('verify_dmg_contains_app "$DMG_PATH" "$APP_NAME"', shell_source)
+        self.assertIn('find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.mount.*"', shell_source)
         self.assertIn('require_nonempty_file "$APP_NOTARY_ZIP" "Notary upload archive"', shell_source)
         self.assertLess(
             shell_source.index('require_nonempty_file "$DMG_PATH" "DMG installer"'),
             shell_source.index('hdiutil verify "$DMG_PATH"'),
+        )
+        self.assertLess(
+            shell_source.index('hdiutil verify "$DMG_PATH"'),
+            shell_source.index('verify_dmg_contains_app "$DMG_PATH" "$APP_NAME"'),
         )
 
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")

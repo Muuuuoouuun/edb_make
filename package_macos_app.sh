@@ -81,6 +81,54 @@ require_zip_entry() {
   fi
 }
 
+verify_dmg_contains_app() {
+  local dmg_path="$1"
+  local app_name="$2"
+  local mount_root
+  local attach_plist
+  local mount_point
+
+  mount_root="$(mktemp -d "$RESOLVED_OUTPUT_DIR/${app_name}.mount.XXXXXX")"
+  attach_plist="$mount_root/attach.plist"
+  mount_point=""
+
+  if ! hdiutil attach -plist -readonly -nobrowse -mountroot "$mount_root" "$dmg_path" > "$attach_plist"; then
+    rm -rf "$mount_root"
+    echo "Could not mount DMG for inspection: $dmg_path" >&2
+    exit 1
+  fi
+
+  if ! mount_point="$("$PYTHON_EXE" - "$attach_plist" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+data = plistlib.loads(Path(sys.argv[1]).read_bytes())
+for entity in data.get("system-entities", []):
+    mount_point = entity.get("mount-point")
+    if mount_point:
+        print(mount_point)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+)"; then
+    hdiutil detach "$mount_root" -quiet >/dev/null 2>&1 || true
+    rm -rf "$mount_root"
+    echo "Could not locate mounted DMG volume: $dmg_path" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$mount_point/$app_name.app/Contents/Info.plist" ]]; then
+    hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true
+    rm -rf "$mount_root"
+    echo "DMG is missing expected app bundle: $app_name.app/Contents/Info.plist" >&2
+    exit 1
+  fi
+
+  hdiutil detach "$mount_point" -quiet
+  rm -rf "$mount_root"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)
@@ -249,6 +297,7 @@ APP_NOTARY_ZIP="$RESOLVED_OUTPUT_DIR/$APP_NAME-notary-upload.zip"
 
 rm -rf "$WORK_DIR" "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"
 find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.dmg.*" -exec rm -rf {} +
+find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.mount.*" -exec rm -rf {} +
 
 APP_UPDATE_CONFIG="$SPEC_DIR/app_update_config.json"
 EDB_PACKAGE_APP_NAME="$APP_NAME" \
@@ -466,15 +515,17 @@ if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
     "$DMG_PATH" >/dev/null
   rm -rf "$STAGING_DIR"
   require_nonempty_file "$DMG_PATH" "DMG installer"
-  hdiutil verify "$DMG_PATH"
   if [[ -n "$SIGN_IDENTITY" && "$SIGN_IDENTITY" != "-" ]] && command -v codesign >/dev/null 2>&1; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
     codesign --verify --verbose=2 "$DMG_PATH"
   fi
+  hdiutil verify "$DMG_PATH"
+  verify_dmg_contains_app "$DMG_PATH" "$APP_NAME"
   if [[ "$NOTARIZE" == "1" ]]; then
     notarytool_submit "$DMG_PATH"
     xcrun stapler staple "$DMG_PATH"
     hdiutil verify "$DMG_PATH"
+    verify_dmg_contains_app "$DMG_PATH" "$APP_NAME"
   fi
 fi
 
