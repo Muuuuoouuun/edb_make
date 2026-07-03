@@ -671,7 +671,7 @@ def run_export(
     max_dimension: int | None = None,
     export_edb: bool = False,
     edb_name: str = "mvp_board.edb",
-    sync_ui: bool = True,
+    sync_ui: bool = False,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
     ai_fallback_provider: str = "gemini",
@@ -804,7 +804,8 @@ def main() -> int:
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     parser.add_argument("--export-edb", action="store_true", help="Also export a board-image .edb")
     parser.add_argument("--edb-name", default="mvp_board.edb", help="Output .edb filename")
-    parser.add_argument("--skip-ui-sync", action="store_true", help="Do not refresh ui_prototype/generated_session.js")
+    parser.add_argument("--sync-ui", action="store_true", help="Legacy opt-in: refresh ui_prototype/generated_session.js")
+    parser.add_argument("--skip-ui-sync", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
     parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")
     parser.add_argument("--ai-fallback-provider", default="gemini", help="AI fallback provider name")
@@ -831,7 +832,7 @@ def main() -> int:
         max_dimension=args.max_dimension,
         export_edb=args.export_edb,
         edb_name=args.edb_name,
-        sync_ui=not args.skip_ui_sync,
+        sync_ui=bool(args.sync_ui) and not args.skip_ui_sync,
         ai_fallback_enabled=args.ai_fallback_enabled,
         ai_fallback=args.ai_fallback,
         ai_fallback_provider=args.ai_fallback_provider,

@@ -8,7 +8,7 @@
 ## 현재 상태 요약
 - 현재 구조는 이미 `로컬 웹앱형 MVP`에 가깝다.
 - 핵심 역할은 다음과 같이 나뉜다.
-  - UI: [ui_prototype/index.html](/C:/Projects/Class_project/edb_make/ui_prototype/index.html), [ui_prototype/app.js](/C:/Projects/Class_project/edb_make/ui_prototype/app.js)
+  - UI: [ui_prototype/index.html](/C:/Projects/Class_project/edb_make/ui_prototype/index.html), [ui_prototype/board.html](/C:/Projects/Class_project/edb_make/ui_prototype/board.html), [ui_prototype/app.jsx](/C:/Projects/Class_project/edb_make/ui_prototype/app.jsx), [ui_prototype/app.bundle.js](/C:/Projects/Class_project/edb_make/ui_prototype/app.bundle.js)
   - 로컬 서버: [app_server.py](/C:/Projects/Class_project/edb_make/app_server.py)
   - 파싱/변환 코어: [build_mvp_export.py](/C:/Projects/Class_project/edb_make/build_mvp_export.py), [preprocess.py](/C:/Projects/Class_project/edb_make/preprocess.py), [segment.py](/C:/Projects/Class_project/edb_make/segment.py)
 - 즉, 지금 당장 필요한 것은 "처음부터 새 웹앱 만들기"가 아니라 "지금 로컬 제품을 더 잘 쓰이게 만드는 것"이다.
@@ -121,7 +121,9 @@
 
 주요 코드 접점:
 - [ui_prototype/index.html](/C:/Projects/Class_project/edb_make/ui_prototype/index.html)
-- [ui_prototype/app.js](/C:/Projects/Class_project/edb_make/ui_prototype/app.js)
+- [ui_prototype/board.html](/C:/Projects/Class_project/edb_make/ui_prototype/board.html)
+- [ui_prototype/app.jsx](/C:/Projects/Class_project/edb_make/ui_prototype/app.jsx)
+- [ui_prototype/app.bundle.js](/C:/Projects/Class_project/edb_make/ui_prototype/app.bundle.js)
 - [app_server.py](/C:/Projects/Class_project/edb_make/app_server.py)
 
 ### Phase 2. 서비스 레이어 분리

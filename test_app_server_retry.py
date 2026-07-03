@@ -206,6 +206,32 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertIn(("Cache-Control", "no-store, max-age=0"), headers)
         self.assertIn(("Pragma", "no-cache"), headers)
 
+    def test_legacy_app_js_requests_serve_current_bundle(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.path = "/app.js?v=old-ui"
+        served_paths = []
+
+        def fake_static_get(static_handler):
+            served_paths.append(static_handler.path)
+
+        with patch.object(app_server.SimpleHTTPRequestHandler, "do_GET", fake_static_get):
+            handler.do_GET()
+
+        self.assertEqual(["/app.bundle.js"], served_paths)
+
+    def test_legacy_app_js_head_requests_serve_current_bundle(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.path = "/app.js?v=old-ui"
+        served_paths = []
+
+        def fake_static_head(static_handler):
+            served_paths.append(static_handler.path)
+
+        with patch.object(app_server.SimpleHTTPRequestHandler, "do_HEAD", fake_static_head):
+            handler.do_HEAD()
+
+        self.assertEqual(["/app.bundle.js"], served_paths)
+
     def test_generated_session_script_is_served_from_runtime_file(self):
         with TemporaryDirectory() as raw_tmp:
             generated_path = Path(raw_tmp) / "generated_session.js"

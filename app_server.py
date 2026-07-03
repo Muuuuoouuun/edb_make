@@ -270,6 +270,9 @@ def resource_root() -> Path:
 BASE_DIR = app_root()
 RESOURCE_DIR = resource_root()
 UI_DIR = RESOURCE_DIR / "ui_prototype"
+LEGACY_UI_ASSET_ALIASES = {
+    "/app.js": "/app.bundle.js",
+}
 RUNTIME_DIR = BASE_DIR / ".app_runtime"
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
@@ -4721,6 +4724,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         super().end_headers()
 
+    def _rewrite_legacy_ui_asset_path(self, path: str) -> bool:
+        alias = LEGACY_UI_ASSET_ALIASES.get(path)
+        if not alias:
+            return False
+        self.path = alias
+        return True
+
+    def do_HEAD(self) -> None:
+        parsed = urlparse(self.path)
+        if self._rewrite_legacy_ui_asset_path(parsed.path):
+            return super().do_HEAD()
+        if parsed.path in {"", "/"}:
+            self.path = "/index.html"
+        else:
+            self.path = parsed.path
+        return super().do_HEAD()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
@@ -4729,6 +4749,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/generated_session.js":
             self._send_text(read_generated_session_js(), content_type="application/javascript; charset=utf-8")
             return
+        if self._rewrite_legacy_ui_asset_path(parsed.path):
+            return super().do_GET()
         if parsed.path == "/api/runtime-diagnostics":
             params = parse_qs(parsed.query)
             force_refresh = str(params.get("refresh", [""])[0]).strip().lower() in {"1", "true", "yes"}

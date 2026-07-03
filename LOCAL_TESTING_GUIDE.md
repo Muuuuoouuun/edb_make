@@ -81,7 +81,7 @@ This command does all of the following:
 - crops problem images
 - places them onto the board layout
 - writes a test `.edb`
-- refreshes `ui_prototype/prototype_data.js`
+- leaves `ui_prototype` untouched unless a legacy output path is explicitly requested
 
 ```powershell
 python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\sample_run --ocr noop --subject korean --record-mode mixed
@@ -92,7 +92,6 @@ Main outputs:
 - `local_test_output\sample_run\pages.json`
 - `local_test_output\sample_run\board_run_summary.json`
 - `local_test_output\sample_run\record_0001_img_0.edb`
-- `ui_prototype\prototype_data.js`
 
 ### Record modes
 
@@ -120,13 +119,15 @@ python inspect_edb.py .\local_test_output\sample_run\record_0001_img_0.edb
 
 For a mixed export, check whether text and image records both appear in the summary.
 
-### 3. Open the preview prototype
+### 3. Open the local app
 
-Open this file in a browser:
+Run the local app and open the printed URL:
 
-- `ui_prototype\index.html`
+```powershell
+.\run_local_app.ps1
+```
 
-The prototype will read `ui_prototype\prototype_data.js` and show the latest generated problem sequence and board preview.
+The app serves `ui_prototype\board.html` and the current `ui_prototype\app.bundle.js` bundle.
 
 ## Structured JSON Only
 

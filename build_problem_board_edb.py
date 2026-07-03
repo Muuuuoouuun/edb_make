@@ -6783,8 +6783,8 @@ def main() -> int:
     parser.add_argument("--fail-on-ai-error", action="store_true", help="Raise an error if AI fallback fails")
     parser.add_argument(
         "--prototype-data-out",
-        default=str(Path("ui_prototype") / "prototype_data.js"),
-        help="Path to write UI prototype data JS",
+        default="",
+        help="Legacy opt-in path to write old ui_prototype/prototype_data.js data",
     )
     args = parser.parse_args()
 
@@ -6892,26 +6892,24 @@ def main() -> int:
     summary_path = output_dir / "board_run_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    prototype_path = Path(args.prototype_data_out)
-    prototype_path.parent.mkdir(parents=True, exist_ok=True)
-    write_ui_prototype_data(prototype_path, placements)
+    prototype_path: Path | None = None
+    if str(args.prototype_data_out or "").strip():
+        prototype_path = Path(args.prototype_data_out)
+        prototype_path.parent.mkdir(parents=True, exist_ok=True)
+        write_ui_prototype_data(prototype_path, placements)
 
-    print(
-        json.dumps(
-            {
-                "edb_path": str(edb_path),
-                "pages_json_path": str(output_dir / "pages.json"),
-                "board_run_summary_path": str(summary_path),
-                "ui_prototype_data_path": str(prototype_path),
-                "problem_count": len(placements),
-                "record_mode": args.record_mode,
-                "text_record_count": summary["placement_summary"]["text_record_count"],
-                "image_record_count": summary["placement_summary"]["image_record_count"],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    result = {
+        "edb_path": str(edb_path),
+        "pages_json_path": str(output_dir / "pages.json"),
+        "board_run_summary_path": str(summary_path),
+        "problem_count": len(placements),
+        "record_mode": args.record_mode,
+        "text_record_count": summary["placement_summary"]["text_record_count"],
+        "image_record_count": summary["placement_summary"]["image_record_count"],
+    }
+    if prototype_path is not None:
+        result["legacy_ui_prototype_data_path"] = str(prototype_path)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

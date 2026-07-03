@@ -24,10 +24,11 @@
 - Added a local HTTP app runtime that serves the UI and runs export jobs:
   - `app_server.py`
 - Connected the preview UI to real MVP export output:
-  - `build_mvp_export.py` now writes `ui_session.json`, problem crops, and an optional auto-synced `ui_prototype/generated_session.js`
+  - `build_mvp_export.py` now writes `ui_session.json` and problem crops for the local app runtime
   - `ui_prototype/index.html`
-  - `ui_prototype/app.js`
-  - `ui_prototype/styles.css`
+  - `ui_prototype/board.html`
+  - `ui_prototype/app.jsx`
+  - `ui_prototype/app.bundle.js`
 - Added first-pass launcher and packaging assets:
   - `run_local_app.ps1`
   - `package_mvp.ps1`
@@ -42,11 +43,11 @@
   - `EDB_LAYOUT_PLACEMENT_RULES.md`
 - Added a local preview-first UI prototype:
   - `ui_prototype/index.html`
-  - `ui_prototype/styles.css`
-  - `ui_prototype/app.js`
+  - `ui_prototype/board.html`
+  - `ui_prototype/app.jsx`
+  - `ui_prototype/app.bundle.js`
 - Added local testing and one-command export helpers:
   - `build_problem_board_edb.py`
-  - `build_ui_prototype_data.py`
   - `requirements-local.txt`
   - `LOCAL_TESTING_GUIDE.md`
 
