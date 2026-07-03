@@ -169,6 +169,34 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("dmg artifact must use expected file extension (.dmg)", result.stderr)
 
+    def test_rejects_platform_artifact_type_mismatch(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            setup = tmpdir / "ClassInEDBMVP-Setup.exe"
+            setup.write_bytes(b"windows setup")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-Setup.exe",
+                    "--macos-file",
+                    str(setup),
+                    "--macos-artifact-type",
+                    "setup-exe",
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("macos artifact type must be one of: dmg, zip", result.stderr)
+
     def test_rejects_artifact_without_download_url(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

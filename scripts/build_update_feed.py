@@ -18,6 +18,10 @@ ARTIFACT_TYPE_SUFFIXES = {
     "setup-exe": (".exe",),
     "zip": (".zip",),
 }
+PLATFORM_ARTIFACT_TYPES = {
+    "macos": ("dmg", "zip"),
+    "windows": ("setup-exe",),
+}
 
 
 def utc_timestamp() -> str:
@@ -39,6 +43,18 @@ def validate_artifact_type_filename(artifact: Path, artifact_type: str) -> None:
         raise ValueError(
             f"{artifact_type} artifact must use expected file extension ({expected}): {artifact.name}"
         )
+
+
+def validate_platform_artifact_type(platform: str, artifact_type: str) -> str:
+    normalized_platform = str(platform or "").strip().lower()
+    normalized_type = str(artifact_type or "").strip().lower()
+    if not normalized_type:
+        raise ValueError(f"{normalized_platform} artifact type must not be empty")
+    allowed_types = PLATFORM_ARTIFACT_TYPES.get(normalized_platform)
+    if allowed_types and normalized_type not in allowed_types:
+        allowed = ", ".join(allowed_types)
+        raise ValueError(f"{normalized_platform} artifact type must be one of: {allowed}")
+    return normalized_type
 
 
 def artifact_metadata(path: str | None, *, artifact_type: str = "") -> dict[str, Any]:
@@ -123,6 +139,7 @@ def platform_payload(
 ) -> dict[str, Any] | None:
     if not download_url and not artifact_path:
         return None
+    safe_artifact_type = validate_platform_artifact_type(platform, artifact_type)
     if artifact_path and not download_url:
         raise ValueError(f"{platform} artifact requires a download URL")
     safe_download_url = validate_update_url(f"{platform} download URL", download_url) if download_url else ""
@@ -131,14 +148,14 @@ def platform_payload(
     )
     payload: dict[str, Any] = {
         "version": version,
-        "artifactType": artifact_type,
+        "artifactType": safe_artifact_type,
         "arch": arch,
     }
     if safe_download_url:
         payload["downloadUrl"] = safe_download_url
     if safe_release_notes_url:
         payload["releaseNotesUrl"] = safe_release_notes_url
-    payload.update(artifact_metadata(artifact_path, artifact_type=artifact_type))
+    payload.update(artifact_metadata(artifact_path, artifact_type=safe_artifact_type))
     if "fileName" not in payload and safe_download_url:
         payload["fileName"] = Path(safe_download_url.rstrip("/")).name or f"{platform}-{version}"
     return payload

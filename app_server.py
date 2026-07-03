@@ -237,6 +237,15 @@ MAX_UPDATE_FEED_BYTES = 262_144
 UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
 RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+UPDATE_ARTIFACT_TYPE_SUFFIXES = {
+    "dmg": (".dmg",),
+    "setup-exe": (".exe",),
+    "zip": (".zip",),
+}
+UPDATE_PLATFORM_ARTIFACT_TYPES = {
+    "macos": ("dmg", "zip"),
+    "windows": ("setup-exe",),
+}
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 OUTER_EDB_PREFIX_LEN = 11
 _update_status_cache_lock = threading.Lock()
@@ -552,6 +561,42 @@ def _copy_update_integrity_fields(target: dict[str, Any], source: dict[str, Any]
         target["sizeBytes"] = size_bytes
 
 
+def _update_artifact_file_name(source: dict[str, Any]) -> str:
+    file_name = str(source.get("fileName") or "").strip()
+    if file_name:
+        return file_name
+    raw_url = str(_first_nonempty(source.get("downloadUrl"), source.get("download_url"), source.get("url")) or "").strip()
+    if not raw_url:
+        return ""
+    return Path(urlparse(raw_url).path).name
+
+
+def _update_artifact_metadata_error(source: dict[str, Any], platform_key: str) -> str:
+    platform = str(platform_key or "").strip().lower()
+    artifact_type = str(source.get("artifactType") or "").strip().lower()
+    file_name = _update_artifact_file_name(source)
+    allowed_types = UPDATE_PLATFORM_ARTIFACT_TYPES.get(platform)
+    if artifact_type:
+        if allowed_types and artifact_type not in allowed_types:
+            allowed = ", ".join(allowed_types)
+            return f"update feed artifactType for {platform} must be one of: {allowed}"
+        expected_suffixes = UPDATE_ARTIFACT_TYPE_SUFFIXES.get(artifact_type, ())
+        if file_name and expected_suffixes and Path(file_name).suffix.lower() not in expected_suffixes:
+            expected = ", ".join(expected_suffixes)
+            return f"update feed fileName does not match {artifact_type} artifact extension ({expected})"
+    elif file_name and allowed_types:
+        allowed_suffixes = tuple(
+            suffix
+            for allowed_type in allowed_types
+            for suffix in UPDATE_ARTIFACT_TYPE_SUFFIXES.get(allowed_type, ())
+        )
+        suffix = Path(file_name).suffix.lower()
+        if suffix and allowed_suffixes and suffix not in allowed_suffixes:
+            expected = ", ".join(allowed_suffixes)
+            return f"update feed fileName for {platform} must use one of: {expected}"
+    return ""
+
+
 def build_app_update_status() -> dict[str, Any]:
     config = load_app_update_config()
     platform_key = str(config.get("platform") or _app_platform_key())
@@ -656,6 +701,11 @@ def build_app_update_status() -> dict[str, Any]:
         status["updateAvailable"] = False
         status["channelStatus"] = "invalid_feed"
         status["error"] = metadata_error
+        return _remember_update_status(cache_key, status)
+    if artifact_metadata_error := _update_artifact_metadata_error(selected, platform_key):
+        status["updateAvailable"] = False
+        status["channelStatus"] = "invalid_feed"
+        status["error"] = artifact_metadata_error
         return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     if comparison > 0 and not download_url:

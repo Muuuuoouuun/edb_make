@@ -295,6 +295,80 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("update feed has invalid sizeBytes", status["error"])
             self.assertNotIn("sizeBytes", status["latest"])
 
+    def test_update_status_rejects_platform_artifact_type_mismatch(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-Setup.exe",
+                        "fileName": "ClassInEDBMVP-Setup.exe",
+                        "artifactType": "setup-exe",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual("update feed artifactType for macos must be one of: dmg, zip", status["error"])
+
+    def test_update_status_rejects_platform_file_name_mismatch_without_artifact_type(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-Setup.exe",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual("update feed fileName for macos must use one of: .dmg, .zip", status["error"])
+
     def test_update_status_caches_feed_fetches_for_short_ttl(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
