@@ -189,7 +189,9 @@ if ($LASTEXITCODE -ne 0) {
     $HasPyInstaller = $false
 }
 
+$BuiltWithPyInstaller = $false
 if ($HasPyInstaller) {
+    $BuiltWithPyInstaller = $true
     $ModeArg = if ($OneFile) { "--onefile" } else { "--onedir" }
     $WindowArg = if ($Console) { "--console" } else { "--windowed" }
     $PackageRoot = if ($OneFile) { $PackageExePath } else { $PackageDirPath }
@@ -328,8 +330,10 @@ if ($Zip) {
     if (Test-Path $PackageRoot) {
         Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
         Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"
-        if (-not $OneFile) {
+        if ($BuiltWithPyInstaller -and -not $OneFile) {
             Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"
+        } elseif (-not $BuiltWithPyInstaller) {
+            Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "source-package/app_update_config.json"
         }
         Write-Host "Zip archive: $ZipPath"
     }
