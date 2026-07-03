@@ -13,6 +13,10 @@ import app_server
 from structured_schema import Box
 
 
+VALID_MANIFEST_SHA256 = "a" * 64
+VALID_ARTIFACT_SHA256 = "b" * 64
+
+
 class TestStaticAssetCaching(unittest.TestCase):
     def setUp(self):
         app_server.clear_app_update_status_cache()
@@ -99,7 +103,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "version": "0.1.1",
                 "publishedAt": "2026-06-19T00:00:00+00:00",
                 "manifestUrl": "https://example.test/releases/0.1.2/manifest.json",
-                "manifestSha256": "manifest-digest",
+                "manifestSha256": VALID_MANIFEST_SHA256,
                 "platforms": {
                     "macos": {
                         "version": "0.1.2",
@@ -109,7 +113,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                         "artifactType": "dmg",
                         "arch": "arm64",
                         "sizeBytes": 12345,
-                        "sha256": "artifact-digest",
+                        "sha256": VALID_ARTIFACT_SHA256,
                     }
                 },
             }
@@ -134,7 +138,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("0.1.2", status["latest"]["version"])
             self.assertEqual("ClassInEDBMVP-macOS.dmg", status["latest"]["fileName"])
             self.assertEqual("dmg", status["latest"]["artifactType"])
-            self.assertEqual("artifact-digest", status["latest"]["sha256"])
+            self.assertEqual(VALID_ARTIFACT_SHA256, status["latest"]["sha256"])
             self.assertEqual(12345, status["latest"]["sizeBytes"])
             self.assertEqual("https://example.test/ClassInEDBMVP-macOS.dmg", status["downloadUrl"])
 
@@ -152,7 +156,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             feed = {
                 "version": "0.1.2",
                 "manifestUrl": "http://example.test/releases/0.1.2/manifest.json",
-                "manifestSha256": "manifest-digest",
+                "manifestSha256": VALID_MANIFEST_SHA256,
                 "platforms": {
                     "macos": {
                         "version": "0.1.2",
@@ -175,7 +179,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertTrue(status["updateAvailable"])
             self.assertNotIn("manifestUrl", status)
             self.assertNotIn("manifestUrl", status["latest"])
-            self.assertEqual("manifest-digest", status["manifestSha256"])
+            self.assertEqual(VALID_MANIFEST_SHA256, status["manifestSha256"])
 
     def test_update_status_rejects_available_update_without_usable_download_url(self):
         with TemporaryDirectory() as raw_tmp:
@@ -213,6 +217,83 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual("update feed does not include a usable download URL", status["error"])
             self.assertEqual("", status["downloadUrl"])
+
+    def test_update_status_rejects_invalid_integrity_digest_from_feed(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "manifestSha256": "not-a-real-sha",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
+                        "sha256": VALID_ARTIFACT_SHA256,
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual("update feed has invalid manifestSha256", status["error"])
+            self.assertNotIn("manifestSha256", status)
+
+    def test_update_status_rejects_invalid_artifact_size_from_feed(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
+                        "sizeBytes": 0,
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual("update feed has invalid sizeBytes", status["error"])
+            self.assertNotIn("sizeBytes", status["latest"])
 
     def test_update_status_caches_feed_fetches_for_short_ttl(self):
         with TemporaryDirectory() as raw_tmp:

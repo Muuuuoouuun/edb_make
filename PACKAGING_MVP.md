@@ -235,7 +235,7 @@ Update feed JSON shape:
   "summary": "Bug fixes and packaging improvements.",
   "releaseNotesUrl": "https://example.com/releases/0.1.1",
   "manifestUrl": "https://example.com/releases/0.1.1/manifest.json",
-  "manifestSha256": "manifest-sha256",
+  "manifestSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "platforms": {
     "windows": {
       "version": "0.1.1",
@@ -245,7 +245,7 @@ Update feed JSON shape:
       "artifactType": "setup-exe",
       "arch": "x64",
       "sizeBytes": 12345678,
-      "sha256": "windows-installer-sha256"
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
     },
     "macos": {
       "version": "0.1.1",
@@ -255,7 +255,7 @@ Update feed JSON shape:
       "artifactType": "dmg",
       "arch": "arm64",
       "sizeBytes": 12345678,
-      "sha256": "macos-installer-sha256"
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
     }
   }
 }
@@ -281,6 +281,7 @@ python3 scripts/build_update_feed.py \
 
 Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist/manifest.json` plus `dist/checksums.txt` with the same release assets.
 Update feed, manifest, release notes, and artifact download URLs must be HTTPS, except for loopback HTTP used in local testing. When a platform artifact file is supplied, its matching `--macos-url` or `--windows-url` is required. This keeps installed apps from seeing an available update with no usable download action.
+`manifestSha256` and artifact `sha256` values must be 64-character lowercase SHA-256 hex strings when present, and `sizeBytes` must be a positive integer.
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 The feed builder also rejects known platform artifact mismatches, such as a `.exe` passed as a macOS DMG or the same local file reused for multiple platforms.
 

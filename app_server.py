@@ -236,6 +236,7 @@ MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
 MAX_UPDATE_FEED_BYTES = 262_144
 UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
 RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
 OUTER_EDB_PREFIX_LEN = 11
 _update_status_cache_lock = threading.Lock()
@@ -510,6 +511,47 @@ def _copy_update_url_field(target: dict[str, Any], source: dict[str, Any], outpu
         target[output_name] = value
 
 
+def _normalize_update_sha256(value: Any) -> str:
+    digest = str(value or "").strip()
+    return digest if SHA256_RE.fullmatch(digest) else ""
+
+
+def _normalize_positive_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+    else:
+        return None
+    return number if number > 0 else None
+
+
+def _update_integrity_error(source: dict[str, Any]) -> str:
+    for field_name in ("manifestSha256", "sha256"):
+        raw_value = str(source.get(field_name) or "").strip()
+        if raw_value and not _normalize_update_sha256(raw_value):
+            return f"update feed has invalid {field_name}"
+    if source.get("sizeBytes") not in (None, "") and _normalize_positive_int(source.get("sizeBytes")) is None:
+        return "update feed has invalid sizeBytes"
+    return ""
+
+
+def _copy_update_integrity_fields(target: dict[str, Any], source: dict[str, Any]) -> None:
+    manifest_digest = _normalize_update_sha256(source.get("manifestSha256"))
+    if manifest_digest:
+        target["manifestSha256"] = manifest_digest
+    artifact_digest = _normalize_update_sha256(source.get("sha256"))
+    if artifact_digest:
+        target["sha256"] = artifact_digest
+    size_bytes = _normalize_positive_int(source.get("sizeBytes"))
+    if size_bytes is not None:
+        target["sizeBytes"] = size_bytes
+
+
 def build_app_update_status() -> dict[str, Any]:
     config = load_app_update_config()
     platform_key = str(config.get("platform") or _app_platform_key())
@@ -564,7 +606,6 @@ def build_app_update_status() -> dict[str, Any]:
             "appId",
             "channel",
             "publishedAt",
-            "manifestSha256",
         ),
     )
     _copy_update_url_field(status, selected, "manifestUrl", "manifestUrl", "manifest_url")
@@ -601,16 +642,20 @@ def build_app_update_status() -> dict[str, Any]:
             "fileName",
             "artifactType",
             "arch",
-            "sizeBytes",
-            "sha256",
             "publishedAt",
-            "manifestSha256",
         ),
     )
     _copy_update_url_field(status["latest"], selected, "manifestUrl", "manifestUrl", "manifest_url")
+    _copy_update_integrity_fields(status, selected)
+    _copy_update_integrity_fields(status["latest"], selected)
     if not latest_version:
         status["channelStatus"] = "invalid_feed"
         status["error"] = "update feed does not include a version"
+        return _remember_update_status(cache_key, status)
+    if metadata_error := _update_integrity_error(selected):
+        status["updateAvailable"] = False
+        status["channelStatus"] = "invalid_feed"
+        status["error"] = metadata_error
         return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     if comparison > 0 and not download_url:
