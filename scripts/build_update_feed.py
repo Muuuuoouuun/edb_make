@@ -4,9 +4,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def utc_timestamp() -> str:
@@ -27,11 +32,29 @@ def artifact_metadata(path: str | None) -> dict[str, Any]:
     artifact = Path(path).expanduser().resolve()
     if not artifact.exists():
         raise FileNotFoundError(f"artifact not found: {artifact}")
+    if not artifact.is_file():
+        raise ValueError(f"artifact path is not a file: {artifact}")
+    if artifact.stat().st_size <= 0:
+        raise ValueError(f"artifact file is empty: {artifact}")
     return {
         "fileName": artifact.name,
         "sizeBytes": artifact.stat().st_size,
         "sha256": sha256_file(artifact),
     }
+
+
+def validate_sha256(label: str, value: str) -> str:
+    digest = str(value or "").strip().lower()
+    if not SHA256_RE.fullmatch(digest):
+        raise ValueError(f"{label} must be a 64-character lowercase hex sha256")
+    return digest
+
+
+def validate_version(version: str) -> str:
+    normalized = str(version or "").strip()
+    if not normalized:
+        raise ValueError("release version must not be empty")
+    return normalized
 
 
 def platform_payload(
@@ -214,22 +237,37 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    args = parse_args()
-    feed = build_feed(args)
-    if args.manifest_output:
-        manifest = build_manifest(feed, args)
-        manifest_sha256 = write_json(args.manifest_output, manifest)
-        if args.manifest_url:
-            feed["manifestUrl"] = args.manifest_url
-        feed["manifestSha256"] = args.manifest_sha256 or manifest_sha256
-    write_json(args.output, feed)
-    write_checksums(args.checksums_output, feed, args.manifest_output)
-    print(f"Wrote update feed: {Path(args.output).expanduser()}")
-    if args.manifest_output:
-        print(f"Wrote release manifest: {Path(args.manifest_output).expanduser()}")
-    if args.checksums_output:
-        print(f"Wrote checksums: {Path(args.checksums_output).expanduser()}")
-    return 0
+    try:
+        args = parse_args()
+        args.version = validate_version(args.version)
+        expected_manifest_sha256 = ""
+        if args.manifest_sha256:
+            expected_manifest_sha256 = validate_sha256("manifestSha256", args.manifest_sha256)
+            args.manifest_sha256 = expected_manifest_sha256
+
+        feed = build_feed(args)
+        if args.manifest_output:
+            manifest = build_manifest(feed, args)
+            manifest_sha256 = write_json(args.manifest_output, manifest)
+            if expected_manifest_sha256 and expected_manifest_sha256 != manifest_sha256:
+                raise ValueError(
+                    "manifestSha256 does not match generated release manifest: "
+                    f"expected {expected_manifest_sha256}, generated {manifest_sha256}"
+                )
+            if args.manifest_url:
+                feed["manifestUrl"] = args.manifest_url
+            feed["manifestSha256"] = expected_manifest_sha256 or manifest_sha256
+        write_json(args.output, feed)
+        write_checksums(args.checksums_output, feed, args.manifest_output)
+        print(f"Wrote update feed: {Path(args.output).expanduser()}")
+        if args.manifest_output:
+            print(f"Wrote release manifest: {Path(args.manifest_output).expanduser()}")
+        if args.checksums_output:
+            print(f"Wrote checksums: {Path(args.checksums_output).expanduser()}")
+        return 0
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[update-feed] ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

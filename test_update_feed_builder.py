@@ -87,6 +87,88 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertIn("ClassInEDBMVP-macOS.dmg", checksum_text)
         self.assertIn("manifest.json", checksum_text)
 
+    def test_rejects_manifest_sha_mismatch_when_generating_manifest(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--manifest-output",
+                    str(tmpdir / "manifest.json"),
+                    "--manifest-sha256",
+                    "f" * 64,
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("manifestSha256 does not match generated release manifest", result.stderr)
+
+    def test_rejects_empty_artifact_file(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("artifact file is empty", result.stderr)
+
+    def test_rejects_empty_release_version(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("release version must not be empty", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
