@@ -48,6 +48,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", 
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
 PDF_NORMALIZED_CACHE_VERSION = 1
+IMAGE_NORMALIZED_CACHE_VERSION = 1
 HWP_NORMALIZED_CACHE_VERSION = 5
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
@@ -253,10 +254,16 @@ print(json.dumps(pages, ensure_ascii=True))
 
 
 def _iter_external_pymupdf_python_candidates() -> list[Path]:
+    base_dir = Path(__file__).resolve().parent
+    virtual_env = os.environ.get("VIRTUAL_ENV")
     raw_candidates: list[str | Path | None] = [
         os.environ.get("EDB_PYMUPDF_PYTHON"),
         sys.executable,
-        Path(__file__).resolve().parent / ".venv" / "Scripts" / "python.exe",
+        Path(virtual_env) / "bin" / "python" if virtual_env else None,
+        Path(virtual_env) / "Scripts" / "python.exe" if virtual_env else None,
+        base_dir / ".venv" / "bin" / "python",
+        base_dir / ".venv" / "bin" / "python3",
+        base_dir / ".venv" / "Scripts" / "python.exe",
         Path.home() / "AppData" / "Local" / "Python" / "bin" / "python.exe",
         shutil.which("python"),
         shutil.which("python3"),
@@ -2301,6 +2308,189 @@ def _pdf_normalized_output_dir(
     return target_dir / "normalized" / f"{source_key}-{option_key}"
 
 
+def _image_normalized_cache_options(
+    *,
+    enable_perspective: bool,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> dict[str, Any]:
+    return {
+        "enable_perspective": bool(enable_perspective),
+        "enable_deskew": bool(enable_deskew),
+        "enable_margin_crop": bool(enable_margin_crop),
+        "max_dimension": int(max_dimension) if max_dimension is not None else None,
+    }
+
+
+def _image_normalized_pages_cache_path(
+    target_dir: Path,
+    source_path: Path,
+    source_sha1: str | None = None,
+) -> Path:
+    cache_key = source_sha1 or source_path.stem
+    return target_dir / f".{cache_key}.image-normalized-pages.json"
+
+
+def _image_normalized_output_dir(
+    target_dir: Path,
+    source_path: Path,
+    *,
+    enable_perspective: bool,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+    source_sha1: str | None = None,
+) -> Path:
+    if source_sha1 is None:
+        try:
+            source_sha1 = _file_sha1(source_path)
+        except OSError:
+            source_sha1 = None
+    if source_sha1:
+        source_key = source_sha1[:16]
+    else:
+        source_key = re.sub(r"[^A-Za-z0-9_.-]+", "-", source_path.stem).strip("-") or "source"
+    options = _image_normalized_cache_options(
+        enable_perspective=enable_perspective,
+        enable_deskew=enable_deskew,
+        enable_margin_crop=enable_margin_crop,
+        max_dimension=max_dimension,
+    )
+    option_key = hashlib.sha1(
+        json.dumps(options, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    return target_dir / "normalized" / f"{source_key}-{option_key}"
+
+
+def _load_cached_image_normalized_pages(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    enable_perspective: bool,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+    source_sha1: str | None = None,
+) -> list[NormalizedPageImage]:
+    target_root = target_dir.resolve()
+    if source_sha1 is None:
+        try:
+            source_sha1 = _file_sha1(source_path)
+        except OSError:
+            return []
+    cache_path = _image_normalized_pages_cache_path(target_dir, source_path, source_sha1)
+    if not cache_path.exists():
+        return []
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    expected_options = _image_normalized_cache_options(
+        enable_perspective=enable_perspective,
+        enable_deskew=enable_deskew,
+        enable_margin_crop=enable_margin_crop,
+        max_dimension=max_dimension,
+    )
+    if payload.get("source_sha1") != source_sha1:
+        return []
+    if payload.get("version") != IMAGE_NORMALIZED_CACHE_VERSION:
+        return []
+    if payload.get("source_suffix") != source_path.suffix.lower():
+        return []
+    if payload.get("options") != expected_options:
+        return []
+
+    pages: list[NormalizedPageImage] = []
+    for index, item in enumerate(payload.get("pages") or []):
+        if not isinstance(item, dict):
+            return []
+        normalized_name = str(item.get("normalized_name") or "")
+        if not normalized_name:
+            return []
+        normalized_path = target_root / normalized_name
+        try:
+            if not normalized_path.exists() or normalized_path.stat().st_size <= 0:
+                return []
+        except OSError:
+            return []
+
+        metadata = dict(item.get("metadata") or {})
+        metadata["image_normalized_cache_hit"] = True
+        metadata.setdefault("source_type", "image")
+        pages.append(
+            NormalizedPageImage(
+                page_id=str(item.get("page_id") or f"{source_path.stem}-page-{index + 1:03d}"),
+                source_path=str(source_path),
+                normalized_path=str(normalized_path),
+                page_index=int(item.get("page_index") if item.get("page_index") is not None else index),
+                width_px=int(item.get("width_px") or 0),
+                height_px=int(item.get("height_px") or 0),
+                metadata=metadata,
+            )
+        )
+    return pages
+
+
+def _save_image_normalized_pages_cache(
+    source_path: Path,
+    target_dir: Path,
+    *,
+    enable_perspective: bool,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+    pages: list[NormalizedPageImage],
+    source_sha1: str | None = None,
+) -> None:
+    if not pages:
+        return
+
+    cache_pages: list[dict[str, Any]] = []
+    try:
+        if source_sha1 is None:
+            source_sha1 = _file_sha1(source_path)
+        target_root = target_dir.resolve()
+        for page in pages:
+            normalized_name = Path(page.normalized_path).resolve().relative_to(target_root).as_posix()
+            metadata = dict(page.metadata)
+            metadata.pop("image_normalized_cache_hit", None)
+            cache_pages.append(
+                {
+                    "page_id": page.page_id,
+                    "normalized_name": normalized_name,
+                    "page_index": page.page_index,
+                    "width_px": page.width_px,
+                    "height_px": page.height_px,
+                    "metadata": metadata,
+                }
+            )
+    except (OSError, ValueError):
+        return
+
+    payload = {
+        "version": IMAGE_NORMALIZED_CACHE_VERSION,
+        "source_name": source_path.name,
+        "source_suffix": source_path.suffix.lower(),
+        "source_sha1": source_sha1,
+        "options": _image_normalized_cache_options(
+            enable_perspective=enable_perspective,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        ),
+        "pages": cache_pages,
+    }
+    try:
+        _image_normalized_pages_cache_path(target_dir, source_path, source_sha1).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
 def _load_cached_pdf_normalized_pages(
     source_path: Path,
     target_dir: Path,
@@ -2950,6 +3140,53 @@ def load_image(source: str | Path) -> Image.Image:
     return Image.open(source).convert("RGB")
 
 
+def _read_image_dimensions(source: str | Path) -> tuple[int, int] | None:
+    try:
+        with Image.open(source) as image:
+            return image.size
+    except OSError:
+        return None
+
+
+def _passthrough_image_page_if_possible(
+    source_path: Path,
+    *,
+    page_index: int,
+    enable_perspective: bool,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> NormalizedPageImage | None:
+    if enable_perspective or enable_deskew or enable_margin_crop:
+        return None
+    size = _read_image_dimensions(source_path)
+    if size is None:
+        return None
+    width, height = size
+    if max_dimension and max(width, height) > max_dimension:
+        return None
+    page_id = f"{source_path.stem}-page-{page_index + 1:03d}"
+    metadata: dict[str, Any] = {
+        "source_type": "image",
+        "image_passthrough": True,
+        "perspective_corrected": False,
+        "deskewed": False,
+        "margin_cropped": False,
+    }
+    if max_dimension:
+        metadata["max_dimension"] = int(max_dimension)
+        metadata["max_dimension_passthrough"] = True
+    return NormalizedPageImage(
+        page_id=page_id,
+        source_path=str(source_path),
+        normalized_path=str(source_path),
+        page_index=page_index,
+        width_px=width,
+        height_px=height,
+        metadata=metadata,
+    )
+
+
 def _crop_uniform_margin_with_box(
     image: Image.Image,
     background_threshold: int = 245,
@@ -3524,10 +3761,45 @@ def prepare_pages(
         return normalized_pages
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
-        return [
+        passthrough = _passthrough_image_page_if_possible(
+            source_path,
+            page_index=0,
+            enable_perspective=enable_perspective,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        )
+        if passthrough is not None:
+            return [passthrough]
+
+        try:
+            image_source_sha1 = _file_sha1(source_path)
+        except OSError:
+            image_source_sha1 = None
+        cached_image_pages = _load_cached_image_normalized_pages(
+            source_path,
+            normalized_dir,
+            enable_perspective=enable_perspective,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+            source_sha1=image_source_sha1,
+        )
+        if cached_image_pages:
+            return cached_image_pages
+
+        normalized_pages = [
             normalize_image(
                 source_path,
-                normalized_dir / "normalized",
+                _image_normalized_output_dir(
+                    normalized_dir,
+                    source_path,
+                    enable_perspective=enable_perspective,
+                    enable_deskew=enable_deskew,
+                    enable_margin_crop=enable_margin_crop,
+                    max_dimension=max_dimension,
+                    source_sha1=image_source_sha1,
+                ),
                 page_index=0,
                 enable_perspective=enable_perspective,
                 enable_deskew=enable_deskew,
@@ -3535,6 +3807,17 @@ def prepare_pages(
                 max_dimension=max_dimension,
             )
         ]
+        _save_image_normalized_pages_cache(
+            source_path,
+            normalized_dir,
+            enable_perspective=enable_perspective,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+            pages=normalized_pages,
+            source_sha1=image_source_sha1,
+        )
+        return normalized_pages
 
     raise ValueError(f"Unsupported input type: {source_path.suffix}")
 

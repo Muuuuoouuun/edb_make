@@ -137,6 +137,7 @@ def test_marker_like_block_uses_backend_when_page_segmenter_is_not_pdf_markers(m
 def test_ocr_cache_uses_stable_index_and_can_fallback_to_legacy_image_hash(tmp_path):
     from PIL import Image
 
+    import pipeline_cache
     from ocr_backend import OCRResult
     from pipeline_cache import PipelineCache
 
@@ -149,15 +150,24 @@ def test_ocr_cache_uses_stable_index_and_can_fallback_to_legacy_image_hash(tmp_p
         "block": {"id": "block-1"},
     }
 
-    payload_path = cache.save_ocr_result(
-        image,
-        result,
-        backend_name="gemini",
-        cache_identity=identity,
-    )
+    def fail_image_hash(_image):
+        raise AssertionError("stable OCR identity should avoid image hashing")
+
+    original_image_hash = pipeline_cache._image_hash
+    pipeline_cache._image_hash = fail_image_hash
+    try:
+        payload_path = cache.save_ocr_result(
+            image,
+            result,
+            backend_name="gemini",
+            cache_identity=identity,
+        )
+    finally:
+        pipeline_cache._image_hash = original_image_hash
 
     assert "ocr" in payload_path.parts
     assert "ocr_index" not in payload_path.parts
+    assert payload_path.name.startswith("stable-")
 
     changed_crop = Image.new("RGB", (41, 20), "white")
     loaded = cache.load_ocr_result(

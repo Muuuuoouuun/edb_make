@@ -2620,15 +2620,9 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "subject": parent.get("subject"),
         "sourceFileName": parent.get("sourceFileName"),
         "sourceImagePath": parent.get("sourceImagePath"),
-        "actualHeightPages": parent.get("actualHeightPages"),
         "overflowAllowed": parent.get("overflowAllowed"),
         "readingHeavy": parent.get("readingHeavy"),
         "sourcePageId": parent.get("sourcePageId"),
-        "startYPages": parent.get("startYPages"),
-        "snappedNextStartYPages": parent.get("snappedNextStartYPages"),
-        "overflowAmountPages": parent.get("overflowAmountPages"),
-        "overflowViolation": parent.get("overflowViolation"),
-        "slotSpanCount": parent.get("slotSpanCount"),
         "recordMode": parent.get("recordMode"),
         "step": _normalize_processing_step(
             parent.get("processingStep")
@@ -2648,6 +2642,53 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "riskFlags": [],  # mutated entries lose the auto-detected risk
     }
     return skeleton
+
+
+_MUTATED_CROP_LAYOUT_KEYS = (
+    "actualHeightPages",
+    "actual_height_pages",
+    "actualContentHeightPages",
+    "actual_content_height_pages",
+    "startYPages",
+    "start_y_pages",
+    "snappedNextStartYPages",
+    "snapped_next_start_y_pages",
+    "actualBottomYPages",
+    "actual_bottom_y_pages",
+    "renderedBottomYPages",
+    "rendered_bottom_y_pages",
+    "overflowAmountPages",
+    "overflow_amount_pages",
+    "overflowViolation",
+    "overflow_violation",
+    "slotSpanCount",
+    "slot_span_count",
+)
+
+
+def _mutated_crop_layout_template() -> LayoutTemplate:
+    template = LayoutTemplate(name="academy-default")
+    template.base_slot_height_pages = ONE_PROBLEM_SLOT_HEIGHT_PAGES
+    return template
+
+
+def _estimate_mutated_crop_height_pages(crop_path: Path) -> float:
+    template = _mutated_crop_layout_template()
+    try:
+        from PIL import Image
+
+        with Image.open(crop_path) as image:
+            return float(estimate_height_pages(image.size, template))
+    except Exception:
+        return float(template.base_slot_height_pages)
+
+
+def _refresh_mutated_crop_layout(entry: dict[str, Any], crop_path: Path) -> None:
+    for key in _MUTATED_CROP_LAYOUT_KEYS:
+        entry.pop(key, None)
+    actual_height_pages = _estimate_mutated_crop_height_pages(crop_path)
+    entry["actualHeightPages"] = actual_height_pages
+    entry["actual_height_pages"] = actual_height_pages
 
 
 def _refresh_session_problem_counts(session: dict[str, Any]) -> None:
@@ -3259,6 +3300,7 @@ def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float
             "width": new_bbox.width,
             "height": new_bbox.height,
         }
+        _refresh_mutated_crop_layout(entry, crop_path)
         return entry
 
     upper_entry = make_entry(upper_id, upper, upper_crop_path, "위")
@@ -3320,6 +3362,7 @@ def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, 
         "width": merged.width,
         "height": merged.height,
     }
+    _refresh_mutated_crop_layout(merged_entry, new_crop_path)
     # remove all originals; the page's problemIds will be cleaned up too.
     _remove_problems(session, {str(pid) for pid in problem_ids})
     # insert the merged entry at the position of the first removed problem
@@ -3615,6 +3658,8 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     }
     problem["manualCrop"] = crop
     problem["manual_crop"] = crop
+    if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
+        _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
     _refresh_session_problem_counts(session)
     return session
 
@@ -3777,6 +3822,7 @@ def _mutate_bulk_crop(
         entry["imageRecordCount"] = 1
         entry["riskFlags"] = []
         entry["reviewStatus"] = "normal"
+        _refresh_mutated_crop_layout(entry, crop_path)
         replacements.append(entry)
 
     _replace_bulk_crop_problems(session, page, replacements, replace_ids)

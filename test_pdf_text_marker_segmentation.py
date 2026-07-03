@@ -75,6 +75,12 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             self.assertEqual("external_pymupdf", pages[0].metadata.get("pdf_renderer"))
             self.assertEqual(1, len(pages[0].metadata.get("pdf_problem_markers") or []))
 
+    def test_external_pymupdf_candidates_include_local_posix_venv(self):
+        candidates = preprocess_module._iter_external_pymupdf_python_candidates()
+        expected = Path(preprocess_module.__file__).resolve().parent / ".venv" / "bin" / "python"
+
+        self.assertIn(expected, candidates)
+
     def test_pdf_problem_markers_ignore_chrome_print_date_header(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "chrome_header.pdf"

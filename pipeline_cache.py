@@ -157,6 +157,10 @@ class PipelineCache:
         image_key = _image_hash(image)
         return self.root_dir / "ocr" / _safe_slug(backend_name) / f"{image_key}.json"
 
+    def _ocr_identity_cache_path(self, *, backend_name: str, cache_identity: OCRCacheIdentity) -> Path:
+        identity_key = _stable_ocr_key(cache_identity)
+        return self.root_dir / "ocr" / _safe_slug(backend_name) / f"stable-{identity_key}.json"
+
     def _ocr_stable_index_path(self, *, backend_name: str, cache_identity: OCRCacheIdentity) -> Path:
         return self.root_dir / "ocr_index" / _safe_slug(backend_name) / f"{_stable_ocr_key(cache_identity)}.json"
 
@@ -231,7 +235,13 @@ class PipelineCache:
         backend_name: str,
         cache_identity: OCRCacheIdentity | None = None,
     ) -> Path:
-        path = self._ocr_cache_path(image, backend_name)
+        if cache_identity is not None:
+            path = self._ocr_identity_cache_path(
+                backend_name=backend_name,
+                cache_identity=cache_identity,
+            )
+        else:
+            path = self._ocr_cache_path(image, backend_name)
         payload = _serialize_ocr_result(result)
         payload["cached_backend_name"] = backend_name
         _write_json_atomic(path, payload)
@@ -245,7 +255,8 @@ class PipelineCache:
                 {
                     "version": "ocr_index_v1",
                     "target": str(path.relative_to(self.root_dir)),
-                    "image_sha1": path.stem,
+                    "cache_key": path.stem,
+                    "cache_key_kind": "stable_identity",
                     "backend_name": backend_name,
                 },
             )

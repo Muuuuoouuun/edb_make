@@ -1442,6 +1442,34 @@ def estimate_page_as_is_height_pages(image_size: tuple[int, int], template: Layo
     return max(MIN_HEIGHT_PAGES, min(MAX_HEIGHT_PAGES, estimated))
 
 
+def resolve_source_build_worker_count(
+    source_count: int,
+    *,
+    input_intent: str,
+    ocr_mode: str,
+    ai_fallback_config: dict[str, Any] | None,
+) -> int:
+    if source_count <= 1:
+        return 1
+    if _normalize_input_intent(input_intent) == "page-as-is":
+        max_workers = max(1, min(8, source_count, os.cpu_count() or 2))
+        raw_worker_count = os.environ.get("EDB_PAGE_AS_IS_SOURCE_WORKERS", "").strip()
+        if raw_worker_count:
+            try:
+                requested_workers = int(raw_worker_count)
+            except ValueError:
+                requested_workers = max_workers
+            if requested_workers <= 0:
+                return 1
+            return max(1, min(max_workers, requested_workers))
+        return max_workers
+    return resolve_recognition_worker_count(
+        source_count,
+        ocr_mode=ocr_mode,
+        ai_config=_to_page_ai_config(ai_fallback_config),
+    )
+
+
 def build_pages(
     source: str | Path,
     *,
@@ -1454,6 +1482,7 @@ def build_pages(
     crop_margins: bool,
     max_dimension: int | None,
     debug_segments_dir: Path | None = None,
+    input_intent: str = "auto",
 ) -> tuple[list[PreparedPage], list[PageModel]]:
     prepared_pages = prepare_source_pages(
         source,
@@ -1463,6 +1492,9 @@ def build_pages(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
+    if _normalize_input_intent(input_intent) == "page-as-is":
+        return prepared_pages, _build_page_as_is_models(prepared_pages, subject=subject)
+
     page_ai_config = _to_page_ai_config(ai_fallback_config)
     page_models = build_page_models_for_prepared_pages(
         prepared_pages,
@@ -1477,6 +1509,76 @@ def build_pages(
     return prepared_pages, page_models
 
 
+def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Subject) -> list[PageModel]:
+    pages: list[PageModel] = []
+    for index, prepared_page in enumerate(prepared_pages, start=1):
+        block_id = f"{prepared_page.page_id}-full-page"
+        problem_id = f"{prepared_page.page_id}-problem-1"
+        page_metadata = {
+            **dict(prepared_page.metadata),
+            "input_intent": "page-as-is",
+            "grouping_source": "user_intent",
+            "grouping_mode": "single_page",
+            "forced_single_problem": True,
+            "page_as_is_fast_path": True,
+            "segmentation_skipped": True,
+            "ocr_skipped": True,
+            "ocr_skipped_reason": "page_as_is_fast_path",
+        }
+        block = ContentBlock(
+            block_id=block_id,
+            block_type=BlockType.IMAGE,
+            bbox=Box(
+                left=0.0,
+                top=0.0,
+                width=float(prepared_page.image.width),
+                height=float(prepared_page.image.height),
+            ),
+            reading_order=0,
+            confidence=1.0,
+            metadata={
+                "input_intent": "page-as-is",
+                "force_image_record": True,
+                "force_full_page_bounds": True,
+                "segmentation_skipped": True,
+                "ocr_skipped": True,
+                "ocr_backend": "none",
+                "ocr_skipped_reason": "page_as_is_fast_path",
+            },
+        )
+        problem = ProblemUnit(
+            unit_id=problem_id,
+            subject=subject,
+            title=f"페이지 {index}",
+            stem_block_ids=[block_id],
+            metadata={
+                "grouping_source": "user_intent",
+                "grouping_reason": ["page-as-is"],
+                "force_full_page_bounds": True,
+                "input_intent": "page-as-is",
+                "bbox_px": {
+                    "left": 0.0,
+                    "top": 0.0,
+                    "width": float(prepared_page.image.width),
+                    "height": float(prepared_page.image.height),
+                },
+            },
+        )
+        pages.append(
+            PageModel(
+                page_id=prepared_page.page_id,
+                width_px=prepared_page.image.width,
+                height_px=prepared_page.image.height,
+                subject=subject,
+                source_path=prepared_page.source_path,
+                blocks=[block],
+                problems=[problem],
+                metadata=page_metadata,
+            )
+        )
+    return pages
+
+
 def _force_single_problem_per_page(pages: list[PageModel], *, input_intent: str) -> list[PageModel]:
     forced_pages: list[PageModel] = []
     title_prefix = "페이지" if input_intent == "page-as-is" else "문항"
@@ -1484,12 +1586,15 @@ def _force_single_problem_per_page(pages: list[PageModel], *, input_intent: str)
     for index, page in enumerate(pages, start=1):
         ordered_blocks = page.sorted_blocks()
         block_ids = [block.block_id for block in ordered_blocks]
-        unit_metadata: dict[str, Any] = {
+        unit_metadata: dict[str, Any] = {}
+        if input_intent == "page-as-is" and page.problems:
+            unit_metadata.update(dict(page.problems[0].metadata))
+        unit_metadata.update({
             "grouping_source": "user_intent",
             "grouping_reason": [input_intent],
             "force_full_page_bounds": True,
             "input_intent": input_intent,
-        }
+        })
         if input_intent == "single-problem":
             unit_metadata["problem_number"] = index
             unit_metadata["problem_number_source"] = "user_intent"
@@ -5164,7 +5269,9 @@ def build_ui_session(
     for prepared_page in prepared_pages:
         width, height = prepared_page.image.size
         resolved_path = Path(prepared_page.source_path).resolve()
-        page_quality = _page_quality_payload(pages_by_id.get(prepared_page.page_id))
+        page_model = pages_by_id.get(prepared_page.page_id)
+        page_quality = _page_quality_payload(page_model)
+        page_metadata = dict(page_model.metadata) if page_model is not None else dict(prepared_page.metadata)
         problem_ids = problems_by_page.get(prepared_page.page_id, [])
         risk_flags = page_risk_flags.get(prepared_page.page_id, [])
         review_status = "failed" if not problem_ids else "check_needed" if risk_flags else "normal"
@@ -5179,6 +5286,18 @@ def build_ui_session(
                 "problemIds": problem_ids,
                 "riskFlags": risk_flags,
                 "reviewStatus": review_status,
+                "sourceType": page_metadata.get("source_type"),
+                "source_type": page_metadata.get("source_type"),
+                "pageAsIsFastPath": bool(page_metadata.get("page_as_is_fast_path")),
+                "page_as_is_fast_path": bool(page_metadata.get("page_as_is_fast_path")),
+                "segmentationSkipped": bool(page_metadata.get("segmentation_skipped")),
+                "segmentation_skipped": bool(page_metadata.get("segmentation_skipped")),
+                "ocrSkipped": bool(page_metadata.get("ocr_skipped")),
+                "ocr_skipped": bool(page_metadata.get("ocr_skipped")),
+                "imagePassthrough": bool(page_metadata.get("image_passthrough")),
+                "image_passthrough": bool(page_metadata.get("image_passthrough")),
+                "imageNormalizedCacheHit": bool(page_metadata.get("image_normalized_cache_hit")),
+                "image_normalized_cache_hit": bool(page_metadata.get("image_normalized_cache_hit")),
                 **page_quality,
             }
         )
@@ -6542,12 +6661,14 @@ def run_problem_export(
             deskew=not skip_deskew,
             crop_margins=not skip_crop,
             max_dimension=max_dimension,
+            input_intent=resolved_input_intent,
         )
 
-    source_worker_count = resolve_recognition_worker_count(
+    source_worker_count = resolve_source_build_worker_count(
         len(source_paths),
+        input_intent=resolved_input_intent,
         ocr_mode=ocr,
-        ai_config=_to_page_ai_config(ai_fallback_config),
+        ai_fallback_config=ai_fallback_config,
     )
     source_build_started_at = time.perf_counter()
     if source_worker_count <= 1:
@@ -6569,7 +6690,7 @@ def run_problem_export(
     save_pages_json(pages, out_dir / "pages.json")
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
     ocr_summary = _summarize_ocr_usage(pages)
-    if ocr_summary["no_ocr_fallback_active"]:
+    if resolved_input_intent != "page-as-is" and ocr_summary["no_ocr_fallback_active"]:
         print(
             "[run_problem_export] WARNING: OCR resolved to 'none' for every block - "
             "problem-number detection will be disabled and each detected band "
@@ -6791,6 +6912,7 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(args.subject)
+    resolved_input_intent = _normalize_input_intent(args.input_intent)
     resolved_board_theme = _resolve_board_theme(args.board_theme)
     ai_fallback_config = _build_ai_fallback_config(
         enabled=args.ai_fallback_enabled,
@@ -6818,8 +6940,8 @@ def main() -> int:
         crop_margins=not args.skip_crop,
         max_dimension=args.max_dimension,
         debug_segments_dir=debug_segments_dir,
+        input_intent=resolved_input_intent,
     )
-    resolved_input_intent = _normalize_input_intent(args.input_intent)
     if resolved_input_intent in {"single-problem", "page-as-is"}:
         pages = _force_single_problem_per_page(pages, input_intent=resolved_input_intent)
     save_pages_json(pages, output_dir / "pages.json")

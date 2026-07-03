@@ -5667,6 +5667,42 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(image.size, crop.size)
             self.assertEqual((0, 0, 0), crop.getpixel((179, 70)))
 
+    def test_page_as_is_export_skips_segmentation_and_ocr_page_model_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "page.png"
+            image = Image.new("RGB", (180, 140), "white")
+            draw = ImageDraw.Draw(image)
+            draw.text((12, 28), "page as is", fill="black")
+            image.save(source)
+
+            with mock.patch.object(
+                problem_board,
+                "build_page_models_for_prepared_pages",
+                side_effect=AssertionError("page-as-is should not build OCR page models"),
+            ):
+                result = run_problem_export(
+                    source,
+                    output_dir=root / "out",
+                    input_intent="page-as-is",
+                    ocr="auto",
+                    record_mode="image-only",
+                    export_edb=False,
+                    skip_deskew=True,
+                    skip_crop=True,
+                    max_dimension=2400,
+                )
+
+            page = result["ui_session"]["pages"][0]
+            self.assertIs(True, page["pageAsIsFastPath"])
+            self.assertIs(True, page["segmentationSkipped"])
+            self.assertIs(True, page["ocrSkipped"])
+            self.assertEqual(1, len(result["ui_session"]["problems"]))
+            problem = result["ui_session"]["problems"][0]
+            self.assertIs(True, problem["forceFullPageBounds"])
+            self.assertEqual("page-as-is", problem["inputIntent"])
+            self.assertEqual({"left": 0.0, "top": 0.0, "width": 180.0, "height": 140.0}, problem["bbox"])
+
 
 if __name__ == "__main__":
     unittest.main()

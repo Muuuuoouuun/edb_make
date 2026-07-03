@@ -834,6 +834,14 @@ class TestSessionCropMutation(unittest.TestCase):
                         "sourceFileName": "page.png",
                         "sourceImagePath": page_path.resolve().as_uri(),
                         "bbox": {"left": 0, "top": 0, "width": 300, "height": 200},
+                        "actualHeightPages": 1.9,
+                        "actual_height_pages": 1.9,
+                        "startYPages": 3.6,
+                        "start_y_pages": 3.6,
+                        "snappedNextStartYPages": 6.0,
+                        "snapped_next_start_y_pages": 6.0,
+                        "slotSpanCount": 2,
+                        "slot_span_count": 2,
                         "riskFlags": ["large_block_dominance"],
                         "recordMode": "image-only",
                     },
@@ -874,6 +882,14 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual("normal", created[0]["reviewStatus"])
             self.assertEqual(page_path.resolve().as_uri(), created[0]["sourceImagePath"])
             self.assertEqual({"left": 250.0, "top": 180.0, "width": 50.0, "height": 20.0}, created[1]["bbox"])
+            self.assertAlmostEqual(
+                app_server.estimate_height_pages((50, 40), app_server.LayoutTemplate(name="academy-default")),
+                created[0]["actualHeightPages"],
+            )
+            self.assertAlmostEqual(created[0]["actualHeightPages"], created[0]["actual_height_pages"])
+            self.assertNotIn("startYPages", created[0])
+            self.assertNotIn("snappedNextStartYPages", created[0])
+            self.assertNotIn("slotSpanCount", created[0])
 
             first_crop = app_server._resolve_session_path(created[0]["imagePath"])
             second_crop = app_server._resolve_session_path(created[1]["imagePath"])
