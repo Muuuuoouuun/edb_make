@@ -72,6 +72,40 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
 
         self.assertEqual({"build", "dist", "dist_sizecheck", "tmp_validation_future"}, names)
 
+    def test_local_cleanup_defaults_target_legacy_ui_bridge_files_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp).resolve()
+            runtime = root / ".app_runtime"
+            runtime.mkdir()
+            (runtime / "generated_session.js").write_text("window.EDB_UI_SESSION = stale;\n", encoding="utf-8")
+            (runtime / "latest_session.json").write_text('{"problems":[]}\n', encoding="utf-8")
+            ui_root = root / "ui_prototype"
+            ui_root.mkdir()
+            (ui_root / "generated_session.js").write_text("window.EDB_UI_SESSION = stale;\n", encoding="utf-8")
+            (ui_root / "prototype_data.js").write_text("window.PROTOTYPE_DATA = stale;\n", encoding="utf-8")
+
+            candidates = collect_cleanup_candidates(root)
+            relative_paths = {candidate.path.relative_to(root).as_posix() for candidate in candidates}
+            categories = {candidate.category for candidate in candidates}
+            for candidate in candidates:
+                remove_candidate(root, candidate)
+
+            self.assertEqual(
+                {
+                    ".app_runtime/generated_session.js",
+                    "ui_prototype/generated_session.js",
+                    "ui_prototype/prototype_data.js",
+                },
+                relative_paths,
+            )
+            self.assertEqual({"legacy-ui"}, categories)
+            self.assertTrue((runtime / "latest_session.json").exists())
+            self.assertTrue(runtime.exists())
+            self.assertTrue(ui_root.exists())
+            self.assertFalse((runtime / "generated_session.js").exists())
+            self.assertFalse((ui_root / "generated_session.js").exists())
+            self.assertFalse((ui_root / "prototype_data.js").exists())
+
     def test_local_cleanup_can_opt_into_generated_exports_and_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)

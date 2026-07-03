@@ -21,6 +21,11 @@ EDB_EXPORT_PATTERNS = (
 RUNTIME_PATTERNS = (
     ".app_runtime",
 )
+LEGACY_UI_FILE_PATHS = (
+    Path(".app_runtime") / "generated_session.js",
+    Path("ui_prototype") / "generated_session.js",
+    Path("ui_prototype") / "prototype_data.js",
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,15 @@ def _safe_root_child(root: Path, path: Path) -> bool:
     except OSError:
         return False
     return resolved_path != resolved_root and resolved_path.parent == resolved_root
+
+
+def _safe_root_descendant(root: Path, path: Path) -> bool:
+    try:
+        resolved_root = root.resolve()
+        resolved_path = path.resolve(strict=False)
+    except OSError:
+        return False
+    return resolved_path != resolved_root and resolved_root in resolved_path.parents
 
 
 def collect_cleanup_candidates(
@@ -63,6 +77,13 @@ def collect_cleanup_candidates(
             if _matches(child.name, patterns):
                 candidates.append(CleanupCandidate(path=child, category=category))
                 break
+
+    for relative_path in LEGACY_UI_FILE_PATHS:
+        path = root / relative_path
+        if not _safe_root_descendant(root, path):
+            continue
+        if path.is_file() or path.is_symlink():
+            candidates.append(CleanupCandidate(path=path, category="legacy-ui"))
 
     return sorted(candidates, key=lambda candidate: (candidate.category, candidate.path.name))
 
@@ -99,7 +120,9 @@ def format_size(size: int) -> str:
 
 def remove_candidate(root: Path, candidate: CleanupCandidate) -> None:
     path = candidate.path
-    if not _safe_root_child(root, path):
+    root_child = _safe_root_child(root, path)
+    nested_file = (path.is_file() or path.is_symlink()) and _safe_root_descendant(root, path)
+    if not (root_child or nested_file):
         raise ValueError(f"refusing to remove non-root child: {path}")
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)

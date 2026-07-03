@@ -139,9 +139,10 @@ python scripts/clean_local_artifacts.py
 python scripts/clean_local_artifacts.py --yes
 ```
 
-By default this removes only root-level `dist*`, `build`, and
-`tmp_validation_*` artifacts. It does not remove generated EDB exports or the
-local `.app_runtime` folder unless you explicitly pass
+By default this removes root-level `dist*`, `build`, and `tmp_validation_*`
+artifacts, plus stale legacy UI bridge files such as
+`.app_runtime/generated_session.js`. It does not remove generated EDB exports
+or the local `.app_runtime` folder unless you explicitly pass
 `--include-edb-exports` or `--include-runtime`.
 
 ## Structured JSON Only
