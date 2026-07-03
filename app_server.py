@@ -504,6 +504,12 @@ def _copy_update_fields(target: dict[str, Any], source: dict[str, Any], field_na
             target[field_name] = value
 
 
+def _copy_update_url_field(target: dict[str, Any], source: dict[str, Any], output_name: str, *field_names: str) -> None:
+    value = _normalize_update_url(_first_nonempty(*(source.get(field_name) for field_name in field_names)))
+    if value:
+        target[output_name] = value
+
+
 def build_app_update_status() -> dict[str, Any]:
     config = load_app_update_config()
     platform_key = str(config.get("platform") or _app_platform_key())
@@ -558,10 +564,10 @@ def build_app_update_status() -> dict[str, Any]:
             "appId",
             "channel",
             "publishedAt",
-            "manifestUrl",
             "manifestSha256",
         ),
     )
+    _copy_update_url_field(status, selected, "manifestUrl", "manifestUrl", "manifest_url")
     latest_version = _first_nonempty(
         selected.get("version"),
         selected.get("latestVersion"),
@@ -598,15 +604,20 @@ def build_app_update_status() -> dict[str, Any]:
             "sizeBytes",
             "sha256",
             "publishedAt",
-            "manifestUrl",
             "manifestSha256",
         ),
     )
+    _copy_update_url_field(status["latest"], selected, "manifestUrl", "manifestUrl", "manifest_url")
     if not latest_version:
         status["channelStatus"] = "invalid_feed"
         status["error"] = "update feed does not include a version"
         return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
+    if comparison > 0 and not download_url:
+        status["updateAvailable"] = False
+        status["channelStatus"] = "invalid_feed"
+        status["error"] = "update feed does not include a usable download URL"
+        return _remember_update_status(cache_key, status)
     status["updateAvailable"] = comparison > 0
     status["channelStatus"] = "update_available" if comparison > 0 else "up_to_date"
     return _remember_update_status(cache_key, status)

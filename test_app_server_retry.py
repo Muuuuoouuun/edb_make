@@ -138,6 +138,82 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(12345, status["latest"]["sizeBytes"])
             self.assertEqual("https://example.test/ClassInEDBMVP-macOS.dmg", status["downloadUrl"])
 
+    def test_update_status_filters_unsafe_manifest_url_from_feed(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "manifestUrl": "http://example.test/releases/0.1.2/manifest.json",
+                "manifestSha256": "manifest-digest",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertTrue(status["updateAvailable"])
+            self.assertNotIn("manifestUrl", status)
+            self.assertNotIn("manifestUrl", status["latest"])
+            self.assertEqual("manifest-digest", status["manifestSha256"])
+
+    def test_update_status_rejects_available_update_without_usable_download_url(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "http://example.test/ClassInEDBMVP-macOS.dmg",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual("update feed does not include a usable download URL", status["error"])
+            self.assertEqual("", status["downloadUrl"])
+
     def test_update_status_caches_feed_fetches_for_short_ttl(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

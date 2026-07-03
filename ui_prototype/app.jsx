@@ -4353,6 +4353,8 @@ function SidePanel({
             ? '미설정'
             : updateStatus === 'error'
               ? '오류'
+              : updateStatus === 'invalid_feed'
+                ? '피드 오류'
               : updateStatus === 'unsupported_platform'
                 ? '미지원'
                 : '확인 전';
@@ -4360,7 +4362,7 @@ function SidePanel({
     ? 'var(--accent)'
     : updateStatus === 'up_to_date'
       ? 'var(--ok)'
-      : updateStatus === 'error'
+      : updateStatus === 'error' || updateStatus === 'invalid_feed'
         ? 'var(--danger)'
         : 'var(--muted)';
   const updateVersionLine = updateInfo?.currentVersion
@@ -7954,6 +7956,7 @@ function App(){
     if (info.channelStatus === 'manual_download') return '다운로드 페이지를 열 수 있습니다';
     if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
     if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
+    if (info.channelStatus === 'invalid_feed') return `업데이트 피드 오류: ${info.error || '채널 정보가 올바르지 않습니다'}`;
     if (info.channelStatus === 'error') return `업데이트 확인 오류: ${info.error || '채널 확인 실패'}`;
     return '업데이트 정보를 확인했습니다';
   };

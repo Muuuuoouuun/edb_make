@@ -187,6 +187,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("업데이트 확인", side_panel)
         self.assertIn("다운로드 열기", side_panel)
         self.assertIn("const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || ''", side_panel)
+        self.assertIn("updateStatus === 'invalid_feed'", side_panel)
+        self.assertIn("피드 오류", side_panel)
         self.assertIn("disabled={updateBusy || !updateDownloadUrl}", side_panel)
         self.assertIn("if (updateBusy)", source)
         self.assertIn("fetch('/api/app/update')", source)
@@ -197,6 +199,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         compact_bundle = re.sub(r"\s+", "", bundle)
 
         self.assertIn("updateBusy||!updateDownloadUrl", compact_bundle)
+        self.assertIn("invalid_feed", bundle)
+        self.assertIn("피드 오류", bundle)
         self.assertIn("fetch('/api/app/update')", bundle)
         self.assertIn("fetch('/api/system/open-url'", bundle)
 
