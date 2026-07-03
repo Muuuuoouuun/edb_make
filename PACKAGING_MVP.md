@@ -336,7 +336,7 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 - Development runs write default and relative UI-named outputs under `.app_runtime\outputs` in the project folder.
 - Packaged runs write default and relative UI-named outputs under `Documents\ClassInEDBMVP\.app_runtime\outputs`.
 - Uploaded files are cached in `.app_runtime\uploads` under the active app home.
-- `generated_session.js` is kept and overwritten only as an empty compatibility bridge; latest-session restore uses `.app_runtime\latest_session.json` and session history.
+- `generated_session.js` is kept and overwritten only as an empty compatibility bridge; latest-session restore uses `.app_runtime\latest_session.json` and session history. Legacy CLI bridge output stays under the selected output folder and must not recreate project `ui_prototype\generated_session.js` or `prototype_data.js`.
 - The browser UI talks to the local server over HTTP and does not call Python directly.
 - Double-clicking the packaged app opens the browser automatically. If the app server is already running, it opens the browser instead of starting a duplicate server.
 - API keys are entered in the app's `칠판 설정` panel and stored locally under the app runtime folder.

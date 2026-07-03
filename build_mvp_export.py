@@ -650,7 +650,7 @@ def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, syn
 
     synced_path: Path | None = None
     if sync_ui:
-        synced_path = Path(__file__).resolve().parent / "ui_prototype" / "generated_session.js"
+        synced_path = output_dir / "generated_session.js"
         synced_path.write_text(
             "window.EDB_UI_SESSION = " + json.dumps(ui_session, ensure_ascii=False, indent=2) + ";\n",
             encoding="utf-8",
@@ -804,7 +804,7 @@ def main() -> int:
     parser.add_argument("--max-dimension", type=int, default=None, help="Resize long edge to this many pixels")
     parser.add_argument("--export-edb", action="store_true", help="Also export a board-image .edb")
     parser.add_argument("--edb-name", default="mvp_board.edb", help="Output .edb filename")
-    parser.add_argument("--sync-ui", action="store_true", help="Legacy opt-in: refresh ui_prototype/generated_session.js")
+    parser.add_argument("--sync-ui", action="store_true", help="Legacy opt-in: write generated_session.js next to ui_session.json")
     parser.add_argument("--skip-ui-sync", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--ai-fallback-enabled", action="store_true", help="Enable optional AI fallback settings")
     parser.add_argument("--ai-fallback", default=None, help="AI fallback mode override: off, auto, force")

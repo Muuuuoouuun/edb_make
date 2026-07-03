@@ -81,7 +81,7 @@ This command does all of the following:
 - crops problem images
 - places them onto the board layout
 - writes a test `.edb`
-- leaves `ui_prototype` untouched unless a legacy output path is explicitly requested
+- leaves project `ui_prototype` untouched; legacy UI bridge files are written under the selected output folder
 
 ```powershell
 python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\sample_run --ocr noop --subject korean --record-mode mixed

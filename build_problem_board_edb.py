@@ -5397,7 +5397,7 @@ def write_ui_session_bundle(output_dir: Path, ui_session: dict[str, Any], *, syn
 
     synced_path: Path | None = None
     if sync_ui:
-        synced_path = Path(__file__).resolve().parent / "ui_prototype" / "generated_session.js"
+        synced_path = output_dir / "generated_session.js"
         synced_path.write_text(
             "window.EDB_UI_SESSION = " + json.dumps(ui_session, ensure_ascii=False, indent=2) + ";\n",
             encoding="utf-8",
@@ -6558,6 +6558,18 @@ def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object
     )
 
 
+def resolve_legacy_prototype_data_path(raw_path: str | Path) -> Path:
+    output_path = Path(raw_path)
+    resolved_output = output_path.expanduser().resolve()
+    project_ui_root = (Path(__file__).resolve().parent / "ui_prototype").resolve()
+    if resolved_output == project_ui_root or project_ui_root in resolved_output.parents:
+        raise ValueError(
+            "--prototype-data-out must not write into project ui_prototype; "
+            "write legacy prototype data under --output-dir instead"
+        )
+    return output_path
+
+
 def build_placement_summary(placements: list[dict[str, object]]) -> dict[str, object]:
     if not placements:
         return {
@@ -6905,7 +6917,7 @@ def main() -> int:
     parser.add_argument(
         "--prototype-data-out",
         default="",
-        help="Legacy opt-in path to write old ui_prototype/prototype_data.js data",
+        help="Legacy opt-in path to write old prototype_data.js data outside project ui_prototype",
     )
     args = parser.parse_args()
 
@@ -7016,7 +7028,7 @@ def main() -> int:
 
     prototype_path: Path | None = None
     if str(args.prototype_data_out or "").strip():
-        prototype_path = Path(args.prototype_data_out)
+        prototype_path = resolve_legacy_prototype_data_path(args.prototype_data_out)
         prototype_path.parent.mkdir(parents=True, exist_ok=True)
         write_ui_prototype_data(prototype_path, placements)
 
