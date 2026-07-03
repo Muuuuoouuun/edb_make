@@ -192,6 +192,96 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(23456, status["latest"]["sizeBytes"])
             self.assertEqual("https://example.test/ClassInEDBMVP-macOS.zip", status["downloadUrl"])
 
+    def test_update_status_rejects_conflicting_download_url_aliases(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.1",
+                "downloadUrl": "https://example.test/old/ClassInEDBMVP-macOS.zip",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "download_url": "https://example.test/new/ClassInEDBMVP-macOS.zip",
+                        "file_name": "ClassInEDBMVP-macOS.zip",
+                        "artifact_type": "zip",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual(
+                "update feed downloadUrl aliases conflict: "
+                "downloadUrl='https://example.test/old/ClassInEDBMVP-macOS.zip', "
+                "download_url='https://example.test/new/ClassInEDBMVP-macOS.zip'",
+                status["error"],
+            )
+            self.assertIsNone(status["latest"])
+
+    def test_update_status_rejects_conflicting_artifact_metadata_aliases(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS.dmg",
+                        "fileName": "ClassInEDBMVP-macOS-old.dmg",
+                        "file_name": "ClassInEDBMVP-macOS.dmg",
+                        "artifactType": "dmg",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual(
+                "update feed fileName aliases conflict: "
+                "fileName='ClassInEDBMVP-macOS-old.dmg', "
+                "file_name='ClassInEDBMVP-macOS.dmg'",
+                status["error"],
+            )
+            self.assertIsNone(status["latest"])
+
     def test_update_status_rejects_mismatched_feed_app_id(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

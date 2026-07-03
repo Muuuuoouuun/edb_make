@@ -528,6 +528,37 @@ def _update_source_value(source: dict[str, Any], *field_names: str) -> Any:
     return None
 
 
+def _update_alias_conflict_error(label: str, source: dict[str, Any], *field_names: str) -> str:
+    values = {
+        field_name: str(source.get(field_name) or "").strip()
+        for field_name in field_names
+        if str(source.get(field_name) or "").strip()
+    }
+    if len(set(values.values())) <= 1:
+        return ""
+    details = ", ".join(f"{field_name}={value!r}" for field_name, value in values.items())
+    return f"update feed {label} aliases conflict: {details}"
+
+
+def _update_metadata_alias_conflict_error(source: dict[str, Any]) -> str:
+    alias_pairs = (
+        ("appId", ("appId", "app_id")),
+        ("appName", ("appName", "app_name")),
+        ("version", ("version", "latestVersion", "latest_version")),
+        ("manifestUrl", ("manifestUrl", "manifest_url")),
+        ("manifestSha256", ("manifestSha256", "manifest_sha256")),
+        ("downloadUrl", ("downloadUrl", "download_url", "url")),
+        ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url", "notesUrl", "notes_url")),
+        ("fileName", ("fileName", "file_name")),
+        ("artifactType", ("artifactType", "artifact_type")),
+        ("sizeBytes", ("sizeBytes", "size_bytes")),
+    )
+    for label, field_names in alias_pairs:
+        if alias_error := _update_alias_conflict_error(label, source, *field_names):
+            return alias_error
+    return ""
+
+
 def _copy_update_field_alias(
     target: dict[str, Any],
     source: dict[str, Any],
@@ -599,8 +630,7 @@ def _update_artifact_file_name(source: dict[str, Any]) -> str:
 
 
 def _update_download_url_value(source: dict[str, Any]) -> str:
-    raw_url = str(_first_nonempty(source.get("downloadUrl"), source.get("download_url"), source.get("url")) or "").strip()
-    return raw_url
+    return _update_source_text(source, "downloadUrl", "download_url", "url")
 
 
 def _update_download_url_file_name(source: dict[str, Any]) -> str:
@@ -733,6 +763,10 @@ def build_app_update_status() -> dict[str, Any]:
     if selected.get("platformSupported") is False:
         status["channelStatus"] = "unsupported_platform"
         return _remember_update_status(cache_key, status)
+    if alias_error := _update_metadata_alias_conflict_error(selected):
+        status["channelStatus"] = "invalid_feed"
+        status["error"] = alias_error
+        return _remember_update_status(cache_key, status)
     if identity_error := _update_identity_error(
         selected,
         expected_app_id=app_id,
@@ -758,16 +792,17 @@ def build_app_update_status() -> dict[str, Any]:
         selected.get("latest_version"),
     )
     download_url = _normalize_update_url(_first_nonempty(
-        selected.get("downloadUrl"),
-        selected.get("download_url"),
-        selected.get("url"),
+        _update_download_url_value(selected),
         fallback_download_url,
     ))
     notes_url = _normalize_update_url(_first_nonempty(
-        selected.get("releaseNotesUrl"),
-        selected.get("release_notes_url"),
-        selected.get("notesUrl"),
-        selected.get("notes_url"),
+        _update_source_text(
+            selected,
+            "releaseNotesUrl",
+            "release_notes_url",
+            "notesUrl",
+            "notes_url",
+        ),
         fallback_notes_url,
     ))
     status["downloadUrl"] = download_url
