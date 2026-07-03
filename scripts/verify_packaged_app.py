@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import plistlib
 import re
 import sys
 from pathlib import Path
@@ -118,6 +119,7 @@ def collect_package_errors(
         labels = ", ".join(str(path.relative_to(root)) for path in resource_roots)
         errors.append(f"multiple packaged frontend roots found: {labels}")
 
+    packaged_version = ""
     resource_root = resource_roots[0]
     for rel_path in (*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_FILES):
         if not (resource_root / rel_path).is_file():
@@ -139,6 +141,8 @@ def collect_package_errors(
                     errors.append("packaged app_update_config.json is missing appName")
                 if not version:
                     errors.append("packaged app_update_config.json is missing version")
+                else:
+                    packaged_version = version
                 if expected_app_name and app_name != expected_app_name:
                     errors.append(
                         "packaged app_update_config.json appName mismatch: "
@@ -196,6 +200,30 @@ def collect_package_errors(
         for token in FORBIDDEN_BOARD_TOKENS:
             if token in board_html:
                 errors.append(f"packaged board.html still references legacy runtime token: {token}")
+
+    info_plist_path = root / "Contents" / "Info.plist"
+    if root.suffix == ".app" or info_plist_path.exists():
+        if not info_plist_path.is_file():
+            errors.append("missing macOS app bundle Info.plist: Contents/Info.plist")
+        else:
+            try:
+                info_plist = plistlib.loads(info_plist_path.read_bytes())
+            except (OSError, plistlib.InvalidFileException) as exc:
+                errors.append(f"macOS app bundle Info.plist is not valid: {exc}")
+            else:
+                if not isinstance(info_plist, dict):
+                    errors.append("macOS app bundle Info.plist must contain a dictionary")
+                else:
+                    expected_bundle_version = expected_version or packaged_version
+                    for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+                        value = str(info_plist.get(key) or "").strip()
+                        if not value:
+                            errors.append(f"macOS app bundle Info.plist is missing {key}")
+                        elif expected_bundle_version and value != expected_bundle_version:
+                            errors.append(
+                                f"macOS app bundle Info.plist {key} mismatch: "
+                                f"expected {expected_bundle_version!r}, found {value!r}"
+                            )
 
     return errors
 

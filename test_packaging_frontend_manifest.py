@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import plistlib
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -82,6 +83,21 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         (vendor_root / "react.production.min.js").write_text("// react\n", encoding="utf-8")
         (vendor_root / "react-dom.production.min.js").write_text("// react-dom\n", encoding="utf-8")
         return resource_root
+
+    def _write_macos_info_plist(self, package_root: Path, version: str = "test") -> None:
+        contents_root = package_root / "Contents"
+        contents_root.mkdir(parents=True, exist_ok=True)
+        (contents_root / "Info.plist").write_bytes(
+            plistlib.dumps(
+                {
+                    "CFBundleIdentifier": "local.classin.edbmvp",
+                    "CFBundleName": "ClassInEDBMVP",
+                    "CFBundleShortVersionString": version,
+                    "CFBundleVersion": version,
+                },
+                sort_keys=True,
+            )
+        )
 
     def test_frontend_package_manifest_is_current(self) -> None:
         self.assertEqual([], collect_errors(PROJECT_ROOT))
@@ -228,6 +244,26 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("version mismatch" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_macos_info_plist_version_mismatch(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
+            self._write_packaged_runtime(package_root, "Contents/Resources")
+            self._write_macos_info_plist(package_root, version="0.9.0")
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("CFBundleShortVersionString mismatch" in error for error in errors))
+        self.assertTrue(any("CFBundleVersion mismatch" in error for error in errors))
+
+    def test_packaged_app_layout_rejects_missing_macos_info_plist(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
+            self._write_packaged_runtime(package_root, "Contents/Resources")
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("missing macOS app bundle Info.plist" in error for error in errors))
+
     def test_packaged_app_layout_rejects_runtime_session_artifacts(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -271,6 +307,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
             frameworks_root = package_root / "Contents" / "Frameworks"
             self._write_packaged_runtime(package_root, "Contents/Resources")
+            self._write_macos_info_plist(package_root)
             frameworks_root.mkdir(parents=True)
             try:
                 (frameworks_root / "ui_prototype").symlink_to("../Resources/ui_prototype", target_is_directory=True)
