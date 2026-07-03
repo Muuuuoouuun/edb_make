@@ -198,6 +198,30 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("latest_session.json" in error for error in errors))
         self.assertTrue(any("uploads" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_build_time_frontend_tools(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "scripts" / "vendor").mkdir()
+            (resource_root / "scripts" / "build_frontend_bundle.mjs").write_text(
+                "console.log('build');\n",
+                encoding="utf-8",
+            )
+            (resource_root / "scripts" / "vendor" / "babel.min.js").write_text(
+                "// build-time babel\n",
+                encoding="utf-8",
+            )
+            (resource_root / "scripts" / "verify_frontend_package.py").write_text(
+                "print('dev verifier')\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("scripts/build_frontend_bundle.mjs" in error for error in errors))
+        self.assertTrue(any("scripts/vendor" in error for error in errors))
+        self.assertTrue(any("scripts/verify_frontend_package.py" in error for error in errors))
+
     def test_packaged_app_layout_dedupes_macos_resource_symlinks(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
@@ -247,6 +271,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     "scripts/verify_packaged_app.py".replace("/", "\\" if rel_path.endswith(".ps1") else "/"),
                     source,
                 )
+
+    def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
+        source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn('"scripts\\render_hwp_with_rhwp_core.mjs"', source)
+        self.assertNotRegex(source, r'(?m)^\s+"scripts",\s*$')
 
     def test_windows_installer_verifies_existing_app_before_installer_build(self) -> None:
         source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")

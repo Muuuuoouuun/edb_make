@@ -307,6 +307,7 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 - `ui_prototype\vendor\react.production.min.js`
 - `ui_prototype\vendor\react-dom.production.min.js`
 - `app_update_config.json`
+- `scripts\render_hwp_with_rhwp_core.mjs`
 - `assets\app_icon.ico`
 - `assets\app_icon.icns`
 - `assets\app_icon.png`
@@ -314,7 +315,7 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 ## Notes
 - `ui_prototype\app.bundle.js` is generated from `art.jsx`, `tweaks-panel.jsx`, and `app.jsx` by `scripts\build_frontend_bundle.mjs`. The build-time Babel transformer lives under `scripts\vendor`, outside the browser UI asset tree. Packaging scripts rebuild the bundle when Node.js is available.
 - `scripts\verify_frontend_package.py` runs before PyInstaller packaging, including direct `ClassInEDBMVP.spec` builds, and fails if required UI assets are missing, `app.bundle.js` is stale against its source digest, `board.html` points at a legacy runtime, browser-side Babel returns under `ui_prototype\vendor`, or old prototype files such as `ui_prototype\app.js`/`prototype_data.js` have returned.
-- `scripts\verify_packaged_app.py` runs after folder-style packaging, source-package fallback builds, and Windows installer reuse of an existing app folder to confirm the final artifact contains the current prebuilt UI with bundle digest metadata, update metadata, and HWP render helper, without browser-side Babel, legacy UI data files, or local runtime/session outputs.
+- `scripts\verify_packaged_app.py` runs after folder-style packaging, source-package fallback builds, and Windows installer reuse of an existing app folder to confirm the final artifact contains the current prebuilt UI with bundle digest metadata, update metadata, and HWP render helper, without browser-side Babel, build-time frontend tooling, legacy UI data files, or local runtime/session outputs.
 - Browser-side Babel is not included in packaged builds.
 - Development runs write default and relative UI-named outputs under `.app_runtime\outputs` in the project folder.
 - Packaged runs write default and relative UI-named outputs under `Documents\ClassInEDBMVP\.app_runtime\outputs`.

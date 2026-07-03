@@ -25,6 +25,13 @@ FORBIDDEN_PACKAGED_FRONTEND_FILES = (
     "ui_prototype/vendor/babel.min.js.map",
 )
 
+FORBIDDEN_PACKAGED_BUILD_TOOL_PATHS = (
+    "scripts/build_frontend_bundle.mjs",
+    "scripts/vendor",
+    "scripts/verify_frontend_package.py",
+    "scripts/verify_packaged_app.py",
+)
+
 FORBIDDEN_BOARD_TOKENS = (
     "app.js?v=",
     "prototype_data.js",
@@ -115,6 +122,10 @@ def collect_package_errors(package_root: Path) -> list[str]:
         if candidate not in runtime_scan_roots:
             runtime_scan_roots.append(candidate)
     for scan_root in runtime_scan_roots:
+        for rel_path in FORBIDDEN_PACKAGED_BUILD_TOOL_PATHS:
+            candidate = scan_root / rel_path
+            if candidate.exists():
+                errors.append(f"forbidden packaged build-time tool exists: {rel_path}")
         for rel_path in FORBIDDEN_PACKAGED_RUNTIME_PATHS:
             candidate = scan_root / rel_path
             if candidate.exists():

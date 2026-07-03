@@ -182,7 +182,7 @@ if ($HasPyInstaller) {
         "inspect_edb.py",
         "requirements-local.txt",
         "run_local_app.ps1",
-        "scripts",
+        "scripts\render_hwp_with_rhwp_core.mjs",
         "assets",
         "PACKAGING_MVP.md",
         "ui_prototype\index.html",
