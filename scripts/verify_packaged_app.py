@@ -108,6 +108,18 @@ def _config_text_value(config: dict, *field_names: str) -> str:
     return ""
 
 
+def _config_alias_conflict_error(label: str, config: dict, *field_names: str) -> str:
+    values = {
+        field_name: str(config.get(field_name) or "").strip()
+        for field_name in field_names
+        if str(config.get(field_name) or "").strip()
+    }
+    if len(set(values.values())) <= 1:
+        return ""
+    details = ", ".join(f"{field_name}={value!r}" for field_name, value in values.items())
+    return f"packaged app_update_config.json {label} aliases conflict: {details}"
+
+
 def _resource_root_candidates(package_root: Path) -> list[Path]:
     explicit_candidates = (
         package_root,
@@ -185,6 +197,15 @@ def collect_package_errors(
                 app_id = str(update_config.get("appId") or update_config.get("app_id") or "").strip()
                 app_name = str(update_config.get("appName") or "").strip()
                 version = str(update_config.get("version") or "").strip()
+                alias_pairs = (
+                    ("appId", ("appId", "app_id")),
+                    ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
+                    ("downloadUrl", ("downloadUrl", "download_url")),
+                    ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
+                )
+                for label, field_names in alias_pairs:
+                    if alias_error := _config_alias_conflict_error(label, update_config, *field_names):
+                        errors.append(alias_error)
                 if not app_id:
                     errors.append("packaged app_update_config.json is missing appId")
                 if not app_name:

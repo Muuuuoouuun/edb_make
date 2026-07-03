@@ -311,6 +311,33 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("downloadUrl mismatch" in error for error in errors))
         self.assertTrue(any("releaseNotesUrl mismatch" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_conflicting_update_metadata_aliases(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                "{"
+                '"appId":"ClassInEDBMVP",'
+                '"app_id":"OtherApp",'
+                '"appName":"ClassInEDBMVP",'
+                '"version":"test",'
+                '"updateFeedUrl":"https://example.test/update.json",'
+                '"update_feed_url":"https://example.test/other-update.json",'
+                '"downloadUrl":"https://example.test/ClassInEDBMVP-macOS.zip",'
+                '"download_url":"https://example.test/other.zip",'
+                '"releaseNotesUrl":"https://example.test/releases/test",'
+                '"release_notes_url":"https://example.test/releases/other"'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("appId aliases conflict" in error for error in errors))
+        self.assertTrue(any("updateFeedUrl aliases conflict" in error for error in errors))
+        self.assertTrue(any("downloadUrl aliases conflict" in error for error in errors))
+        self.assertTrue(any("releaseNotesUrl aliases conflict" in error for error in errors))
+
     def test_packaged_app_layout_rejects_legacy_browser_runtime(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
