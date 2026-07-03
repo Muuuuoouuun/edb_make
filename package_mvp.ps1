@@ -62,7 +62,8 @@ $PackageDirPath = Join-Path $ResolvedOutputDir $AppName
 $PackageExePath = Join-Path $ResolvedOutputDir "$AppName.exe"
 $SourcePackagePath = Join-Path $ResolvedOutputDir "source-package"
 $ZipPath = Join-Path $ResolvedOutputDir "$AppName.zip"
-foreach ($StalePath in @($PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath)) {
+$WorkPath = Join-Path $ResolvedOutputDir "_pyinstaller_build"
+foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath)) {
     Remove-EDBPathIfExists $StalePath
 }
 $SpecDir = Join-Path $ResolvedOutputDir "_pyinstaller_spec"
@@ -167,6 +168,7 @@ if ($HasPyInstaller) {
         $WindowArg,
         "--distpath", $ResolvedOutputDir,
         "--specpath", $SpecDir,
+        "--workpath", $WorkPath,
         "--name", $AppName
     ) + $DataArgs + $HiddenImportArgs + $IconArgs + @("app_server.py")
 
@@ -177,6 +179,7 @@ if ($HasPyInstaller) {
             --expected-app-name $EffectiveAppName `
             --expected-version $EffectiveAppVersion
     }
+    Remove-EDBPathIfExists $WorkPath
     Write-Host "PyInstaller packaging complete."
 } else {
     if ($RequirePyInstaller) {

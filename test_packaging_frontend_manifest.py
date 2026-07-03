@@ -467,20 +467,24 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
     def test_packaging_scripts_remove_previous_same_name_outputs(self) -> None:
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn('WORK_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_build"', shell_source)
         self.assertIn('APP_DIR_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME"', shell_source)
-        self.assertIn('rm -rf "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"', shell_source)
+        self.assertIn('rm -rf "$WORK_DIR" "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"', shell_source)
         self.assertIn('find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.dmg.*"', shell_source)
-        self.assertLess(shell_source.index('rm -rf "$APP_PATH"'), shell_source.index('"$PYTHON_EXE" -m PyInstaller'))
+        self.assertLess(shell_source.index('rm -rf "$WORK_DIR"'), shell_source.index('"$PYTHON_EXE" -m PyInstaller'))
         verifier_index = shell_source.index("scripts/verify_packaged_app.py")
         collect_cleanup_index = shell_source.index('rm -rf "$APP_DIR_PATH"', verifier_index)
         self.assertLess(verifier_index, collect_cleanup_index)
-        self.assertLess(collect_cleanup_index, shell_source.index('if [[ "$ZIP" == "1"'))
+        work_cleanup_index = shell_source.index('rm -rf "$WORK_DIR"', collect_cleanup_index)
+        self.assertLess(collect_cleanup_index, work_cleanup_index)
+        self.assertLess(work_cleanup_index, shell_source.index('if [[ "$ZIP" == "1"'))
 
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn("function Remove-EDBPathIfExists", ps_source)
         self.assertIn("$PackageDirPath = Join-Path $ResolvedOutputDir $AppName", ps_source)
         self.assertIn('$SourcePackagePath = Join-Path $ResolvedOutputDir "source-package"', ps_source)
-        cleanup_index = ps_source.index("foreach ($StalePath in @($PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath))")
+        self.assertIn('$WorkPath = Join-Path $ResolvedOutputDir "_pyinstaller_build"', ps_source)
+        cleanup_index = ps_source.index("foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath))")
         self.assertLess(cleanup_index, ps_source.index("$HasPyInstaller = $true"))
         self.assertIn("Remove-EDBPathIfExists $StalePath", ps_source)
         pyinstaller_index = ps_source.index("if ($HasPyInstaller)")
@@ -493,6 +497,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertLess(
             fallback_index,
             ps_source.index("New-Item -ItemType Directory -Force -Path $PackageRoot", fallback_index),
+        )
+
+    def test_packaging_scripts_isolate_pyinstaller_workpath(self) -> None:
+        shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn('--workpath "$WORK_DIR"', shell_source)
+        self.assertLess(shell_source.index('--workpath "$WORK_DIR"'), shell_source.index('--name "$APP_NAME"'))
+        self.assertIn('rm -rf "$WORK_DIR"', shell_source)
+
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn('"--workpath", $WorkPath', ps_source)
+        self.assertLess(ps_source.index('"--workpath", $WorkPath'), ps_source.index('"--name", $AppName'))
+        self.assertLess(
+            ps_source.index("& $PythonExe -m PyInstaller @PyInstallerArgs"),
+            ps_source.index("Remove-EDBPathIfExists $WorkPath", ps_source.index("& $PythonExe -m PyInstaller @PyInstallerArgs")),
         )
 
     def test_windows_installer_derives_version_from_packaged_update_metadata(self) -> None:

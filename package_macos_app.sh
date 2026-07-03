@@ -218,13 +218,14 @@ fi
 mkdir -p "$RESOLVED_OUTPUT_DIR"
 SPEC_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_spec"
 mkdir -p "$SPEC_DIR"
+WORK_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_build"
 APP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME.app"
 APP_DIR_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME"
 ZIP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.zip"
 DMG_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.dmg"
 APP_NOTARY_ZIP="$RESOLVED_OUTPUT_DIR/$APP_NAME-notary-upload.zip"
 
-rm -rf "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"
+rm -rf "$WORK_DIR" "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"
 find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.dmg.*" -exec rm -rf {} +
 
 APP_UPDATE_CONFIG="$SPEC_DIR/app_update_config.json"
@@ -348,6 +349,7 @@ add_data "assets/app_icon.png" "assets"
   --osx-bundle-identifier "$BUNDLE_ID" \
   --distpath "$RESOLVED_OUTPUT_DIR" \
   --specpath "$SPEC_DIR" \
+  --workpath "$WORK_DIR" \
   --name "$APP_NAME" \
   "${DATA_ARGS[@]}" \
   "${HIDDEN_IMPORT_ARGS[@]}" \
@@ -378,6 +380,9 @@ if [[ -n "$PACKAGED_APP_ROOT" ]]; then
 fi
 if [[ -d "$APP_PATH" && -d "$APP_DIR_PATH" ]]; then
   rm -rf "$APP_DIR_PATH"
+fi
+if [[ -d "$APP_PATH" ]]; then
+  rm -rf "$WORK_DIR"
 fi
 
 notarytool_submit() {
