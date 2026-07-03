@@ -5,11 +5,20 @@ import os
 import sys
 from pathlib import Path
 
+
+PROJECT_ROOT = Path(globals().get("SPECPATH", Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd())).resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from scripts.verify_frontend_package import collect_errors
 
 
+def project_path(rel_path: str) -> Path:
+    return PROJECT_ROOT / rel_path
+
+
 def verify_frontend_package() -> None:
-    errors = collect_errors(Path.cwd())
+    errors = collect_errors(PROJECT_ROOT)
     if errors:
         message = "\n".join(f"[frontend-package] ERROR: {error}" for error in errors)
         raise SystemExit(message)
@@ -17,7 +26,7 @@ def verify_frontend_package() -> None:
 
 def resolve_icon() -> str | None:
     icon_name = "app_icon.icns" if sys.platform == "darwin" else "app_icon.ico"
-    icon_path = Path("assets") / icon_name
+    icon_path = project_path(f"assets/{icon_name}")
     return str(icon_path) if icon_path.exists() else None
 
 
@@ -33,7 +42,7 @@ def build_update_config() -> tuple[str, dict]:
         "downloadUrl": "",
         "releaseNotesUrl": "",
     }
-    source = Path("app_update_config.json")
+    source = project_path("app_update_config.json")
     if source.exists():
         try:
             data = json.loads(source.read_text(encoding="utf-8-sig"))
@@ -49,7 +58,7 @@ def build_update_config() -> tuple[str, dict]:
         "releaseNotesUrl": os.environ.get("EDB_PACKAGE_RELEASE_NOTES_URL", os.environ.get("EDB_RELEASE_NOTES_URL", "")).strip(),
     }
     config.update({key: value for key, value in env_overrides.items() if value})
-    target = Path("build") / "app_update_config.generated.json"
+    target = project_path("build/app_update_config.json")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return str(target), config
@@ -94,10 +103,14 @@ HIDDEN_IMPORTS = [
 ]
 
 a = Analysis(
-    ['app_server.py'],
-    pathex=[],
+    [str(project_path("app_server.py"))],
+    pathex=[str(PROJECT_ROOT)],
     binaries=[],
-    datas=[item for item in UI_DATAS + ASSET_DATAS + APP_CONFIG_DATAS + SCRIPT_DATAS if Path(item[0]).exists()],
+    datas=[
+        (str(project_path(source)), destination)
+        for source, destination in UI_DATAS + ASSET_DATAS + SCRIPT_DATAS
+        if project_path(source).exists()
+    ] + APP_CONFIG_DATAS,
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
@@ -143,4 +156,7 @@ if sys.platform == "darwin":
         icon=resolved_icon,
         bundle_identifier=bundle_identifier,
         version=bundle_version,
+        info_plist={
+            "CFBundleVersion": bundle_version,
+        },
     )

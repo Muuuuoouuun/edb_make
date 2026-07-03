@@ -409,6 +409,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         spec_source = (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8")
         self.assertLess(spec_source.index("verify_frontend_package()"), spec_source.index("a = Analysis("))
 
+    def test_pyinstaller_spec_uses_project_root_for_direct_builds(self) -> None:
+        source = (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8")
+        self.assertIn("SPECPATH", source)
+        self.assertIn("PROJECT_ROOT", source)
+        self.assertLess(source.index("sys.path.insert(0, str(PROJECT_ROOT))"), source.index("from scripts.verify_frontend_package import collect_errors"))
+        self.assertIn("collect_errors(PROJECT_ROOT)", source)
+        self.assertIn('project_path("build/app_update_config.json")', source)
+        self.assertIn('[str(project_path("app_server.py"))]', source)
+        self.assertIn("pathex=[str(PROJECT_ROOT)]", source)
+        self.assertIn('"CFBundleVersion": bundle_version', source)
+        self.assertNotIn("collect_errors(Path.cwd())", source)
+        self.assertNotIn("pathex=[]", source)
+
     def test_frontend_bundle_builder_updates_board_cache_bust(self) -> None:
         source = (PROJECT_ROOT / "scripts" / "build_frontend_bundle.mjs").read_text(encoding="utf-8")
         self.assertIn("board.html", source)
