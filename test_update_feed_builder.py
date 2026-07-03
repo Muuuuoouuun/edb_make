@@ -197,6 +197,55 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("macos artifact type must be one of: dmg, zip", result.stderr)
 
+    def test_rejects_download_url_filename_that_mismatches_artifact_type(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-Setup.exe",
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "macos download URL file name does not match dmg artifact extension (.dmg)",
+            result.stderr,
+        )
+
+    def test_derives_download_file_name_without_query_string(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            output = tmpdir / "update.json"
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg?download=1",
+                    "--output",
+                    str(output),
+                ],
+                cwd=PROJECT_ROOT,
+                check=True,
+            )
+
+            feed = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual("ClassInEDBMVP-macOS.dmg", feed["platforms"]["macos"]["fileName"])
+
     def test_rejects_artifact_without_download_url(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

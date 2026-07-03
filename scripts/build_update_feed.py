@@ -45,6 +45,24 @@ def validate_artifact_type_filename(artifact: Path, artifact_type: str) -> None:
         )
 
 
+def artifact_file_name_from_url(download_url: str) -> str:
+    return Path(urlparse(download_url).path).name
+
+
+def validate_download_url_filename(platform: str, download_url: str, artifact_type: str) -> str:
+    file_name = artifact_file_name_from_url(download_url)
+    if not file_name:
+        return ""
+    expected_suffixes = ARTIFACT_TYPE_SUFFIXES.get(str(artifact_type or "").strip().lower())
+    suffix = Path(file_name).suffix.lower()
+    if suffix and expected_suffixes and suffix not in expected_suffixes:
+        expected = ", ".join(expected_suffixes)
+        raise ValueError(
+            f"{platform} download URL file name does not match {artifact_type} artifact extension ({expected})"
+        )
+    return file_name
+
+
 def validate_platform_artifact_type(platform: str, artifact_type: str) -> str:
     normalized_platform = str(platform or "").strip().lower()
     normalized_type = str(artifact_type or "").strip().lower()
@@ -164,7 +182,10 @@ def platform_payload(
         payload["releaseNotesUrl"] = safe_release_notes_url
     payload.update(artifact_metadata(artifact_path, artifact_type=safe_artifact_type))
     if "fileName" not in payload and safe_download_url:
-        payload["fileName"] = Path(safe_download_url.rstrip("/")).name or f"{platform}-{version}"
+        payload["fileName"] = (
+            validate_download_url_filename(platform, safe_download_url, safe_artifact_type)
+            or f"{platform}-{version}"
+        )
     return payload
 
 
