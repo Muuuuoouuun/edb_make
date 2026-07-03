@@ -2,16 +2,14 @@ __pycache__/
 *.pyc
 .venv/
 .env.local
+.DS_Store
 
 samples/
 out_image1/
 out_images_sample4/
 .pipeline_cache/
 .app_runtime/
-smoke_pipeline_output/
-pipeline_output_smoke/
-pipeline_output_test/
-pipeline_output_perspective/
+pipeline_output*/
 mvp_export*/
 mvp_output/
 smoke_server_export*/
@@ -23,6 +21,8 @@ tmp_debug_output/
 /tmp_tune_*/
 /tmp_validation_*/
 20[0-9][0-9][0-9][0-9][0-9][0-9]_*/
+*_img_*/
+generated_edb_pair*/
 ui_prototype/prototype_data.js
 ui_prototype/generated_session.js
 local_test_output/
@@ -34,10 +34,6 @@ app_server_stderr.log
 
 generated_*.edb
 *.edb
-smoke_pipeline_output/
-pipeline_output_smoke/
-pipeline_output_test/
-tmp_debug_output/
 test_output*/
 test_output_*/
 *.png
