@@ -107,6 +107,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
+        self.assertIn("materializeSessionForItems(session, nextItems, fileName)", remove_flow)
+        self.assertIn("setSession(nextSession)", remove_flow)
+        self.assertIn("postRestore(nextSession)", remove_flow)
 
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

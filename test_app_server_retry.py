@@ -584,6 +584,44 @@ class TestSessionExcludeMutation(unittest.TestCase):
         self.assertIsNotNone(remembered)
         self.assertEqual(["p2"], [problem["id"] for problem in remembered["problems"]])
 
+    def test_exclude_cleans_snake_case_page_links_and_review_focus(self):
+        session = {
+            "pages": [
+                {"id": "page-1", "problem_ids": ["p1", "p2"]},
+            ],
+            "problems": [
+                {"id": "p1", "sourcePageId": "page-1", "bbox": {"width": 100, "height": 80}},
+                {"id": "p2", "sourcePageId": "page-1", "bbox": {"width": 100, "height": 80}},
+            ],
+            "reviewFocus": {"filter": "all", "problemIds": ["p1"]},
+            "review_focus": {"filter": "all", "problem_ids": ["p1"]},
+        }
+
+        new_session = app_server._mutate_exclude_many(session, ["p1"])
+
+        self.assertEqual(["p2"], [problem["id"] for problem in new_session["problems"]])
+        self.assertEqual(["p2"], new_session["pages"][0]["problemIds"])
+        self.assertEqual(["p2"], new_session["pages"][0]["problem_ids"])
+        self.assertNotIn("reviewFocus", new_session)
+        self.assertNotIn("review_focus", new_session)
+
+    def test_rewrite_session_for_http_normalizes_legacy_problem_links(self):
+        session = {
+            "pages": [
+                {"id": "page-1", "problem_ids": ["p1", "p2"]},
+            ],
+            "problems": [
+                {"id": "p1", "source_page_id": "page-1"},
+                {"id": "p2", "sourcePageId": "page-1"},
+            ],
+        }
+
+        rewritten = app_server.rewrite_session_for_http(session)
+
+        self.assertEqual(["p1", "p2"], rewritten["pages"][0]["problemIds"])
+        self.assertEqual(["p1", "p2"], rewritten["pages"][0]["problem_ids"])
+        self.assertEqual("page-1", rewritten["problems"][0]["sourcePageId"])
+
 
 class TestSessionCropMutation(unittest.TestCase):
     def test_bbox_crop_wraps_fractional_edges_outward(self):
@@ -733,6 +771,47 @@ class TestSessionCropMutation(unittest.TestCase):
             crop_path = app_server._resolve_session_path(problem["imagePath"])
             self.assertIsNotNone(crop_path)
             self.assertEqual((150, 120), Image.open(crop_path).size)
+
+    def test_manual_crop_materializes_missing_problem_image_from_source_page(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            Image.new("RGB", (300, 200), "white").save(page_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problem_ids": ["p1"],
+                }],
+                "problems": [{
+                    "id": "p1",
+                    "source_page_id": "page-1",
+                    "bbox": {"left": 50, "top": 40, "width": 100, "height": 80},
+                }],
+            }
+
+            cropped_session = app_server._mutate_crop(
+                session,
+                "p1",
+                {"cropBox": {"left": 45, "top": 35, "width": 110, "height": 90}},
+            )
+
+            problem = cropped_session["problems"][0]
+            self.assertEqual({"left": 50.0, "top": 40.0, "width": 100.0, "height": 80.0}, problem["cropBaseBbox"])
+            base_path = app_server._resolve_session_path(problem["cropBaseImagePath"])
+            crop_path = app_server._resolve_session_path(problem["imagePath"])
+            self.assertIsNotNone(base_path)
+            self.assertIsNotNone(crop_path)
+            self.assertTrue(base_path.exists())
+            self.assertTrue(crop_path.exists())
+            with Image.open(base_path) as base_image:
+                self.assertEqual((100, 80), base_image.size)
+            with Image.open(crop_path) as crop_image:
+                self.assertEqual((110, 90), crop_image.size)
+            self.assertEqual({"left": 45.0, "top": 35.0, "width": 110.0, "height": 90.0}, problem["bbox"])
 
     def test_manual_crop_refreshes_board_render_for_processed_steps(self):
         from PIL import Image, ImageDraw

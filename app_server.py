@@ -2582,12 +2582,20 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten["rendered_page_file_uris"] = [path_to_api_url(value) for value in session.get("rendered_page_paths", [])]
 
     for problem in rewritten.get("problems", []):
+        if not problem.get("sourcePageId") and problem.get("source_page_id"):
+            problem["sourcePageId"] = str(problem.get("source_page_id") or "")
         problem["imagePath"] = path_to_api_url(problem.get("imagePath"))
         problem["sourceImagePath"] = path_to_api_url(problem.get("sourceImagePath"))
         problem["boardRenderPath"] = path_to_api_url(problem.get("boardRenderPath"))
         problem["originalImagePath"] = path_to_api_url(problem.get("originalImagePath"))
 
     for page in rewritten.get("pages", []):
+        raw_problem_ids = page.get("problemIds")
+        if not isinstance(raw_problem_ids, list):
+            raw_problem_ids = page.get("problem_ids")
+        problem_ids = [str(pid) for pid in (raw_problem_ids or []) if str(pid or "").strip()]
+        page["problemIds"] = problem_ids
+        page["problem_ids"] = problem_ids
         # Front-end loads page images through /api/file; the original
         # sourceImagePath is kept (server-side absolute path) for mutation
         # endpoints to re-open with PIL.
@@ -3259,10 +3267,11 @@ def _replace_problem(session: dict[str, Any], original_index: int, replacements:
 def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dict[str, Any]]:
     """Drop matching problems from session.problems and from each page's
     problemIds list. Returns the removed entries (in original order)."""
+    normalized_problem_ids = {str(problem_id) for problem_id in problem_ids}
     removed: list[dict[str, Any]] = []
     kept: list[dict[str, Any]] = []
     for problem in session.get("problems") or []:
-        if isinstance(problem, dict) and str(problem.get("id")) in problem_ids:
+        if isinstance(problem, dict) and str(problem.get("id")) in normalized_problem_ids:
             removed.append(problem)
         else:
             kept.append(problem)
@@ -3270,7 +3279,36 @@ def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dic
     for page in session.get("pages", []):
         if not isinstance(page, dict):
             continue
-        page["problemIds"] = [pid for pid in (page.get("problemIds") or []) if pid not in problem_ids]
+        raw_page_ids = page.get("problemIds")
+        if not isinstance(raw_page_ids, list):
+            raw_page_ids = page.get("problem_ids")
+        next_page_ids = [
+            str(pid)
+            for pid in (raw_page_ids or [])
+            if str(pid) not in normalized_problem_ids
+        ]
+        page["problemIds"] = next_page_ids
+        page["problem_ids"] = next_page_ids
+    review_focus = session.get("reviewFocus")
+    if not isinstance(review_focus, dict):
+        review_focus = session.get("review_focus")
+    if isinstance(review_focus, dict):
+        raw_focus_ids = review_focus.get("problemIds")
+        if not isinstance(raw_focus_ids, list):
+            raw_focus_ids = review_focus.get("problem_ids")
+        next_focus_ids = [
+            str(pid)
+            for pid in (raw_focus_ids or [])
+            if str(pid) not in normalized_problem_ids
+        ]
+        if next_focus_ids:
+            review_focus["problemIds"] = next_focus_ids
+            review_focus["problem_ids"] = next_focus_ids
+            session["reviewFocus"] = review_focus
+            session["review_focus"] = review_focus
+        else:
+            session.pop("reviewFocus", None)
+            session.pop("review_focus", None)
     _refresh_session_problem_counts(session)
     return removed
 
@@ -3587,24 +3625,61 @@ def _crop_image_by_bbox(source_path: Path, bbox: Box, output_path: Path) -> tupl
         return cropped.size
 
 
+def _materialize_crop_base_image(
+    session: dict[str, Any],
+    problem_id: str,
+    source_path: Path,
+    base_bbox: Box,
+) -> str:
+    crop_dir = _crop_dir_for_session(session)
+    base_crop_path = crop_dir / _make_crop_filename(problem_id, "crop_base")
+    _crop_image_by_bbox(source_path, base_bbox, base_crop_path)
+    return base_crop_path.resolve().as_uri()
+
+
 def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dict[str, Any]:
     _index, problem = _find_problem(session, problem_id)
     crop_payload = raw_crop if isinstance(raw_crop, dict) else {}
+    page_source_path = _source_page_path_for_problem(session, problem)
     if "cropBaseBbox" not in problem:
         base_bbox = _bbox_from_problem(problem)
+        crop_base_image_path = problem.get("imagePath")
+        if (
+            not crop_base_image_path
+            and page_source_path is not None
+            and page_source_path.exists()
+        ):
+            crop_base_image_path = _materialize_crop_base_image(
+                session,
+                problem_id,
+                page_source_path,
+                base_bbox,
+            )
         problem["cropBaseBbox"] = {
             "left": base_bbox.left,
             "top": base_bbox.top,
             "width": base_bbox.width,
             "height": base_bbox.height,
         }
-        problem["cropBaseImagePath"] = problem.get("imagePath")
-        problem["cropBaseBoardRenderPath"] = problem.get("boardRenderPath") or problem.get("imagePath")
+        problem["cropBaseImagePath"] = crop_base_image_path
+        problem["cropBaseBoardRenderPath"] = problem.get("boardRenderPath") or crop_base_image_path
     else:
         base_bbox = _bbox_from_problem(problem, prefer_crop_base=True)
+        if (
+            not _resolve_session_path(problem.get("cropBaseImagePath") or problem.get("imagePath"))
+            and page_source_path is not None
+            and page_source_path.exists()
+        ):
+            crop_base_image_path = _materialize_crop_base_image(
+                session,
+                problem_id,
+                page_source_path,
+                base_bbox,
+            )
+            problem["cropBaseImagePath"] = crop_base_image_path
+            problem["cropBaseBoardRenderPath"] = problem.get("cropBaseBoardRenderPath") or crop_base_image_path
 
     crop_box_payload = crop_payload.get("cropBox") or crop_payload.get("crop_box")
-    page_source_path = _source_page_path_for_problem(session, problem)
     next_bbox: Box
     crop: dict[str, float]
     if crop_box_payload is not None:
