@@ -24,6 +24,8 @@ FORBIDDEN_FRONTEND_FILES = (
     "ui_prototype/app.js",
     "ui_prototype/prototype_data.js",
     "ui_prototype/generated_session.js",
+    "ui_prototype/vendor/babel.min.js",
+    "ui_prototype/vendor/babel.min.js.map",
     "build_ui_prototype_data.py",
 )
 
@@ -38,6 +40,7 @@ FRONTEND_BUNDLE_SOURCE_FILES = (
     "ui_prototype/tweaks-panel.jsx",
     "ui_prototype/app.jsx",
     "scripts/build_frontend_bundle.mjs",
+    "scripts/vendor/babel.min.js",
 )
 SOURCE_DIGEST_RE = re.compile(r"Source SHA256:\s*([0-9a-f]{64})")
 

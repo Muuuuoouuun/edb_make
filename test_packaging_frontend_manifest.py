@@ -16,12 +16,14 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         ui_root = project_root / "ui_prototype"
         vendor_root = ui_root / "vendor"
         scripts_root = project_root / "scripts"
+        build_vendor_root = scripts_root / "vendor"
         vendor_root.mkdir(parents=True)
-        scripts_root.mkdir(parents=True)
+        build_vendor_root.mkdir(parents=True)
         (ui_root / "art.jsx").write_text("const Art = () => null;\n", encoding="utf-8")
         (ui_root / "tweaks-panel.jsx").write_text("const Tweaks = () => null;\n", encoding="utf-8")
         (ui_root / "app.jsx").write_text("const App = () => null;\n", encoding="utf-8")
         (scripts_root / "build_frontend_bundle.mjs").write_text("console.log('build');\n", encoding="utf-8")
+        (build_vendor_root / "babel.min.js").write_text("// babel build tool\n", encoding="utf-8")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
         (ui_root / "board.html").write_text(
             '<!doctype html><script src="app.bundle.js?v=frontend-bundle-test"></script>\n',
@@ -105,6 +107,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("source digest is stale" in error for error in errors))
 
+    def test_frontend_package_rejects_bundle_built_with_old_babel_transformer(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            project_root = Path(raw_tmp)
+            self._write_frontend_project(project_root)
+            self.assertEqual([], collect_errors(project_root))
+
+            (project_root / "scripts" / "vendor" / "babel.min.js").write_text(
+                "// changed babel build tool\n",
+                encoding="utf-8",
+            )
+            errors = collect_errors(project_root)
+
+        self.assertTrue(any("source digest is stale" in error for error in errors))
+
     def test_frontend_package_rejects_bundle_without_source_digest(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             project_root = Path(raw_tmp)
@@ -117,6 +133,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             errors = collect_errors(project_root)
 
         self.assertTrue(any("missing the source digest" in error for error in errors))
+
+    def test_frontend_package_rejects_browser_side_babel_in_ui_assets(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            project_root = Path(raw_tmp)
+            self._write_frontend_project(project_root)
+            self.assertEqual([], collect_errors(project_root))
+
+            (project_root / "ui_prototype" / "vendor" / "babel.min.js").write_text(
+                "// old browser-side babel\n",
+                encoding="utf-8",
+            )
+            errors = collect_errors(project_root)
+
+        self.assertTrue(any("ui_prototype/vendor/babel.min.js" in error for error in errors))
 
     def test_packaged_app_layout_accepts_current_runtime_assets(self) -> None:
         with TemporaryDirectory() as raw_tmp:

@@ -7,13 +7,15 @@ import path from "node:path";
 const require = createRequire(import.meta.url);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(projectRoot, "ui_prototype");
-const Babel = require(path.join(uiRoot, "vendor", "babel.min.js"));
+const buildVendorRoot = path.join(projectRoot, "scripts", "vendor");
+const Babel = require(path.join(buildVendorRoot, "babel.min.js"));
 
 const inputFiles = ["art.jsx", "tweaks-panel.jsx", "app.jsx"];
 const outputFile = path.join(uiRoot, "app.bundle.js");
 const digestInputs = [
   ...inputFiles.map((fileName) => path.join("ui_prototype", fileName)),
   path.join("scripts", "build_frontend_bundle.mjs"),
+  path.join("scripts", "vendor", "babel.min.js"),
 ];
 
 async function frontendSourceDigest() {
