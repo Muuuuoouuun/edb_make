@@ -39,6 +39,7 @@ FRONTEND_BUNDLE_SOURCE_FILES = (
     "ui_prototype/app.jsx",
     "scripts/build_frontend_bundle.mjs",
 )
+SOURCE_DIGEST_RE = re.compile(r"Source SHA256:\s*([0-9a-f]{64})")
 
 
 def _read(path: Path) -> str:
@@ -103,7 +104,7 @@ def collect_errors(project_root: Path) -> list[str]:
         if "/* app.jsx */" not in bundle:
             errors.append("app.bundle.js does not include the app.jsx section")
         expected_digest = frontend_bundle_source_digest(root)
-        digest_match = re.search(r"Source SHA256:\s*([0-9a-f]{64})", bundle)
+        digest_match = SOURCE_DIGEST_RE.search(bundle)
         if expected_digest is None:
             errors.append("could not calculate app.bundle.js source digest because a bundle input is missing")
         elif digest_match is None:
