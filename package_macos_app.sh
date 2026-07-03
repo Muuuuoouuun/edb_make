@@ -81,6 +81,14 @@ require_zip_entry() {
   fi
 }
 
+verify_packaged_app_root() {
+  local package_root="$1"
+  "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "$package_root" \
+    --expected-app-name "$APP_NAME" \
+    --expected-version "$EFFECTIVE_APP_VERSION" \
+    --expected-bundle-id "$BUNDLE_ID"
+}
+
 verify_dmg_contains_app() {
   local dmg_path="$1"
   local app_name="$2"
@@ -444,10 +452,7 @@ elif [[ -d "$RESOLVED_OUTPUT_DIR/$APP_NAME" ]]; then
   PACKAGED_APP_ROOT="$RESOLVED_OUTPUT_DIR/$APP_NAME"
 fi
 if [[ -n "$PACKAGED_APP_ROOT" ]]; then
-  "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "$PACKAGED_APP_ROOT" \
-    --expected-app-name "$APP_NAME" \
-    --expected-version "$EFFECTIVE_APP_VERSION" \
-    --expected-bundle-id "$BUNDLE_ID"
+  verify_packaged_app_root "$PACKAGED_APP_ROOT"
 fi
 if [[ -d "$APP_PATH" && -d "$APP_DIR_PATH" ]]; then
   rm -rf "$APP_DIR_PATH"
@@ -483,6 +488,7 @@ if [[ -d "$APP_PATH" ]] && command -v codesign >/dev/null 2>&1; then
   else
     codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
   fi
+  verify_packaged_app_root "$APP_PATH"
 fi
 
 if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
@@ -492,6 +498,7 @@ if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
   notarytool_submit "$APP_NOTARY_ZIP"
   xcrun stapler staple "$APP_PATH"
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+  verify_packaged_app_root "$APP_PATH"
   rm -f "$APP_NOTARY_ZIP"
 fi
 

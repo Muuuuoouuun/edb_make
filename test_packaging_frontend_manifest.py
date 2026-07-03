@@ -467,6 +467,17 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn('"--expected-app-name"', installer_source)
         self.assertIn('"--expected-version"', installer_source)
 
+    def test_macos_packaging_rechecks_app_after_signing_and_stapling(self) -> None:
+        source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn("verify_packaged_app_root()", source)
+        self.assertIn('verify_packaged_app_root "$PACKAGED_APP_ROOT"', source)
+        signed_verify_index = source.index('verify_packaged_app_root "$APP_PATH"', source.index('codesign --force --deep --sign -'))
+        self.assertLess(source.index('codesign --force --deep --sign -'), signed_verify_index)
+        stapler_index = source.index('xcrun stapler staple "$APP_PATH"')
+        stapled_verify_index = source.index('verify_packaged_app_root "$APP_PATH"', stapler_index)
+        self.assertLess(stapler_index, stapled_verify_index)
+        self.assertLess(signed_verify_index, source.index('if [[ "$ZIP" == "1"'))
+
     def test_packaging_scripts_remove_previous_same_name_outputs(self) -> None:
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn('WORK_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_build"', shell_source)
