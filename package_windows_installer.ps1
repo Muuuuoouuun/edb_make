@@ -170,6 +170,11 @@ if ($Sign -and $SkipAppBuild) {
         -Description $AppName
 }
 
+$InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"
+if (Test-Path $InstallerPath) {
+    Remove-Item -Force $InstallerPath
+}
+
 $Iscc = Find-InnoSetupCompiler $InnoSetupCompiler
 if (-not $Iscc) {
     throw "Inno Setup 6 compiler(ISCC.exe)를 찾지 못했습니다. https://jrsoftware.org/isinfo.php 에서 설치한 뒤 다시 실행하거나 -InnoSetupCompiler 경로를 지정하세요."
@@ -184,7 +189,6 @@ $IsccArgs = @(
 )
 & $Iscc @IsccArgs $InstallerScript
 
-$InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"
 if ($Sign) {
     Invoke-EDBWindowsSignature `
         -Path $InstallerPath `

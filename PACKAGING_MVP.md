@@ -124,6 +124,8 @@ Useful options:
 .\package_mvp.ps1 -OutputDir .\dist_smoke -Clean -Zip
 ```
 
+The packaging scripts remove deterministic previous outputs for the same app name before writing a new package. Use a separate `-OutputDir` when you need to keep older artifacts side by side.
+
 Expected output:
 - **Default**: a folder containing the executable and dependencies: `dist\ClassInEDBMVP\`
 - **Single file**: a standalone executable: `dist\ClassInEDBMVP.exe`
@@ -162,6 +164,8 @@ Expected output:
 dist/ClassInEDBMVP.app
 dist/ClassInEDBMVP-macOS.zip
 ```
+
+The macOS wrapper removes stale same-name app folders, `.app` bundles, zip archives, DMGs, and notary-upload zips before each build. After verifying the `.app`, it also removes PyInstaller's sibling collect folder so the output directory does not expose an extra runnable-looking copy.
 
 The default macOS build is windowed and ad-hoc signed when `codesign` is available. Logs are written under:
 ```text

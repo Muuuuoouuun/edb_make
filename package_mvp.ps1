@@ -46,10 +46,25 @@ if ($InstallPyInstaller) {
 
 $ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
 
+function Remove-EDBPathIfExists {
+    param([Parameter(Mandatory = $true)] [string]$Path)
+
+    if (Test-Path $Path) {
+        Remove-Item -Recurse -Force $Path
+    }
+}
+
 if ($Clean -and (Test-Path $ResolvedOutputDir)) {
     Remove-Item -Recurse -Force $ResolvedOutputDir
 }
 New-Item -ItemType Directory -Force -Path $ResolvedOutputDir | Out-Null
+$PackageDirPath = Join-Path $ResolvedOutputDir $AppName
+$PackageExePath = Join-Path $ResolvedOutputDir "$AppName.exe"
+$SourcePackagePath = Join-Path $ResolvedOutputDir "source-package"
+$ZipPath = Join-Path $ResolvedOutputDir "$AppName.zip"
+foreach ($StalePath in @($PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath)) {
+    Remove-EDBPathIfExists $StalePath
+}
 $SpecDir = Join-Path $ResolvedOutputDir "_pyinstaller_spec"
 New-Item -ItemType Directory -Force -Path $SpecDir | Out-Null
 $FrontendBundle = Join-Path $ProjectRoot "ui_prototype\app.bundle.js"
@@ -105,6 +120,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($HasPyInstaller) {
     $ModeArg = if ($OneFile) { "--onefile" } else { "--onedir" }
     $WindowArg = if ($Console) { "--console" } else { "--windowed" }
+    $PackageRoot = if ($OneFile) { $PackageExePath } else { $PackageDirPath }
     $ResolvedIconPath = if ([System.IO.Path]::IsPathRooted($IconPath)) { $IconPath } else { Join-Path $ProjectRoot $IconPath }
     $IconArgs = @()
     if (Test-Path $ResolvedIconPath) {
@@ -156,7 +172,6 @@ if ($HasPyInstaller) {
 
     & $PythonExe -m PyInstaller @PyInstallerArgs
 
-    $PackageRoot = if ($OneFile) { Join-Path $ResolvedOutputDir "$AppName.exe" } else { Join-Path $ResolvedOutputDir $AppName }
     if (-not $OneFile) {
         & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
             --expected-app-name $EffectiveAppName `
@@ -167,7 +182,7 @@ if ($HasPyInstaller) {
     if ($RequirePyInstaller) {
         throw "PyInstaller is required for this packaging mode. Run with -InstallPyInstaller or install PyInstaller first."
     }
-    $PackageRoot = Join-Path $ResolvedOutputDir "source-package"
+    $PackageRoot = $SourcePackagePath
     New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
 
     $ItemsToCopy = @(
@@ -232,10 +247,6 @@ if ($Zip) {
             -Description $AppName
     }
 
-    $ZipPath = Join-Path $ResolvedOutputDir "$AppName.zip"
-    if (Test-Path $ZipPath) {
-        Remove-Item $ZipPath -Force
-    }
     if (Test-Path $PackageRoot) {
         Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
         Write-Host "Zip archive: $ZipPath"

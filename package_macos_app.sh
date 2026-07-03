@@ -218,6 +218,14 @@ fi
 mkdir -p "$RESOLVED_OUTPUT_DIR"
 SPEC_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_spec"
 mkdir -p "$SPEC_DIR"
+APP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME.app"
+APP_DIR_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME"
+ZIP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.zip"
+DMG_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.dmg"
+APP_NOTARY_ZIP="$RESOLVED_OUTPUT_DIR/$APP_NAME-notary-upload.zip"
+
+rm -rf "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"
+find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.dmg.*" -exec rm -rf {} +
 
 APP_UPDATE_CONFIG="$SPEC_DIR/app_update_config.json"
 EDB_PACKAGE_APP_NAME="$APP_NAME" \
@@ -346,7 +354,6 @@ add_data "assets/app_icon.png" "assets"
   "${ICON_ARGS[@]}" \
   app_server.py
 
-APP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME.app"
 PLIST_PATH="$APP_PATH/Contents/Info.plist"
 if [[ -f "$PLIST_PATH" && -x "/usr/libexec/PlistBuddy" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EFFECTIVE_APP_VERSION" "$PLIST_PATH" >/dev/null 2>&1 || \
@@ -368,6 +375,9 @@ if [[ -n "$PACKAGED_APP_ROOT" ]]; then
     --expected-app-name "$APP_NAME" \
     --expected-version "$EFFECTIVE_APP_VERSION" \
     --expected-bundle-id "$BUNDLE_ID"
+fi
+if [[ -d "$APP_PATH" && -d "$APP_DIR_PATH" ]]; then
+  rm -rf "$APP_DIR_PATH"
 fi
 
 notarytool_submit() {
@@ -400,7 +410,6 @@ if [[ -d "$APP_PATH" ]] && command -v codesign >/dev/null 2>&1; then
 fi
 
 if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
-  APP_NOTARY_ZIP="$RESOLVED_OUTPUT_DIR/$APP_NAME-notary-upload.zip"
   rm -f "$APP_NOTARY_ZIP"
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$APP_NOTARY_ZIP")
   notarytool_submit "$APP_NOTARY_ZIP"
@@ -410,12 +419,11 @@ if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
 fi
 
 if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
-  rm -f "$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.zip"
-  (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$APP_NAME-macOS.zip")
+  rm -f "$ZIP_PATH"
+  (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$(basename "$ZIP_PATH")")
 fi
 
 if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
-  DMG_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.dmg"
   STAGING_DIR="$(mktemp -d "$RESOLVED_OUTPUT_DIR/${APP_NAME}.dmg.XXXXXX")"
   rm -f "$DMG_PATH"
   /usr/bin/ditto "$APP_PATH" "$STAGING_DIR/$APP_NAME.app"
@@ -442,10 +450,10 @@ echo "Packaging complete."
 if [[ -d "$APP_PATH" ]]; then
   echo "App bundle: $APP_PATH"
   if [[ "$ZIP" == "1" ]]; then
-    echo "Zip archive: $RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.zip"
+    echo "Zip archive: $ZIP_PATH"
   fi
   if [[ "$DMG" == "1" ]]; then
-    echo "DMG installer: $RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.dmg"
+    echo "DMG installer: $DMG_PATH"
   fi
 else
   echo "Output folder: $RESOLVED_OUTPUT_DIR"
