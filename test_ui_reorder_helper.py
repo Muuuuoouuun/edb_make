@@ -93,6 +93,7 @@ class TestUiReorderHelper(unittest.TestCase):
             if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
             const sandbox = {};
             sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
             vm.runInNewContext(
               source.slice(start, end) + '\n'
                 + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n'
@@ -129,6 +130,7 @@ class TestUiReorderHelper(unittest.TestCase):
             if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
             const sandbox = {};
             sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
             vm.runInNewContext(
               source.slice(start, end) + '\n'
                 + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
@@ -158,6 +160,44 @@ class TestUiReorderHelper(unittest.TestCase):
             ], 1.2, 3);
             if (magnetReflowed[0].placementMagnetColumnIndex !== 1 || magnetReflowed[0].placementXRatio !== 0.5) {
               throw new Error(`manual magnet column should survive reflow, got ${JSON.stringify(magnetReflowed[0])}`);
+            }
+          """
+        )
+
+    def test_page_as_is_reflow_uses_scaled_continuous_flow(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'page-1', heightFrac: 0.9, placementScaleRatio: 1.6, inputIntent: 'page-as-is' },
+              { id: 'page-2', heightFrac: 0.5, placementScaleRatio: 1.6, placementMode: 'continuous-page-as-is' },
+            ], 1.2, 3);
+
+            if (reflowed[0].boardColumnCount !== 1 || reflowed[1].boardColumnCount !== 1) {
+              throw new Error(`page-as-is should ignore multi-column grouping, got ${reflowed[0].boardColumnCount}/${reflowed[1].boardColumnCount}`);
+            }
+            if (reflowed[0].snappedNextStartYPages !== 1.44) {
+              throw new Error(`first page should reserve scaled proportional height 1.44p, got ${reflowed[0].snappedNextStartYPages}`);
+            }
+            if (reflowed[1].startYPages !== 1.44) {
+              throw new Error(`second page should start immediately after first, got ${reflowed[1].startYPages}`);
+            }
+            if (reflowed[1].snappedNextStartYPages !== 2.24) {
+              throw new Error(`second page should keep proportional continuous height, got ${reflowed[1].snappedNextStartYPages}`);
             }
           """
         )

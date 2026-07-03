@@ -500,12 +500,31 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    border-left: 1px dashed rgba(246,211,101,.18);
-    border-right: 1px dashed rgba(246,211,101,.08);
-    background: linear-gradient(90deg, rgba(246,211,101,.045), rgba(246,211,101,.012));
+    border-left: 1px dashed rgba(246,211,101,.1);
+    border-right: 1px dashed rgba(246,211,101,.04);
+    background: linear-gradient(90deg, rgba(246,211,101,.018), rgba(246,211,101,.004));
     pointer-events: none;
     z-index: 1;
-    opacity: .72;
+    opacity: 0;
+    transform: translateX(-1px) scaleX(.985);
+    transform-origin: left center;
+    transition:
+      opacity .24s ease,
+      transform .24s ease,
+      background .24s ease,
+      border-color .24s ease,
+      box-shadow .24s ease;
+  }
+  .stage-content.has-column-guides .stage-column-guide{
+    opacity: .1;
+  }
+  .stage-content.has-column-guides:hover .stage-column-guide{
+    opacity: .24;
+    transform: translateX(0) scaleX(1);
+  }
+  .stage-content.is-positioning .stage-column-guide{
+    opacity: .4;
+    transform: translateX(0) scaleX(1);
   }
   .stage-column-guide span{
     position: sticky;
@@ -519,6 +538,14 @@
     font-size: 9.5px;
     font-family: 'JetBrains Mono', monospace;
     letter-spacing: .04em;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity .2s ease, transform .2s ease, background .2s ease, color .2s ease;
+  }
+  .stage-content.has-column-guides:hover .stage-column-guide span,
+  .stage-content.is-positioning .stage-column-guide span{
+    opacity: .72;
+    transform: translateY(0);
   }
   .stage-column-guide.active{
     border-left-color: rgba(246,211,101,.9);
@@ -526,10 +553,13 @@
     background: linear-gradient(90deg, rgba(246,211,101,.16), rgba(246,211,101,.035));
     box-shadow: inset 0 0 0 1px rgba(246,211,101,.14);
     opacity: 1;
+    transform: translateX(0) scaleX(1);
   }
   .stage-column-guide.active span{
     background: rgba(246,211,101,.18);
     color: var(--chalk-warm);
+    opacity: 1;
+    transform: translateY(0);
   }
   .board-pageind{
     position: absolute;

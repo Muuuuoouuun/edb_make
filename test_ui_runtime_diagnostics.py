@@ -55,6 +55,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         rail = rail.split("function BoardStage", 1)[0]
         board_stage = source.split("function BoardStage", 1)[1]
         board_stage = board_stage.split("function downloadPublishSummary", 1)[0]
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
         self.assertIn("topbar-actions", topbar)
         self.assertIn("topbar-more-menu", topbar)
@@ -63,6 +65,14 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("hasSessionItems ? 'is-compact'", rail)
         self.assertIn("stage-fit-btn", board_stage)
         self.assertNotIn("title=\"자동 정렬\"", board_stage)
+        self.assertIn("한 줄 ${columnCount}개", board_stage)
+        self.assertIn("연속 이어붙임", board_stage)
+        self.assertIn("칸 {p.columnIndex + 1}", board_stage)
+        self.assertIn("한 줄 자료 수", side_panel)
+        self.assertIn("너비 맞춤 아님 · 한 줄 배치 개수", side_panel)
+        self.assertIn("배치 칸 가이드에 자동 정렬", side_panel)
+        self.assertNotIn("열 수", side_panel)
+        self.assertNotIn("열 가이드 자동 정렬", side_panel)
         self.assertIn(".drop-zone.is-compact", html)
         self.assertIn(".topbar-more-menu", html)
 
@@ -117,6 +127,15 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("quick-scale-control", side_panel)
         self.assertIn("scale-limit-note", side_panel)
         self.assertIn("--range-progress", side_panel)
+        self.assertIn("너비 맞춤 이어붙임", side_panel)
+        self.assertIn("title=\"너비 맞춤 후 아래로 이어붙이기\"", side_panel)
+        fit_width_flow = source.split("if (wantsFitWidth) {", 1)[1]
+        fit_width_flow = fit_width_flow.split("} else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio'))", 1)[0]
+        self.assertIn("next.inputIntent = 'page-as-is';", fit_width_flow)
+        self.assertIn("next.placementMode = 'continuous-page-as-is';", fit_width_flow)
+        self.assertIn("heightPages * targetScale", fit_width_flow)
+        self.assertIn("next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));", fit_width_flow)
+        self.assertNotIn("snapUpPages(startPages + slotSpanPages)", fit_width_flow)
         self.assertIn("publish-result-panel ${open ? 'open' : 'is-collapsed'}", publish_panel)
         self.assertIn("제작 결과 펼치기", publish_panel)
         self.assertIn(".position-sliders input.scale-range", html)
@@ -143,6 +162,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", reorder_flow)
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
+        self.assertIn("if (session)", remove_flow)
+        self.assertIn("void mutateSession('exclude', { problemId: id });", remove_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
 
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:

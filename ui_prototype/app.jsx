@@ -3859,7 +3859,10 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const rawCount = items.filter(i => i.step === 'raw').length;
   const s1Count = items.filter(i => i.step === 's1').length;
   const leftZonePercent = `${FIXED_LEFT_ZONE_RATIO * 100}%`;
-  const activePlacement = layout.positions[items.findIndex(x => x.id === activeId)] || null;
+  const activeIndex = items.findIndex(x => x.id === activeId);
+  const activePlacement = layout.positions[activeIndex] || null;
+  const activeLayoutItem = layout.items[activeIndex] || null;
+  const activeContinuousFlow = isContinuousPlacementItem(activeLayoutItem);
   const columnGuideWidth = contentW > 0 ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10) : 0;
   const columnGuides = contentW > 0
     ? boardColumnRatios(columnCount).map((ratio, index) => ({
@@ -3898,7 +3901,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
             <div className="stage-scroll" ref={scrollRef} onScroll={onScroll}>
               <div
-                className="stage-content"
+                className={`stage-content ${columnCount > 1 ? 'has-column-guides' : ''} ${positioningId ? 'is-positioning' : ''}`}
                 ref={contentRef}
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
@@ -3916,7 +3919,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     style={{ left: guide.left, width: guide.width }}
                     aria-hidden="true"
                   >
-                    <span>{guide.index + 1}열</span>
+                    <span>칸 {guide.index + 1}</span>
                   </div>
                 ))}
 
@@ -3969,7 +3972,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                           <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
                         )}
                         {p.columnCount > 1 && (
-                          <span className="column-mark">{p.columnIndex + 1}열</span>
+                          <span className="column-mark">칸 {p.columnIndex + 1}</span>
                         )}
                         {p.rowHeightPages > p.renderedHeightPages + 0.05 && (
                           <span className="row-mark">{p.rowHeightPages.toFixed(1)}p</span>
@@ -4013,7 +4016,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
           <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
           <span className="chip">
             <span className="pip" />
-            {columnCount}열
+            {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
           </span>
           {activePlacement && (
             <span className="chip">
@@ -4395,6 +4398,7 @@ function SidePanel({
   const fitPlacementWidth = () => {
     updatePlacement({
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
+      xEdited: false,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
       scaleRatio: PLACEMENT_SCALE_MAX,
       fitWidth: true,
@@ -4445,7 +4449,7 @@ function SidePanel({
           className={tab==='board' ? 'on' : ''}
           onClick={() => setTab('board')}
           title="칠판 설정"
-          data-tooltip="칠판 색상, 열 수, AI 인식 설정"
+          data-tooltip="칠판 색상, 한 줄 자료 수, AI 인식 설정"
         >
           칠판
         </button>
@@ -4602,10 +4606,10 @@ function SidePanel({
                           <button
                             className="btn fit-width-action"
                             type="button"
-                            title="페이지 너비 맞춤"
+                            title="너비 맞춤 후 아래로 이어붙이기"
                             disabled={!item}
                             onClick={fitPlacementWidth}
-                          >{Icon.stretchHorizontal} 너비 맞춤</button>
+                          >{Icon.stretchHorizontal} 너비 맞춤 이어붙임</button>
                         )}
                         <div className="spacer" />
                         <span className="scale">{placementScalePercent}%</span>
@@ -4898,10 +4902,10 @@ function SidePanel({
             <div className="panel-section-hd">레이아웃 <span className="line" /></div>
 
             <div className="row-control">
-              <div className="lbl">열 수<small>한 행에 나란히 둘 자료 수</small></div>
+              <div className="lbl">한 줄 자료 수<small>너비 맞춤 아님 · 한 줄 배치 개수</small></div>
               <div className="seg-mini">
                 {[1,2,3].map(n => (
-                  <button key={n} className={boardColumns===n ? 'on' : ''} onClick={() => setBoardColumns(n)}>{n}</button>
+                  <button key={n} className={boardColumns===n ? 'on' : ''} onClick={() => setBoardColumns(n)}>{n}개</button>
                 ))}
               </div>
             </div>
@@ -4912,7 +4916,7 @@ function SidePanel({
             </div>
 
             <div className="row-control">
-              <div className="lbl">드래그 마그넷<small>열 가이드 자동 정렬</small></div>
+              <div className="lbl">드래그 마그넷<small>배치 칸 가이드에 자동 정렬</small></div>
               <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
             </div>
 
@@ -5867,10 +5871,10 @@ const INPUT_INTENT_OPTIONS = [
   {
     value: 'page-as-is',
     label: '원본 페이지 이어붙이기',
-    description: '너비 맞춤 고화질 페이지를 아래로 이어 배치',
+    description: '너비에 맞춰 키우고 높이는 비율대로 이어 배치',
     icon: 'rows3',
     badgeLabel: '원본 이어붙임',
-    pills: ['3단계 고화질', '너비 맞춤', '연속 이어붙이기'],
+    pills: ['3단계 고화질', '너비 맞춤', '비율 높이', '연속 이어붙이기'],
     exportMode: 'question',
   },
 ];
@@ -8861,9 +8865,15 @@ function App(){
             Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') ? patch.scaleRatio : PLACEMENT_SCALE_MAX,
             PLACEMENT_SCALE_MAX
           );
-          const slotSpanPages = Math.max(itemSlotSpanPages(next), heightPages * targetScale);
-          next.snappedNextStartYPages = Number(snapUpPages(startPages + slotSpanPages).toFixed(6));
-          next.slotSpanCount = Math.max(1, Math.round((next.snappedNextStartYPages - startPages) / DEFAULT_SLOT_HEIGHT_PAGES));
+          next.inputIntent = 'page-as-is';
+          next.input_intent = 'page-as-is';
+          next.placementMode = 'continuous-page-as-is';
+          next.placement_mode = 'continuous-page-as-is';
+          next.forceFullPageBounds = true;
+          next.force_full_page_bounds = true;
+          const slotSpanPages = heightPages * targetScale;
+          next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));
+          next.slotSpanCount = Math.max(1, Math.ceil(slotSpanPages / DEFAULT_SLOT_HEIGHT_PAGES));
           next.placementScaleRatio = targetScale;
         } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
           next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
@@ -8895,6 +8905,14 @@ function App(){
     setPublished(false);
   };
   const removeItem = (id) => {
+    if (session) {
+      if (mutating) {
+        showToast('이전 변경을 적용하는 중입니다');
+        return;
+      }
+      void mutateSession('exclude', { problemId: id });
+      return;
+    }
     const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
     if (activeId === id) {
@@ -9297,7 +9315,7 @@ function App(){
         <TweakColor label="강조색" value={t.accent} options={ACCENTS} onChange={v => setTweak('accent', v)} />
         <TweakSection label="칠판" />
         <TweakColor label="칠판 색" value={t.boardColor} options={BOARD_COLORS} onChange={v => setTweak('boardColor', v)} />
-        <TweakRadio label="열 수" value={String(t.boardColumns)} options={['1','2','3']} onChange={v => setTweak('boardColumns', parseInt(v))} />
+        <TweakRadio label="한 줄 자료 수" value={String(t.boardColumns)} options={['1','2','3']} onChange={v => setTweak('boardColumns', parseInt(v))} />
       </TweaksPanel>
     </div>
   );
