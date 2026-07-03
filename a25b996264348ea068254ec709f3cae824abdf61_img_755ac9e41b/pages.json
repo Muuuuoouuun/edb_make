@@ -1,7 +1,7 @@
 [
   {
     "page_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001",
-    "width_px": 1734,
+    "width_px": 1701,
     "height_px": 2400,
     "subject": "unknown",
     "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001.png",
@@ -10,15 +10,15 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-001",
         "block_type": "title",
         "bbox": {
-          "left": 0.0,
-          "top": 0.0,
-          "width": 829.0,
-          "height": 183.0
+          "left": 20.0,
+          "top": 58.0,
+          "width": 797.0,
+          "height": 187.0
         },
         "reading_order": 0,
         "text": "중등 1학년\n1. 기본도형",
         "style": {
-          "font_size": 64.05,
+          "font_size": 65.45,
           "weight": null,
           "italic": false,
           "color": null,
@@ -34,8 +34,8 @@
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 829.0,
-              "height": 91.5
+              "width": 797.0,
+              "height": 93.5
             }
           },
           {
@@ -43,9 +43,9 @@
             "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 91.5,
-              "width": 829.0,
-              "height": 91.5
+              "top": 93.5,
+              "width": 797.0,
+              "height": 93.5
             }
           }
         ],
@@ -61,15 +61,15 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.036454,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.036508,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2165,
+          "ocr_latency_ms": 2847,
           "ocr_line_count": 2,
           "ocr_empty_text": false,
           "ocr_text_length": 14,
@@ -83,42 +83,42 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-002",
         "block_type": "stem",
         "bbox": {
-          "left": 0.0,
-          "top": 214.0,
-          "width": 827.0,
-          "height": 391.0
+          "left": 30.0,
+          "top": 270.0,
+          "width": 786.0,
+          "height": 373.0
         },
         "reading_order": 1,
-        "text": "다음 그림과 같은 직육면체에서 \\overline{\\mathrm{AD}}와 평행한 면의 개수\n를 구하여라.",
+        "text": "다음 그림과 같은 직육면체에서 \\(\\overline{\\text{AD}}\\)와 평행한 면의 개수\n를 구하여라.",
         "style": {
-          "font_size": 136.85,
+          "font_size": 130.54999999999998,
           "weight": null,
           "italic": false,
           "color": null,
           "align": null,
           "math_like": false
         },
-        "confidence": 0.98,
+        "confidence": 0.95,
         "asset": null,
         "ocr_lines": [
           {
-            "text": "다음 그림과 같은 직육면체에서 \\overline{\\mathrm{AD}}와 평행한 면의 개수",
-            "confidence": 0.98,
+            "text": "다음 그림과 같은 직육면체에서 \\(\\overline{\\text{AD}}\\)와 평행한 면의 개수",
+            "confidence": 0.95,
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 827.0,
-              "height": 195.5
+              "width": 786.0,
+              "height": 186.5
             }
           },
           {
             "text": "를 구하여라.",
-            "confidence": 0.98,
+            "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 195.5,
-              "width": 827.0,
-              "height": 195.5
+              "top": 186.5,
+              "width": 786.0,
+              "height": 186.5
             }
           }
         ],
@@ -134,18 +134,18 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.0777,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.071815,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2958,
+          "ocr_latency_ms": 4143,
           "ocr_line_count": 2,
           "ocr_empty_text": false,
-          "ocr_text_length": 58,
+          "ocr_text_length": 60,
           "force_problem_start": true,
           "problem_start_source": "document_band_prompt",
           "problem_marker": false,
@@ -157,15 +157,15 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-003",
         "block_type": "title",
         "bbox": {
-          "left": 0.0,
-          "top": 866.0,
-          "width": 823.0,
-          "height": 208.0
+          "left": 30.0,
+          "top": 886.0,
+          "width": 783.0,
+          "height": 200.0
         },
         "reading_order": 2,
         "text": "22\n다음 그림과 같은 직육면체에서 대각선 AG와 꼬인 위치\n에 있는 모서리의 개수를 구하여라.",
         "style": {
-          "font_size": 72.8,
+          "font_size": 70.0,
           "weight": null,
           "italic": false,
           "color": null,
@@ -181,8 +181,8 @@
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 823.0,
-              "height": 69.33333333333333
+              "width": 783.0,
+              "height": 66.66666666666667
             }
           },
           {
@@ -190,9 +190,9 @@
             "confidence": 1.0,
             "bbox": {
               "left": 0.0,
-              "top": 69.33333333333333,
-              "width": 823.0,
-              "height": 69.33333333333333
+              "top": 66.66666666666667,
+              "width": 783.0,
+              "height": 66.66666666666667
             }
           },
           {
@@ -200,9 +200,9 @@
             "confidence": 1.0,
             "bbox": {
               "left": 0.0,
-              "top": 138.66666666666666,
-              "width": 823.0,
-              "height": 69.33333333333333
+              "top": 133.33333333333334,
+              "width": 783.0,
+              "height": 66.66666666666667
             }
           }
         ],
@@ -218,15 +218,15 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.041134,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.03836,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2461,
+          "ocr_latency_ms": 4063,
           "ocr_line_count": 3,
           "ocr_empty_text": false,
           "ocr_text_length": 53,
@@ -241,15 +241,15 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-004",
         "block_type": "image",
         "bbox": {
-          "left": 236.0,
-          "top": 1051.0,
-          "width": 495.0,
-          "height": 150.0
+          "left": 255.0,
+          "top": 1060.0,
+          "width": 471.0,
+          "height": 146.0
         },
         "reading_order": 3,
-        "text": "A\nD\nB\nC",
+        "text": "A D\nB C",
         "style": {
-          "font_size": 52.5,
+          "font_size": 51.099999999999994,
           "weight": null,
           "italic": false,
           "color": null,
@@ -260,43 +260,23 @@
         "asset": null,
         "ocr_lines": [
           {
-            "text": "A",
+            "text": "A D",
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 495.0,
-              "height": 37.5
+              "width": 471.0,
+              "height": 73.0
             }
           },
           {
-            "text": "D",
+            "text": "B C",
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 37.5,
-              "width": 495.0,
-              "height": 37.5
-            }
-          },
-          {
-            "text": "B",
-            "confidence": 0.9,
-            "bbox": {
-              "left": 0.0,
-              "top": 75.0,
-              "width": 495.0,
-              "height": 37.5
-            }
-          },
-          {
-            "text": "C",
-            "confidence": 0.9,
-            "bbox": {
-              "left": 0.0,
-              "top": 112.5,
-              "width": 495.0,
-              "height": 37.5
+              "top": 73.0,
+              "width": 471.0,
+              "height": 73.0
             }
           }
         ],
@@ -312,16 +292,16 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.017842,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.016845,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 1785,
-          "ocr_line_count": 4,
+          "ocr_latency_ms": 2488,
+          "ocr_line_count": 2,
           "ocr_empty_text": false,
           "ocr_text_length": 7,
           "block_type_source": "vision_hint",
@@ -334,15 +314,15 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-005",
         "block_type": "image",
         "bbox": {
-          "left": 249.0,
-          "top": 1206.0,
-          "width": 349.0,
-          "height": 159.0
+          "left": 267.0,
+          "top": 1207.0,
+          "width": 333.0,
+          "height": 154.0
         },
         "reading_order": 4,
         "text": "E\nH\nF\nG",
         "style": {
-          "font_size": 55.65,
+          "font_size": 53.9,
           "weight": null,
           "italic": false,
           "color": null,
@@ -358,8 +338,8 @@
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 349.0,
-              "height": 39.75
+              "width": 333.0,
+              "height": 38.5
             }
           },
           {
@@ -367,9 +347,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 39.75,
-              "width": 349.0,
-              "height": 39.75
+              "top": 38.5,
+              "width": 333.0,
+              "height": 38.5
             }
           },
           {
@@ -377,9 +357,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 79.5,
-              "width": 349.0,
-              "height": 39.75
+              "top": 77.0,
+              "width": 333.0,
+              "height": 38.5
             }
           },
           {
@@ -387,9 +367,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 119.25,
-              "width": 349.0,
-              "height": 39.75
+              "top": 115.5,
+              "width": 333.0,
+              "height": 38.5
             }
           }
         ],
@@ -405,15 +385,15 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.013334,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.012562,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2279,
+          "ocr_latency_ms": 2376,
           "ocr_line_count": 4,
           "ocr_empty_text": false,
           "ocr_text_length": 7,
@@ -427,52 +407,52 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-006",
         "block_type": "title",
         "bbox": {
-          "left": 0.0,
-          "top": 1632.0,
-          "width": 826.0,
-          "height": 212.0
+          "left": 30.0,
+          "top": 1559.0,
+          "width": 786.0,
+          "height": 253.0
         },
         "reading_order": 5,
-        "text": "23\n다음 그림에서 l // m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
+        "text": "23\n다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
         "style": {
-          "font_size": 74.19999999999999,
+          "font_size": 88.55,
           "weight": null,
           "italic": false,
           "color": null,
           "align": null,
           "math_like": false
         },
-        "confidence": 0.98,
+        "confidence": 0.95,
         "asset": null,
         "ocr_lines": [
           {
             "text": "23",
-            "confidence": 0.98,
+            "confidence": 0.95,
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 826.0,
-              "height": 70.66666666666667
+              "width": 786.0,
+              "height": 84.33333333333333
             }
           },
           {
-            "text": "다음 그림에서 l // m일 때, ∠x의 크기는 몇 도인지 구",
-            "confidence": 0.98,
+            "text": "다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구",
+            "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 70.66666666666667,
-              "width": 826.0,
-              "height": 70.66666666666667
+              "top": 84.33333333333333,
+              "width": 786.0,
+              "height": 84.33333333333333
             }
           },
           {
             "text": "하여라.",
-            "confidence": 0.98,
+            "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 141.33333333333334,
-              "width": 826.0,
-              "height": 70.66666666666667
+              "top": 168.66666666666666,
+              "width": 786.0,
+              "height": 84.33333333333333
             }
           }
         ],
@@ -488,18 +468,18 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.042078,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.048711,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2090,
+          "ocr_latency_ms": 4564,
           "ocr_line_count": 3,
           "ocr_empty_text": false,
-          "ocr_text_length": 42,
+          "ocr_text_length": 40,
           "problem_marker": false,
           "choice_marker": false,
           "marker_conflict": false,
@@ -511,32 +491,32 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-007",
         "block_type": "title",
         "bbox": {
-          "left": 0.0,
-          "top": 2265.0,
-          "width": 829.0,
-          "height": 120.0
+          "left": 20.0,
+          "top": 2207.0,
+          "width": 797.0,
+          "height": 117.0
         },
         "reading_order": 6,
         "text": "윤자매 놀이 학습",
         "style": {
-          "font_size": 42.0,
+          "font_size": 40.949999999999996,
           "weight": null,
           "italic": false,
           "color": null,
           "align": null,
           "math_like": false
         },
-        "confidence": 0.95,
+        "confidence": 0.99,
         "asset": null,
         "ocr_lines": [
           {
             "text": "윤자매 놀이 학습",
-            "confidence": 0.95,
+            "confidence": 0.99,
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 829.0,
-              "height": 120.0
+              "width": 797.0,
+              "height": 117.0
             }
           }
         ],
@@ -552,15 +532,15 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.023904,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.022842,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2006,
+          "ocr_latency_ms": 2471,
           "ocr_line_count": 1,
           "ocr_empty_text": false,
           "ocr_text_length": 9,
@@ -574,15 +554,15 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-008",
         "block_type": "stem",
         "bbox": {
-          "left": 899.0,
-          "top": 0.0,
-          "width": 835.0,
-          "height": 313.0
+          "left": 883.0,
+          "top": 58.0,
+          "width": 798.0,
+          "height": 310.0
         },
         "reading_order": 7,
-        "text": "기 단원평가\n위치관계\n윤자매놀이학습(fillthevoid82.com)\n24\n다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
+        "text": "기 단원평가\n위치관계\n윤자매 놀이학습(fillthevoid82.com)\n24\n다음 그림에서 l // m 일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
         "style": {
-          "font_size": 109.55,
+          "font_size": 108.5,
           "weight": null,
           "italic": false,
           "color": null,
@@ -598,8 +578,8 @@
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 835.0,
-              "height": 52.166666666666664
+              "width": 798.0,
+              "height": 51.666666666666664
             }
           },
           {
@@ -607,19 +587,19 @@
             "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 52.166666666666664,
-              "width": 835.0,
-              "height": 52.166666666666664
+              "top": 51.666666666666664,
+              "width": 798.0,
+              "height": 51.666666666666664
             }
           },
           {
-            "text": "윤자매놀이학습(fillthevoid82.com)",
+            "text": "윤자매 놀이학습(fillthevoid82.com)",
             "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 104.33333333333333,
-              "width": 835.0,
-              "height": 52.166666666666664
+              "top": 103.33333333333333,
+              "width": 798.0,
+              "height": 51.666666666666664
             }
           },
           {
@@ -627,19 +607,19 @@
             "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 156.5,
-              "width": 835.0,
-              "height": 52.166666666666664
+              "top": 155.0,
+              "width": 798.0,
+              "height": 51.666666666666664
             }
           },
           {
-            "text": "다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구",
+            "text": "다음 그림에서 l // m 일 때, ∠x의 크기는 몇 도인지 구",
             "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 208.66666666666666,
-              "width": 835.0,
-              "height": 52.166666666666664
+              "top": 206.66666666666666,
+              "width": 798.0,
+              "height": 51.666666666666664
             }
           },
           {
@@ -647,9 +627,9 @@
             "confidence": 0.95,
             "bbox": {
               "left": 0.0,
-              "top": 260.8333333333333,
-              "width": 835.0,
-              "height": 52.166666666666664
+              "top": 258.3333333333333,
+              "width": 798.0,
+              "height": 51.666666666666664
             }
           }
         ],
@@ -665,18 +645,18 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.062802,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.060597,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2708,
+          "ocr_latency_ms": 2524,
           "ocr_line_count": 6,
           "ocr_empty_text": false,
-          "ocr_text_length": 79,
+          "ocr_text_length": 83,
           "force_problem_start": true,
           "problem_number": 24,
           "problem_number_source": "ocr_internal_line",
@@ -688,17 +668,17 @@
       },
       {
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-009",
-        "block_type": "formula",
+        "block_type": "title",
         "bbox": {
-          "left": 899.0,
-          "top": 919.0,
-          "width": 802.0,
-          "height": 208.0
+          "left": 883.0,
+          "top": 936.0,
+          "width": 759.0,
+          "height": 200.0
         },
         "reading_order": 8,
-        "text": "다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
+        "text": "25\n다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
         "style": {
-          "font_size": 72.8,
+          "font_size": 70.0,
           "weight": null,
           "italic": false,
           "color": null,
@@ -709,13 +689,23 @@
         "asset": null,
         "ocr_lines": [
           {
-            "text": "다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R",
+            "text": "25",
             "confidence": 0.98,
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 802.0,
-              "height": 52.0
+              "width": 759.0,
+              "height": 40.0
+            }
+          },
+          {
+            "text": "다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R",
+            "confidence": 0.98,
+            "bbox": {
+              "left": 0.0,
+              "top": 40.0,
+              "width": 759.0,
+              "height": 40.0
             }
           },
           {
@@ -723,9 +713,9 @@
             "confidence": 0.98,
             "bbox": {
               "left": 0.0,
-              "top": 52.0,
-              "width": 802.0,
-              "height": 52.0
+              "top": 80.0,
+              "width": 759.0,
+              "height": 40.0
             }
           },
           {
@@ -733,9 +723,9 @@
             "confidence": 0.98,
             "bbox": {
               "left": 0.0,
-              "top": 104.0,
-              "width": 802.0,
-              "height": 52.0
+              "top": 120.0,
+              "width": 759.0,
+              "height": 40.0
             }
           },
           {
@@ -743,9 +733,9 @@
             "confidence": 0.98,
             "bbox": {
               "left": 0.0,
-              "top": 156.0,
-              "width": 802.0,
-              "height": 52.0
+              "top": 160.0,
+              "width": 759.0,
+              "height": 40.0
             }
           }
         ],
@@ -761,38 +751,38 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.040085,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.037184,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2795,
-          "ocr_line_count": 4,
+          "ocr_latency_ms": 2810,
+          "ocr_line_count": 5,
           "ocr_empty_text": false,
-          "ocr_text_length": 97,
-          "force_problem_start": true,
-          "problem_start_source": "document_band_prompt",
+          "ocr_text_length": 100,
           "problem_marker": false,
           "choice_marker": false,
-          "marker_conflict": false
+          "marker_conflict": false,
+          "problem_number": 25,
+          "problem_number_source": "ocr_top_left"
         }
       },
       {
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-010",
         "block_type": "image",
         "bbox": {
-          "left": 1029.0,
-          "top": 1267.0,
-          "width": 516.0,
-          "height": 117.0
+          "left": 1004.0,
+          "top": 1265.0,
+          "width": 491.0,
+          "height": 114.0
         },
         "reading_order": 9,
         "text": "66°\nB\nR\nQ\nC",
         "style": {
-          "font_size": 40.949999999999996,
+          "font_size": 39.9,
           "weight": null,
           "italic": false,
           "color": null,
@@ -808,8 +798,8 @@
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 516.0,
-              "height": 23.4
+              "width": 491.0,
+              "height": 22.8
             }
           },
           {
@@ -817,9 +807,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 23.4,
-              "width": 516.0,
-              "height": 23.4
+              "top": 22.8,
+              "width": 491.0,
+              "height": 22.8
             }
           },
           {
@@ -827,9 +817,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 46.8,
-              "width": 516.0,
-              "height": 23.4
+              "top": 45.6,
+              "width": 491.0,
+              "height": 22.8
             }
           },
           {
@@ -837,9 +827,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 70.19999999999999,
-              "width": 516.0,
-              "height": 23.4
+              "top": 68.4,
+              "width": 491.0,
+              "height": 22.8
             }
           },
           {
@@ -847,9 +837,9 @@
             "confidence": 0.9,
             "bbox": {
               "left": 0.0,
-              "top": 93.6,
-              "width": 516.0,
-              "height": 23.4
+              "top": 91.2,
+              "width": 491.0,
+              "height": 22.8
             }
           }
         ],
@@ -865,15 +855,15 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.014507,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.013711,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 1880,
+          "ocr_latency_ms": 2198,
           "ocr_line_count": 5,
           "ocr_empty_text": false,
           "ocr_text_length": 11,
@@ -887,32 +877,32 @@
         "block_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-block-011",
         "block_type": "explanation",
         "bbox": {
-          "left": 899.0,
-          "top": 2270.0,
-          "width": 835.0,
-          "height": 115.0
+          "left": 883.0,
+          "top": 2212.0,
+          "width": 798.0,
+          "height": 112.0
         },
         "reading_order": 10,
         "text": "hevoid82.com)",
         "style": {
-          "font_size": 40.25,
+          "font_size": 39.199999999999996,
           "weight": null,
           "italic": false,
           "color": null,
           "align": null,
           "math_like": false
         },
-        "confidence": 0.99,
+        "confidence": 0.95,
         "asset": null,
         "ocr_lines": [
           {
             "text": "hevoid82.com)",
-            "confidence": 0.99,
+            "confidence": 0.95,
             "bbox": {
               "left": 0.0,
               "top": 0.0,
-              "width": 835.0,
-              "height": 115.0
+              "width": 798.0,
+              "height": 112.0
             }
           }
         ],
@@ -928,15 +918,15 @@
           "band_split_count": 1,
           "grid_balance_split": false,
           "segmentation_mode": "document",
-          "page_area_px": 4161600,
-          "block_area_ratio": 0.023074,
+          "page_area_px": 4082400,
+          "block_area_ratio": 0.021893,
           "large_block": false,
           "ocr_stage": "primary_ocr",
           "ocr_primary_backend": "gemini",
-          "ocr_cache_hit": true,
-          "ocr_cache_miss": false,
+          "ocr_cache_hit": false,
+          "ocr_cache_miss": true,
           "ocr_backend": "gemini",
-          "ocr_latency_ms": 2580,
+          "ocr_latency_ms": 2485,
           "ocr_line_count": 1,
           "ocr_empty_text": false,
           "ocr_text_length": 13,
@@ -980,24 +970,15 @@
     ],
     "metadata": {
       "source_type": "image",
-      "perspective_corrected": false,
-      "deskewed": true,
-      "margin_crop_box": {
-        "left": 60,
-        "top": 124,
-        "right": 2956,
-        "bottom": 4132
-      },
-      "margin_cropped": true,
       "resized_to_max_dimension": 2400,
       "original_source_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b.jpg",
       "normalized_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001.png",
       "segmenter": "document-bands",
       "content_box": {
-        "left": 0.0,
-        "top": 0.0,
-        "width": 1734.0,
-        "height": 2400.0
+        "left": 28.0,
+        "top": 66.0,
+        "width": 1645.0,
+        "height": 2272.0
       },
       "column_count": 2,
       "document_band_split_count": 0,
@@ -1009,17 +990,17 @@
       "document_row_band_count": 11,
       "document_split_block_count": 11,
       "document_split_applied": false,
-      "content_box_area_ratio": 1.0,
+      "content_box_area_ratio": 0.915501,
       "segmentation_mode": "document",
-      "page_area_px": 4161600,
+      "page_area_px": 4082400,
       "block_count": 11,
       "text_block_count": 0,
       "image_block_count": 0,
       "large_block_threshold": 0.18,
       "large_block_count": 0,
       "large_block_ratio": 0.0,
-      "max_block_area_ratio": 0.0777,
-      "mean_block_area_ratio": 0.035719,
+      "max_block_area_ratio": 0.071815,
+      "mean_block_area_ratio": 0.034639,
       "fallback_reasons": [],
       "fallback_reason": null,
       "fallback_reason_count": 0,
@@ -1027,29 +1008,29 @@
       "segmentation_stats": {
         "segmenter": "document-bands",
         "segmentation_mode": "document",
-        "page_area_px": 4161600,
+        "page_area_px": 4082400,
         "block_count": 11,
         "text_block_count": 0,
         "image_block_count": 0,
         "large_block_threshold": 0.18,
         "large_block_count": 0,
         "large_block_ratio": 0.0,
-        "max_block_area_ratio": 0.0777,
-        "mean_block_area_ratio": 0.035719,
+        "max_block_area_ratio": 0.071815,
+        "mean_block_area_ratio": 0.034639,
         "fallback_reasons": []
       },
       "ocr_mode": "auto",
       "pipeline_cache_dir": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/.pipeline_cache",
       "recognition_timing_ms": {
-        "segmentation": 47,
-        "block_ocr": 17,
-        "total_before_repair": 64
+        "segmentation": 335,
+        "block_ocr": 11571,
+        "total_before_repair": 11906
       },
       "ocr_block_worker_count": 3,
       "ocr_eligible_block_count": 11,
       "ocr_skipped_block_count": 0,
-      "ocr_cache_hit_count": 11,
-      "ocr_cache_miss_count": 0,
+      "ocr_cache_hit_count": 0,
+      "ocr_cache_miss_count": 11,
       "ocr_escalation_attempted_block_count": 0,
       "ocr_escalation_cache_hit_count": 0,
       "ocr_escalated_block_count": 0,
@@ -1063,9 +1044,9 @@
           "ai_powered": true,
           "eligible_block_count": 11,
           "processed_block_count": 11,
-          "api_call_block_count": 0,
-          "cache_hit_count": 11,
-          "cache_miss_count": 0,
+          "api_call_block_count": 11,
+          "cache_hit_count": 0,
+          "cache_miss_count": 11,
           "skipped_block_count": 0
         },
         "ocr_escalation": {
@@ -1123,15 +1104,15 @@
           "problem_marker_block_count": 0,
           "choice_marker_block_count": 0,
           "marker_conflict_block_count": 0,
-          "forced_problem_start_block_count": 3,
-          "problem_number_block_count": 3,
+          "forced_problem_start_block_count": 2,
+          "problem_number_block_count": 4,
           "excess_problem_marker_block_count": 0,
           "excess_problem_marker_total": 0
         },
         "excess_problem_marker_block_count": 0,
         "excess_problem_marker_total": 0,
         "problem_number_source_counts": {
-          "ocr_top_left": 2,
+          "ocr_top_left": 3,
           "ocr_internal_line": 1
         },
         "block_diagnostics": [
@@ -1151,7 +1132,7 @@
             "excess_problem_marker_count": 0
           },
           {
-            "raw_text_marker_source": "다음 그림과 같은 직육면체에서 \\overline{\\mathrm{AD}}와 평행한 면의 개수\n를 구하여라.",
+            "raw_text_marker_source": "다음 그림과 같은 직육면체에서 \\(\\overline{\\text{AD}}\\)와 평행한 면의 개수\n를 구하여라.",
             "display_title_marker_source": null,
             "problem_marker": false,
             "choice_marker": false,
@@ -1183,7 +1164,7 @@
             "excess_problem_marker_count": 0
           },
           {
-            "raw_text_marker_source": "A\nD\nB\nC",
+            "raw_text_marker_source": "A D\nB C",
             "display_title_marker_source": null,
             "problem_marker": false,
             "choice_marker": false,
@@ -1213,7 +1194,7 @@
             "excess_problem_marker_count": 0
           },
           {
-            "raw_text_marker_source": "23\n다음 그림에서 l // m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
+            "raw_text_marker_source": "23\n다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
             "display_title_marker_source": null,
             "problem_marker": false,
             "choice_marker": false,
@@ -1245,7 +1226,7 @@
             "excess_problem_marker_count": 0
           },
           {
-            "raw_text_marker_source": "기 단원평가\n위치관계\n윤자매놀이학습(fillthevoid82.com)\n24\n다음 그림에서 l//m일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
+            "raw_text_marker_source": "기 단원평가\n위치관계\n윤자매 놀이학습(fillthevoid82.com)\n24\n다음 그림에서 l // m 일 때, ∠x의 크기는 몇 도인지 구\n하여라.",
             "display_title_marker_source": null,
             "problem_marker": false,
             "choice_marker": false,
@@ -1262,18 +1243,20 @@
             "excess_problem_marker_count": 0
           },
           {
-            "raw_text_marker_source": "다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
+            "raw_text_marker_source": "25\n다음 그림과 같이 직사각형 모양의 종이를 점 D가 점 R\n에 오도록 선분 PQ를 접는 선으로 하여 접었다.\n∠PRB = 66°일 때, ∠QPR의 크기는 몇 도인지 구하\n여라.",
             "display_title_marker_source": null,
             "problem_marker": false,
             "choice_marker": false,
-            "problem_number": null,
-            "problem_number_source": null,
-            "force_problem_start": true,
+            "problem_number": 25,
+            "problem_number_source": "ocr_top_left",
+            "force_problem_start": false,
             "marker_conflict": false,
             "fallback_reason": null,
             "display_title_present": false,
-            "internal_problem_markers": [],
-            "internal_problem_marker_count": 0,
+            "internal_problem_markers": [
+              25
+            ],
+            "internal_problem_marker_count": 1,
             "excess_problem_marker_count": 0
           },
           {
@@ -1315,8 +1298,8 @@
         "problem_marker_block_count": 0,
         "choice_marker_block_count": 0,
         "marker_conflict_block_count": 0,
-        "forced_problem_start_block_count": 3,
-        "problem_number_block_count": 3,
+        "forced_problem_start_block_count": 2,
+        "problem_number_block_count": 4,
         "excess_problem_marker_block_count": 0,
         "excess_problem_marker_total": 0
       },
@@ -1333,7 +1316,7 @@
         "problem_count": 5
       },
       "problem_number_source_counts": {
-        "ocr_top_left": 2,
+        "ocr_top_left": 3,
         "ocr_internal_line": 1
       },
       "difficulty_profile": {
@@ -1352,14 +1335,14 @@
             "large_block_count": 0,
             "large_block_ratio": 0.0,
             "fallback_reasons": [],
-            "content_box_area_ratio": 1.0,
+            "content_box_area_ratio": 0.915501,
             "board_region_area_ratio": 0.0,
             "document_split_block_count": 11,
             "document_split_applied": false,
             "candidate_count": 0,
             "expanded_candidate_count": 0,
             "merged_candidate_count": 0,
-            "max_block_area_ratio": 0.0777,
+            "max_block_area_ratio": 0.071815,
             "pdf_text_marker_count": 0,
             "pdf_text_markers_reliable": null
           },
@@ -1370,14 +1353,14 @@
             "empty_text_ratio": 0.0,
             "low_confidence_block_count": 0,
             "low_confidence_ratio": 0.0,
-            "avg_confidence": 0.9724999999999999,
-            "recognized_line_count": 35,
-            "ocr_cache_hit_count": 11,
-            "ocr_cache_miss_count": 0,
+            "avg_confidence": 0.965,
+            "recognized_line_count": 34,
+            "ocr_cache_hit_count": 0,
+            "ocr_cache_miss_count": 11,
             "backend_counts": {
               "gemini": 11
             },
-            "backend_latency_ms_avg": 2337.0,
+            "backend_latency_ms_avg": 2997.181818181818,
             "all_text_from_trusted_pdf_markers": false
           },
           "grouping": {
@@ -1391,7 +1374,7 @@
             "marker_conflict_count": 0,
             "fallback_grouping_problem_count": 0,
             "problem_number_source_counts": {
-              "ocr_top_left": 2,
+              "ocr_top_left": 3,
               "ocr_internal_line": 1
             },
             "excess_problem_marker_block_count": 0,

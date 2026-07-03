@@ -18,9 +18,9 @@
   "ai_summary": null,
   "placement_summary": {
     "problem_count": 1,
-    "overflow_count": 0,
-    "overflow_violation_count": 0,
-    "max_bottom_y_pages": 0.72,
+    "overflow_count": 1,
+    "overflow_violation_count": 1,
+    "max_bottom_y_pages": 1.291364,
     "text_record_count": 0,
     "image_record_count": 1
   },
@@ -35,34 +35,34 @@
       "source_page_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001",
       "source_path": "/Users/clmagi/Desktop/Projects/edb_mak/.app_runtime/uploads/.pipeline_cache/normalized/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001.png",
       "start_y_pages": 0.0,
-      "actual_content_height_pages": 0.72,
-      "actual_bottom_y_pages": 0.72,
-      "snapped_next_start_y_pages": 1.2,
+      "actual_content_height_pages": 1.291364,
+      "actual_bottom_y_pages": 1.291364,
+      "snapped_next_start_y_pages": 2.066182,
       "overflow_allowed": false,
-      "overflow_amount_pages": 0.0,
-      "overflow_violation": false,
-      "slot_span_count": 1,
+      "overflow_amount_pages": 0.866182,
+      "overflow_violation": true,
+      "slot_span_count": 2,
       "bbox": {
         "left": 0.0,
         "top": 0.0,
-        "width": 1734.0,
+        "width": 1701.0,
         "height": 2400.0
       },
       "risk_flags": [],
       "record_mode": "image-only",
-      "step": "raw",
-      "processing_step": "raw",
+      "step": "s3",
+      "processing_step": "s3",
       "text_record_count": 0,
       "image_record_count": 1,
       "board_theme": "charcoal",
       "crop_format": "v1",
-      "image_pixel_width": 1734,
-      "image_pixel_height": 2488,
-      "rendered_width_px": 540.0,
-      "rendered_height_px": 774.809688581315,
+      "image_pixel_width": 1701,
+      "image_pixel_height": 2400,
+      "rendered_width_px": 864.0,
+      "rendered_height_px": 1219.047619047619,
       "placement_x_ratio": 0.0,
       "placement_y_ratio": 0.0,
-      "placement_scale_ratio": 1.0
+      "placement_scale_ratio": 1.6
     }
   ],
   "ocr_backend_requested": "auto",
@@ -78,18 +78,48 @@
   },
   "input_intent": "page-as-is",
   "timing_ms": {
-    "source_build": 341,
-    "problem_assets": 590,
-    "records": 110,
-    "page_segmentation_sum": 47,
-    "page_block_ocr_sum": 17,
-    "page_total_before_repair_sum": 64,
+    "source_build": 12082,
+    "problem_assets": 1946,
+    "records": 2150,
+    "page_segmentation_sum": 335,
+    "page_block_ocr_sum": 11571,
+    "page_total_before_repair_sum": 11906,
     "page_ai_repair_sum": 0,
     "edb_write": 4,
     "ui_session": 0,
-    "total": 1072
+    "total": 16208
   },
-  "edb_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/mvp_board.edb",
+  "edb_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/새_세션.edb",
+  "edb_paths": [
+    "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/새_세션.edb"
+  ],
+  "edb_parts": [
+    {
+      "partIndex": 1,
+      "part_index": 1,
+      "partCount": 1,
+      "part_count": 1,
+      "edbFileName": "새_세션.edb",
+      "edb_file_name": "새_세션.edb",
+      "edbPath": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/새_세션.edb",
+      "edb_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/새_세션.edb",
+      "recordCount": 1,
+      "record_count": 1,
+      "placementCount": 0,
+      "placement_count": 0,
+      "pageCountHint": 50,
+      "page_count_hint": 50,
+      "problemIds": [
+        "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1"
+      ],
+      "problem_ids": [
+        "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1"
+      ],
+      "placements": []
+    }
+  ],
+  "edb_part_count": 1,
+  "edb_split": false,
   "classin_handoff_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/classin_handoff.json",
   "classin_handoff_markdown_path": "/Users/clmagi/Desktop/Projects/edb_mak/a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b/classin_handoff.md",
   "classinHandoffStatus": "ready_for_classin_review",
@@ -131,5 +161,73 @@
   "classinPreflightStatus": "passed",
   "classin_preflight_status": "passed",
   "classinPreflightIssueCount": 0,
-  "classin_preflight_issue_count": 0
+  "classin_preflight_issue_count": 0,
+  "layoutDiagnostics": {
+    "itemCount": 1,
+    "item_count": 1,
+    "longImageCount": 1,
+    "long_image_count": 1,
+    "autoExtendedCount": 1,
+    "auto_extended_count": 1,
+    "scaledItemCount": 1,
+    "scaled_item_count": 1,
+    "overlapRiskCount": 0,
+    "overlap_risk_count": 0,
+    "maxRenderedHeightPages": 2.066182,
+    "max_rendered_height_pages": 2.066182,
+    "maxReservedSpanPages": 2.066182,
+    "max_reserved_span_pages": 2.066182,
+    "label": "긴 이미지 자동 확장 1 · 최대 2.07p",
+    "items": [
+      {
+        "problemId": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1",
+        "problem_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1",
+        "title": "페이지 1",
+        "actualHeightPages": 1.291364,
+        "renderedHeightPages": 2.066182,
+        "reservedSpanPages": 2.066182,
+        "reservedExtraPages": 0.866182,
+        "placementScaleRatio": 1.6,
+        "overlapAmountPages": 0.0,
+        "longImage": true,
+        "autoExtended": true,
+        "scaleAdjusted": true,
+        "overlapRisk": false
+      }
+    ]
+  },
+  "layout_diagnostics": {
+    "itemCount": 1,
+    "item_count": 1,
+    "longImageCount": 1,
+    "long_image_count": 1,
+    "autoExtendedCount": 1,
+    "auto_extended_count": 1,
+    "scaledItemCount": 1,
+    "scaled_item_count": 1,
+    "overlapRiskCount": 0,
+    "overlap_risk_count": 0,
+    "maxRenderedHeightPages": 2.066182,
+    "max_rendered_height_pages": 2.066182,
+    "maxReservedSpanPages": 2.066182,
+    "max_reserved_span_pages": 2.066182,
+    "label": "긴 이미지 자동 확장 1 · 최대 2.07p",
+    "items": [
+      {
+        "problemId": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1",
+        "problem_id": "a25b996264348ea068254ec709f3cae824abdf61_img_755ac9e41b-page-001-problem-1",
+        "title": "페이지 1",
+        "actualHeightPages": 1.291364,
+        "renderedHeightPages": 2.066182,
+        "reservedSpanPages": 2.066182,
+        "reservedExtraPages": 0.866182,
+        "placementScaleRatio": 1.6,
+        "overlapAmountPages": 0.0,
+        "longImage": true,
+        "autoExtended": true,
+        "scaleAdjusted": true,
+        "overlapRisk": false
+      }
+    ]
+  }
 }
