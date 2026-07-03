@@ -100,6 +100,14 @@ def _packaged_update_url_error(field_name: str, value: object) -> str:
     return f"packaged app_update_config.json {field_name} must use https or loopback http"
 
 
+def _config_text_value(config: dict, *field_names: str) -> str:
+    for field_name in field_names:
+        value = str(config.get(field_name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _resource_root_candidates(package_root: Path) -> list[Path]:
     explicit_candidates = (
         package_root,
@@ -139,6 +147,9 @@ def collect_package_errors(
     expected_app_id: str = "",
     expected_app_name: str = "",
     expected_version: str = "",
+    expected_update_feed_url: str = "",
+    expected_download_url: str = "",
+    expected_release_notes_url: str = "",
     expected_bundle_id: str = "",
 ) -> list[str]:
     root = package_root.resolve()
@@ -207,6 +218,29 @@ def collect_package_errors(
                 ):
                     if url_error := _packaged_update_url_error(field_name, update_config.get(field_name)):
                         errors.append(url_error)
+                expected_urls = (
+                    (
+                        "updateFeedUrl",
+                        expected_update_feed_url,
+                        _config_text_value(update_config, "updateFeedUrl", "update_feed_url"),
+                    ),
+                    (
+                        "downloadUrl",
+                        expected_download_url,
+                        _config_text_value(update_config, "downloadUrl", "download_url"),
+                    ),
+                    (
+                        "releaseNotesUrl",
+                        expected_release_notes_url,
+                        _config_text_value(update_config, "releaseNotesUrl", "release_notes_url"),
+                    ),
+                )
+                for field_name, expected_url, packaged_url in expected_urls:
+                    if expected_url and packaged_url != expected_url:
+                        errors.append(
+                            f"packaged app_update_config.json {field_name} mismatch: "
+                            f"expected {expected_url!r}, found {packaged_url!r}"
+                        )
 
     for rel_path in FORBIDDEN_PACKAGED_FRONTEND_FILES:
         if (resource_root / rel_path).exists():
@@ -303,6 +337,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-app-id", default="", help="Expected appId in packaged update metadata")
     parser.add_argument("--expected-app-name", default="", help="Expected appName in packaged update metadata")
     parser.add_argument("--expected-version", default="", help="Expected version in packaged update metadata")
+    parser.add_argument("--expected-update-feed-url", default="", help="Expected updateFeedUrl in packaged metadata")
+    parser.add_argument("--expected-download-url", default="", help="Expected downloadUrl in packaged metadata")
+    parser.add_argument("--expected-release-notes-url", default="", help="Expected releaseNotesUrl in packaged metadata")
     parser.add_argument("--expected-bundle-id", default="", help="Expected macOS CFBundleIdentifier")
     args = parser.parse_args(argv)
 
@@ -311,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
         expected_app_id=args.expected_app_id,
         expected_app_name=args.expected_app_name,
         expected_version=args.expected_version,
+        expected_update_feed_url=args.expected_update_feed_url,
+        expected_download_url=args.expected_download_url,
+        expected_release_notes_url=args.expected_release_notes_url,
         expected_bundle_id=args.expected_bundle_id,
     )
     if errors:

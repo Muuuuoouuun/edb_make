@@ -141,6 +141,34 @@ $UpdateConfig | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $Buil
 $EffectiveAppId = [string]$UpdateConfig["appId"]
 $EffectiveAppName = [string]$UpdateConfig["appName"]
 $EffectiveAppVersion = [string]$UpdateConfig["version"]
+$EffectiveUpdateFeedUrl = [string]$UpdateConfig["updateFeedUrl"]
+$EffectiveDownloadUrl = [string]$UpdateConfig["downloadUrl"]
+$EffectiveReleaseNotesUrl = [string]$UpdateConfig["releaseNotesUrl"]
+
+function Invoke-EDBPackagedAppVerifier {
+    param([Parameter(Mandatory = $true)] [string]$PackageRoot)
+
+    $VerifierArgs = @(
+        (Join-Path $ProjectRoot "scripts\verify_packaged_app.py"),
+        $PackageRoot,
+        "--expected-app-id",
+        $EffectiveAppId,
+        "--expected-app-name",
+        $EffectiveAppName,
+        "--expected-version",
+        $EffectiveAppVersion
+    )
+    if ($EffectiveUpdateFeedUrl) {
+        $VerifierArgs += @("--expected-update-feed-url", $EffectiveUpdateFeedUrl)
+    }
+    if ($EffectiveDownloadUrl) {
+        $VerifierArgs += @("--expected-download-url", $EffectiveDownloadUrl)
+    }
+    if ($EffectiveReleaseNotesUrl) {
+        $VerifierArgs += @("--expected-release-notes-url", $EffectiveReleaseNotesUrl)
+    }
+    & $PythonExe @VerifierArgs
+}
 
 if (-not $SkipFrontendBuild) {
     $NodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -220,10 +248,7 @@ if ($HasPyInstaller) {
     if ($OneFile) {
         Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"
     } else {
-        & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
-            --expected-app-id $EffectiveAppId `
-            --expected-app-name $EffectiveAppName `
-            --expected-version $EffectiveAppVersion
+        Invoke-EDBPackagedAppVerifier -PackageRoot $PackageRoot
     }
     Remove-EDBPathIfExists $WorkPath
     Write-Host "PyInstaller packaging complete."
@@ -276,10 +301,7 @@ if ($HasPyInstaller) {
     }
     Copy-Item -Force $BuildUpdateConfig (Join-Path $PackageRoot "app_update_config.json")
 
-    & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
-        --expected-app-id $EffectiveAppId `
-        --expected-app-name $EffectiveAppName `
-        --expected-version $EffectiveAppVersion
+    Invoke-EDBPackagedAppVerifier -PackageRoot $PackageRoot
     Write-Warning "PyInstaller is not installed. Created source-package fallback instead."
 }
 

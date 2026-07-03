@@ -77,7 +77,7 @@ require_zip_entry() {
     echo "zipinfo is required to inspect zip archive contents." >&2
     exit 1
   fi
-  if ! zipinfo -1 "$zip_path" | grep -Fxq "$entry"; then
+  if ! zipinfo -1 "$zip_path" | awk -v expected="$entry" '$0 == expected { found = 1 } END { exit(found ? 0 : 1) }'; then
     echo "Zip archive is missing expected entry: $entry" >&2
     exit 1
   fi
@@ -89,6 +89,9 @@ verify_packaged_app_root() {
     --expected-app-id "$EFFECTIVE_APP_ID" \
     --expected-app-name "$APP_NAME" \
     --expected-version "$EFFECTIVE_APP_VERSION" \
+    --expected-update-feed-url "$EFFECTIVE_UPDATE_FEED_URL" \
+    --expected-download-url "$EFFECTIVE_DOWNLOAD_URL" \
+    --expected-release-notes-url "$EFFECTIVE_RELEASE_NOTES_URL" \
     --expected-bundle-id "$BUNDLE_ID"
 }
 
@@ -373,6 +376,36 @@ from pathlib import Path
 
 config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 print(str(config.get("version") or "0.1.0"))
+PY
+)"
+
+EFFECTIVE_UPDATE_FEED_URL="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(config.get("updateFeedUrl") or ""))
+PY
+)"
+
+EFFECTIVE_DOWNLOAD_URL="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(config.get("downloadUrl") or ""))
+PY
+)"
+
+EFFECTIVE_RELEASE_NOTES_URL="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(config.get("releaseNotesUrl") or ""))
 PY
 )"
 

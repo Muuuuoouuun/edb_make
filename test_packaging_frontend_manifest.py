@@ -284,6 +284,33 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertEqual([], errors)
 
+    def test_packaged_app_layout_rejects_unexpected_update_metadata_urls(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                "{"
+                '"appId":"ClassInEDBMVP",'
+                '"appName":"ClassInEDBMVP",'
+                '"version":"test",'
+                '"updateFeedUrl":"https://example.test/update.json",'
+                '"downloadUrl":"https://example.test/ClassInEDBMVP-macOS.zip",'
+                '"releaseNotesUrl":"https://example.test/releases/test"'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(
+                package_root,
+                expected_update_feed_url="https://example.test/other-update.json",
+                expected_download_url="https://example.test/other.zip",
+                expected_release_notes_url="https://example.test/releases/other",
+            )
+
+        self.assertTrue(any("updateFeedUrl mismatch" in error for error in errors))
+        self.assertTrue(any("downloadUrl mismatch" in error for error in errors))
+        self.assertTrue(any("releaseNotesUrl mismatch" in error for error in errors))
+
     def test_packaged_app_layout_rejects_legacy_browser_runtime(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -515,19 +542,34 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn('--expected-app-id "$EFFECTIVE_APP_ID"', shell_source)
         self.assertIn('--expected-app-name "$APP_NAME"', shell_source)
         self.assertIn('--expected-version "$EFFECTIVE_APP_VERSION"', shell_source)
+        self.assertIn('--expected-update-feed-url "$EFFECTIVE_UPDATE_FEED_URL"', shell_source)
+        self.assertIn('--expected-download-url "$EFFECTIVE_DOWNLOAD_URL"', shell_source)
+        self.assertIn('--expected-release-notes-url "$EFFECTIVE_RELEASE_NOTES_URL"', shell_source)
         self.assertIn('--expected-bundle-id "$BUNDLE_ID"', shell_source)
         self.assertIn('EDB_PACKAGE_APP_ID="$APP_ID"', shell_source)
 
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
-        self.assertIn("--expected-app-id $EffectiveAppId", ps_source)
-        self.assertIn("--expected-app-name $EffectiveAppName", ps_source)
-        self.assertIn("--expected-version $EffectiveAppVersion", ps_source)
+        self.assertIn('"--expected-app-id"', ps_source)
+        self.assertIn("$EffectiveAppId", ps_source)
+        self.assertIn('"--expected-app-name"', ps_source)
+        self.assertIn("$EffectiveAppName", ps_source)
+        self.assertIn('"--expected-version"', ps_source)
+        self.assertIn("$EffectiveAppVersion", ps_source)
+        self.assertIn("--expected-update-feed-url", ps_source)
+        self.assertIn("$EffectiveUpdateFeedUrl", ps_source)
+        self.assertIn("--expected-download-url", ps_source)
+        self.assertIn("$EffectiveDownloadUrl", ps_source)
+        self.assertIn("--expected-release-notes-url", ps_source)
+        self.assertIn("$EffectiveReleaseNotesUrl", ps_source)
         self.assertIn('appId = "ClassInEDBMVP"', ps_source)
 
         installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
         self.assertIn('"--expected-app-id"', installer_source)
         self.assertIn('"--expected-app-name"', installer_source)
         self.assertIn('"--expected-version"', installer_source)
+        self.assertIn('"--expected-update-feed-url"', installer_source)
+        self.assertIn('"--expected-download-url"', installer_source)
+        self.assertIn('"--expected-release-notes-url"', installer_source)
         self.assertIn("$EffectiveInstallerAppId", installer_source)
 
     def test_macos_packaging_rechecks_app_after_signing_and_stapling(self) -> None:
@@ -617,6 +659,8 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("require_nonempty_file()", shell_source)
         self.assertIn("require_zip_entry()", shell_source)
         self.assertIn("verify_dmg_contains_app()", shell_source)
+        self.assertIn('awk -v expected="$entry"', shell_source)
+        self.assertNotIn("grep -Fxq", shell_source)
         self.assertIn('require_nonempty_file "$ZIP_PATH" "Zip archive"', shell_source)
         self.assertIn('require_zip_entry "$ZIP_PATH" "$APP_NAME.app/Contents/Info.plist"', shell_source)
         self.assertIn('require_nonempty_file "$DMG_PATH" "DMG installer"', shell_source)

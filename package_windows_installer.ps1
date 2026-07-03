@@ -161,8 +161,14 @@ if (-not (Test-Path $PackageExe)) {
 $PackagedUpdateConfig = Read-PackagedUpdateConfig $PackageRoot
 $PackagedAppId = Get-JsonStringProperty $PackagedUpdateConfig "appId"
 $PackagedVersion = Get-JsonStringProperty $PackagedUpdateConfig "version"
+$PackagedUpdateFeedUrl = Get-JsonStringProperty $PackagedUpdateConfig "updateFeedUrl"
+$PackagedDownloadUrl = Get-JsonStringProperty $PackagedUpdateConfig "downloadUrl"
+$PackagedReleaseNotesUrl = Get-JsonStringProperty $PackagedUpdateConfig "releaseNotesUrl"
 $EffectiveInstallerAppId = if ($AppId) { $AppId } else { $PackagedAppId }
 $EffectiveInstallerVersion = if ($Version) { $Version } else { $PackagedVersion }
+$EffectiveInstallerUpdateFeedUrl = if ($UpdateFeedUrl) { $UpdateFeedUrl } else { $PackagedUpdateFeedUrl }
+$EffectiveInstallerDownloadUrl = if ($DownloadUrl) { $DownloadUrl } else { $PackagedDownloadUrl }
+$EffectiveInstallerReleaseNotesUrl = if ($ReleaseNotesUrl) { $ReleaseNotesUrl } else { $PackagedReleaseNotesUrl }
 if (-not $EffectiveInstallerVersion) {
     throw "Packaged update metadata does not include a version, and -Version was not provided."
 }
@@ -177,6 +183,15 @@ $VerifierArgs = @(
     "--expected-version",
     $EffectiveInstallerVersion
 )
+if ($EffectiveInstallerUpdateFeedUrl) {
+    $VerifierArgs += @("--expected-update-feed-url", $EffectiveInstallerUpdateFeedUrl)
+}
+if ($EffectiveInstallerDownloadUrl) {
+    $VerifierArgs += @("--expected-download-url", $EffectiveInstallerDownloadUrl)
+}
+if ($EffectiveInstallerReleaseNotesUrl) {
+    $VerifierArgs += @("--expected-release-notes-url", $EffectiveInstallerReleaseNotesUrl)
+}
 & $PythonExe @VerifierArgs
 
 if ($Sign -and $SkipAppBuild) {
