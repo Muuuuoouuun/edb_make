@@ -358,6 +358,11 @@ function replacementSourceIdFor(problem){
   ).trim();
 }
 
+function isEditableKeyboardTarget(target){
+  const tagName = String(target?.tagName || '').toLowerCase();
+  return ['input', 'textarea', 'select'].includes(tagName) || Boolean(target?.isContentEditable);
+}
+
 function resetItemPlacement(item){
   return {
     ...item,
@@ -1166,24 +1171,6 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
       <div className="topbar-actions" aria-label="보조 작업">
         <button
           className="btn ghost icon"
-          onClick={onRefresh}
-          disabled={refreshing}
-          title={refreshing ? '새로고침 중' : '새로고침'}
-          data-tooltip={refreshing ? '현재 세션을 새로고침하는 중' : '현재 세션 다시 불러오기'}
-          aria-label={refreshing ? '새로고침 중' : '새로고침'}
-        >
-          <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
-        </button>
-        <button
-          className="btn ghost icon"
-          title={canUndo ? '되돌리기 (Ctrl/Cmd+Z)' : '되돌릴 변경이 없습니다'}
-          data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
-          aria-label="되돌리기"
-          onClick={onUndo}
-          disabled={!canUndo}
-        >{Icon.undo}</button>
-        <button
-          className="btn ghost icon"
           type="button"
           title={canReset ? '초기화' : '초기화할 내용이 없습니다'}
           data-tooltip={canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
@@ -1195,9 +1182,27 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         </button>
         <button
           className="btn ghost icon"
+          title={canUndo ? '되돌리기 (Ctrl/Cmd+Z)' : '되돌릴 변경이 없습니다'}
+          data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
+          aria-label="되돌리기"
+          onClick={onUndo}
+          disabled={!canUndo}
+        >{Icon.undo}</button>
+        <button
+          className="btn ghost icon"
+          onClick={onRefresh}
+          disabled={refreshing}
+          title={refreshing ? '세션 새로고침 중' : '저장된 최신 세션 다시 읽기'}
+          data-tooltip={refreshing ? '저장된 최신 세션을 읽는 중' : '디스크에 저장된 최신 세션을 다시 읽기'}
+          aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}
+        >
+          <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
+        </button>
+        <button
+          className="btn ghost icon"
           type="button"
-          title={canExportImages ? '이미지 다운로드 · PNG ZIP' : '다운로드할 이미지가 없습니다'}
-          data-tooltip={canExportImages ? '수정된 문제 이미지를 PNG ZIP으로 다운로드' : '다운로드할 이미지가 없습니다'}
+          title={canExportImages ? '현재 선택 단계 기준 PNG ZIP' : '다운로드할 이미지가 없습니다'}
+          data-tooltip={canExportImages ? '현재 선택한 처리 단계 기준으로 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
           aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
           onClick={onExportImages}
           disabled={!canExportImages || exportingImages}
@@ -1211,24 +1216,13 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
             aria-haspopup="menu"
             aria-expanded={moreOpen}
             title="더보기"
-            data-tooltip="초기화, 종료 등 추가 작업"
+            data-tooltip="종료 등 추가 작업"
             onClick={() => setMoreOpen(open => !open)}
           >
             {Icon.more}
           </button>
           {moreOpen && (
             <div className="topbar-more-menu" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  onReset?.();
-                }}
-                disabled={!canReset}
-              >
-                {Icon.reset}<span>초기화</span>
-              </button>
               <button
                 type="button"
                 role="menuitem"
@@ -1292,6 +1286,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const manualSplitDragRef = useRef(null);
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
+  const manualSplitFocusRef = useRef('');
   const reviewWrapRef = useRef(null);
 
   // Cancel split mode if the session changes underneath (e.g. after a mutation).
@@ -1381,6 +1376,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   };
 
   const selectedList = Array.from(selectedIds).filter(id => problemsById.has(id));
+  const selectedActionKey = selectedList.join('|');
+  const selectedActionIds = useMemo(() => selectedList, [selectedActionKey]);
   const selectedProblems = selectedList.map(id => problemsById.get(id)).filter(Boolean);
   const selectedSingleProblem = selectedProblems.length === 1 ? selectedProblems[0] : null;
   const selectedSinglePage = selectedSingleProblem
@@ -1620,6 +1617,24 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     if (!selectedCanManualSplit || !selectedSourcePage) return;
     beginManualPageSplit(selectedSourcePage, selectedList);
   };
+
+  useEffect(() => {
+    const pageId = String(reviewFocus?.manualSplitPageId || '').trim();
+    if (!pageId) return;
+    const focusKey = [
+      pageId,
+      String(reviewFocus?.source || ''),
+      (reviewFocus?.scopeProblemIds || []).join(','),
+      (reviewFocus?.scopePageIds || []).join(','),
+    ].join('|');
+    if (manualSplitFocusRef.current === focusKey) return;
+    const page = pages.find(item => item.id === pageId);
+    if (!page?.sourceImageUri || !page.width || !page.height) return;
+    manualSplitFocusRef.current = focusKey;
+    const scopedIds = new Set((reviewFocus?.scopeProblemIds || []).map(id => String(id || '').trim()).filter(Boolean));
+    const replacementIds = (page.problemIds || []).filter(id => !scopedIds.size || scopedIds.has(String(id)));
+    beginManualPageSplit(page, replacementIds);
+  }, [reviewFocus, pages]);
 
   const centerReviewZoomScrollers = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -2002,8 +2017,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
     boxEditCommitRef.current = true;
     try {
-      await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
-      setBoxEdit(null);
+      const nextSession = await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
+      if (nextSession) setBoxEdit(null);
     } finally {
       boxEditCommitRef.current = false;
     }
@@ -2062,14 +2077,16 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     if (!sameSourcePage) return;
     await mutateSession?.('merge', { problemIds: selectedList });
   };
-  const doExclude = async () => {
-    if (selectedList.length === 0) return;
-    if (selectedList.length === 1) {
-      await mutateSession?.('exclude', { problemId: selectedList[0] });
+  const doExclude = useCallback(async () => {
+    if (selectedActionIds.length === 0 || mutating) return;
+    setSplitTarget(null);
+    setBoxEdit(null);
+    if (selectedActionIds.length === 1) {
+      await mutateSession?.('exclude', { problemId: selectedActionIds[0] });
       return;
     }
-    await mutateSession?.('exclude', { problemIds: selectedList });
-  };
+    await mutateSession?.('exclude', { problemIds: selectedActionIds });
+  }, [selectedActionIds, mutating, mutateSession]);
   const doRetryAi = async (pageIds) => {
     if (!pageIds?.length) return;
     await retryAiSession?.({ pageIds });
@@ -2086,6 +2103,21 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
     setSelectedIds(new Set(visibleReviewScope.problemIds));
     if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
+
+  useEffect(() => {
+    if (manualSplit || selectedActionIds.length === 0) return undefined;
+    const onReviewDeleteKey = (evt) => {
+      if (evt.defaultPrevented || evt.repeat || mutating) return;
+      if (evt.key !== 'Delete' && evt.key !== 'Backspace') return;
+      if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
+      if (isEditableKeyboardTarget(evt.target)) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      void doExclude();
+    };
+    window.addEventListener('keydown', onReviewDeleteKey);
+    return () => window.removeEventListener('keydown', onReviewDeleteKey);
+  }, [manualSplit, selectedActionIds, mutating, doExclude]);
 
   // Drag handler for the split guideline. Tracks against the splitting bbox
   // element so the ratio is relative to the box, not the page image.
@@ -2287,8 +2319,7 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   useEffect(() => {
     if (!manualSplit) return undefined;
     const onKeyDown = (evt) => {
-      const tagName = String(evt.target?.tagName || '').toLowerCase();
-      const isFormControl = ['input', 'textarea', 'select'].includes(tagName) || evt.target?.isContentEditable;
+      const isFormControl = isEditableKeyboardTarget(evt.target);
       if (evt.key === 'Escape' && manualSplit.mode === 'stamp') {
         evt.preventDefault();
         setManualSplitMode('draw');
@@ -3044,7 +3075,8 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
 function ItemsRail({
   items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
-  pendingFiles, removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
+  pendingFiles, selectedPendingFileKey, onSelectPendingFile,
+  removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
   onDownloadItemImage, downloadingItemId,
 }){
@@ -3382,8 +3414,22 @@ function ItemsRail({
             <div className="source-queue-list">
               {pendingFiles.map((file, index) => {
                 const key = fileQueueKey(file);
+                const selected = selectedPendingFileKey === key;
                 return (
-                <div className="source-queue-row" key={key}>
+                <div
+                  className={`source-queue-row ${selected ? 'is-selected' : ''}`}
+                  key={key}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected ? 'true' : 'false'}
+                  aria-label={`${file.name || '이름 없는 파일'} 미리보기`}
+                  onClick={() => onSelectPendingFile?.(key)}
+                  onKeyDown={e => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    onSelectPendingFile?.(key);
+                  }}
+                >
                   <span className="idx">{String(index + 1).padStart(2, '0')}</span>
                   <div className="file">
                     <div className="name">{file.name || '이름 없는 파일'}</div>
@@ -3393,16 +3439,25 @@ function ItemsRail({
                     className="icon-btn queue-row-action"
                     title="이 파일을 문제 파싱 없이 페이지 PNG로 등록"
                     aria-label="이 파일 페이지 PNG 등록"
-                    onClick={() => processQueuedFiles('register', key)}
+                    onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
                     disabled={queueBusy}
                   >
                     {Icon.pagePng}
                   </button>
                   <button
                     className="icon-btn queue-row-action"
+                    title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
+                    aria-label="이 파일 수동 쪼개기"
+                    onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
+                    disabled={queueBusy}
+                  >
+                    {Icon.pen}
+                  </button>
+                  <button
+                    className="icon-btn queue-row-action"
                     title="이 파일만 문항 AI 인식"
                     aria-label="이 파일 문항 AI 인식"
-                    onClick={() => processQueuedFiles('recognize', key)}
+                    onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
                     disabled={queueBusy}
                   >
                     {Icon.aiBatch}
@@ -3410,7 +3465,7 @@ function ItemsRail({
                   <button
                     className="icon-btn"
                     title="대기열에서 제거"
-                    onClick={() => removePendingFile(key)}
+                    onClick={e => { e.stopPropagation(); removePendingFile(key); }}
                     disabled={queueBusy}
                   >
                     {Icon.trash}
@@ -3443,6 +3498,19 @@ function ItemsRail({
                 <span className="queue-action-copy">
                   <strong>문항 AI 인식</strong>
                   <small>문제별 자동 분리</small>
+                </span>
+              </button>
+              <button
+                className="btn queue-action-card queue-action-manual"
+                type="button"
+                title="대기열 전체를 인식 없이 열고 수동으로 문제 영역을 나누기"
+                onClick={() => processQueuedFiles('manual-split')}
+                disabled={queueBusy}
+              >
+                <span className="queue-action-icon">{Icon.pen}</span>
+                <span className="queue-action-copy">
+                  <strong>수동 쪼개기</strong>
+                  <small>인식 없이 직접 분할</small>
                 </span>
               </button>
               {!aiAvailable && (
@@ -4183,7 +4251,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
               type="button"
               onClick={() => onExportImages?.()}
               disabled={!canExportImages || exportingImages || !onExportImages}
-              title={canExportImages ? '현재 문제 이미지를 PNG 묶음으로 다운로드' : '다운로드할 이미지가 없습니다'}
+              title={canExportImages ? '현재 선택 단계 기준 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
             >
               {Icon.download}<span>{exportingImages ? '준비 중' : 'PNG 묶음'}</span>
             </button>
@@ -4257,6 +4325,7 @@ function SidePanel({
   onExportImages, exportingImages, canExportImages,
   updateInfo, updateBusy, onCheckUpdate, onOpenUpdate,
   view,
+  pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -4313,7 +4382,11 @@ function SidePanel({
     setCropPresetsOpen(false);
   }, [view, item?.id]);
 
-  const itemPosLabel = item ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}` : '— / —';
+  const itemPosLabel = item
+    ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}`
+    : pendingFile
+      ? '대기'
+      : '— / —';
   const maxScale = maxPlacementScaleRatio(item);
   const placementScale = item ? normalizePlacementScaleRatio(item.placementScaleRatio, maxScale) : DEFAULT_PLACEMENT_SCALE_RATIO;
   const placementScalePercent = Math.round(placementScale * 100);
@@ -4862,6 +4935,14 @@ function SidePanel({
                   )}
                 </div>
               </>
+            ) : pendingFile ? (
+              <PendingFilePreview
+                file={pendingFile}
+                fileKey={pendingFileKey}
+                queueBusy={queueBusy}
+                processQueuedFiles={processQueuedFiles}
+                onPreviewError={onPendingPreviewError}
+              />
             ) : (
               <div style={{
                 padding: 40, textAlign: 'center',
@@ -5302,6 +5383,41 @@ function BackgroundJobsPanel({ jobs, onCancel, onDismiss }){
   );
 }
 
+function RecognitionCancelBanner({ job, onCancel }){
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!job?.startedAt) return;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [job?.startedAt]);
+
+  if (!job || job.status !== 'running') return null;
+
+  const elapsedSeconds = Math.max(0, Math.floor((now - job.startedAt) / 1000));
+  const elapsedLabel = elapsedSeconds >= 60
+    ? `${Math.floor(elapsedSeconds / 60)}분 ${elapsedSeconds % 60}초`
+    : `${elapsedSeconds}초`;
+
+  return (
+    <div className="recognition-cancel-banner" role="status" aria-live="polite">
+      <div className="recognition-cancel-mark">
+        <span className="mini-spinner" />
+      </div>
+      <div className="recognition-cancel-copy">
+        <strong>{job.label || 'AI 인식 중'}</strong>
+        <span>{elapsedLabel} 경과 · 잘못 눌렀다면 지금 취소할 수 있습니다</span>
+      </div>
+      <button
+        className="btn danger recognition-cancel-action"
+        type="button"
+        onClick={() => onCancel?.(job.id)}
+      >
+        인식 취소
+      </button>
+    </div>
+  );
+}
+
 function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
   const previewSession = review?.session;
   const targetPageIds = review?.pageIds || null;
@@ -5333,6 +5449,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
   );
   const confirmLabel = movesToReview ? '맞아요, 검수로 이동' : '맞아요, 칠판에 붙이기';
   const confirmingLabel = movesToReview ? '검수로 이동 중...' : '붙이는 중...';
+  const cancelLabel = movesToReview ? '적용 안 함' : '취소';
 
   return (
     <div className="recognition-modal-shell" role="dialog" aria-modal="true" aria-labelledby="recognition-review-title">
@@ -5405,7 +5522,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
         </div>
 
         <div className="recognition-modal-foot">
-          <button className="btn" type="button" onClick={onCancel} disabled={confirming}>취소</button>
+          <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
           <button className="btn primary" type="button" onClick={onConfirm} disabled={confirming || !summary.problems}>
             {confirming ? confirmingLabel : confirmLabel}
           </button>
@@ -5433,6 +5550,145 @@ function TileImage({ item, forceMode }){
     );
   }
   return <ItemArt kind={item.kind} mode={wantChalk ? 'chalk' : 'raw'} />;
+}
+
+function canPreviewImageFile(file){
+  const ext = sourceFileExtension(file);
+  return Boolean(file?.type?.startsWith('image/')) && !['tif', 'tiff'].includes(ext);
+}
+
+function pendingFilePreviewLabel(file){
+  if (canPreviewImageFile(file)) return '이미지 미리보기';
+  if (isPdfFile(file)) return 'PDF 미리보기';
+  if (isHwpFile(file)) return '한글 문서';
+  return '파일 미리보기';
+}
+
+function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPreviewError }){
+  const [objectUrl, setObjectUrl] = useState('');
+  const [previewError, setPreviewError] = useState('');
+  const isImagePreview = canPreviewImageFile(file);
+  const isPdfPreview = isPdfFile(file);
+  const isHangulFile = isHwpFile(file);
+  const canCreatePreview = Boolean(file && (isImagePreview || isPdfPreview));
+  const extension = sourceFileExtension(file);
+
+  useEffect(() => {
+    setPreviewError('');
+    setObjectUrl('');
+    if (!canCreatePreview) return;
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+      const err = new Error('브라우저 미리보기를 만들 수 없습니다');
+      setPreviewError('미리보기를 열 수 없습니다');
+      onPreviewError?.(err);
+      return;
+    }
+    let url = '';
+    try {
+      url = URL.createObjectURL(file);
+      setObjectUrl(url);
+    } catch (err) {
+      setPreviewError('미리보기를 열 수 없습니다');
+      onPreviewError?.(err);
+    }
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [file, canCreatePreview, onPreviewError]);
+
+  if (!file) return null;
+
+  const runQueueAction = (mode) => {
+    if (!fileKey || queueBusy) return;
+    processQueuedFiles?.(mode, fileKey);
+  };
+  const metaParts = [
+    sourceFileKindLabel(file),
+    formatBytes(file.size),
+    extension ? `.${extension}` : '',
+  ].filter(Boolean);
+
+  return (
+    <div className="pending-preview-panel">
+      <div className="pending-preview-head">
+        <span className="pending-preview-icon">{isImagePreview ? Icon.scan : Icon.fileText}</span>
+        <div className="pending-preview-copy">
+          <div className="pending-preview-eyebrow">업로드 대기 파일</div>
+          <div className="pending-preview-title" title={file.name || ''}>{file.name || '이름 없는 파일'}</div>
+          <div className="pending-preview-meta">{metaParts.join(' · ')}</div>
+        </div>
+      </div>
+
+      <div className={`pending-preview-surface ${isPdfPreview ? 'pdf' : ''} ${previewError ? 'has-error' : ''}`}>
+        {isImagePreview && objectUrl && !previewError ? (
+          <img
+            className="pending-preview-image"
+            src={objectUrl}
+            alt={file.name || '업로드 파일 미리보기'}
+            draggable={false}
+            onError={() => {
+              const err = new Error('이미지 미리보기 실패');
+              setPreviewError('이미지 미리보기를 열 수 없습니다');
+              onPreviewError?.(err);
+            }}
+          />
+        ) : isPdfPreview && objectUrl && !previewError ? (
+          <object
+            className="pending-preview-pdf"
+            data={objectUrl}
+            type="application/pdf"
+            aria-label={file.name || 'PDF 미리보기'}
+          >
+            <div className="pending-preview-empty">
+              <strong>PDF 미리보기를 열 수 없습니다</strong>
+              <span>등록하거나 검수에서 확인해 주세요.</span>
+            </div>
+          </object>
+        ) : (
+          <div className="pending-preview-empty">
+            <strong>{previewError || pendingFilePreviewLabel(file)}</strong>
+            <span>
+              {previewError
+                ? '등록하거나 검수에서 확인해 주세요.'
+                : isHangulFile
+                  ? '처리하면 페이지 이미지로 확인할 수 있습니다.'
+                  : '이 파일은 바로 미리보기를 지원하지 않습니다.'}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="pending-preview-actions">
+        <button
+          className="btn"
+          type="button"
+          onClick={() => runQueueAction('manual-split')}
+          disabled={queueBusy}
+          title="인식 없이 열고 검수 화면에서 직접 문제 영역을 나눕니다"
+        >
+          {Icon.pen}<span>직접 쪼개기</span>
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => runQueueAction('register')}
+          disabled={queueBusy}
+          title="문제 파싱 없이 페이지 PNG 자료로 등록"
+        >
+          {Icon.pagePng}<span>페이지 PNG</span>
+        </button>
+        <button
+          className="btn primary"
+          type="button"
+          onClick={() => runQueueAction('recognize')}
+          disabled={queueBusy}
+          title="이 파일만 문항 AI 인식"
+        >
+          {Icon.aiBatch}<span>AI 인식</span>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ─── backend helpers ──────────────────────────────────────────────────────
@@ -7686,6 +7942,26 @@ function formatApiError(payload, fallbackMessage){
   return `${baseMessage}\n\n다음 조치:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`;
 }
 
+function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
+  const raw = String(error?.message || error || '').trim();
+  if (/failed to fetch|networkerror|load failed|network/i.test(raw)) {
+    return `${fallbackMessage} · 로컬 앱 연결 확인`;
+  }
+  if (/413|too large|payload|용량|크기/i.test(raw)) {
+    return `${fallbackMessage} · 파일이 너무 큽니다`;
+  }
+  if (/api key|apikey|gemini|openai|unauthorized|인증|키/i.test(raw)) {
+    return `${fallbackMessage} · API 키 확인 필요`;
+  }
+  if (/hwp|hwpx|한글|libreoffice|rhwp|pdf 변환|converter/i.test(raw)) {
+    return `${fallbackMessage} · HWP 변환 환경 확인`;
+  }
+  if (/pdf/i.test(raw)) {
+    return `${fallbackMessage} · PDF 상태 확인`;
+  }
+  return `${fallbackMessage} · 다시 시도해 주세요`;
+}
+
 async function fetchUserSettings(){
   const resp = await fetch('/api/user-settings');
   const json = await expectOkJson(resp, '설정 로드 실패');
@@ -7761,10 +8037,21 @@ function filenameFromContentDisposition(header, fallbackName = 'problem.png'){
   return quoted?.[1]?.trim() || fallbackName;
 }
 
-async function fetchProblemImageDownload(problemId){
+async function fetchProblemImageDownload(problemId, args = {}){
   const id = String(problemId || '').trim();
   if (!id) throw new Error('자료 ID가 없습니다');
-  const resp = await fetch(`/api/session/problem-image?problemId=${encodeURIComponent(id)}&variant=board`);
+  const payloadSession = args?.session;
+  const resp = payloadSession
+    ? await fetch('/api/session/problem-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          problemId: id,
+          variant: args?.variant || 'board',
+          session: payloadSession,
+        }),
+      })
+    : await fetch(`/api/session/problem-image?problemId=${encodeURIComponent(id)}&variant=${encodeURIComponent(args?.variant || 'board')}`);
   if (!resp.ok) {
     const body = await resp.text().catch(() => '');
     throw new Error(body.trim() || `HTTP ${resp.status}`);
@@ -7892,16 +8179,19 @@ function App(){
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
+  const [selectedPendingFileKey, setSelectedPendingFileKey] = useState(null);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
   const [view, setView] = useState(initialViewRef.current);
   const [reviewFocus, setReviewFocus] = useState(null);
   const [mutating, setMutating] = useState(false);
+  const mutatingRef = useRef(false);
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
   const [historyStack, setHistoryStack] = useState([]);
   const boardColumns = normalizeBoardColumns(t.boardColumns);
   const fileInputRef = useRef(null);
+  const toastTimerRef = useRef(null);
   const jobControllersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
   const pendingFileKeysRef = useRef(new Set());
@@ -7916,16 +8206,44 @@ function App(){
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
+  const selectedPendingFile = useMemo(
+    () => pendingFiles.find(file => fileQueueKey(file) === selectedPendingFileKey) || null,
+    [pendingFiles, selectedPendingFileKey]
+  );
   const processed = items.filter(i => i.step !== 'raw').length;
   const progress = items.length ? processed / items.length : 0;
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
   const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
+  const runningRecognitionJob = backgroundJobs.find(job => (
+    job.status === 'running' && String(job.scope || '').includes('recognition')
+  )) || null;
 
-  const showToast = msg => {
+  const showToast = useCallback((msg) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     setToast(msg);
-    setTimeout(() => setToast(null), 2200);
-  };
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  const showSimpleErrorToast = useCallback((error, fallbackMessage) => {
+    console.warn(`[board] ${fallbackMessage || '작업 실패'}:`, error);
+    showToast(simpleToastErrorMessage(error, fallbackMessage));
+  }, [showToast]);
+
+  const selectBoardItem = useCallback((id) => {
+    setSelectedPendingFileKey(null);
+    setActiveId(id);
+  }, []);
+
+  const selectPendingFile = useCallback((key) => {
+    if (!key) return;
+    setActiveId(null);
+    setSelectedPendingFileKey(key);
+  }, []);
+
+  const showPendingPreviewError = useCallback((error) => {
+    showSimpleErrorToast(error, '미리보기 실패');
+  }, [showSimpleErrorToast]);
 
   const setPendingFilesTracked = useCallback((updater) => {
     setPendingFiles(prev => {
@@ -7940,6 +8258,16 @@ function App(){
     generation === queueGenerationRef.current
     && (fileKeys || []).every(key => pendingFileKeysRef.current.has(key))
   ), []);
+
+  useEffect(() => {
+    if (!pendingFiles.length) {
+      if (selectedPendingFileKey) setSelectedPendingFileKey(null);
+      return;
+    }
+    if (!selectedPendingFileKey || !pendingFiles.some(file => fileQueueKey(file) === selectedPendingFileKey)) {
+      setSelectedPendingFileKey(fileQueueKey(pendingFiles[0]));
+    }
+  }, [pendingFiles, selectedPendingFileKey]);
 
   const setRecentSessionsAuthoritative = useCallback((history) => {
     sessionHistoryRequestRef.current += 1;
@@ -7969,13 +8297,13 @@ function App(){
       if (!options.silent) showToast(updateStatusToast(info));
       return info;
     } catch (e) {
-      if (!options.silent) showToast('업데이트 확인 실패: ' + e.message);
+      if (!options.silent) showSimpleErrorToast(e, '업데이트 확인 실패');
       console.warn('[board] update check skipped:', e.message);
       return null;
     } finally {
       setUpdateBusy(false);
     }
-  }, []);
+  }, [showSimpleErrorToast, showToast]);
 
   const openUpdatePage = useCallback(async () => {
     if (updateBusy) {
@@ -7992,9 +8320,9 @@ function App(){
       await postOpenUrl(url);
       showToast('다운로드 페이지를 열었어요');
     } catch (e) {
-      showToast('다운로드 페이지 열기 실패: ' + e.message);
+      showSimpleErrorToast(e, '다운로드 페이지 열기 실패');
     }
-  }, [updateInfo, updateBusy, checkForUpdates]);
+  }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
 
   const refreshSessionHistory = useCallback(async () => {
     const requestId = sessionHistoryRequestRef.current + 1;
@@ -8056,12 +8384,13 @@ function App(){
       hint: '결과를 적용하지 않았습니다.',
     }, 2200);
     showToast(isRecognition ? 'AI 인식을 취소했어요' : '작업을 취소했어요');
-  }, [backgroundJobs, settleBackgroundJob]);
+  }, [backgroundJobs, settleBackgroundJob, showToast]);
 
   useEffect(() => {
     return () => {
       jobControllersRef.current.forEach(controller => controller.abort());
       jobControllersRef.current.clear();
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, []);
 
@@ -8168,6 +8497,10 @@ function App(){
     setItems(mapped);
     setSession(nextSession);
     setPublished(false);
+    if (mapped.length === 0) {
+      setActiveId(null);
+      return;
+    }
     if (!nextProblemsById.has(activeId)) {
       const replacementActiveId = (replacementsBySourceId.get(activeId) || [])
         .find(id => nextProblemsById.has(id));
@@ -8183,6 +8516,11 @@ function App(){
       showToast('변경할 세션이 없습니다');
       return;
     }
+    if (mutatingRef.current) {
+      showToast('이전 변경을 적용하는 중입니다');
+      return;
+    }
+    mutatingRef.current = true;
     setMutating(true);
     setLoading({
       label: action === 'split' ? '문제를 가르는 중…'
@@ -8209,13 +8547,14 @@ function App(){
       );
       return next;
     } catch (e) {
-      showToast(`수정 실패: ${e.message}`);
+      showSimpleErrorToast(e, '수정 실패');
       return null;
     } finally {
+      mutatingRef.current = false;
       setMutating(false);
       setLoading(null);
     }
-  }, [session, items, fileName, boardColumns, adoptMutatedSession, refreshSessionHistory]);
+  }, [session, items, fileName, boardColumns, adoptMutatedSession, refreshSessionHistory, showSimpleErrorToast, showToast]);
 
   const retryAiSession = useCallback(async (args) => {
     if (!session) {
@@ -8287,9 +8626,9 @@ function App(){
         label: 'AI 인식 실패',
         hint: e.message,
       }, 5000);
-      showToast(`AI 재인식 실패: ${e.message}`);
+      showSimpleErrorToast(e, 'AI 재인식 실패');
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob]);
+  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
@@ -8309,7 +8648,9 @@ function App(){
       showToast('다운로드할 세션이 없습니다');
       return;
     }
-    const problemIds = listUnique(items
+    const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;
+    const problemIds = listUnique(itemsForExport
       .filter(item => item?.id && !item.excluded)
       .map(item => item.id));
     if (!problemIds.length) {
@@ -8318,7 +8659,7 @@ function App(){
     }
     setExportingImages(true);
     try {
-      const result = await postExportImages({ mode: 'both', problemIds });
+      const result = await postExportImages({ mode: 'both', problemIds, session: sessionForExport });
       if (!result?.downloadUrl) {
         throw new Error('다운로드 URL이 없습니다');
       }
@@ -8333,11 +8674,11 @@ function App(){
         ? `PNG 묶음을 준비했어요 · 누락 ${missingCount}개는 manifest에서 확인`
         : `PNG 묶음 다운로드 시작 · ${result.count || problemIds.length}개`);
     } catch (e) {
-      showToast(`PNG 묶음 실패: ${e.message}`);
+      showSimpleErrorToast(e, 'PNG 묶음 실패');
     } finally {
       setExportingImages(false);
     }
-  }, [session, items, fileName]);
+  }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
 
   const downloadItemImage = useCallback(async (item) => {
     if (!session) {
@@ -8350,15 +8691,17 @@ function App(){
     }
     setDownloadingItemId(item.id);
     try {
-      const result = await fetchProblemImageDownload(item.id);
+      const itemsForDownload = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+      const sessionForDownload = materializeSessionForItems(session, itemsForDownload, fileName, boardColumns) || session;
+      const result = await fetchProblemImageDownload(item.id, { session: sessionForDownload });
       triggerBlobDownload(result.blob, result.fileName);
       showToast('PNG 다운로드 시작');
     } catch (e) {
-      showToast(`다운로드 실패: ${e.message}`);
+      showSimpleErrorToast(e, '다운로드 실패');
     } finally {
       setDownloadingItemId(null);
     }
-  }, [session]);
+  }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
 
   const undoMutation = useCallback(async () => {
     if (historyStack.length === 0) return;
@@ -8372,12 +8715,12 @@ function App(){
       refreshSessionHistory();
       showToast('이전 상태로 되돌렸어요');
     } catch (e) {
-      showToast(`되돌리기 실패: ${e.message}`);
+      showSimpleErrorToast(e, '되돌리기 실패');
     } finally {
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, applySession, refreshSessionHistory]);
+  }, [historyStack, applySession, refreshSessionHistory, showSimpleErrorToast]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -8387,9 +8730,7 @@ function App(){
       if (!(evt.ctrlKey || evt.metaKey)) return;
       if (evt.shiftKey) return;  // reserve Ctrl/Cmd+Shift+Z for future redo
       const target = evt.target;
-      const tag = (target?.tagName || '').toUpperCase();
-      const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || (target && target.isContentEditable);
-      if (isEditable) return;
+      if (isEditableKeyboardTarget(target)) return;
       if (historyStack.length === 0 || mutating) return;
       evt.preventDefault();
       undoMutation();
@@ -8453,9 +8794,9 @@ function App(){
       setUserSettings(s);
       showToast(key ? 'Gemini 키 저장됨' : 'Gemini 키 삭제됨');
     } catch (e) {
-      showToast('저장 실패: ' + e.message);
+      showSimpleErrorToast(e, '저장 실패');
     }
-  }, []);
+  }, [showSimpleErrorToast, showToast]);
 
   const onSaveOpenAiKey = useCallback(async (key) => {
     try {
@@ -8463,9 +8804,9 @@ function App(){
       setUserSettings(s);
       showToast(key ? 'OpenAI 키 저장됨' : 'OpenAI 키 삭제됨');
     } catch (e) {
-      showToast('저장 실패: ' + e.message);
+      showSimpleErrorToast(e, '저장 실패');
     }
-  }, []);
+  }, [showSimpleErrorToast, showToast]);
 
   const enhanceImageSession = useCallback(async (problemIds) => {
     if (!session) {
@@ -8514,9 +8855,9 @@ function App(){
         label: 'AI 업스케일 실패',
         hint: e.message,
       }, 5000);
-      showToast(`AI 업스케일 실패: ${e.message}`);
+      showSimpleErrorToast(e, 'AI 업스케일 실패');
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession]);
+  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast]);
 
   const resetSession = useCallback(async () => {
     if (loading) {
@@ -8542,9 +8883,9 @@ function App(){
       setReviewFocus(null);
       hideMockItems('초기화 완료 · 빈 세션');
     } catch (e) {
-      showToast('초기화 실패: ' + e.message);
+      showSimpleErrorToast(e, '초기화 실패');
     }
-  }, [loading, session, items.length, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative]);
+  }, [loading, session, items.length, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, showSimpleErrorToast, showToast]);
 
   const shutdownApp = useCallback(async () => {
     if (!window.confirm('로컬 앱을 종료할까요? 브라우저 창은 직접 닫으면 됩니다.')) return;
@@ -8552,9 +8893,9 @@ function App(){
       await postShutdown();
       showToast('앱을 종료합니다. 브라우저 창을 닫아도 됩니다.');
     } catch (e) {
-      showToast('앱 종료 실패: ' + e.message);
+      showSimpleErrorToast(e, '앱 종료 실패');
     }
-  }, []);
+  }, [showSimpleErrorToast, showToast]);
 
   const refreshSession = useCallback(async () => {
     setRefreshing(true);
@@ -8575,11 +8916,11 @@ function App(){
         showToast(usingMock ? '저장된 세션 없음 · 더미 유지' : '저장된 세션 없음 · 빈 세션');
       }
     } catch (e) {
-      showToast('새로고침 실패: ' + e.message);
+      showSimpleErrorToast(e, '새로고침 실패');
     } finally {
       setRefreshing(false);
     }
-  }, [applySession, usingMock, refreshSessionHistory]);
+  }, [applySession, usingMock, refreshSessionHistory, showSimpleErrorToast, showToast]);
 
   const restoreRecentSession = useCallback(async (id) => {
     if (!id || restoringSessionId) return;
@@ -8594,12 +8935,12 @@ function App(){
       setReviewFocus(null);
       showToast('최근 작업을 열었어요');
     } catch (e) {
-      showToast('작업 열기 실패: ' + e.message);
+      showSimpleErrorToast(e, '작업 열기 실패');
     } finally {
       setRestoringSessionId(null);
       setLoading(null);
     }
-  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative]);
+  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, showSimpleErrorToast, showToast]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -8607,6 +8948,8 @@ function App(){
     const files = Array.from(fileList || []);
     if (!files.length) return;
     setRecognitionReview(null);
+    const existingKeys = new Set(pendingFiles.map(fileQueueKey));
+    const firstAddedKey = files.map(fileQueueKey).find(key => !existingKeys.has(key)) || null;
     setPendingFilesTracked(prev => {
       const seen = new Set(prev.map(fileQueueKey));
       const next = [...prev];
@@ -8619,6 +8962,7 @@ function App(){
       });
       return next;
     });
+    if (firstAddedKey) selectPendingFile(firstAddedKey);
     showToast(`${files.length}개 파일을 대기열에 추가했어요`);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -8629,6 +8973,7 @@ function App(){
 
   const clearPendingFiles = useCallback(() => {
     setRecognitionReview(null);
+    setSelectedPendingFileKey(null);
     setPendingFilesTracked([]);
     showToast('업로드 대기열을 비웠어요');
   }, [setPendingFilesTracked]);
@@ -8649,6 +8994,7 @@ function App(){
       return;
     }
     const isRecognition = mode === 'recognize';
+    const isManualSplit = mode === 'manual-split';
     const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
     const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey
       ? AI_FALLBACK_ON
@@ -8714,7 +9060,7 @@ function App(){
           label: '문제 인식 실패',
           hint: e.message,
         }, 5000);
-        showToast(`문제 인식 실패: ${e.message}`);
+        showSimpleErrorToast(e, '문제 인식 실패');
       } finally {
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
@@ -8723,11 +9069,15 @@ function App(){
     setLoading({
       label: isRecognition
         ? `${files.length}개 파일에서 문제 인식 중...`
-        : files.length === 1 ? '1개 파일을 페이지 PNG로 등록 중...' : `${files.length}개 파일을 페이지 PNG로 등록 중...`,
+        : isManualSplit
+          ? (files.length === 1 ? '1개 파일을 수동 쪼개기용으로 여는 중...' : `${files.length}개 파일을 수동 쪼개기용으로 여는 중...`)
+          : files.length === 1 ? '1개 파일을 페이지 PNG로 등록 중...' : `${files.length}개 파일을 페이지 PNG로 등록 중...`,
       hint: isRecognition
         ? (aiFallback.enabled
             ? 'Gemini AI 보정으로 문항 경계를 다시 확인합니다.'
             : 'Gemini 키가 없어 기본 문항 인식만 실행합니다.')
+        : isManualSplit
+          ? '인식 없이 원본 페이지를 열고 검수 화면에서 직접 영역을 그립니다.'
         : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 하나의 PNG 자료로 등록합니다.',
       startedAt: Date.now(),
     });
@@ -8745,19 +9095,38 @@ function App(){
       const firstInserted = (sessionToApply?.problems || []).find(problem => problem?.id && !previousItemIds.has(problem.id));
       const applied = applySession(sessionToApply);
       if (applied && firstInserted?.id) setActiveId(firstInserted.id);
-      setReviewFocus(reviewFocusForNewSession(baseSnapshotForReviewScope, sessionToApply, 'queue-register'));
+      const nextReviewFocus = reviewFocusForNewSession(
+        baseSnapshotForReviewScope,
+        sessionToApply,
+        isManualSplit ? 'queue-manual-split' : 'queue-register'
+      );
+      if (isManualSplit) {
+        const manualSplitPageId = firstInserted?.sourcePageId
+          || nextReviewFocus?.scopePageIds?.[0]
+          || (sessionToApply?.pages || []).find(page => (page.problemIds || []).some(id => !previousItemIds.has(id)))?.id
+          || sessionToApply?.pages?.[0]?.id
+          || null;
+        setReviewFocus({
+          ...(nextReviewFocus || { source: 'queue-manual-split' }),
+          filter: 'all',
+          manualSplitPageId,
+        });
+        setView('review');
+      } else {
+        setReviewFocus(nextReviewFocus);
+      }
       refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
       setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
-      const intentLabel = isRecognition ? '문항 AI 인식' : '페이지 PNG 등록';
+      const intentLabel = isRecognition ? '문항 AI 인식' : isManualSplit ? '수동 쪼개기 준비' : '페이지 PNG 등록';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
     } catch (e) {
-      showToast(`${isRecognition ? '문제 인식' : '등록'} 실패: ${e.message}`);
+      showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패');
     } finally {
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent]);
+  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, showSimpleErrorToast]);
 
   const cancelRecognitionReview = useCallback(() => {
     if (confirmingRecognition) return;
@@ -8814,7 +9183,7 @@ function App(){
       }
       setRecognitionReview(null);
     } catch (e) {
-      showToast(`적용 실패: ${e.message}`);
+      showSimpleErrorToast(e, '적용 실패');
     } finally {
       setConfirmingRecognition(false);
     }
@@ -8831,6 +9200,7 @@ function App(){
     refreshSessionHistory,
     queueRequestIsCurrent,
     setPendingFilesTracked,
+    showSimpleErrorToast,
   ]);
 
   const setStep = (id, step) => {
@@ -9011,9 +9381,9 @@ function App(){
       setPublished(true);
       showToast('ClassIn 검수 완료로 저장했어요');
     } catch (e) {
-      showToast('ClassIn 검수 저장 실패: ' + e.message);
+      showSimpleErrorToast(e, 'ClassIn 검수 저장 실패');
     }
-  }, [session, refreshSessionHistory]);
+  }, [session, refreshSessionHistory, showSimpleErrorToast]);
 
   const onPublish = async () => {
     if (!session || !Array.isArray(session.problems)) {
@@ -9154,7 +9524,7 @@ function App(){
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
       showToast(`${publishLabel}로 EDB 제작 완료 · 다운로드 시작`);
     } catch (e) {
-      showToast('제작 실패: ' + e.message);
+      showSimpleErrorToast(e, '제작 실패');
     } finally {
       setLoading(null);
     }
@@ -9188,13 +9558,15 @@ function App(){
         <ItemsRail
           items={items}
           activeId={activeId}
-          setActive={setActiveId}
+          setActive={selectBoardItem}
           reorder={reorder}
           removeItem={removeItem}
           addSample={addSample}
           bulkApply={applyToAll}
           handleFiles={handleFiles}
           pendingFiles={pendingFiles}
+          selectedPendingFileKey={selectedPendingFileKey}
+          onSelectPendingFile={selectPendingFile}
           removePendingFile={removePendingFile}
           clearPendingFiles={clearPendingFiles}
           processQueuedFiles={processQueuedFiles}
@@ -9213,7 +9585,7 @@ function App(){
             session={session}
             items={items}
             activeId={activeId}
-            setActive={setActiveId}
+            setActive={selectBoardItem}
             mutateSession={mutateSession}
             retryAiSession={retryAiSession}
             mutating={mutating}
@@ -9226,7 +9598,7 @@ function App(){
           <BoardStage
             items={items}
             activeId={activeId}
-            setActive={setActiveId}
+            setActive={selectBoardItem}
             boardColor={t.boardColor}
             boardColumns={boardColumns}
             fileName={fileName}
@@ -9276,6 +9648,11 @@ function App(){
           onCheckUpdate={checkForUpdates}
           onOpenUpdate={openUpdatePage}
           view={view}
+          pendingFile={selectedPendingFile}
+          pendingFileKey={selectedPendingFileKey}
+          processQueuedFiles={processQueuedFiles}
+          queueBusy={!!loading || hasRunningQueueRecognition}
+          onPendingPreviewError={showPendingPreviewError}
         />
       </div>
 
@@ -9283,6 +9660,11 @@ function App(){
         jobs={backgroundJobs}
         onCancel={cancelBackgroundJob}
         onDismiss={dismissBackgroundJob}
+      />
+
+      <RecognitionCancelBanner
+        job={runningRecognitionJob}
+        onCancel={cancelBackgroundJob}
       />
 
       <RecognitionReviewModal

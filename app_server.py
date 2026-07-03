@@ -4298,6 +4298,41 @@ def _existing_session_image_path(value: Any) -> Path | None:
     return resolved if resolved.exists() and resolved.is_file() else None
 
 
+def _session_problem_processing_step(problem: dict[str, Any]) -> str:
+    return _normalize_processing_step(
+        problem.get("processingStep")
+        or problem.get("processing_step")
+        or problem.get("step")
+    )
+
+
+def _encode_png_payload(image: Any) -> bytes:
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _session_problem_s3_board_png_payload(problem: dict[str, Any], *, board_theme: str) -> bytes | None:
+    if _session_problem_processing_step(problem) != "s3":
+        return None
+    source_path = (
+        _existing_session_image_path(problem.get("imagePath"))
+        or _existing_session_image_path(problem.get("boardRenderPath"))
+    )
+    if source_path is None:
+        return None
+
+    from PIL import Image
+
+    with Image.open(source_path) as loaded:
+        crop_image = loaded.convert("RGBA" if "A" in loaded.getbands() else "RGB")
+    board_image = _build_transparent_reconstruction_image(
+        crop_image,
+        board_theme=board_theme or DEFAULT_BOARD_THEME,
+    )
+    return _encode_png_payload(board_image)
+
+
 def _write_zip_png(zip_file: zipfile.ZipFile, source_path: Path, arcname: str) -> None:
     if source_path.suffix.lower() == ".png":
         zip_file.write(source_path, arcname)
@@ -4378,6 +4413,7 @@ def _write_session_image_export_zip(
         "missing": [],
     }
     exported_problem_ids: set[str] = set()
+    board_theme = str(session.get("board_theme") or session.get("boardTheme") or DEFAULT_BOARD_THEME)
     folders = []
     if normalized_mode in {"edb", "both"}:
         folders.append(("edb", "edb_images", "edbImage"))
@@ -4398,32 +4434,45 @@ def _write_session_image_export_zip(
             exported_any = False
             for kind, folder, manifest_key in folders:
                 arcname = f"{folder}/{filename}"
-                source_path = _session_image_export_source_path(problem, kind)
-                if source_path is None:
+                source_path: Path | None = None
+                try:
+                    rendered_payload = (
+                        _session_problem_s3_board_png_payload(problem, board_theme=board_theme)
+                        if kind == "edb"
+                        else None
+                    )
+                    if rendered_payload is not None:
+                        archive.writestr(arcname, rendered_payload)
+                    else:
+                        source_path = _session_image_export_source_path(problem, kind)
+                        if source_path is None:
+                            manifest_item[manifest_key] = None
+                            missing = {
+                                "index": index,
+                                "problemId": problem_id,
+                                "title": manifest_item["title"],
+                                "kind": kind,
+                                "reason": "image file missing",
+                            }
+                            manifest["missing"].append(missing)
+                            continue
+                        _write_zip_png(archive, source_path, arcname)
+                except Exception as exc:  # noqa: BLE001 - one failed render should not block the whole bundle.
                     manifest_item[manifest_key] = None
                     missing = {
                         "index": index,
                         "problemId": problem_id,
                         "title": manifest_item["title"],
                         "kind": kind,
-                        "reason": "image file missing",
+                        "reason": str(exc),
                     }
+                    if source_path is not None:
+                        missing["sourcePath"] = str(source_path)
                     manifest["missing"].append(missing)
                     continue
-                try:
-                    _write_zip_png(archive, source_path, arcname)
-                except OSError as exc:
-                    manifest_item[manifest_key] = None
-                    manifest["missing"].append({
-                        "index": index,
-                        "problemId": problem_id,
-                        "title": manifest_item["title"],
-                        "kind": kind,
-                        "sourcePath": str(source_path),
-                        "reason": str(exc),
-                    })
-                    continue
                 manifest_item[manifest_key] = arcname
+                if kind == "edb":
+                    manifest_item["processingStep"] = _session_problem_processing_step(problem)
                 exported_any = True
             if exported_any:
                 exported_problem_ids.add(problem_id)
@@ -5279,6 +5328,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/export-images":
             self._handle_session_export_images()
             return
+        if parsed.path == "/api/session/problem-image":
+            self._handle_session_problem_image_post()
+            return
         if parsed.path == "/api/session/retry-ai":
             self._handle_session_retry_ai()
             return
@@ -5800,6 +5852,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
 
+        payload_session = payload.get("session")
+        if isinstance(payload_session, dict) and isinstance(payload_session.get("problems"), list):
+            session = _denormalize_session_paths(payload_session)
+
         raw_problem_ids = payload.get("problemIds", payload.get("problem_ids"))
         problem_ids = _coerce_problem_ids(raw_problem_ids) if raw_problem_ids is not None else None
         try:
@@ -5827,28 +5883,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "mode": result["mode"],
         })
 
-    def _handle_session_problem_image(self, parsed) -> None:
-        session = self.app_server.latest_session or load_latest_session()
-        if session is None:
-            self.send_error(HTTPStatus.NOT_FOUND, "no session available")
-            return
-        query = parse_qs(parsed.query)
-        problem_id = str(query.get("problemId", query.get("problem_id", [""]))[0] or "").strip()
+    def _send_session_problem_image_response(self, session: dict[str, Any], problem_id: str, variant: str) -> None:
         if not problem_id:
             self.send_error(HTTPStatus.BAD_REQUEST, "problemId is required")
             return
-        variant = str(query.get("variant", ["board"])[0] or "board")
         problems = [problem for problem in session.get("problems", []) if isinstance(problem, dict)]
         problem = next((problem for problem in problems if str(problem.get("id") or "") == problem_id), None)
         if problem is None:
             self.send_error(HTTPStatus.NOT_FOUND, "problem not found")
             return
+        index = problems.index(problem) + 1
+        filename = _safe_problem_image_download_filename(index, problem.get("title"), problem_id)
+        normalized_variant = str(variant or "board").strip().lower()
+        if normalized_variant == "board":
+            try:
+                rendered_payload = _session_problem_s3_board_png_payload(
+                    problem,
+                    board_theme=str(session.get("board_theme") or session.get("boardTheme") or DEFAULT_BOARD_THEME),
+                )
+            except Exception as exc:  # noqa: BLE001 - surface a direct download failure.
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"failed to render problem image: {exc}")
+                return
+            if rendered_payload is not None:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(rendered_payload)))
+                self.send_header("Content-Disposition", content_disposition_attachment(filename))
+                self.end_headers()
+                self.wfile.write(rendered_payload)
+                return
+
         source_path = _session_problem_image_download_source_path(problem, variant)
         if source_path is None:
             self.send_error(HTTPStatus.NOT_FOUND, "problem image not found")
             return
-        index = problems.index(problem) + 1
-        filename = _safe_problem_image_download_filename(index, problem.get("title"), problem_id)
         try:
             if source_path.suffix.lower() == ".png":
                 file_size = source_path.stat().st_size
@@ -5871,6 +5939,33 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Disposition", content_disposition_attachment(filename))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _handle_session_problem_image(self, parsed) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "no session available")
+            return
+        query = parse_qs(parsed.query)
+        problem_id = str(query.get("problemId", query.get("problem_id", [""]))[0] or "").strip()
+        variant = str(query.get("variant", ["board"])[0] or "board")
+        self._send_session_problem_image_response(session, problem_id, variant)
+
+    def _handle_session_problem_image_post(self) -> None:
+        session = self.app_server.latest_session or load_latest_session()
+        if session is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "no session available")
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, f"invalid JSON: {exc}")
+            return
+        payload_session = payload.get("session")
+        if isinstance(payload_session, dict) and isinstance(payload_session.get("problems"), list):
+            session = _denormalize_session_paths(payload_session)
+        problem_id = str(payload.get("problemId") or payload.get("problem_id") or "").strip()
+        variant = str(payload.get("variant") or "board")
+        self._send_session_problem_image_response(session, problem_id, variant)
 
     def _handle_session_retry_ai(self) -> None:
         session = self.app_server.latest_session or load_latest_session()

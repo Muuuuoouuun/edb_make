@@ -13,11 +13,59 @@ class TestUiQueueActions(unittest.TestCase):
 
         self.assertIn("페이지 PNG", source)
         self.assertIn("문제 파싱 없음", source)
+        self.assertIn("수동 쪼개기", source)
+        self.assertIn("인식 없이 직접 분할", source)
         self.assertIn("문항 AI 인식", source)
         self.assertIn("문제별 자동 분리", source)
         self.assertIn("onClick={() => processQueuedFiles('register')}", source)
+        self.assertIn("onClick={() => processQueuedFiles('manual-split')}", source)
         self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
         self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
+
+    def test_upload_queue_row_selects_pending_file_preview(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        rail = source.split("function ItemsRail", 1)[1].split("function SidePanel", 1)[0]
+
+        self.assertIn("const [selectedPendingFileKey, setSelectedPendingFileKey] = useState(null);", source)
+        self.assertIn("const selectedPendingFile = useMemo", source)
+        self.assertIn("const selectPendingFile = useCallback((key) => {", source)
+        self.assertIn("setActiveId(null);", source)
+        self.assertIn("className={`source-queue-row ${selected ? 'is-selected' : ''}`}", rail)
+        self.assertIn("aria-pressed={selected ? 'true' : 'false'}", rail)
+        self.assertIn("onClick={() => onSelectPendingFile?.(key)}", rail)
+        self.assertIn("onKeyDown={e =>", rail)
+        self.assertIn("onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}", rail)
+        self.assertIn("onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}", rail)
+        self.assertIn("onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}", rail)
+        self.assertIn("<PendingFilePreview", source)
+        self.assertIn("pendingFile={selectedPendingFile}", source)
+
+    def test_queue_and_preview_errors_use_short_toast_helper(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+
+        self.assertIn("function simpleToastErrorMessage", source)
+        self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage) => {", source)
+        self.assertIn("showSimpleErrorToast(error, '미리보기 실패')", source)
+        self.assertIn("showSimpleErrorToast(e, '문제 인식 실패')", queue_source)
+        self.assertIn("showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패')", queue_source)
+        self.assertNotIn("문제 인식 실패: ${e.message}", queue_source)
+        self.assertNotIn("등록'} 실패: ${e.message}", queue_source)
+
+    def test_manual_split_queue_registers_without_recognition_and_opens_editor(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("const centerReviewZoomScrollers", 1)[0]
+
+        self.assertIn("const isManualSplit = mode === 'manual-split';", queue_source)
+        self.assertIn("isManualSplit ? 'queue-manual-split' : 'queue-register'", queue_source)
+        self.assertIn("manualSplitPageId,", queue_source)
+        self.assertIn("setView('review');", queue_source)
+        self.assertIn("const pageId = String(reviewFocus?.manualSplitPageId || '').trim();", review_stage)
+        self.assertIn("beginManualPageSplit(page, replacementIds);", review_stage)
 
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
@@ -41,7 +89,9 @@ class TestUiQueueActions(unittest.TestCase):
         register_branch = register_branch.split("} catch (e) {", 1)[0]
 
         self.assertIn("페이지 PNG 등록", register_branch)
-        self.assertIn("reviewFocusForNewSession(baseSnapshotForReviewScope, sessionToApply, 'queue-register')", register_branch)
+        self.assertIn("const nextReviewFocus = reviewFocusForNewSession", register_branch)
+        self.assertIn("isManualSplit ? 'queue-manual-split' : 'queue-register'", register_branch)
+        self.assertIn("setReviewFocus(nextReviewFocus);", register_branch)
         self.assertNotIn("openOutputFolder(", register_branch)
 
     def test_review_scope_limits_all_tab_to_recently_added_batch(self) -> None:
@@ -67,6 +117,25 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn('aria-label="초기화"', actions)
         self.assertIn("onClick={onReset}", actions)
         self.assertIn("{Icon.reset}", actions)
+        self.assertLess(actions.index('aria-label="초기화"'), actions.index("aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}"))
+        self.assertIn("저장된 최신 세션 다시 읽기", topbar)
+        self.assertNotIn("현재 세션 다시 불러오기", topbar)
+
+    def test_review_selected_boxes_delete_key_excludes_and_can_undo(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("function ItemsRail", 1)[0]
+        do_exclude = review_stage.split("const doExclude = useCallback(async () => {", 1)[1]
+        do_exclude = do_exclude.split("const doRetryAi", 1)[0]
+        delete_key_handler = review_stage.split("const onReviewDeleteKey = (evt) => {", 1)[1]
+        delete_key_handler = delete_key_handler.split("window.addEventListener('keydown', onReviewDeleteKey)", 1)[0]
+
+        self.assertIn("if (selectedActionIds.length === 0 || mutating) return;", do_exclude)
+        self.assertIn("mutateSession?.('exclude', { problemId: selectedActionIds[0] })", do_exclude)
+        self.assertIn("mutateSession?.('exclude', { problemIds: selectedActionIds })", do_exclude)
+        self.assertIn("evt.key !== 'Delete' && evt.key !== 'Backspace'", delete_key_handler)
+        self.assertIn("isEditableKeyboardTarget(evt.target)", delete_key_handler)
+        self.assertIn("void doExclude();", delete_key_handler)
 
     def test_queue_recognition_ignores_stale_queue_results(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -81,6 +150,21 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("if (!queueRequestIsCurrent(queueGeneration, fileKeys))", recognition_branch)
         self.assertIn("queueGeneration,", recognition_branch)
         self.assertIn("if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || []))", confirm_branch)
+
+    def test_running_recognition_exposes_prominent_cancel_banner(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        self.assertIn("function RecognitionCancelBanner", source)
+        self.assertIn("const runningRecognitionJob = backgroundJobs.find", source)
+        self.assertIn("String(job.scope || '').includes('recognition')", source)
+        self.assertIn("<RecognitionCancelBanner", source)
+        self.assertIn("job={runningRecognitionJob}", source)
+        self.assertIn("onCancel={cancelBackgroundJob}", source)
+        self.assertIn("인식 취소", source)
+        self.assertIn("잘못 눌렀다면 지금 취소할 수 있습니다", source)
+        self.assertIn(".recognition-cancel-banner", html)
+        self.assertIn(".recognition-cancel-action", html)
 
     def test_session_history_refresh_ignores_stale_responses(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

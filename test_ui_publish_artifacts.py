@@ -107,7 +107,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("exportingImages", panel)
         self.assertIn("canExportImages", panel)
         self.assertIn("PNG 묶음", panel)
-        self.assertIn("현재 문제 이미지를 PNG 묶음으로 다운로드", panel)
+        self.assertIn("현재 선택 단계 기준 최종 PNG 묶음 다운로드", panel)
 
     def test_board_toolbar_exposes_image_download_action(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -117,13 +117,17 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("async function postExportImages", source)
         self.assertIn("fetch('/api/session/export-images'", source)
         self.assertIn("const exportSessionImages = useCallback", source)
+        self.assertIn("const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;", source)
+        self.assertIn("postExportImages({ mode: 'both', problemIds, session: sessionForExport })", source)
+        self.assertIn("fetch('/api/session/problem-image'", source)
+        self.assertIn("fetchProblemImageDownload(item.id, { session: sessionForDownload })", source)
         self.assertIn("result.downloadUrl", source)
         self.assertIn("result.fileName", source)
         self.assertIn("onExportImages", topbar)
         self.assertIn("exportingImages", topbar)
         self.assertIn("canExportImages", topbar)
         self.assertIn("이미지 다운로드", topbar)
-        self.assertIn("PNG ZIP", topbar)
+        self.assertIn("현재 선택 단계 기준 PNG ZIP", topbar)
 
     def test_app_sends_requested_edb_name_for_export_and_publish(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -1137,6 +1137,120 @@
     font-size: 11px; color: var(--muted);
     padding: 3px 8px;
   }
+  .pending-preview-panel{
+    display: grid;
+    gap: 12px;
+  }
+  .pending-preview-head{
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .pending-preview-icon{
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  }
+  .pending-preview-copy{
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+  .pending-preview-eyebrow{
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .02em;
+  }
+  .pending-preview-title{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .pending-preview-meta{
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+  }
+  .pending-preview-surface{
+    min-height: 218px;
+    aspect-ratio: 4 / 3;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pending-preview-surface.pdf{
+    aspect-ratio: 3 / 4;
+    min-height: 310px;
+  }
+  .pending-preview-surface.has-error{
+    background: var(--surface-2);
+  }
+  .pending-preview-image{
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .pending-preview-pdf{
+    width: 100%;
+    height: 100%;
+    min-height: 310px;
+    border: 0;
+    background: white;
+  }
+  .pending-preview-empty{
+    padding: 22px;
+    color: var(--muted);
+    text-align: center;
+    display: grid;
+    gap: 6px;
+    line-height: 1.35;
+  }
+  .pending-preview-empty strong{
+    color: var(--ink);
+    font-size: 13px;
+  }
+  .pending-preview-empty span{
+    font-size: 11.5px;
+  }
+  .pending-preview-actions{
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .pending-preview-actions .btn{
+    min-width: 0;
+    justify-content: center;
+    padding: 8px 6px;
+    font-size: 11.5px;
+  }
+  .pending-preview-actions .btn span{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .icon-btn.on{
     background: var(--accent-soft);
     color: var(--accent-ink);
@@ -1896,7 +2010,7 @@
   }
   .source-queue-row{
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) auto auto auto;
+    grid-template-columns: 22px minmax(0, 1fr) auto auto auto auto;
     gap: 7px;
     align-items: center;
     min-height: 30px;
@@ -1904,6 +2018,19 @@
     border: 1px solid var(--line);
     border-radius: 7px;
     background: var(--surface);
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  }
+  .source-queue-row:hover,
+  .source-queue-row:focus-visible{
+    border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+    background: color-mix(in srgb, var(--surface) 86%, var(--accent-soft));
+    outline: none;
+  }
+  .source-queue-row.is-selected{
+    border-color: color-mix(in srgb, var(--accent) 54%, var(--line));
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
   }
   .source-queue-row .idx{
     font-family: 'JetBrains Mono', monospace;
@@ -1991,6 +2118,9 @@
   }
   .queue-action-card.primary .queue-action-copy small{
     color: rgba(255,255,255,.72);
+  }
+  .source-queue-actions .queue-action-manual{
+    grid-column: 1 / -1;
   }
   .source-queue-actions .full{
     grid-column: 1 / -1;
@@ -3775,6 +3905,75 @@
     border-color: var(--line-strong);
     background: var(--surface);
   }
+  .recognition-cancel-banner{
+    position: fixed;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 998;
+    width: min(520px, calc(100vw - 28px));
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
+    box-shadow: var(--shadow-2);
+  }
+  .recognition-cancel-mark{
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .recognition-cancel-copy{
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .recognition-cancel-copy strong{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink);
+    font-size: 12.5px;
+  }
+  .recognition-cancel-copy span{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .recognition-cancel-action{
+    min-width: 88px;
+    justify-content: center;
+    background: rgba(213,72,72,.1);
+    border-color: rgba(213,72,72,.24);
+    color: var(--danger);
+  }
+  .recognition-cancel-action:hover{
+    background: rgba(213,72,72,.16);
+    border-color: rgba(213,72,72,.4);
+  }
+  @media (max-width: 560px){
+    .recognition-cancel-banner{
+      grid-template-columns: 30px minmax(0, 1fr);
+      top: 10px;
+    }
+    .recognition-cancel-action{
+      grid-column: 1 / -1;
+      width: 100%;
+      min-height: 34px;
+    }
+  }
 
   /* AI recognition review modal */
   .recognition-modal-shell{
@@ -4023,6 +4222,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-scaled-reflow-20260702"></script>
-<script src="app.bundle.js?v=frontend-bundle-f717ea6de3226d8f9d7de1c41507dd8179a429d3bcb608dcb5f6b000f280d9c2"></script>
+<script src="app.bundle.js?v=frontend-bundle-135e08036eac1d210e63be2ffe2f552099556dbd3072411877b8b4e2017dbad9"></script>
 </body>
 </html>

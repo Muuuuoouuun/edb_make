@@ -1087,6 +1087,56 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertIn("filename*=UTF-8''01_%EB%AC%B8%ED%95%AD_1.png", disposition)
             self.assertEqual(payload, handler.wfile.getvalue())
 
+    def test_problem_image_post_renders_s3_from_payload_session(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            crop = tmpdir / "crop.png"
+            Image.new("RGB", (12, 8), "white").save(crop)
+            latest_session = {
+                "problems": [{
+                    "id": "p1",
+                    "title": "최신",
+                    "imagePath": crop.resolve().as_uri(),
+                    "boardRenderPath": crop.resolve().as_uri(),
+                    "step": "s1",
+                }],
+            }
+            payload_session = {
+                "board_theme": "charcoal",
+                "problems": [{
+                    "id": "p1",
+                    "title": "선택본",
+                    "imagePath": crop.resolve().as_uri(),
+                    "boardRenderPath": crop.resolve().as_uri(),
+                    "step": "s3",
+                    "processingStep": "s3",
+                }],
+            }
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "latest_session": latest_session,
+            })()
+            handler._read_json_body = lambda: {"problemId": "p1", "session": payload_session}
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            rendered = Image.new("RGBA", (3, 2), (255, 0, 0, 200))
+            with patch.object(app_server, "_build_transparent_reconstruction_image", return_value=rendered):
+                handler._handle_session_problem_image_post()
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            self.assertIn(("Content-Type", "image/png"), headers)
+            with Image.open(io.BytesIO(handler.wfile.getvalue())) as downloaded:
+                self.assertEqual((3, 2), downloaded.size)
+                self.assertEqual((255, 0, 0, 200), downloaded.convert("RGBA").getpixel((0, 0)))
+
     def test_problem_image_download_returns_404_without_image(self):
         session = {"problems": [{"id": "p1", "title": "문항 1"}]}
         handler = object.__new__(app_server.AppRequestHandler)
@@ -1805,6 +1855,47 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual(["p2", "p1"], [item["problemId"] for item in manifest["items"]])
             self.assertEqual("edb_images/001_문항_02.png", manifest["items"][0]["edbImage"])
             self.assertEqual("raw_crops/001_문항_02.png", manifest["items"][0]["rawCrop"])
+
+    def test_session_image_export_zip_renders_s3_edb_images(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            crop = tmpdir / "crop.png"
+            Image.new("RGB", (20, 10), "white").save(crop)
+            session = {
+                "session_name": "수업",
+                "board_theme": "charcoal",
+                "problems": [{
+                    "id": "p1",
+                    "title": "문항 1",
+                    "sourcePageId": "page-1",
+                    "bbox": {"left": 0, "top": 0, "width": 20, "height": 10},
+                    "imagePath": crop.resolve().as_uri(),
+                    "boardRenderPath": crop.resolve().as_uri(),
+                    "step": "s3",
+                    "processingStep": "s3",
+                }],
+            }
+
+            rendered = Image.new("RGBA", (4, 3), (0, 255, 0, 180))
+            with (
+                patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"),
+                patch.object(app_server, "_build_transparent_reconstruction_image", return_value=rendered),
+            ):
+                result = app_server._write_session_image_export_zip(session, "both", problem_ids=["p1"])
+
+            with zipfile.ZipFile(Path(result["zipPath"])) as archive:
+                edb_payload = archive.read("edb_images/001_문항_1.png")
+                raw_payload = archive.read("raw_crops/001_문항_1.png")
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+            with Image.open(io.BytesIO(edb_payload)) as edb_image:
+                self.assertEqual((4, 3), edb_image.size)
+                self.assertEqual((0, 255, 0, 180), edb_image.convert("RGBA").getpixel((0, 0)))
+            with Image.open(io.BytesIO(raw_payload)) as raw_image:
+                self.assertEqual((20, 10), raw_image.size)
+            self.assertEqual("s3", manifest["items"][0]["processingStep"])
 
     def test_session_export_images_handler_allows_generated_zip_file(self):
         from PIL import Image
