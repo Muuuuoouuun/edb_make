@@ -95,6 +95,14 @@ function Assert-EDBNonEmptyFile {
     }
 }
 
+function Assert-EDBNativeCommandSucceeded {
+    param([Parameter(Mandatory = $true)] [string]$Label)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed with exit code $LASTEXITCODE."
+    }
+}
+
 function Read-PackagedUpdateConfig {
     param([Parameter(Mandatory = $true)] [string]$PackageRoot)
 
@@ -198,6 +206,7 @@ if ($EffectiveInstallerReleaseNotesUrl) {
     $VerifierArgs += @("--expected-release-notes-url", $EffectiveInstallerReleaseNotesUrl)
 }
 & $PythonExe @VerifierArgs
+Assert-EDBNativeCommandSucceeded "Packaged app verification"
 
 if ($Sign -and $SkipAppBuild) {
     Invoke-EDBWindowsPackageSigning `
@@ -230,6 +239,7 @@ $IsccArgs = @(
     "/DAppVersion=$EffectiveInstallerVersion"
 )
 & $Iscc @IsccArgs $InstallerScript
+Assert-EDBNativeCommandSucceeded "Inno Setup compilation"
 Assert-EDBNonEmptyFile -Path $InstallerPath -Label "Windows installer"
 
 if ($Sign) {

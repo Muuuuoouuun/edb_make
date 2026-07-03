@@ -41,8 +41,17 @@ if (-not $PythonExe) {
     }
 }
 
+function Assert-EDBNativeCommandSucceeded {
+    param([Parameter(Mandatory = $true)] [string]$Label)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed with exit code $LASTEXITCODE."
+    }
+}
+
 if ($InstallPyInstaller) {
     & $PythonExe -m pip install pyinstaller
+    Assert-EDBNativeCommandSucceeded "PyInstaller installation"
 }
 
 $ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
@@ -144,9 +153,7 @@ foreach ($Name in $UpdateConfigEnv.Keys) {
 }
 try {
     & $PythonExe $UpdateConfigScript $ProjectUpdateConfig $BuildUpdateConfig
-    if ($LASTEXITCODE -ne 0) {
-        throw "app_update_config generation failed."
-    }
+    Assert-EDBNativeCommandSucceeded "app_update_config generation"
 } finally {
     foreach ($Name in $PreviousUpdateConfigEnv.Keys) {
         [Environment]::SetEnvironmentVariable($Name, $PreviousUpdateConfigEnv[$Name], "Process")
@@ -183,12 +190,14 @@ function Invoke-EDBPackagedAppVerifier {
         $VerifierArgs += @("--expected-release-notes-url", $EffectiveReleaseNotesUrl)
     }
     & $PythonExe @VerifierArgs
+    Assert-EDBNativeCommandSucceeded "Packaged app verification"
 }
 
 if (-not $SkipFrontendBuild) {
     $NodeCommand = Get-Command node -ErrorAction SilentlyContinue
     if ($NodeCommand) {
         & $NodeCommand.Source (Join-Path $ProjectRoot "scripts\build_frontend_bundle.mjs")
+        Assert-EDBNativeCommandSucceeded "Frontend bundle build"
     } elseif (-not (Test-Path $FrontendBundle)) {
         throw "Node.js is required to build ui_prototype\app.bundle.js. Install Node or run with -SkipFrontendBuild after creating the bundle."
     } else {
@@ -197,6 +206,7 @@ if (-not $SkipFrontendBuild) {
 }
 
 & $PythonExe (Join-Path $ProjectRoot "scripts\verify_frontend_package.py") --root $ProjectRoot
+Assert-EDBNativeCommandSucceeded "Frontend package verification"
 
 $HasPyInstaller = $true
 & $PythonExe -m PyInstaller --version 2>$null | Out-Null
@@ -261,6 +271,7 @@ if ($HasPyInstaller) {
     ) + $DataArgs + $HiddenImportArgs + $IconArgs + @("app_server.py")
 
     & $PythonExe -m PyInstaller @PyInstallerArgs
+    Assert-EDBNativeCommandSucceeded "PyInstaller packaging"
 
     if ($OneFile) {
         Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"

@@ -666,7 +666,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("function Get-EDBJsonStringProperty", ps_source)
         self.assertIn('$UpdateConfigScript = Join-Path $ProjectRoot "scripts\\build_app_update_config.py"', ps_source)
         self.assertIn("& $PythonExe $UpdateConfigScript $ProjectUpdateConfig $BuildUpdateConfig", ps_source)
-        self.assertIn('throw "app_update_config generation failed."', ps_source)
+        self.assertIn('Assert-EDBNativeCommandSucceeded "app_update_config generation"', ps_source)
         self.assertIn("EDB_PACKAGE_UPDATE_FEED_URL = $UpdateFeedUrl", ps_source)
         self.assertNotIn("function Set-EDBUpdateConfigAliasValue", ps_source)
 
@@ -819,6 +819,34 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         verify_index = source.index('Assert-EDBNonEmptyFile -Path $InstallerPath -Label "Windows installer"')
         self.assertLess(source.index("& $Iscc @IsccArgs $InstallerScript"), verify_index)
         self.assertLess(verify_index, source.index("if ($Sign) {", verify_index))
+
+    def test_windows_packaging_native_command_failures_stop_builds(self) -> None:
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Assert-EDBNativeCommandSucceeded", ps_source)
+        for command, label in (
+            ("& $PythonExe -m pip install pyinstaller", "PyInstaller installation"),
+            ("& $PythonExe $UpdateConfigScript $ProjectUpdateConfig $BuildUpdateConfig", "app_update_config generation"),
+            ("& $PythonExe @VerifierArgs", "Packaged app verification"),
+            ('& $PythonExe (Join-Path $ProjectRoot "scripts\\verify_frontend_package.py") --root $ProjectRoot', "Frontend package verification"),
+            ("& $PythonExe -m PyInstaller @PyInstallerArgs", "PyInstaller packaging"),
+        ):
+            with self.subTest(script="package_mvp.ps1", label=label):
+                command_index = ps_source.index(command)
+                assertion_index = ps_source.index(f'Assert-EDBNativeCommandSucceeded "{label}"', command_index)
+                self.assertLess(command_index, assertion_index)
+
+        self.assertIn('Assert-EDBNativeCommandSucceeded "Frontend bundle build"', ps_source)
+
+        installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Assert-EDBNativeCommandSucceeded", installer_source)
+        for command, label in (
+            ("& $PythonExe @VerifierArgs", "Packaged app verification"),
+            ("& $Iscc @IsccArgs $InstallerScript", "Inno Setup compilation"),
+        ):
+            with self.subTest(script="package_windows_installer.ps1", label=label):
+                command_index = installer_source.index(command)
+                assertion_index = installer_source.index(f'Assert-EDBNativeCommandSucceeded "{label}"', command_index)
+                self.assertLess(command_index, assertion_index)
 
     def test_windows_signing_fails_when_no_signable_artifacts_exist(self) -> None:
         source = (PROJECT_ROOT / "scripts" / "Sign-WindowsArtifact.ps1").read_text(encoding="utf-8")
