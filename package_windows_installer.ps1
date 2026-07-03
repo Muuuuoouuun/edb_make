@@ -63,6 +63,37 @@ function Find-InnoSetupCompiler {
     return ""
 }
 
+function Get-JsonStringProperty {
+    param(
+        [Parameter(Mandatory = $true)] [object]$Object,
+        [Parameter(Mandatory = $true)] [string]$Name
+    )
+
+    if (-not $Object.PSObject.Properties[$Name]) {
+        return ""
+    }
+    return [string]$Object.PSObject.Properties[$Name].Value
+}
+
+function Read-PackagedUpdateConfig {
+    param([Parameter(Mandatory = $true)] [string]$PackageRoot)
+
+    $Candidates = @(
+        (Join-Path $PackageRoot "app_update_config.json"),
+        (Join-Path $PackageRoot "_internal\app_update_config.json")
+    )
+    foreach ($Candidate in $Candidates) {
+        if (Test-Path $Candidate) {
+            try {
+                return Get-Content -Raw -Path $Candidate | ConvertFrom-Json
+            } catch {
+                throw "Could not read packaged update metadata: $Candidate. $($_.Exception.Message)"
+            }
+        }
+    }
+    throw "Packaged update metadata was not found under: $PackageRoot"
+}
+
 if (-not $SkipAppBuild) {
     $AppBuildArgs = @{
         AppName = $AppName
@@ -109,15 +140,21 @@ if (-not (Test-Path $PackageExe)) {
     throw "PyInstaller app output was not found: $PackageExe. Build the app first or remove -SkipAppBuild."
 }
 
+$PackagedUpdateConfig = Read-PackagedUpdateConfig $PackageRoot
+$PackagedVersion = Get-JsonStringProperty $PackagedUpdateConfig "version"
+$EffectiveInstallerVersion = if ($Version) { $Version } else { $PackagedVersion }
+if (-not $EffectiveInstallerVersion) {
+    throw "Packaged update metadata does not include a version, and -Version was not provided."
+}
+
 $VerifierArgs = @(
     (Join-Path $ProjectRoot "scripts\verify_packaged_app.py"),
     $PackageRoot,
     "--expected-app-name",
-    $AppName
+    $AppName,
+    "--expected-version",
+    $EffectiveInstallerVersion
 )
-if ($Version) {
-    $VerifierArgs += @("--expected-version", $Version)
-}
 & $PythonExe @VerifierArgs
 
 if ($Sign -and $SkipAppBuild) {
@@ -142,11 +179,9 @@ $InstallerScript = Join-Path $ProjectRoot "installer\windows\ClassInEDBMVP.iss"
 $IsccArgs = @(
     "/DAppName=$AppName",
     "/DSourceDir=$PackageRoot",
-    "/DOutputDir=$ResolvedOutputDir"
+    "/DOutputDir=$ResolvedOutputDir",
+    "/DAppVersion=$EffectiveInstallerVersion"
 )
-if ($Version) {
-    $IsccArgs += "/DAppVersion=$Version"
-}
 & $Iscc @IsccArgs $InstallerScript
 
 $InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"

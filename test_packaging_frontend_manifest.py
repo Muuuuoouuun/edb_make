@@ -344,6 +344,15 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn('"--expected-app-name"', installer_source)
         self.assertIn('"--expected-version"', installer_source)
 
+    def test_windows_installer_derives_version_from_packaged_update_metadata(self) -> None:
+        source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("Read-PackagedUpdateConfig", source)
+        self.assertIn('$EffectiveInstallerVersion = if ($Version) { $Version } else { $PackagedVersion }', source)
+        self.assertIn('"--expected-version"', source)
+        self.assertIn("$EffectiveInstallerVersion", source)
+        self.assertIn('"/DAppVersion=$EffectiveInstallerVersion"', source)
+        self.assertNotIn('"/DAppVersion=$Version"', source)
+
     def test_windows_installer_verifies_existing_app_before_installer_build(self) -> None:
         source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
         verifier_index = source.index("scripts\\verify_packaged_app.py")

@@ -277,6 +277,7 @@ Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 
 The GitHub Actions workflow in `.github/workflows/build-installers.yml` builds the macOS DMG/zip and Windows Setup.exe on matching runners, then generates `update.json`, `manifest.json`, and `checksums.txt` from those artifacts.
+When `package_windows_installer.ps1` wraps an existing app folder, the installer version is derived from packaged `app_update_config.json` unless `-Version` is explicitly supplied; the packaged-app verifier fails if they disagree.
 
 For signed public builds, configure these repository secrets:
 ```text
