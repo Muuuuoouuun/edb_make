@@ -598,10 +598,16 @@ def _update_artifact_metadata_error(source: dict[str, Any], platform_key: str) -
     platform = str(platform_key or "").strip().lower()
     artifact_type = str(source.get("artifactType") or "").strip().lower()
     explicit_file_name = str(source.get("fileName") or "").strip()
+    download_file_name = _update_download_url_file_name(source)
     file_name = _update_artifact_file_name(source)
     has_download_url = bool(_update_download_url_value(source))
     allowed_types = UPDATE_PLATFORM_ARTIFACT_TYPES.get(platform)
     allowed_suffixes = _update_platform_artifact_suffixes(platform)
+    if explicit_file_name and download_file_name and explicit_file_name != download_file_name:
+        return (
+            f"update feed fileName {explicit_file_name!r} "
+            f"does not match download URL file name {download_file_name!r}"
+        )
     if artifact_type:
         if allowed_types and artifact_type not in allowed_types:
             allowed = ", ".join(allowed_types)

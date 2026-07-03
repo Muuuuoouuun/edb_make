@@ -454,6 +454,48 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual("update feed fileName for macos must use one of: .dmg, .zip", status["error"])
 
+    def test_update_status_rejects_file_name_download_url_mismatch(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "downloadUrl": "https://example.test/ClassInEDBMVP-macOS-old.dmg",
+                        "fileName": "ClassInEDBMVP-macOS.dmg",
+                        "artifactType": "dmg",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual(
+                "update feed fileName 'ClassInEDBMVP-macOS.dmg' "
+                "does not match download URL file name 'ClassInEDBMVP-macOS-old.dmg'",
+                status["error"],
+            )
+
     def test_update_status_rejects_download_url_without_artifact_extension(self):
         invalid_urls = (
             "https://example.test/download",
