@@ -338,6 +338,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("downloadUrl aliases conflict" in error for error in errors))
         self.assertTrue(any("releaseNotesUrl aliases conflict" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_conflicting_duplicate_update_configs(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            self._write_packaged_runtime(package_root)
+            (package_root / "app_update_config.json").write_text(
+                '{"appId":"ClassInEDBMVP","appName":"ClassInEDBMVP","version":"old"}\n',
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("multiple packaged app_update_config.json files disagree" in error for error in errors))
+
     def test_packaged_app_layout_rejects_legacy_browser_runtime(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"

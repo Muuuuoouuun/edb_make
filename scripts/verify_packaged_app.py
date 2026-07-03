@@ -120,6 +120,44 @@ def _config_alias_conflict_error(label: str, config: dict, *field_names: str) ->
     return f"packaged app_update_config.json {label} aliases conflict: {details}"
 
 
+def _relative_label(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _packaged_update_config_paths(root: Path, resource_roots: list[Path]) -> list[Path]:
+    candidates = [
+        root / "app_update_config.json",
+        root / "_internal" / "app_update_config.json",
+        root / "Contents" / "Resources" / "app_update_config.json",
+        root / "Contents" / "Resources" / "_internal" / "app_update_config.json",
+        root / "Contents" / "Frameworks" / "app_update_config.json",
+        root / "Contents" / "Frameworks" / "_internal" / "app_update_config.json",
+        *(resource_root / "app_update_config.json" for resource_root in resource_roots),
+    ]
+    candidates.extend(root.rglob("app_update_config.json"))
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        paths.append(candidate)
+    return paths
+
+
+def _update_config_payload_key(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _resource_root_candidates(package_root: Path) -> list[Path]:
     explicit_candidates = (
         package_root,
@@ -183,6 +221,29 @@ def collect_package_errors(
     for rel_path in (*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_FILES):
         if not (resource_root / rel_path).is_file():
             errors.append(f"missing packaged runtime file: {rel_path}")
+
+    update_config_payloads: dict[str, list[str]] = {}
+    for config_path in _packaged_update_config_paths(root, resource_roots):
+        try:
+            payload = _read_json(config_path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(
+                "packaged app_update_config.json is not valid JSON at "
+                f"{_relative_label(root, config_path)}: {exc}"
+            )
+            continue
+        if not isinstance(payload, dict):
+            errors.append(
+                "packaged app_update_config.json must contain a JSON object at "
+                f"{_relative_label(root, config_path)}"
+            )
+            continue
+        update_config_payloads.setdefault(_update_config_payload_key(payload), []).append(
+            _relative_label(root, config_path)
+        )
+    if len(update_config_payloads) > 1:
+        labels = "; ".join(", ".join(paths) for paths in update_config_payloads.values())
+        errors.append(f"multiple packaged app_update_config.json files disagree: {labels}")
 
     update_config_path = resource_root / "app_update_config.json"
     if update_config_path.is_file():
