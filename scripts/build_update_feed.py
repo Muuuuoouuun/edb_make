@@ -194,11 +194,16 @@ def platform_payload(
     if safe_release_notes_url:
         payload["releaseNotesUrl"] = safe_release_notes_url
     payload.update(artifact_metadata(artifact_path, artifact_type=safe_artifact_type))
-    if "fileName" not in payload and safe_download_url:
-        payload["fileName"] = (
-            validate_download_url_filename(platform, safe_download_url, safe_artifact_type)
-            or f"{platform}-{version}"
-        )
+    if safe_download_url:
+        url_file_name = validate_download_url_filename(platform, safe_download_url, safe_artifact_type)
+        artifact_file_name = str(payload.get("fileName") or "").strip()
+        if artifact_file_name and url_file_name and artifact_file_name != url_file_name:
+            raise ValueError(
+                f"{platform} download URL file name {url_file_name!r} "
+                f"does not match artifact file name {artifact_file_name!r}"
+            )
+        if "fileName" not in payload:
+            payload["fileName"] = url_file_name or f"{platform}-{version}"
     return payload
 
 

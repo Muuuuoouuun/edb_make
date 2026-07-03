@@ -222,6 +222,36 @@ class TestUpdateFeedBuilder(unittest.TestCase):
             result.stderr,
         )
 
+    def test_rejects_download_url_filename_that_disagrees_with_local_artifact(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS-old.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "macos download URL file name 'ClassInEDBMVP-macOS-old.dmg' "
+            "does not match artifact file name 'ClassInEDBMVP-macOS.dmg'",
+            result.stderr,
+        )
+
     def test_rejects_download_url_without_artifact_extension(self) -> None:
         invalid_urls = (
             "https://example.test/download",
