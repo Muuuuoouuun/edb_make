@@ -111,6 +111,7 @@ def collect_package_errors(
     *,
     expected_app_name: str = "",
     expected_version: str = "",
+    expected_bundle_id: str = "",
 ) -> list[str]:
     root = package_root.resolve()
     errors: list[str] = []
@@ -228,6 +229,14 @@ def collect_package_errors(
                 if not isinstance(info_plist, dict):
                     errors.append("macOS app bundle Info.plist must contain a dictionary")
                 else:
+                    bundle_id = str(info_plist.get("CFBundleIdentifier") or "").strip()
+                    if not bundle_id:
+                        errors.append("macOS app bundle Info.plist is missing CFBundleIdentifier")
+                    elif expected_bundle_id and bundle_id != expected_bundle_id:
+                        errors.append(
+                            "macOS app bundle Info.plist CFBundleIdentifier mismatch: "
+                            f"expected {expected_bundle_id!r}, found {bundle_id!r}"
+                        )
                     expected_bundle_version = expected_version or packaged_version
                     for key in ("CFBundleShortVersionString", "CFBundleVersion"):
                         value = str(info_plist.get(key) or "").strip()
@@ -247,12 +256,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("package_root", type=Path)
     parser.add_argument("--expected-app-name", default="", help="Expected appName in packaged update metadata")
     parser.add_argument("--expected-version", default="", help="Expected version in packaged update metadata")
+    parser.add_argument("--expected-bundle-id", default="", help="Expected macOS CFBundleIdentifier")
     args = parser.parse_args(argv)
 
     errors = collect_package_errors(
         args.package_root,
         expected_app_name=args.expected_app_name,
         expected_version=args.expected_version,
+        expected_bundle_id=args.expected_bundle_id,
     )
     if errors:
         for error in errors:

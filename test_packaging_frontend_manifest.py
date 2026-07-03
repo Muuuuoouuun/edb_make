@@ -87,13 +87,18 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         (vendor_root / "react-dom.production.min.js").write_text("// react-dom\n", encoding="utf-8")
         return resource_root
 
-    def _write_macos_info_plist(self, package_root: Path, version: str = "test") -> None:
+    def _write_macos_info_plist(
+        self,
+        package_root: Path,
+        version: str = "test",
+        bundle_id: str = "local.classin.edbmvp",
+    ) -> None:
         contents_root = package_root / "Contents"
         contents_root.mkdir(parents=True, exist_ok=True)
         (contents_root / "Info.plist").write_bytes(
             plistlib.dumps(
                 {
-                    "CFBundleIdentifier": "local.classin.edbmvp",
+                    "CFBundleIdentifier": bundle_id,
                     "CFBundleName": "ClassInEDBMVP",
                     "CFBundleShortVersionString": version,
                     "CFBundleVersion": version,
@@ -258,6 +263,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("CFBundleShortVersionString mismatch" in error for error in errors))
         self.assertTrue(any("CFBundleVersion mismatch" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_macos_bundle_identifier_mismatch(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
+            self._write_packaged_runtime(package_root, "Contents/Resources")
+            self._write_macos_info_plist(package_root, bundle_id="com.example.old-edb")
+
+            errors = collect_package_errors(
+                package_root,
+                expected_bundle_id="local.classin.edbmvp",
+            )
+
+        self.assertTrue(any("CFBundleIdentifier mismatch" in error for error in errors))
+
     def test_packaged_app_layout_rejects_missing_macos_info_plist(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
@@ -392,6 +410,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn('--expected-app-name "$APP_NAME"', shell_source)
         self.assertIn('--expected-version "$EFFECTIVE_APP_VERSION"', shell_source)
+        self.assertIn('--expected-bundle-id "$BUNDLE_ID"', shell_source)
 
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn("--expected-app-name $EffectiveAppName", ps_source)

@@ -366,7 +366,8 @@ fi
 if [[ -n "$PACKAGED_APP_ROOT" ]]; then
   "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "$PACKAGED_APP_ROOT" \
     --expected-app-name "$APP_NAME" \
-    --expected-version "$EFFECTIVE_APP_VERSION"
+    --expected-version "$EFFECTIVE_APP_VERSION" \
+    --expected-bundle-id "$BUNDLE_ID"
 fi
 
 notarytool_submit() {
