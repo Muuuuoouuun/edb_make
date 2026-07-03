@@ -68,6 +68,19 @@ require_nonempty_file() {
   fi
 }
 
+require_zip_entry() {
+  local zip_path="$1"
+  local entry="$2"
+  if ! command -v zipinfo >/dev/null 2>&1; then
+    echo "zipinfo is required to inspect zip archive contents." >&2
+    exit 1
+  fi
+  if ! zipinfo -1 "$zip_path" | grep -Fxq "$entry"; then
+    echo "Zip archive is missing expected entry: $entry" >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)
@@ -437,6 +450,7 @@ if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
   rm -f "$ZIP_PATH"
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$(basename "$ZIP_PATH")")
   require_nonempty_file "$ZIP_PATH" "Zip archive"
+  require_zip_entry "$ZIP_PATH" "$APP_NAME.app/Contents/Info.plist"
 fi
 
 if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then

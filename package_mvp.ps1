@@ -68,6 +68,31 @@ function Assert-EDBNonEmptyFile {
     }
 }
 
+function Assert-EDBZipContainsEntry {
+    param(
+        [Parameter(Mandatory = $true)] [string]$ZipPath,
+        [Parameter(Mandatory = $true)] [string]$EntryName
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $Archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $Expected = $EntryName.Replace("\", "/")
+        $Found = $false
+        foreach ($Entry in $Archive.Entries) {
+            if ($Entry.FullName.Replace("\", "/") -eq $Expected) {
+                $Found = $true
+                break
+            }
+        }
+        if (-not $Found) {
+            throw "Zip archive is missing expected entry: $EntryName"
+        }
+    } finally {
+        $Archive.Dispose()
+    }
+}
+
 if ($Clean -and (Test-Path $ResolvedOutputDir)) {
     Remove-Item -Recurse -Force $ResolvedOutputDir
 }
@@ -269,6 +294,9 @@ if ($Zip) {
     if (Test-Path $PackageRoot) {
         Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
         Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"
+        if (-not $OneFile) {
+            Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"
+        }
         Write-Host "Zip archive: $ZipPath"
     }
 } elseif ($Sign) {

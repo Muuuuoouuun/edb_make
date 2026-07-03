@@ -541,7 +541,9 @@ class TestPackagingFrontendManifest(unittest.TestCase):
     def test_packaging_scripts_verify_distribution_archives(self) -> None:
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn("require_nonempty_file()", shell_source)
+        self.assertIn("require_zip_entry()", shell_source)
         self.assertIn('require_nonempty_file "$ZIP_PATH" "Zip archive"', shell_source)
+        self.assertIn('require_zip_entry "$ZIP_PATH" "$APP_NAME.app/Contents/Info.plist"', shell_source)
         self.assertIn('require_nonempty_file "$DMG_PATH" "DMG installer"', shell_source)
         self.assertIn('require_nonempty_file "$APP_NOTARY_ZIP" "Notary upload archive"', shell_source)
         self.assertLess(
@@ -551,8 +553,10 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn("function Assert-EDBNonEmptyFile", ps_source)
+        self.assertIn("function Assert-EDBZipContainsEntry", ps_source)
         self.assertIn('Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"', ps_source)
         self.assertIn('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"', ps_source)
+        self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"', ps_source)
         self.assertLess(
             ps_source.index("Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath"),
             ps_source.index('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"'),
