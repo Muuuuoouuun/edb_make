@@ -1,6 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -11,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.verify_frontend_package import collect_errors
+from scripts.build_app_update_config import build_config, write_config
 
 
 def project_path(rel_path: str) -> Path:
@@ -39,34 +39,9 @@ resolved_icon = resolve_icon()
 
 
 def build_update_config() -> tuple[str, dict]:
-    config = {
-        "appId": "ClassInEDBMVP",
-        "appName": "ClassInEDBMVP",
-        "version": "0.1.0",
-        "updateFeedUrl": "",
-        "downloadUrl": "",
-        "releaseNotesUrl": "",
-    }
-    source = project_path("app_update_config.json")
-    if source.exists():
-        try:
-            data = json.loads(source.read_text(encoding="utf-8-sig"))
-            if isinstance(data, dict):
-                config.update({key: value for key, value in data.items() if value is not None})
-        except json.JSONDecodeError:
-            pass
-    env_overrides = {
-        "appId": os.environ.get("EDB_PACKAGE_APP_ID", os.environ.get("EDB_APP_ID", "")).strip(),
-        "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),
-        "version": os.environ.get("EDB_PACKAGE_APP_VERSION", os.environ.get("EDB_APP_VERSION", "")).strip(),
-        "updateFeedUrl": os.environ.get("EDB_PACKAGE_UPDATE_FEED_URL", os.environ.get("EDB_UPDATE_FEED_URL", "")).strip(),
-        "downloadUrl": os.environ.get("EDB_PACKAGE_DOWNLOAD_URL", os.environ.get("EDB_DOWNLOAD_URL", "")).strip(),
-        "releaseNotesUrl": os.environ.get("EDB_PACKAGE_RELEASE_NOTES_URL", os.environ.get("EDB_RELEASE_NOTES_URL", "")).strip(),
-    }
-    config.update({key: value for key, value in env_overrides.items() if value})
     target = pyinstaller_work_path() / "app_update_config.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    config = build_config(project_path("app_update_config.json"))
+    write_config(target, config)
     return str(target), config
 
 

@@ -568,15 +568,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("SPECPATH", source)
         self.assertIn("PROJECT_ROOT", source)
         self.assertLess(source.index("sys.path.insert(0, str(PROJECT_ROOT))"), source.index("from scripts.verify_frontend_package import collect_errors"))
+        self.assertIn("from scripts.build_app_update_config import build_config, write_config", source)
         self.assertIn("collect_errors(PROJECT_ROOT)", source)
         self.assertIn('globals().get("workpath", project_path("build/ClassInEDBMVP"))', source)
         self.assertIn('pyinstaller_work_path() / "app_update_config.json"', source)
+        self.assertIn('build_config(project_path("app_update_config.json"))', source)
+        self.assertIn("write_config(target, config)", source)
         self.assertIn('[str(project_path("app_server.py"))]', source)
         self.assertIn("pathex=[str(PROJECT_ROOT)]", source)
         self.assertIn('"CFBundleVersion": bundle_version', source)
         self.assertNotIn("collect_errors(Path.cwd())", source)
         self.assertNotIn("pathex=[]", source)
         self.assertNotIn('project_path("build/app_update_config.json")', source)
+        self.assertNotIn("EDB_APP_VERSION", source)
 
     def test_frontend_bundle_builder_updates_board_cache_bust(self) -> None:
         source = (PROJECT_ROOT / "scripts" / "build_frontend_bundle.mjs").read_text(encoding="utf-8")
@@ -648,6 +652,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("$EffectiveInstallerAppId", installer_source)
 
     def test_packaging_scripts_normalize_update_config_aliases(self) -> None:
+        spec_source = (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8")
+        self.assertIn("from scripts.build_app_update_config import build_config, write_config", spec_source)
+        self.assertIn('build_config(project_path("app_update_config.json"))', spec_source)
+        self.assertNotIn("EDB_UPDATE_FEED_URL", spec_source)
+
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn('"$PROJECT_ROOT/scripts/build_app_update_config.py"', shell_source)
         self.assertIn('EDB_PACKAGE_UPDATE_FEED_URL="$UPDATE_FEED_URL"', shell_source)
