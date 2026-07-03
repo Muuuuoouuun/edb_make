@@ -1,5 +1,6 @@
 param(
     [string]$AppName = "ClassInEDBMVP",
+    [string]$AppId = "",
     [string]$OutputDir = "dist",
     [string]$Version = "",
     [string]$UpdateFeedUrl = "",
@@ -113,6 +114,9 @@ if (-not $SkipAppBuild) {
         AppName = $AppName
         OutputDir = $OutputDir
     }
+    if ($AppId) {
+        $AppBuildArgs.AppId = $AppId
+    }
     if ($Version) {
         $AppBuildArgs.Version = $Version
     }
@@ -155,7 +159,9 @@ if (-not (Test-Path $PackageExe)) {
 }
 
 $PackagedUpdateConfig = Read-PackagedUpdateConfig $PackageRoot
+$PackagedAppId = Get-JsonStringProperty $PackagedUpdateConfig "appId"
 $PackagedVersion = Get-JsonStringProperty $PackagedUpdateConfig "version"
+$EffectiveInstallerAppId = if ($AppId) { $AppId } else { $PackagedAppId }
 $EffectiveInstallerVersion = if ($Version) { $Version } else { $PackagedVersion }
 if (-not $EffectiveInstallerVersion) {
     throw "Packaged update metadata does not include a version, and -Version was not provided."
@@ -164,6 +170,8 @@ if (-not $EffectiveInstallerVersion) {
 $VerifierArgs = @(
     (Join-Path $ProjectRoot "scripts\verify_packaged_app.py"),
     $PackageRoot,
+    "--expected-app-id",
+    $EffectiveInstallerAppId,
     "--expected-app-name",
     $AppName,
     "--expected-version",

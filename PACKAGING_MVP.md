@@ -221,7 +221,7 @@ Documents\ClassInEDBMVP\app_update_config.json
 ~/Documents/ClassInEDBMVP/app_update_config.json
 ```
 
-Prefer the packaging scripts for release builds because they generate build-scoped update metadata and run the post-build package verifier. If you run `pyinstaller ClassInEDBMVP.spec` directly, the spec resolves assets relative to the spec file location and writes generated update metadata inside PyInstaller's work path; set the same metadata through environment variables such as `EDB_PACKAGE_APP_VERSION`, `EDB_PACKAGE_UPDATE_FEED_URL`, and `EDB_PACKAGE_DOWNLOAD_URL`, then run `scripts/verify_packaged_app.py` on the built app folder.
+Prefer the packaging scripts for release builds because they generate build-scoped update metadata and run the post-build package verifier. If you run `pyinstaller ClassInEDBMVP.spec` directly, the spec resolves assets relative to the spec file location and writes generated update metadata inside PyInstaller's work path; set the same metadata through environment variables such as `EDB_PACKAGE_APP_ID`, `EDB_PACKAGE_APP_VERSION`, `EDB_PACKAGE_UPDATE_FEED_URL`, and `EDB_PACKAGE_DOWNLOAD_URL`, then run `scripts/verify_packaged_app.py` on the built app folder.
 
 Update feed JSON shape:
 ```json
@@ -283,6 +283,7 @@ Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist
 Update feed, manifest, release notes, and artifact download URLs must be HTTPS, except for loopback HTTP used in local testing. When a platform artifact file is supplied, its matching `--macos-url` or `--windows-url` is required. This keeps installed apps from seeing an available update with no usable download action.
 macOS update artifacts may use `dmg` or `zip`; Windows update artifacts must use `setup-exe`.
 If a feed includes `appId` or `appName`, the installed app rejects it unless those identifiers match the packaged app metadata. This prevents an old or unrelated release channel from appearing as an available update.
+Packaged builds must include `appId`, `appName`, and `version` in `app_update_config.json`; `scripts/verify_packaged_app.py` fails the artifact if those required update identifiers are missing or mismatched.
 `manifestSha256` and artifact `sha256` values must be 64-character lowercase SHA-256 hex strings when present, and `sizeBytes` must be a positive integer.
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 The feed builder also rejects known platform artifact mismatches, such as a `.exe` passed as a macOS DMG or the same local file reused for multiple platforms.

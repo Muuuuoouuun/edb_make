@@ -1,5 +1,6 @@
 param(
     [string]$AppName = "ClassInEDBMVP",
+    [string]$AppId = "",
     [string]$OutputDir = "dist",
     [string]$Version = "",
     [string]$UpdateFeedUrl = "",
@@ -111,6 +112,7 @@ $FrontendBundle = Join-Path $ProjectRoot "ui_prototype\app.bundle.js"
 $BuildUpdateConfig = Join-Path $SpecDir "app_update_config.json"
 $ProjectUpdateConfig = Join-Path $ProjectRoot "app_update_config.json"
 $UpdateConfig = [ordered]@{
+    appId = "ClassInEDBMVP"
     appName = $AppName
     version = "0.1.0"
     updateFeedUrl = ""
@@ -120,7 +122,7 @@ $UpdateConfig = [ordered]@{
 if (Test-Path $ProjectUpdateConfig) {
     try {
         $ExistingUpdateConfig = Get-Content -Raw -Path $ProjectUpdateConfig | ConvertFrom-Json
-        foreach ($Name in @("appName", "version", "updateFeedUrl", "downloadUrl", "releaseNotesUrl")) {
+        foreach ($Name in @("appId", "appName", "version", "updateFeedUrl", "downloadUrl", "releaseNotesUrl")) {
             if ($ExistingUpdateConfig.PSObject.Properties[$Name]) {
                 $UpdateConfig[$Name] = $ExistingUpdateConfig.$Name
             }
@@ -129,12 +131,14 @@ if (Test-Path $ProjectUpdateConfig) {
         Write-Warning "Could not read app_update_config.json; using defaults."
     }
 }
+if ($AppId) { $UpdateConfig["appId"] = $AppId }
 $UpdateConfig["appName"] = $AppName
 if ($Version) { $UpdateConfig["version"] = $Version }
 if ($UpdateFeedUrl) { $UpdateConfig["updateFeedUrl"] = $UpdateFeedUrl }
 if ($DownloadUrl) { $UpdateConfig["downloadUrl"] = $DownloadUrl }
 if ($ReleaseNotesUrl) { $UpdateConfig["releaseNotesUrl"] = $ReleaseNotesUrl }
 $UpdateConfig | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $BuildUpdateConfig
+$EffectiveAppId = [string]$UpdateConfig["appId"]
 $EffectiveAppName = [string]$UpdateConfig["appName"]
 $EffectiveAppVersion = [string]$UpdateConfig["version"]
 
@@ -217,6 +221,7 @@ if ($HasPyInstaller) {
         Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"
     } else {
         & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
+            --expected-app-id $EffectiveAppId `
             --expected-app-name $EffectiveAppName `
             --expected-version $EffectiveAppVersion
     }
@@ -272,6 +277,7 @@ if ($HasPyInstaller) {
     Copy-Item -Force $BuildUpdateConfig (Join-Path $PackageRoot "app_update_config.json")
 
     & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
+        --expected-app-id $EffectiveAppId `
         --expected-app-name $EffectiveAppName `
         --expected-version $EffectiveAppVersion
     Write-Warning "PyInstaller is not installed. Created source-package fallback instead."

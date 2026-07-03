@@ -40,6 +40,7 @@ resolved_icon = resolve_icon()
 
 def build_update_config() -> tuple[str, dict]:
     config = {
+        "appId": "ClassInEDBMVP",
         "appName": "ClassInEDBMVP",
         "version": "0.1.0",
         "updateFeedUrl": "",
@@ -55,6 +56,7 @@ def build_update_config() -> tuple[str, dict]:
         except json.JSONDecodeError:
             pass
     env_overrides = {
+        "appId": os.environ.get("EDB_PACKAGE_APP_ID", os.environ.get("EDB_APP_ID", "")).strip(),
         "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),
         "version": os.environ.get("EDB_PACKAGE_APP_VERSION", os.environ.get("EDB_APP_VERSION", "")).strip(),
         "updateFeedUrl": os.environ.get("EDB_PACKAGE_UPDATE_FEED_URL", os.environ.get("EDB_UPDATE_FEED_URL", "")).strip(),

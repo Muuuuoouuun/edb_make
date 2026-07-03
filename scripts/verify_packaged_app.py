@@ -118,6 +118,7 @@ def _resource_root_candidates(package_root: Path) -> list[Path]:
 def collect_package_errors(
     package_root: Path,
     *,
+    expected_app_id: str = "",
     expected_app_name: str = "",
     expected_version: str = "",
     expected_bundle_id: str = "",
@@ -152,14 +153,22 @@ def collect_package_errors(
             if not isinstance(update_config, dict):
                 errors.append("packaged app_update_config.json must contain a JSON object")
             else:
+                app_id = str(update_config.get("appId") or update_config.get("app_id") or "").strip()
                 app_name = str(update_config.get("appName") or "").strip()
                 version = str(update_config.get("version") or "").strip()
+                if not app_id:
+                    errors.append("packaged app_update_config.json is missing appId")
                 if not app_name:
                     errors.append("packaged app_update_config.json is missing appName")
                 if not version:
                     errors.append("packaged app_update_config.json is missing version")
                 else:
                     packaged_version = version
+                if expected_app_id and app_id != expected_app_id:
+                    errors.append(
+                        "packaged app_update_config.json appId mismatch: "
+                        f"expected {expected_app_id!r}, found {app_id!r}"
+                    )
                 if expected_app_name and app_name != expected_app_name:
                     errors.append(
                         "packaged app_update_config.json appName mismatch: "
@@ -263,6 +272,7 @@ def collect_package_errors(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify a built app package layout.")
     parser.add_argument("package_root", type=Path)
+    parser.add_argument("--expected-app-id", default="", help="Expected appId in packaged update metadata")
     parser.add_argument("--expected-app-name", default="", help="Expected appName in packaged update metadata")
     parser.add_argument("--expected-version", default="", help="Expected version in packaged update metadata")
     parser.add_argument("--expected-bundle-id", default="", help="Expected macOS CFBundleIdentifier")
@@ -270,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
 
     errors = collect_package_errors(
         args.package_root,
+        expected_app_id=args.expected_app_id,
         expected_app_name=args.expected_app_name,
         expected_version=args.expected_version,
         expected_bundle_id=args.expected_bundle_id,

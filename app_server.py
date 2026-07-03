@@ -354,6 +354,7 @@ def _app_platform_key() -> str:
 
 def load_app_update_config() -> dict[str, Any]:
     config: dict[str, Any] = {
+        "appId": "ClassInEDBMVP",
         "appName": "ClassInEDBMVP",
         "version": "0.1.0",
         "updateFeedUrl": "",
@@ -371,6 +372,7 @@ def load_app_update_config() -> dict[str, Any]:
         seen.add(resolved)
         config.update({k: v for k, v in _read_json_object(path).items() if v is not None})
     env_map = {
+        "appId": "EDB_APP_ID",
         "version": "EDB_APP_VERSION",
         "updateFeedUrl": "EDB_UPDATE_FEED_URL",
         "downloadUrl": "EDB_DOWNLOAD_URL",

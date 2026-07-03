@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APP_NAME="ClassInEDBMVP"
+APP_ID=""
 OUTPUT_DIR="dist"
 APP_VERSION=""
 BUNDLE_ID="local.classin.edbmvp"
@@ -32,6 +33,7 @@ Usage: ./package_macos_app.sh [options]
 
 Options:
   --name NAME              App bundle name. Default: ClassInEDBMVP
+  --app-id ID              Stable update feed app identifier
   --version VERSION        App version written into bundled update metadata
   --bundle-id ID           macOS bundle identifier. Default: local.classin.edbmvp
   --update-feed-url URL    JSON update feed checked by the in-app updater
@@ -84,6 +86,7 @@ require_zip_entry() {
 verify_packaged_app_root() {
   local package_root="$1"
   "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "$package_root" \
+    --expected-app-id "$EFFECTIVE_APP_ID" \
     --expected-app-name "$APP_NAME" \
     --expected-version "$EFFECTIVE_APP_VERSION" \
     --expected-bundle-id "$BUNDLE_ID"
@@ -141,6 +144,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)
       APP_NAME="${2:-}"
+      shift 2
+      ;;
+    --app-id)
+      APP_ID="${2:-}"
       shift 2
       ;;
     --output-dir)
@@ -308,6 +315,7 @@ find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.dmg.*" -exec rm
 find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.mount.*" -exec rm -rf {} +
 
 APP_UPDATE_CONFIG="$SPEC_DIR/app_update_config.json"
+EDB_PACKAGE_APP_ID="$APP_ID" \
 EDB_PACKAGE_APP_NAME="$APP_NAME" \
 EDB_PACKAGE_APP_VERSION="$APP_VERSION" \
 EDB_PACKAGE_UPDATE_FEED_URL="$UPDATE_FEED_URL" \
@@ -322,6 +330,7 @@ from pathlib import Path
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 config = {
+    "appId": "ClassInEDBMVP",
     "appName": "ClassInEDBMVP",
     "version": "0.1.0",
     "updateFeedUrl": "",
@@ -336,6 +345,7 @@ if source.exists():
     except json.JSONDecodeError:
         pass
 overrides = {
+    "appId": os.environ.get("EDB_PACKAGE_APP_ID", "").strip(),
     "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),
     "version": os.environ.get("EDB_PACKAGE_APP_VERSION", "").strip(),
     "updateFeedUrl": os.environ.get("EDB_PACKAGE_UPDATE_FEED_URL", "").strip(),
@@ -345,6 +355,16 @@ overrides = {
 config.update({key: value for key, value in overrides.items() if value})
 target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
+
+EFFECTIVE_APP_ID="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(config.get("appId") or config.get("appName") or "ClassInEDBMVP"))
+PY
+)"
 
 EFFECTIVE_APP_VERSION="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
 import json

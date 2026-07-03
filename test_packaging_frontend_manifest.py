@@ -69,7 +69,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         scripts_root.mkdir(parents=True)
         assets_root.mkdir(parents=True)
         (resource_root / "app_update_config.json").write_text(
-            '{"appName":"ClassInEDBMVP","version":"test"}\n',
+            '{"appId":"ClassInEDBMVP","appName":"ClassInEDBMVP","version":"test"}\n',
             encoding="utf-8",
         )
         (scripts_root / "render_hwp_with_rhwp_core.mjs").write_text("console.log('ok');\n", encoding="utf-8")
@@ -229,6 +229,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
             self.assertEqual([], collect_package_errors(package_root))
 
+    def test_packaged_app_layout_rejects_missing_update_app_id(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                '{"appName":"ClassInEDBMVP","version":"test"}\n',
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("missing appId" in error for error in errors))
+
     def test_packaged_app_layout_rejects_legacy_browser_runtime(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -278,10 +291,12 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
             errors = collect_package_errors(
                 package_root,
+                expected_app_id="OtherApp",
                 expected_app_name="ClassInEDBMVP",
                 expected_version="0.2.0",
             )
 
+        self.assertTrue(any("appId mismatch" in error for error in errors))
         self.assertTrue(any("version mismatch" in error for error in errors))
 
     def test_packaged_app_layout_rejects_macos_info_plist_version_mismatch(self) -> None:
@@ -455,17 +470,23 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
     def test_packaging_scripts_verify_expected_update_metadata(self) -> None:
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn('--expected-app-id "$EFFECTIVE_APP_ID"', shell_source)
         self.assertIn('--expected-app-name "$APP_NAME"', shell_source)
         self.assertIn('--expected-version "$EFFECTIVE_APP_VERSION"', shell_source)
         self.assertIn('--expected-bundle-id "$BUNDLE_ID"', shell_source)
+        self.assertIn('EDB_PACKAGE_APP_ID="$APP_ID"', shell_source)
 
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn("--expected-app-id $EffectiveAppId", ps_source)
         self.assertIn("--expected-app-name $EffectiveAppName", ps_source)
         self.assertIn("--expected-version $EffectiveAppVersion", ps_source)
+        self.assertIn('appId = "ClassInEDBMVP"', ps_source)
 
         installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('"--expected-app-id"', installer_source)
         self.assertIn('"--expected-app-name"', installer_source)
         self.assertIn('"--expected-version"', installer_source)
+        self.assertIn("$EffectiveInstallerAppId", installer_source)
 
     def test_macos_packaging_rechecks_app_after_signing_and_stapling(self) -> None:
         source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
