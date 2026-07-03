@@ -67,13 +67,18 @@ function Find-InnoSetupCompiler {
 function Get-JsonStringProperty {
     param(
         [Parameter(Mandatory = $true)] [object]$Object,
-        [Parameter(Mandatory = $true)] [string]$Name
+        [Parameter(Mandatory = $true)] [string[]]$Names
     )
 
-    if (-not $Object.PSObject.Properties[$Name]) {
-        return ""
+    foreach ($Name in $Names) {
+        if ($Object.PSObject.Properties[$Name]) {
+            $Value = ([string]$Object.PSObject.Properties[$Name].Value).Trim()
+            if ($Value) {
+                return $Value
+            }
+        }
     }
-    return [string]$Object.PSObject.Properties[$Name].Value
+    return ""
 }
 
 function Assert-EDBNonEmptyFile {
@@ -159,11 +164,11 @@ if (-not (Test-Path $PackageExe)) {
 }
 
 $PackagedUpdateConfig = Read-PackagedUpdateConfig $PackageRoot
-$PackagedAppId = Get-JsonStringProperty $PackagedUpdateConfig "appId"
+$PackagedAppId = Get-JsonStringProperty $PackagedUpdateConfig @("appId", "app_id")
 $PackagedVersion = Get-JsonStringProperty $PackagedUpdateConfig "version"
-$PackagedUpdateFeedUrl = Get-JsonStringProperty $PackagedUpdateConfig "updateFeedUrl"
-$PackagedDownloadUrl = Get-JsonStringProperty $PackagedUpdateConfig "downloadUrl"
-$PackagedReleaseNotesUrl = Get-JsonStringProperty $PackagedUpdateConfig "releaseNotesUrl"
+$PackagedUpdateFeedUrl = Get-JsonStringProperty $PackagedUpdateConfig @("updateFeedUrl", "update_feed_url")
+$PackagedDownloadUrl = Get-JsonStringProperty $PackagedUpdateConfig @("downloadUrl", "download_url")
+$PackagedReleaseNotesUrl = Get-JsonStringProperty $PackagedUpdateConfig @("releaseNotesUrl", "release_notes_url")
 $EffectiveInstallerAppId = if ($AppId) { $AppId } else { $PackagedAppId }
 $EffectiveInstallerVersion = if ($Version) { $Version } else { $PackagedVersion }
 $EffectiveInstallerUpdateFeedUrl = if ($UpdateFeedUrl) { $UpdateFeedUrl } else { $PackagedUpdateFeedUrl }

@@ -644,6 +644,25 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn('"--expected-release-notes-url"', installer_source)
         self.assertIn("$EffectiveInstallerAppId", installer_source)
 
+    def test_packaging_scripts_normalize_update_config_aliases(self) -> None:
+        shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn("APP_UPDATE_CONFIG_ALIASES", shell_source)
+        self.assertIn("normalize_update_config(existing)", shell_source)
+        self.assertIn('"downloadUrl", "download_url"', shell_source)
+        self.assertIn("app_update_config.json {canonical} aliases conflict", shell_source)
+
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Set-EDBUpdateConfigAliasValue", ps_source)
+        self.assertIn("function Get-EDBJsonStringProperty", ps_source)
+        self.assertIn('CanonicalName = "downloadUrl"; Aliases = @("downloadUrl", "download_url")', ps_source)
+        self.assertIn('if ($_.Exception.Message -like "app_update_config.json * aliases conflict:*")', ps_source)
+
+        installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('[string[]]$Names', installer_source)
+        self.assertIn('@("updateFeedUrl", "update_feed_url")', installer_source)
+        self.assertIn('@("downloadUrl", "download_url")', installer_source)
+        self.assertIn('@("releaseNotesUrl", "release_notes_url")', installer_source)
+
     def test_macos_packaging_rechecks_app_after_signing_and_stapling(self) -> None:
         source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn("verify_packaged_app_root()", source)

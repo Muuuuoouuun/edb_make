@@ -332,6 +332,13 @@ from pathlib import Path
 
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
+APP_UPDATE_CONFIG_ALIASES = (
+    ("appId", ("appId", "app_id")),
+    ("appName", ("appName", "app_name")),
+    ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
+    ("downloadUrl", ("downloadUrl", "download_url")),
+    ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
+)
 config = {
     "appId": "ClassInEDBMVP",
     "appName": "ClassInEDBMVP",
@@ -340,13 +347,41 @@ config = {
     "downloadUrl": "",
     "releaseNotesUrl": "",
 }
+def first_nonempty(payload, names):
+    for name in names:
+        value = str(payload.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+def normalize_update_config(payload):
+    normalized = {key: value for key, value in payload.items() if value is not None}
+    for canonical, names in APP_UPDATE_CONFIG_ALIASES:
+        values = {
+            name: str(payload.get(name) or "").strip()
+            for name in names
+            if str(payload.get(name) or "").strip()
+        }
+        if len(set(values.values())) > 1:
+            details = ", ".join(f"{name}={value!r}" for name, value in values.items())
+            raise ValueError(f"app_update_config.json {canonical} aliases conflict: {details}")
+        value = first_nonempty(payload, names)
+        for name in names:
+            if name != canonical:
+                normalized.pop(name, None)
+        if value:
+            normalized[canonical] = value
+    return normalized
+
 if source.exists():
     try:
         existing = json.loads(source.read_text(encoding="utf-8"))
         if isinstance(existing, dict):
-            config.update({key: value for key, value in existing.items() if value is not None})
+            config.update(normalize_update_config(existing))
     except json.JSONDecodeError:
         pass
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 overrides = {
     "appId": os.environ.get("EDB_PACKAGE_APP_ID", "").strip(),
     "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),

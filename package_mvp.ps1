@@ -94,6 +94,50 @@ function Assert-EDBZipContainsEntry {
     }
 }
 
+function Get-EDBJsonStringProperty {
+    param(
+        [Parameter(Mandatory = $true)] [object]$Object,
+        [Parameter(Mandatory = $true)] [string[]]$Names
+    )
+
+    foreach ($Name in $Names) {
+        if ($Object.PSObject.Properties[$Name]) {
+            $Value = ([string]$Object.PSObject.Properties[$Name].Value).Trim()
+            if ($Value) {
+                return $Value
+            }
+        }
+    }
+    return ""
+}
+
+function Set-EDBUpdateConfigAliasValue {
+    param(
+        [Parameter(Mandatory = $true)] [System.Collections.IDictionary]$UpdateConfig,
+        [Parameter(Mandatory = $true)] [object]$Object,
+        [Parameter(Mandatory = $true)] [string]$CanonicalName,
+        [Parameter(Mandatory = $true)] [string[]]$Aliases
+    )
+
+    $Values = @{}
+    foreach ($Name in $Aliases) {
+        if ($Object.PSObject.Properties[$Name]) {
+            $Value = ([string]$Object.PSObject.Properties[$Name].Value).Trim()
+            if ($Value) {
+                $Values[$Name] = $Value
+            }
+        }
+    }
+    $UniqueValues = @($Values.Values | Select-Object -Unique)
+    if ($UniqueValues.Count -gt 1) {
+        $Details = ($Values.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)='$($_.Value)'" }) -join ", "
+        throw "app_update_config.json $CanonicalName aliases conflict: $Details"
+    }
+    if ($UniqueValues.Count -eq 1) {
+        $UpdateConfig[$CanonicalName] = $UniqueValues[0]
+    }
+}
+
 if ($Clean -and (Test-Path $ResolvedOutputDir)) {
     Remove-Item -Recurse -Force $ResolvedOutputDir
 }
@@ -122,12 +166,24 @@ $UpdateConfig = [ordered]@{
 if (Test-Path $ProjectUpdateConfig) {
     try {
         $ExistingUpdateConfig = Get-Content -Raw -Path $ProjectUpdateConfig | ConvertFrom-Json
-        foreach ($Name in @("appId", "appName", "version", "updateFeedUrl", "downloadUrl", "releaseNotesUrl")) {
-            if ($ExistingUpdateConfig.PSObject.Properties[$Name]) {
-                $UpdateConfig[$Name] = $ExistingUpdateConfig.$Name
-            }
+        $AliasGroups = @(
+            [pscustomobject]@{ CanonicalName = "appId"; Aliases = @("appId", "app_id") },
+            [pscustomobject]@{ CanonicalName = "appName"; Aliases = @("appName", "app_name") },
+            [pscustomobject]@{ CanonicalName = "updateFeedUrl"; Aliases = @("updateFeedUrl", "update_feed_url") },
+            [pscustomobject]@{ CanonicalName = "downloadUrl"; Aliases = @("downloadUrl", "download_url") },
+            [pscustomobject]@{ CanonicalName = "releaseNotesUrl"; Aliases = @("releaseNotesUrl", "release_notes_url") }
+        )
+        foreach ($AliasGroup in $AliasGroups) {
+            Set-EDBUpdateConfigAliasValue -UpdateConfig $UpdateConfig -Object $ExistingUpdateConfig -CanonicalName $AliasGroup.CanonicalName -Aliases $AliasGroup.Aliases
+        }
+        $ExistingVersion = Get-EDBJsonStringProperty -Object $ExistingUpdateConfig -Names @("version")
+        if ($ExistingVersion) {
+            $UpdateConfig["version"] = $ExistingVersion
         }
     } catch {
+        if ($_.Exception.Message -like "app_update_config.json * aliases conflict:*") {
+            throw
+        }
         Write-Warning "Could not read app_update_config.json; using defaults."
     }
 }

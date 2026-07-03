@@ -223,6 +223,7 @@ Documents\ClassInEDBMVP\app_update_config.json
 Local overrides may use equivalent snake_case keys such as `download_url`; the runtime normalizes them to the canonical camelCase metadata keys before checking updates. If both alias forms are present with different values, update status becomes `invalid_config` instead of guessing between old and new release metadata.
 
 Prefer the packaging scripts for release builds because they generate build-scoped update metadata and run the post-build package verifier. If you run `pyinstaller ClassInEDBMVP.spec` directly, the spec resolves assets relative to the spec file location and writes generated update metadata inside PyInstaller's work path; set the same metadata through environment variables such as `EDB_PACKAGE_APP_ID`, `EDB_PACKAGE_APP_VERSION`, `EDB_PACKAGE_UPDATE_FEED_URL`, and `EDB_PACKAGE_DOWNLOAD_URL`, then run `scripts/verify_packaged_app.py` on the built app folder.
+Packaging wrappers normalize equivalent project `app_update_config.json` aliases into canonical camelCase keys before embedding metadata, and fail on conflicting alias values instead of carrying old release URLs forward.
 
 Update feed JSON shape:
 ```json
