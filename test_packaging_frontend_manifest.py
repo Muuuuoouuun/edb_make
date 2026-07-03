@@ -64,6 +64,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("babel.min.js" in error for error in errors))
         self.assertTrue(any("app.js?v=" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_runtime_session_artifacts(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (package_root / ".app_runtime" / "outputs").mkdir(parents=True)
+            (resource_root / "latest_session.json").write_text('{"problems":[]}\n', encoding="utf-8")
+            (resource_root / "uploads").mkdir()
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any(".app_runtime" in error for error in errors))
+        self.assertTrue(any("latest_session.json" in error for error in errors))
+        self.assertTrue(any("uploads" in error for error in errors))
+
     def test_packaged_app_layout_dedupes_macos_resource_symlinks(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP.app"

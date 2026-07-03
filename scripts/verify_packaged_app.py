@@ -33,6 +33,21 @@ FORBIDDEN_BOARD_TOKENS = (
     'type="text/babel"',
 )
 
+FORBIDDEN_PACKAGED_RUNTIME_PATHS = (
+    ".app_runtime",
+    "uploads",
+    "outputs",
+    "publish_output",
+    "mutated_crops",
+    "exports",
+    "ai_retries",
+    "ai_image_reconstructions",
+    "latest_session.json",
+    "session_history.json",
+    "generated_session.js",
+    "app.log",
+)
+
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
@@ -94,6 +109,16 @@ def collect_package_errors(package_root: Path) -> list[str]:
     for rel_path in FORBIDDEN_PACKAGED_FRONTEND_FILES:
         if (resource_root / rel_path).exists():
             errors.append(f"forbidden packaged frontend file exists: {rel_path}")
+
+    runtime_scan_roots = [root]
+    for candidate in resource_roots:
+        if candidate not in runtime_scan_roots:
+            runtime_scan_roots.append(candidate)
+    for scan_root in runtime_scan_roots:
+        for rel_path in FORBIDDEN_PACKAGED_RUNTIME_PATHS:
+            candidate = scan_root / rel_path
+            if candidate.exists():
+                errors.append(f"forbidden packaged runtime artifact exists: {candidate.relative_to(scan_root)}")
 
     board_path = resource_root / "ui_prototype" / "board.html"
     if board_path.is_file():
