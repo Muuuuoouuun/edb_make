@@ -280,7 +280,7 @@ python3 scripts/build_update_feed.py \
 ```
 
 Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist/manifest.json` plus `dist/checksums.txt` with the same release assets.
-Update feed, manifest, release notes, and artifact download URLs must be HTTPS, except for loopback HTTP used in local testing. When a platform artifact file is supplied, its matching `--macos-url` or `--windows-url` is required. This keeps installed apps from seeing an available update with no usable download action.
+Update feed, manifest, release notes, and artifact download URLs must be HTTPS, except for loopback HTTP used in local testing. When a platform artifact file is supplied, its matching `--macos-url` or `--windows-url` is required. Runtime update checks also reject feed download URLs that do not expose a platform artifact extension such as `.dmg`, `.zip`, or `.exe`. This keeps installed apps from seeing an available update with no usable download action.
 macOS update artifacts may use `dmg` or `zip`; Windows update artifacts must use `setup-exe`.
 If a feed includes `appId` or `appName`, the installed app rejects it unless those identifiers match the packaged app metadata. This prevents an old or unrelated release channel from appearing as an available update.
 Packaged builds must include `appId`, `appName`, and `version` in `app_update_config.json`; `scripts/verify_packaged_app.py` fails the artifact if those required update identifiers are missing or mismatched, if multiple packaged `app_update_config.json` files disagree, if camelCase/snake_case update metadata aliases conflict, if packaged update/download/release-note URLs do not use HTTPS or loopback HTTP, or if wrapper-supplied expected URLs are not actually embedded in the package.

@@ -567,35 +567,71 @@ def _update_artifact_file_name(source: dict[str, Any]) -> str:
     file_name = str(source.get("fileName") or "").strip()
     if file_name:
         return file_name
+    return _update_download_url_file_name(source)
+
+
+def _update_download_url_value(source: dict[str, Any]) -> str:
     raw_url = str(_first_nonempty(source.get("downloadUrl"), source.get("download_url"), source.get("url")) or "").strip()
+    return raw_url
+
+
+def _update_download_url_file_name(source: dict[str, Any]) -> str:
+    raw_url = _update_download_url_value(source)
     if not raw_url:
         return ""
-    return Path(urlparse(raw_url).path).name
+    path = urlparse(raw_url).path
+    if not path or path.endswith("/"):
+        return ""
+    return Path(path).name
+
+
+def _update_platform_artifact_suffixes(platform: str) -> tuple[str, ...]:
+    allowed_types = UPDATE_PLATFORM_ARTIFACT_TYPES.get(platform, ())
+    return tuple(
+        suffix
+        for allowed_type in allowed_types
+        for suffix in UPDATE_ARTIFACT_TYPE_SUFFIXES.get(allowed_type, ())
+    )
 
 
 def _update_artifact_metadata_error(source: dict[str, Any], platform_key: str) -> str:
     platform = str(platform_key or "").strip().lower()
     artifact_type = str(source.get("artifactType") or "").strip().lower()
+    explicit_file_name = str(source.get("fileName") or "").strip()
     file_name = _update_artifact_file_name(source)
+    has_download_url = bool(_update_download_url_value(source))
     allowed_types = UPDATE_PLATFORM_ARTIFACT_TYPES.get(platform)
+    allowed_suffixes = _update_platform_artifact_suffixes(platform)
     if artifact_type:
         if allowed_types and artifact_type not in allowed_types:
             allowed = ", ".join(allowed_types)
             return f"update feed artifactType for {platform} must be one of: {allowed}"
         expected_suffixes = UPDATE_ARTIFACT_TYPE_SUFFIXES.get(artifact_type, ())
-        if file_name and expected_suffixes and Path(file_name).suffix.lower() not in expected_suffixes:
+        suffix = Path(file_name).suffix.lower() if file_name else ""
+        if file_name and expected_suffixes and not suffix:
+            expected = ", ".join(expected_suffixes)
+            if explicit_file_name:
+                return f"update feed fileName must include {artifact_type} artifact extension ({expected})"
+            return f"update feed download URL must include {artifact_type} artifact extension ({expected})"
+        if file_name and expected_suffixes and suffix not in expected_suffixes:
             expected = ", ".join(expected_suffixes)
             return f"update feed fileName does not match {artifact_type} artifact extension ({expected})"
-    elif file_name and allowed_types:
-        allowed_suffixes = tuple(
-            suffix
-            for allowed_type in allowed_types
-            for suffix in UPDATE_ARTIFACT_TYPE_SUFFIXES.get(allowed_type, ())
-        )
+        if expected_suffixes and has_download_url and not file_name:
+            expected = ", ".join(expected_suffixes)
+            return f"update feed download URL must include {artifact_type} artifact extension ({expected})"
+    elif file_name and allowed_suffixes:
         suffix = Path(file_name).suffix.lower()
-        if suffix and allowed_suffixes and suffix not in allowed_suffixes:
+        if not suffix:
+            expected = ", ".join(allowed_suffixes)
+            if explicit_file_name:
+                return f"update feed fileName for {platform} must include one of: {expected}"
+            return f"update feed download URL for {platform} must include artifact extension ({expected})"
+        if suffix not in allowed_suffixes:
             expected = ", ".join(allowed_suffixes)
             return f"update feed fileName for {platform} must use one of: {expected}"
+    elif has_download_url and allowed_suffixes:
+        expected = ", ".join(allowed_suffixes)
+        return f"update feed download URL for {platform} must include artifact extension ({expected})"
     return ""
 
 
