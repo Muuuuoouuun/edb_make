@@ -143,6 +143,62 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("artifact file is empty", result.stderr)
 
+    def test_rejects_platform_artifact_with_wrong_extension(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            wrong_macos_artifact = tmpdir / "ClassInEDBMVP-Setup.exe"
+            wrong_macos_artifact.write_bytes(b"windows setup")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(wrong_macos_artifact),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("dmg artifact must use expected file extension (.dmg)", result.stderr)
+
+    def test_rejects_reusing_same_artifact_for_multiple_platforms(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            artifact = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            artifact.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "https://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(artifact),
+                    "--windows-url",
+                    "https://example.test/ClassInEDBMVP-Setup.exe",
+                    "--windows-file",
+                    str(artifact),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("windows and macos artifacts point to the same file", result.stderr)
+
     def test_rejects_empty_release_version(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

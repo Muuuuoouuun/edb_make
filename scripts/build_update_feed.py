@@ -12,6 +12,11 @@ from typing import Any
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ARTIFACT_TYPE_SUFFIXES = {
+    "dmg": (".dmg",),
+    "setup-exe": (".exe",),
+    "zip": (".zip",),
+}
 
 
 def utc_timestamp() -> str:
@@ -26,7 +31,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def artifact_metadata(path: str | None) -> dict[str, Any]:
+def validate_artifact_type_filename(artifact: Path, artifact_type: str) -> None:
+    expected_suffixes = ARTIFACT_TYPE_SUFFIXES.get(str(artifact_type or "").strip().lower())
+    if expected_suffixes and artifact.suffix.lower() not in expected_suffixes:
+        expected = ", ".join(expected_suffixes)
+        raise ValueError(
+            f"{artifact_type} artifact must use expected file extension ({expected}): {artifact.name}"
+        )
+
+
+def artifact_metadata(path: str | None, *, artifact_type: str = "") -> dict[str, Any]:
     if not path:
         return {}
     artifact = Path(path).expanduser().resolve()
@@ -36,6 +50,7 @@ def artifact_metadata(path: str | None) -> dict[str, Any]:
         raise ValueError(f"artifact path is not a file: {artifact}")
     if artifact.stat().st_size <= 0:
         raise ValueError(f"artifact file is empty: {artifact}")
+    validate_artifact_type_filename(artifact, artifact_type)
     return {
         "fileName": artifact.name,
         "sizeBytes": artifact.stat().st_size,
@@ -55,6 +70,20 @@ def validate_version(version: str) -> str:
     if not normalized:
         raise ValueError("release version must not be empty")
     return normalized
+
+
+def validate_distinct_artifact_files(platform_paths: dict[str, str]) -> None:
+    seen: dict[Path, str] = {}
+    for platform, raw_path in platform_paths.items():
+        if not raw_path:
+            continue
+        artifact = Path(raw_path).expanduser().resolve()
+        previous_platform = seen.get(artifact)
+        if previous_platform:
+            raise ValueError(
+                f"{platform} and {previous_platform} artifacts point to the same file: {artifact}"
+            )
+        seen[artifact] = platform
 
 
 def platform_payload(
@@ -78,13 +107,17 @@ def platform_payload(
         payload["downloadUrl"] = download_url
     if release_notes_url:
         payload["releaseNotesUrl"] = release_notes_url
-    payload.update(artifact_metadata(artifact_path))
+    payload.update(artifact_metadata(artifact_path, artifact_type=artifact_type))
     if "fileName" not in payload and download_url:
         payload["fileName"] = Path(download_url.rstrip("/")).name or f"{platform}-{version}"
     return payload
 
 
 def build_feed(args: argparse.Namespace) -> dict[str, Any]:
+    validate_distinct_artifact_files({
+        "macos": args.macos_file,
+        "windows": args.windows_file,
+    })
     platforms: dict[str, Any] = {}
     macos = platform_payload(
         version=args.version,
