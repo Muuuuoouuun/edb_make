@@ -47,21 +47,27 @@ def _safe_root_child(root: Path, path: Path) -> bool:
     return resolved_path != resolved_root and resolved_path.parent == resolved_root
 
 
-def _safe_root_descendant(root: Path, path: Path) -> bool:
-    try:
-        resolved_root = root.resolve()
-        resolved_path = path.resolve(strict=False)
-    except OSError:
-        return False
-    return resolved_path != resolved_root and resolved_root in resolved_path.parents
-
-
 def _is_legacy_ui_file(root: Path, path: Path) -> bool:
     try:
         relative_path = path.resolve(strict=False).relative_to(root.resolve())
     except (OSError, ValueError):
         return False
     return relative_path in LEGACY_UI_FILE_PATHS
+
+
+def _covered_by_existing_candidate(path: Path, candidates: list[CleanupCandidate]) -> bool:
+    try:
+        resolved_path = path.resolve(strict=False)
+    except OSError:
+        return False
+    for candidate in candidates:
+        try:
+            resolved_candidate = candidate.path.resolve(strict=False)
+        except OSError:
+            continue
+        if resolved_path == resolved_candidate or resolved_candidate in resolved_path.parents:
+            return True
+    return False
 
 
 def collect_cleanup_candidates(
@@ -88,7 +94,11 @@ def collect_cleanup_candidates(
 
     for relative_path in LEGACY_UI_FILE_PATHS:
         path = root / relative_path
-        if _is_legacy_ui_file(root, path) and (path.is_file() or path.is_symlink()):
+        if (
+            _is_legacy_ui_file(root, path)
+            and not _covered_by_existing_candidate(path, candidates)
+            and (path.is_file() or path.is_symlink())
+        ):
             candidates.append(CleanupCandidate(path=path, category="legacy-ui"))
 
     return sorted(candidates, key=lambda candidate: (candidate.category, candidate.path.name))

@@ -117,6 +117,20 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
 
         self.assertEqual({"dist", "generated_edb_pair_future_20990101", ".app_runtime"}, names)
 
+    def test_local_cleanup_runtime_opt_in_does_not_double_count_legacy_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp).resolve()
+            runtime = root / ".app_runtime"
+            runtime.mkdir()
+            (runtime / "generated_session.js").write_text("window.EDB_UI_SESSION = stale;\n", encoding="utf-8")
+
+            candidates = collect_cleanup_candidates(root, include_runtime=True)
+            relative_paths = {candidate.path.relative_to(root).as_posix() for candidate in candidates}
+            categories = {candidate.category for candidate in candidates}
+
+        self.assertEqual({".app_runtime"}, relative_paths)
+        self.assertEqual({"runtime"}, categories)
+
     def test_local_cleanup_removes_only_root_child_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
