@@ -54,6 +54,20 @@ function Remove-EDBPathIfExists {
     }
 }
 
+function Assert-EDBNonEmptyFile {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$Label
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Label was not created: $Path"
+    }
+    if ((Get-Item -LiteralPath $Path).Length -le 0) {
+        throw "$Label is empty: $Path"
+    }
+}
+
 if ($Clean -and (Test-Path $ResolvedOutputDir)) {
     Remove-Item -Recurse -Force $ResolvedOutputDir
 }
@@ -174,7 +188,9 @@ if ($HasPyInstaller) {
 
     & $PythonExe -m PyInstaller @PyInstallerArgs
 
-    if (-not $OneFile) {
+    if ($OneFile) {
+        Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"
+    } else {
         & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
             --expected-app-name $EffectiveAppName `
             --expected-version $EffectiveAppVersion
@@ -252,6 +268,7 @@ if ($Zip) {
 
     if (Test-Path $PackageRoot) {
         Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
+        Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"
         Write-Host "Zip archive: $ZipPath"
     }
 } elseif ($Sign) {

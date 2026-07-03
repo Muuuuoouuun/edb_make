@@ -166,6 +166,7 @@ dist/ClassInEDBMVP-macOS.zip
 ```
 
 The macOS wrapper removes stale same-name app folders, `.app` bundles, zip archives, DMGs, notary-upload zips, and previous PyInstaller work files before each build. After verifying the `.app`, it removes PyInstaller's sibling collect folder and temporary work directory so the output directory does not expose an extra runnable-looking copy.
+Generated zip archives and DMGs are checked for non-empty output, and DMGs are verified with `hdiutil verify`.
 
 The default macOS build is windowed and ad-hoc signed when `codesign` is available. Logs are written under:
 ```text
@@ -322,6 +323,7 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 - `ui_prototype\app.bundle.js` is generated from `art.jsx`, `tweaks-panel.jsx`, and `app.jsx` by `scripts\build_frontend_bundle.mjs`. The build-time Babel transformer lives under `scripts\vendor`, outside the browser UI asset tree. Packaging scripts rebuild the bundle when Node.js is available, and the builder updates `board.html` to load the bundle with a source-digest cache-bust value.
 - `scripts\verify_frontend_package.py` runs before PyInstaller packaging, including direct `ClassInEDBMVP.spec` builds, and fails if required UI/runtime input assets are missing, packaging manifests omit them, `app.bundle.js` is stale against its source digest, `board.html` points at a legacy runtime, browser-side Babel returns under `ui_prototype\vendor`, or old prototype files such as `ui_prototype\app.js`/`prototype_data.js` have returned.
 - `scripts\verify_packaged_app.py` runs after folder-style packaging, source-package fallback builds, and Windows installer reuse of an existing app folder to confirm the final artifact contains the current prebuilt UI with bundle digest metadata, matching app/version update metadata, matching macOS `Info.plist` bundle id/version metadata when present, and HWP render helper, without browser-side Babel, build-time frontend tooling, legacy UI data files, or local runtime/session outputs.
+- Packaging wrappers also verify that generated distribution archives and installers are real non-empty files before reporting success or signing them.
 - Browser-side Babel is not included in packaged builds.
 - Development runs write default and relative UI-named outputs under `.app_runtime\outputs` in the project folder.
 - Packaged runs write default and relative UI-named outputs under `Documents\ClassInEDBMVP\.app_runtime\outputs`.

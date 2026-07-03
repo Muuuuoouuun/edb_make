@@ -538,6 +538,33 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertLess(remove_index, source.index("$Iscc = Find-InnoSetupCompiler"))
         self.assertLess(remove_index, source.index("& $Iscc @IsccArgs $InstallerScript"))
 
+    def test_packaging_scripts_verify_distribution_archives(self) -> None:
+        shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn("require_nonempty_file()", shell_source)
+        self.assertIn('require_nonempty_file "$ZIP_PATH" "Zip archive"', shell_source)
+        self.assertIn('require_nonempty_file "$DMG_PATH" "DMG installer"', shell_source)
+        self.assertIn('require_nonempty_file "$APP_NOTARY_ZIP" "Notary upload archive"', shell_source)
+        self.assertLess(
+            shell_source.index('require_nonempty_file "$DMG_PATH" "DMG installer"'),
+            shell_source.index('hdiutil verify "$DMG_PATH"'),
+        )
+
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Assert-EDBNonEmptyFile", ps_source)
+        self.assertIn('Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"', ps_source)
+        self.assertIn('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"', ps_source)
+        self.assertLess(
+            ps_source.index("Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath"),
+            ps_source.index('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"'),
+        )
+
+    def test_windows_installer_verifies_setup_output_before_signing(self) -> None:
+        source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Assert-EDBNonEmptyFile", source)
+        verify_index = source.index('Assert-EDBNonEmptyFile -Path $InstallerPath -Label "Windows installer"')
+        self.assertLess(source.index("& $Iscc @IsccArgs $InstallerScript"), verify_index)
+        self.assertLess(verify_index, source.index("if ($Sign) {", verify_index))
+
     def test_ci_installer_workflow_uses_packaging_wrappers(self) -> None:
         workflow = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
         self.assertIn("actions/setup-node@v4", workflow)

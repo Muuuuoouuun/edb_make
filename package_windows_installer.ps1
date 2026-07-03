@@ -75,6 +75,20 @@ function Get-JsonStringProperty {
     return [string]$Object.PSObject.Properties[$Name].Value
 }
 
+function Assert-EDBNonEmptyFile {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$Label
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Label was not created: $Path"
+    }
+    if ((Get-Item -LiteralPath $Path).Length -le 0) {
+        throw "$Label is empty: $Path"
+    }
+}
+
 function Read-PackagedUpdateConfig {
     param([Parameter(Mandatory = $true)] [string]$PackageRoot)
 
@@ -188,6 +202,7 @@ $IsccArgs = @(
     "/DAppVersion=$EffectiveInstallerVersion"
 )
 & $Iscc @IsccArgs $InstallerScript
+Assert-EDBNonEmptyFile -Path $InstallerPath -Label "Windows installer"
 
 if ($Sign) {
     Invoke-EDBWindowsSignature `

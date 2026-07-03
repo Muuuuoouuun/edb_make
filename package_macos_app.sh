@@ -59,6 +59,15 @@ Options:
 EOF
 }
 
+require_nonempty_file() {
+  local path="$1"
+  local label="$2"
+  if [[ ! -s "$path" ]]; then
+    echo "$label was not created or is empty: $path" >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)
@@ -417,6 +426,7 @@ fi
 if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
   rm -f "$APP_NOTARY_ZIP"
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$APP_NOTARY_ZIP")
+  require_nonempty_file "$APP_NOTARY_ZIP" "Notary upload archive"
   notarytool_submit "$APP_NOTARY_ZIP"
   xcrun stapler staple "$APP_PATH"
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -426,6 +436,7 @@ fi
 if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
   rm -f "$ZIP_PATH"
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$(basename "$ZIP_PATH")")
+  require_nonempty_file "$ZIP_PATH" "Zip archive"
 fi
 
 if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
@@ -440,6 +451,8 @@ if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
     -format UDZO \
     "$DMG_PATH" >/dev/null
   rm -rf "$STAGING_DIR"
+  require_nonempty_file "$DMG_PATH" "DMG installer"
+  hdiutil verify "$DMG_PATH"
   if [[ -n "$SIGN_IDENTITY" && "$SIGN_IDENTITY" != "-" ]] && command -v codesign >/dev/null 2>&1; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
     codesign --verify --verbose=2 "$DMG_PATH"
