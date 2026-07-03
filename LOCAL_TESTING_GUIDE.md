@@ -129,6 +129,21 @@ Run the local app and open the printed URL:
 
 The app serves `ui_prototype\board.html` and the current `ui_prototype\app.bundle.js` bundle.
 
+### Clean stale local app builds
+
+If an older packaged UI appears during launch checks, first remove ignored local
+packaging outputs so only the current source run remains visible:
+
+```bash
+python scripts/clean_local_artifacts.py
+python scripts/clean_local_artifacts.py --yes
+```
+
+By default this removes only root-level `dist*`, `build`, and
+`tmp_validation_*` artifacts. It does not remove generated EDB exports or the
+local `.app_runtime` folder unless you explicitly pass
+`--include-edb-exports` or `--include-runtime`.
+
 ## Structured JSON Only
 
 If you want only the page analysis output without building an EDB:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+from scripts.clean_local_artifacts import collect_cleanup_candidates, remove_candidate
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -43,6 +46,52 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(set(samples), set(result.stdout.splitlines()))
+
+    def test_local_cleanup_defaults_target_stale_package_outputs_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            for name in (
+                "dist",
+                "dist_sizecheck",
+                "build",
+                "tmp_validation_future",
+                "generated_edb_pair_future_20990101",
+                ".app_runtime",
+                "ui_prototype",
+            ):
+                (root / name).mkdir()
+
+            candidates = collect_cleanup_candidates(root)
+            names = {candidate.path.name for candidate in candidates}
+
+        self.assertEqual({"build", "dist", "dist_sizecheck", "tmp_validation_future"}, names)
+
+    def test_local_cleanup_can_opt_into_generated_exports_and_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            for name in ("dist", "generated_edb_pair_future_20990101", ".app_runtime"):
+                (root / name).mkdir()
+
+            candidates = collect_cleanup_candidates(root, include_edb_exports=True, include_runtime=True)
+            names = {candidate.path.name for candidate in candidates}
+
+        self.assertEqual({"dist", "generated_edb_pair_future_20990101", ".app_runtime"}, names)
+
+    def test_local_cleanup_removes_only_root_child_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            dist_dir = root / "dist_sizecheck"
+            nested_file = dist_dir / "ClassInEDBMVP.app" / "Contents" / "Info.plist"
+            nested_file.parent.mkdir(parents=True)
+            nested_file.write_text("old app", encoding="utf-8")
+            keep_dir = root / "generated_edb_pair_future_20990101"
+            keep_dir.mkdir()
+
+            [candidate] = collect_cleanup_candidates(root)
+            remove_candidate(root, candidate)
+
+            self.assertFalse(dist_dir.exists())
+            self.assertTrue(keep_dir.exists())
 
 
 if __name__ == "__main__":
