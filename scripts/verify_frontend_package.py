@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,13 @@ PACKAGING_MANIFESTS = (
     "package_mvp.ps1",
 )
 
+FRONTEND_BUNDLE_SOURCE_FILES = (
+    "ui_prototype/art.jsx",
+    "ui_prototype/tweaks-panel.jsx",
+    "ui_prototype/app.jsx",
+    "scripts/build_frontend_bundle.mjs",
+)
+
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
@@ -39,6 +47,20 @@ def _read(path: Path) -> str:
 
 def _contains_path(text: str, path: str) -> bool:
     return path in text or path.replace("/", "\\") in text
+
+
+def frontend_bundle_source_digest(project_root: Path) -> str | None:
+    root = project_root.resolve()
+    digest = hashlib.sha256()
+    for rel_path in FRONTEND_BUNDLE_SOURCE_FILES:
+        source_path = root / rel_path
+        if not source_path.is_file():
+            return None
+        digest.update(rel_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(source_path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def collect_errors(project_root: Path) -> list[str]:
@@ -80,6 +102,14 @@ def collect_errors(project_root: Path) -> list[str]:
             errors.append("app.bundle.js is missing the generated bundle banner")
         if "/* app.jsx */" not in bundle:
             errors.append("app.bundle.js does not include the app.jsx section")
+        expected_digest = frontend_bundle_source_digest(root)
+        digest_match = re.search(r"Source SHA256:\s*([0-9a-f]{64})", bundle)
+        if expected_digest is None:
+            errors.append("could not calculate app.bundle.js source digest because a bundle input is missing")
+        elif digest_match is None:
+            errors.append("app.bundle.js is missing the source digest; rebuild with scripts/build_frontend_bundle.mjs")
+        elif digest_match.group(1) != expected_digest:
+            errors.append("app.bundle.js source digest is stale; rebuild with scripts/build_frontend_bundle.mjs")
 
     for manifest_name in PACKAGING_MANIFESTS:
         manifest_path = root / manifest_name
