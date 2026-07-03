@@ -89,6 +89,13 @@ def validate_version(version: str) -> str:
     return normalized
 
 
+def validate_required_text(label: str, value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{label} must not be empty")
+    return normalized
+
+
 def is_loopback_hostname(hostname: str | None) -> bool:
     host = (hostname or "").strip().lower()
     return host == "localhost" or host == "::1" or host.startswith("127.")
@@ -321,6 +328,9 @@ def main() -> int:
     try:
         args = parse_args()
         args.version = validate_version(args.version)
+        args.app_id = validate_required_text("app id", args.app_id)
+        args.app_name = validate_required_text("app name", args.app_name)
+        args.channel = validate_required_text("release channel", args.channel)
         args.update_feed_url = validate_optional_update_url("update feed URL", args.update_feed_url)
         args.release_notes_url = validate_optional_update_url("release notes URL", args.release_notes_url)
         args.manifest_url = validate_optional_update_url("manifest URL", args.manifest_url)

@@ -370,6 +370,40 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("release version must not be empty", result.stderr)
 
+    def test_rejects_empty_required_feed_identity_fields(self) -> None:
+        required_fields = (
+            ("--app-id", "app id must not be empty"),
+            ("--app-name", "app name must not be empty"),
+            ("--channel", "release channel must not be empty"),
+        )
+        for option_name, expected_error in required_fields:
+            with self.subTest(option_name=option_name), TemporaryDirectory() as raw_tmp:
+                tmpdir = Path(raw_tmp)
+                dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+                dmg.write_bytes(b"mac artifact")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                        "--version",
+                        "0.1.1",
+                        option_name,
+                        "",
+                        "--macos-url",
+                        "https://example.test/ClassInEDBMVP-macOS.dmg",
+                        "--macos-file",
+                        str(dmg),
+                        "--output",
+                        str(tmpdir / "update.json"),
+                    ],
+                    cwd=PROJECT_ROOT,
+                    text=True,
+                    capture_output=True,
+                )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(expected_error, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

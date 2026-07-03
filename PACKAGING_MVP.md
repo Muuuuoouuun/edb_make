@@ -284,6 +284,7 @@ Update feed, manifest, release notes, and artifact download URLs must be HTTPS, 
 macOS update artifacts may use `dmg` or `zip`; Windows update artifacts must use `setup-exe`.
 If a feed includes `appId` or `appName`, the installed app rejects it unless those identifiers match the packaged app metadata. This prevents an old or unrelated release channel from appearing as an available update.
 Packaged builds must include `appId`, `appName`, and `version` in `app_update_config.json`; `scripts/verify_packaged_app.py` fails the artifact if those required update identifiers are missing or mismatched, or if packaged update/download/release-note URLs do not use HTTPS or loopback HTTP.
+The feed builder fails if `appId`, `appName`, `channel`, or release `version` is empty, so generated release metadata cannot silently lose its identity.
 `manifestSha256` and artifact `sha256` values must be 64-character lowercase SHA-256 hex strings when present, and `sizeBytes` must be a positive integer.
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 The feed builder also rejects known platform artifact mismatches, such as a `.exe` passed as a macOS DMG or the same local file reused for multiple platforms.
