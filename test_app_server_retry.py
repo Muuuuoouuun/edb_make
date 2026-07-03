@@ -36,6 +36,41 @@ class TestStaticAssetCaching(unittest.TestCase):
             app_server.sanitize_edb_file_name("", fallback_stem="fallback name"),
         )
 
+    def test_export_default_output_dir_lives_under_runtime_outputs(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            runtime_dir = tmpdir / "runtime"
+            source = tmpdir / "Lesson 1.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            handler = object.__new__(app_server.AppRequestHandler)
+
+            with patch.object(app_server, "RUNTIME_DIR", runtime_dir):
+                default_output = handler._resolve_output_dir({}, [source])
+                relative_output = handler._resolve_output_dir({"outputDir": "../Old Session?"}, [source])
+                absolute_output = handler._resolve_output_dir({"outputDir": str(tmpdir / "custom out")}, [source])
+
+            self.assertEqual((runtime_dir / "outputs" / "Lesson_1").resolve(), default_output)
+            self.assertEqual((runtime_dir / "outputs" / "___Old_Session_").resolve(), relative_output)
+            self.assertEqual((tmpdir / "custom out").resolve(), absolute_output)
+
+    def test_ensure_runtime_dirs_creates_default_output_root(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            base_dir = tmpdir / "base"
+            runtime_dir = tmpdir / "runtime"
+            upload_dir = runtime_dir / "uploads"
+
+            with (
+                patch.object(app_server, "BASE_DIR", base_dir),
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "UPLOAD_DIR", upload_dir),
+            ):
+                app_server.ensure_runtime_dirs()
+
+            self.assertTrue(base_dir.is_dir())
+            self.assertTrue(upload_dir.is_dir())
+            self.assertTrue((runtime_dir / "outputs").is_dir())
+
     def test_same_origin_guard_rejects_cross_site_browser_posts(self):
         self.assertTrue(app_server._request_is_same_origin({
             "Host": "127.0.0.1:8765",

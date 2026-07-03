@@ -279,6 +279,11 @@ LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
 GENERATED_SESSION_JS = RUNTIME_DIR / "generated_session.js"
 APP_LOG_FILE = RUNTIME_DIR / "app.log"
+DEFAULT_OUTPUT_ROOT_NAME = "outputs"
+
+
+def default_output_root() -> Path:
+    return RUNTIME_DIR / DEFAULT_OUTPUT_ROOT_NAME
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -622,6 +627,7 @@ def ensure_runtime_dirs() -> None:
     BASE_DIR.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    default_output_root().mkdir(parents=True, exist_ok=True)
 
 
 def hydrate_user_settings_env() -> None:
@@ -5860,17 +5866,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _resolve_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
         requested = payload.get("output_dir") or payload.get("outputDir")
+        output_root = default_output_root()
         if requested:
             target = Path(str(requested))
             if not target.is_absolute():
-                target = BASE_DIR / sanitize_output_dir_name(str(requested))
+                target = output_root / sanitize_output_dir_name(str(requested))
             return target.resolve()
         if not source_paths:
-            return (BASE_DIR / sanitize_output_dir_name(None)).resolve()
+            return (output_root / sanitize_output_dir_name(None)).resolve()
         if len(source_paths) == 1:
-            return (BASE_DIR / sanitize_output_dir_name(source_paths[0].stem)).resolve()
+            return (output_root / sanitize_output_dir_name(source_paths[0].stem)).resolve()
         batch_name = f"{source_paths[0].stem}_{len(source_paths)}files"
-        return (BASE_DIR / sanitize_output_dir_name(batch_name)).resolve()
+        return (output_root / sanitize_output_dir_name(batch_name)).resolve()
 
     def _handle_export(self) -> None:
         try:

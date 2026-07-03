@@ -316,8 +316,8 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 - `scripts\verify_frontend_package.py` runs before PyInstaller packaging, including direct `ClassInEDBMVP.spec` builds, and fails if required UI assets are missing, `board.html` points at a legacy runtime, or old prototype files such as `ui_prototype\app.js`/`prototype_data.js` have returned.
 - `scripts\verify_packaged_app.py` runs after folder-style packaging and source-package fallback builds to confirm the final artifact contains the current prebuilt UI, update metadata, and HWP render helper, without browser-side Babel or legacy UI data files.
 - Browser-side Babel is not included in packaged builds.
-- Development runs write outputs into the project folder unless another output directory name is entered in the UI.
-- Packaged runs write default outputs under `Documents\ClassInEDBMVP` unless another output directory name is entered in the UI.
+- Development runs write default and relative UI-named outputs under `.app_runtime\outputs` in the project folder.
+- Packaged runs write default and relative UI-named outputs under `Documents\ClassInEDBMVP\.app_runtime\outputs`.
 - Uploaded files are cached in `.app_runtime\uploads` under the active app home.
 - The browser UI talks to the local server over HTTP and does not call Python directly.
 - Double-clicking the packaged app opens the browser automatically. If the app server is already running, it opens the browser instead of starting a duplicate server.
