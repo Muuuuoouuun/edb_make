@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.clean_local_artifacts import collect_cleanup_candidates, remove_candidate
+from scripts.clean_local_artifacts import CleanupCandidate, collect_cleanup_candidates, remove_candidate
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -132,6 +132,18 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
 
             self.assertFalse(dist_dir.exists())
             self.assertTrue(keep_dir.exists())
+
+    def test_local_cleanup_rejects_arbitrary_nested_file_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp).resolve()
+            nested_file = root / "dist_sizecheck" / "ClassInEDBMVP.app" / "Contents" / "Info.plist"
+            nested_file.parent.mkdir(parents=True)
+            nested_file.write_text("old app", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                remove_candidate(root, CleanupCandidate(path=nested_file, category="packaging"))
+
+            self.assertTrue(nested_file.exists())
 
 
 if __name__ == "__main__":
