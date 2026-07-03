@@ -597,6 +597,21 @@ def _update_artifact_metadata_error(source: dict[str, Any], platform_key: str) -
     return ""
 
 
+def _update_identity_error(
+    source: dict[str, Any],
+    *,
+    expected_app_id: str,
+    expected_app_name: str,
+) -> str:
+    feed_app_id = str(_first_nonempty(source.get("appId"), source.get("app_id")) or "").strip()
+    feed_app_name = str(_first_nonempty(source.get("appName"), source.get("app_name")) or "").strip()
+    if feed_app_id and feed_app_id != expected_app_id:
+        return f"update feed appId mismatch: expected {expected_app_id}, found {feed_app_id}"
+    if feed_app_name and feed_app_name != expected_app_name:
+        return f"update feed appName mismatch: expected {expected_app_name}, found {feed_app_name}"
+    return ""
+
+
 def build_app_update_status() -> dict[str, Any]:
     config = load_app_update_config()
     platform_key = str(config.get("platform") or _app_platform_key())
@@ -605,7 +620,9 @@ def build_app_update_status() -> dict[str, Any]:
     fallback_download_url = _normalize_update_url(config.get("downloadUrl") or config.get("download_url"))
     fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
     app_name = str(config.get("appName") or "ClassInEDBMVP")
+    app_id = str(config.get("appId") or config.get("app_id") or app_name).strip() or app_name
     cache_key = (
+        app_id,
         app_name,
         platform_key,
         current_version,
@@ -618,6 +635,7 @@ def build_app_update_status() -> dict[str, Any]:
         return cached
     status: dict[str, Any] = {
         "ok": True,
+        "appId": app_id,
         "appName": app_name,
         "platform": platform_key,
         "currentVersion": current_version,
@@ -642,6 +660,14 @@ def build_app_update_status() -> dict[str, Any]:
         return _remember_update_status(cache_key, status)
     if selected.get("platformSupported") is False:
         status["channelStatus"] = "unsupported_platform"
+        return _remember_update_status(cache_key, status)
+    if identity_error := _update_identity_error(
+        selected,
+        expected_app_id=app_id,
+        expected_app_name=app_name,
+    ):
+        status["channelStatus"] = "invalid_feed"
+        status["error"] = identity_error
         return _remember_update_status(cache_key, status)
     _copy_update_fields(
         status,
