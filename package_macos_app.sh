@@ -284,6 +284,8 @@ if [[ "$SKIP_FRONTEND_BUILD" == "0" ]]; then
   fi
 fi
 
+"$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_frontend_package.py" --root "$PROJECT_ROOT"
+
 if ! "$PYTHON_EXE" -m PyInstaller --version >/dev/null 2>&1; then
   echo "PyInstaller가 설치되어 있지 않습니다. --install-pyinstaller 옵션으로 다시 실행하세요." >&2
   exit 1

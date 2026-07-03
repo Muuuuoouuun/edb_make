@@ -5,6 +5,15 @@ import os
 import sys
 from pathlib import Path
 
+from scripts.verify_frontend_package import collect_errors
+
+
+def verify_frontend_package() -> None:
+    errors = collect_errors(Path.cwd())
+    if errors:
+        message = "\n".join(f"[frontend-package] ERROR: {error}" for error in errors)
+        raise SystemExit(message)
+
 
 def resolve_icon() -> str | None:
     icon_name = "app_icon.icns" if sys.platform == "darwin" else "app_icon.ico"
@@ -12,6 +21,7 @@ def resolve_icon() -> str | None:
     return str(icon_path) if icon_path.exists() else None
 
 
+verify_frontend_package()
 resolved_icon = resolve_icon()
 
 

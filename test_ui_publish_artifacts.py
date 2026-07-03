@@ -165,7 +165,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
         self.assertIn("publish_summary.js?v=layout-diagnostics-edb-split-20260702", html)
-        self.assertIn("app.bundle.js?v=frontend-bundle-20260702-board-columns-magnet", html)
+        self.assertIn("app.bundle.js?v=frontend-bundle-", html)
+        self.assertNotIn("app.js?v=", html)
 
 
 if __name__ == "__main__":

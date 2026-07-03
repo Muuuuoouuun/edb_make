@@ -92,6 +92,8 @@ if (-not $SkipFrontendBuild) {
     }
 }
 
+& $PythonExe (Join-Path $ProjectRoot "scripts\verify_frontend_package.py") --root $ProjectRoot
+
 $HasPyInstaller = $true
 & $PythonExe -m PyInstaller --version 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {

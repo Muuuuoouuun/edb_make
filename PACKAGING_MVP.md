@@ -313,6 +313,7 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 
 ## Notes
 - `ui_prototype\app.bundle.js` is generated from `art.jsx`, `tweaks-panel.jsx`, and `app.jsx` by `scripts\build_frontend_bundle.mjs`. Packaging scripts rebuild it when Node.js is available.
+- `scripts\verify_frontend_package.py` runs before PyInstaller packaging, including direct `ClassInEDBMVP.spec` builds, and fails if required UI assets are missing, `board.html` points at a legacy runtime, or old prototype files such as `ui_prototype\app.js`/`prototype_data.js` have returned.
 - Browser-side Babel is not included in packaged builds.
 - Development runs write outputs into the project folder unless another output directory name is entered in the UI.
 - Packaged runs write default outputs under `Documents\ClassInEDBMVP` unless another output directory name is entered in the UI.
