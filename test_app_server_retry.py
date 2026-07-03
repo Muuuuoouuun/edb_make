@@ -287,6 +287,22 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertIn(("Content-Type", "application/javascript; charset=utf-8"), headers)
             self.assertEqual(b"window.EDB_UI_SESSION = null;\n", handler.wfile.getvalue())
 
+    def test_latest_session_does_not_fallback_to_generated_session_bridge(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            latest_path = tmpdir / "missing_latest.json"
+            generated_path = tmpdir / "generated_session.js"
+            generated_path.write_text(
+                'window.EDB_UI_SESSION = {"problems":[{"id":"old-session"}]};\n',
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                self.assertIsNone(app_server.load_latest_session())
+
     def test_file_download_streams_without_reading_entire_artifact(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

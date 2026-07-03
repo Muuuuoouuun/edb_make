@@ -2184,7 +2184,7 @@ def load_generated_session() -> dict[str, Any] | None:
 def load_latest_session() -> dict[str, Any] | None:
     if LATEST_SESSION_JSON.exists():
         return json.loads(LATEST_SESSION_JSON.read_text(encoding="utf-8"))
-    return load_generated_session()
+    return None
 
 
 def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
