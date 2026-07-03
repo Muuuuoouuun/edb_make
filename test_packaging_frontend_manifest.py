@@ -87,6 +87,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("source digest is stale" in error for error in errors))
 
+    def test_frontend_package_rejects_bundle_built_with_old_bundler(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            project_root = Path(raw_tmp)
+            self._write_frontend_project(project_root)
+            self.assertEqual([], collect_errors(project_root))
+
+            (project_root / "scripts" / "build_frontend_bundle.mjs").write_text(
+                "console.log('changed build script');\n",
+                encoding="utf-8",
+            )
+            errors = collect_errors(project_root)
+
+        self.assertTrue(any("source digest is stale" in error for error in errors))
+
     def test_frontend_package_rejects_bundle_without_source_digest(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             project_root = Path(raw_tmp)
@@ -161,6 +175,22 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     self.assertIn("verify_frontend_package()", source)
                 else:
                     self.assertIn("scripts/verify_frontend_package.py".replace("/", "\\" if rel_path.endswith(".ps1") else "/"), source)
+
+    def test_packaging_scripts_verify_frontend_after_optional_bundle_build(self) -> None:
+        shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertLess(
+            shell_source.index("scripts/build_frontend_bundle.mjs"),
+            shell_source.index("scripts/verify_frontend_package.py"),
+        )
+
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertLess(
+            ps_source.index("scripts\\build_frontend_bundle.mjs"),
+            ps_source.index("scripts\\verify_frontend_package.py"),
+        )
+
+        spec_source = (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8")
+        self.assertLess(spec_source.index("verify_frontend_package()"), spec_source.index("a = Analysis("))
 
     def test_packaging_scripts_run_built_artifact_verifier(self) -> None:
         for rel_path in ("package_macos_app.sh", "package_mvp.ps1"):
