@@ -230,6 +230,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
             self.assertEqual([], collect_package_errors(package_root))
 
+    def test_packaged_app_layout_accepts_app_name_alias(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                '{"appId":"ClassInEDBMVP","app_name":"ClassInEDBMVP","version":"test"}\n',
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root, expected_app_name="ClassInEDBMVP")
+
+        self.assertEqual([], errors)
+
     def test_packaged_app_layout_rejects_missing_update_app_id(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -321,6 +334,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                 '"appId":"ClassInEDBMVP",'
                 '"app_id":"OtherApp",'
                 '"appName":"ClassInEDBMVP",'
+                '"app_name":"Old ClassIn App",'
                 '"version":"test",'
                 '"updateFeedUrl":"https://example.test/update.json",'
                 '"update_feed_url":"https://example.test/other-update.json",'
@@ -335,6 +349,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             errors = collect_package_errors(package_root)
 
         self.assertTrue(any("appId aliases conflict" in error for error in errors))
+        self.assertTrue(any("appName aliases conflict" in error for error in errors))
         self.assertTrue(any("updateFeedUrl aliases conflict" in error for error in errors))
         self.assertTrue(any("downloadUrl aliases conflict" in error for error in errors))
         self.assertTrue(any("releaseNotesUrl aliases conflict" in error for error in errors))

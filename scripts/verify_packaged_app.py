@@ -290,10 +290,11 @@ def collect_package_errors(
                 errors.append("packaged app_update_config.json must contain a JSON object")
             else:
                 app_id = str(update_config.get("appId") or update_config.get("app_id") or "").strip()
-                app_name = str(update_config.get("appName") or "").strip()
+                app_name = _config_text_value(update_config, "appName", "app_name")
                 version = str(update_config.get("version") or "").strip()
                 alias_pairs = (
                     ("appId", ("appId", "app_id")),
+                    ("appName", ("appName", "app_name")),
                     ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
                     ("downloadUrl", ("downloadUrl", "download_url")),
                     ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
