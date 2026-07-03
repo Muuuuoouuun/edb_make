@@ -55,13 +55,16 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         ui_root = resource_root / "ui_prototype"
         vendor_root = ui_root / "vendor"
         scripts_root = resource_root / "scripts"
+        assets_root = resource_root / "assets"
         vendor_root.mkdir(parents=True)
         scripts_root.mkdir(parents=True)
+        assets_root.mkdir(parents=True)
         (resource_root / "app_update_config.json").write_text(
             '{"appName":"ClassInEDBMVP","version":"test"}\n',
             encoding="utf-8",
         )
         (scripts_root / "render_hwp_with_rhwp_core.mjs").write_text("console.log('ok');\n", encoding="utf-8")
+        (assets_root / "app_icon.png").write_bytes(b"png")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
         digest = "0" * 64
         (ui_root / "board.html").write_text(
@@ -302,6 +305,18 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("scripts/vendor" in error for error in errors))
         self.assertTrue(any("scripts/verify_frontend_package.py" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_source_asset_files(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "assets" / "app_icon.svg").write_text("<svg />\n", encoding="utf-8")
+            (resource_root / "assets" / "brand_mark.svg").write_text("<svg />\n", encoding="utf-8")
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("assets/app_icon.svg" in error for error in errors))
+        self.assertTrue(any("assets/brand_mark.svg" in error for error in errors))
+
     def test_packaged_app_layout_dedupes_macos_resource_symlinks(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
@@ -362,6 +377,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn('"scripts\\render_hwp_with_rhwp_core.mjs"', source)
         self.assertNotRegex(source, r'(?m)^\s+"scripts",\s*$')
+
+    def test_windows_source_package_fallback_copies_only_runtime_assets(self) -> None:
+        source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn('"assets\\app_icon.png"', source)
+        self.assertNotRegex(source, r'(?m)^\s+"assets",\s*$')
 
     def test_windows_source_package_fallback_uses_generated_update_config(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")

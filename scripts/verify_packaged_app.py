@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - direct script execution
 REQUIRED_RUNTIME_FILES = (
     "app_update_config.json",
     "scripts/render_hwp_with_rhwp_core.mjs",
+    "assets/app_icon.png",
 )
 
 FORBIDDEN_PACKAGED_FRONTEND_FILES = (
@@ -32,6 +33,12 @@ FORBIDDEN_PACKAGED_BUILD_TOOL_PATHS = (
     "scripts/vendor",
     "scripts/verify_frontend_package.py",
     "scripts/verify_packaged_app.py",
+)
+
+FORBIDDEN_PACKAGED_SOURCE_ASSET_FILES = (
+    "assets/app_icon.svg",
+    "assets/brand_mark.svg",
+    "assets/app_icon.iconset",
 )
 
 FORBIDDEN_BOARD_TOKENS = (
@@ -157,6 +164,9 @@ def collect_package_errors(
     for rel_path in FORBIDDEN_PACKAGED_FRONTEND_FILES:
         if (resource_root / rel_path).exists():
             errors.append(f"forbidden packaged frontend file exists: {rel_path}")
+    for rel_path in FORBIDDEN_PACKAGED_SOURCE_ASSET_FILES:
+        if (resource_root / rel_path).exists():
+            errors.append(f"forbidden packaged source asset exists: {rel_path}")
 
     runtime_scan_roots = [root]
     for candidate in resource_roots:
@@ -167,6 +177,10 @@ def collect_package_errors(
             candidate = scan_root / rel_path
             if candidate.exists():
                 errors.append(f"forbidden packaged build-time tool exists: {rel_path}")
+        for rel_path in FORBIDDEN_PACKAGED_SOURCE_ASSET_FILES:
+            candidate = scan_root / rel_path
+            if candidate.exists():
+                errors.append(f"forbidden packaged source asset exists: {rel_path}")
         for rel_path in FORBIDDEN_PACKAGED_RUNTIME_PATHS:
             candidate = scan_root / rel_path
             if candidate.exists():

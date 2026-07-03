@@ -186,7 +186,7 @@ if ($HasPyInstaller) {
         "requirements-local.txt",
         "run_local_app.ps1",
         "scripts\render_hwp_with_rhwp_core.mjs",
-        "assets",
+        "assets\app_icon.png",
         "PACKAGING_MVP.md",
         "ui_prototype\index.html",
         "ui_prototype\board.html",
