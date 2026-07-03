@@ -210,13 +210,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertLess(spec_source.index("verify_frontend_package()"), spec_source.index("a = Analysis("))
 
     def test_packaging_scripts_run_built_artifact_verifier(self) -> None:
-        for rel_path in ("package_macos_app.sh", "package_mvp.ps1"):
+        for rel_path in ("package_macos_app.sh", "package_mvp.ps1", "package_windows_installer.ps1"):
             with self.subTest(rel_path=rel_path):
                 source = (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
                 self.assertIn(
                     "scripts/verify_packaged_app.py".replace("/", "\\" if rel_path.endswith(".ps1") else "/"),
                     source,
                 )
+
+    def test_windows_installer_verifies_existing_app_before_installer_build(self) -> None:
+        source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        verifier_index = source.index("scripts\\verify_packaged_app.py")
+        self.assertLess(source.index("PyInstaller app output was not found"), verifier_index)
+        self.assertLess(verifier_index, source.index("if ($Sign -and $SkipAppBuild)"))
+        self.assertLess(verifier_index, source.index("$Iscc = Find-InnoSetupCompiler"))
 
 
 if __name__ == "__main__":

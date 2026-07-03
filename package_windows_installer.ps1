@@ -28,6 +28,15 @@ Set-Location $ProjectRoot
 . (Join-Path $ProjectRoot "scripts\Sign-WindowsArtifact.ps1")
 $ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
 
+if (-not $PythonExe) {
+    $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    if (Test-Path $VenvPython) {
+        $PythonExe = $VenvPython
+    } else {
+        $PythonExe = "python"
+    }
+}
+
 function Find-InnoSetupCompiler {
     param([string]$Requested)
 
@@ -99,6 +108,8 @@ $PackageExe = Join-Path $PackageRoot "$AppName.exe"
 if (-not (Test-Path $PackageExe)) {
     throw "PyInstaller app output was not found: $PackageExe. Build the app first or remove -SkipAppBuild."
 }
+
+& $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot
 
 if ($Sign -and $SkipAppBuild) {
     Invoke-EDBWindowsPackageSigning `
