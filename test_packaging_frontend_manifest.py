@@ -768,6 +768,14 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertLess(source.index("& $Iscc @IsccArgs $InstallerScript"), verify_index)
         self.assertLess(verify_index, source.index("if ($Sign) {", verify_index))
 
+    def test_windows_signing_fails_when_no_signable_artifacts_exist(self) -> None:
+        source = (PROJECT_ROOT / "scripts" / "Sign-WindowsArtifact.ps1").read_text(encoding="utf-8")
+        self.assertIn('Where-Object { $_.Extension -in @(".exe", ".dll", ".pyd") }', source)
+        self.assertIn("No signable Windows artifacts were found under", source)
+        guard_index = source.index("No signable Windows artifacts were found under")
+        signing_index = source.index("foreach ($Target in $Targets)")
+        self.assertLess(guard_index, signing_index)
+
     def test_ci_installer_workflow_uses_packaging_wrappers(self) -> None:
         workflow = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
         self.assertIn("actions/setup-node@v4", workflow)

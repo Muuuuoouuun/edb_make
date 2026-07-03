@@ -125,6 +125,10 @@ function Invoke-EDBWindowsPackageSigning {
         $Targets = @(Get-Item $ResolvedPackagePath)
     }
 
+    if (-not $Targets -or $Targets.Count -eq 0) {
+        throw "No signable Windows artifacts were found under: $ResolvedPackagePath"
+    }
+
     foreach ($Target in $Targets) {
         Invoke-EDBWindowsSignature `
             -Path $Target.FullName `
