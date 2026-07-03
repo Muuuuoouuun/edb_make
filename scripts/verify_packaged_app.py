@@ -9,15 +9,24 @@ import sys
 from pathlib import Path
 
 try:
-    from .verify_frontend_package import REQUIRED_UI_FILES, SOURCE_DIGEST_RE, bundle_cache_bust_digest
+    from .verify_frontend_package import (
+        REQUIRED_RUNTIME_SOURCE_FILES,
+        REQUIRED_UI_FILES,
+        SOURCE_DIGEST_RE,
+        bundle_cache_bust_digest,
+    )
 except ImportError:  # pragma: no cover - direct script execution
-    from verify_frontend_package import REQUIRED_UI_FILES, SOURCE_DIGEST_RE, bundle_cache_bust_digest
+    from verify_frontend_package import (
+        REQUIRED_RUNTIME_SOURCE_FILES,
+        REQUIRED_UI_FILES,
+        SOURCE_DIGEST_RE,
+        bundle_cache_bust_digest,
+    )
 
 
 REQUIRED_RUNTIME_FILES = (
     "app_update_config.json",
-    "scripts/render_hwp_with_rhwp_core.mjs",
-    "assets/app_icon.png",
+    *REQUIRED_RUNTIME_SOURCE_FILES,
 )
 
 FORBIDDEN_PACKAGED_FRONTEND_FILES = (

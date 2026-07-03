@@ -20,6 +20,11 @@ REQUIRED_UI_FILES = (
     "ui_prototype/vendor/react-dom.production.min.js",
 )
 
+REQUIRED_RUNTIME_SOURCE_FILES = (
+    "scripts/render_hwp_with_rhwp_core.mjs",
+    "assets/app_icon.png",
+)
+
 FORBIDDEN_FRONTEND_FILES = (
     "ui_prototype/app.js",
     "ui_prototype/prototype_data.js",
@@ -83,6 +88,9 @@ def collect_errors(project_root: Path) -> list[str]:
     for rel_path in REQUIRED_UI_FILES:
         if not (root / rel_path).is_file():
             errors.append(f"missing required frontend asset: {rel_path}")
+    for rel_path in REQUIRED_RUNTIME_SOURCE_FILES:
+        if not (root / rel_path).is_file():
+            errors.append(f"missing required runtime asset: {rel_path}")
 
     for rel_path in FORBIDDEN_FRONTEND_FILES:
         if (root / rel_path).exists():
@@ -136,6 +144,9 @@ def collect_errors(project_root: Path) -> list[str]:
         for rel_path in REQUIRED_UI_FILES:
             if not _contains_path(manifest, rel_path):
                 errors.append(f"{manifest_name} does not include {rel_path}")
+        for rel_path in REQUIRED_RUNTIME_SOURCE_FILES:
+            if not _contains_path(manifest, rel_path):
+                errors.append(f"{manifest_name} does not include runtime asset {rel_path}")
         for rel_path in FORBIDDEN_FRONTEND_FILES:
             if _contains_path(manifest, rel_path):
                 errors.append(f"{manifest_name} still references legacy artifact {rel_path}")

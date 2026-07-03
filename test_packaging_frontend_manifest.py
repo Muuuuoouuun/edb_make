@@ -5,7 +5,12 @@ import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from scripts.verify_frontend_package import REQUIRED_UI_FILES, collect_errors, frontend_bundle_source_digest
+from scripts.verify_frontend_package import (
+    REQUIRED_RUNTIME_SOURCE_FILES,
+    REQUIRED_UI_FILES,
+    collect_errors,
+    frontend_bundle_source_digest,
+)
 from scripts.verify_packaged_app import collect_package_errors
 
 
@@ -18,13 +23,17 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         vendor_root = ui_root / "vendor"
         scripts_root = project_root / "scripts"
         build_vendor_root = scripts_root / "vendor"
+        assets_root = project_root / "assets"
         vendor_root.mkdir(parents=True)
         build_vendor_root.mkdir(parents=True)
+        assets_root.mkdir(parents=True)
         (ui_root / "art.jsx").write_text("const Art = () => null;\n", encoding="utf-8")
         (ui_root / "tweaks-panel.jsx").write_text("const Tweaks = () => null;\n", encoding="utf-8")
         (ui_root / "app.jsx").write_text("const App = () => null;\n", encoding="utf-8")
         (scripts_root / "build_frontend_bundle.mjs").write_text("console.log('build');\n", encoding="utf-8")
+        (scripts_root / "render_hwp_with_rhwp_core.mjs").write_text("console.log('render');\n", encoding="utf-8")
         (build_vendor_root / "babel.min.js").write_text("// babel build tool\n", encoding="utf-8")
+        (assets_root / "app_icon.png").write_bytes(b"png")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
         (ui_root / "reorder.js").write_text("// reorder\n", encoding="utf-8")
         (ui_root / "review_filters.js").write_text("// filters\n", encoding="utf-8")
@@ -46,7 +55,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{digest}"></script>\n',
             encoding="utf-8",
         )
-        manifest_text = "\n".join(REQUIRED_UI_FILES) + "\n"
+        manifest_text = "\n".join((*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_SOURCE_FILES)) + "\n"
         for manifest_name in ("ClassInEDBMVP.spec", "package_macos_app.sh", "package_mvp.ps1"):
             (project_root / manifest_name).write_text(manifest_text, encoding="utf-8")
 
@@ -189,6 +198,29 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             errors = collect_errors(project_root)
 
         self.assertTrue(any("ui_prototype/vendor/babel.min.js" in error for error in errors))
+
+    def test_frontend_package_rejects_missing_runtime_source_asset(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            project_root = Path(raw_tmp)
+            self._write_frontend_project(project_root)
+            self.assertEqual([], collect_errors(project_root))
+
+            (project_root / "scripts" / "render_hwp_with_rhwp_core.mjs").unlink()
+            errors = collect_errors(project_root)
+
+        self.assertTrue(any("missing required runtime asset" in error for error in errors))
+
+    def test_frontend_package_rejects_manifest_missing_runtime_source_asset(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            project_root = Path(raw_tmp)
+            self._write_frontend_project(project_root)
+            self.assertEqual([], collect_errors(project_root))
+
+            manifest = "\n".join(REQUIRED_UI_FILES) + "\n"
+            (project_root / "ClassInEDBMVP.spec").write_text(manifest, encoding="utf-8")
+            errors = collect_errors(project_root)
+
+        self.assertTrue(any("ClassInEDBMVP.spec does not include runtime asset" in error for error in errors))
 
     def test_packaged_app_layout_accepts_current_runtime_assets(self) -> None:
         with TemporaryDirectory() as raw_tmp:
