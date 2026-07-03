@@ -111,33 +111,6 @@ function Get-EDBJsonStringProperty {
     return ""
 }
 
-function Set-EDBUpdateConfigAliasValue {
-    param(
-        [Parameter(Mandatory = $true)] [System.Collections.IDictionary]$UpdateConfig,
-        [Parameter(Mandatory = $true)] [object]$Object,
-        [Parameter(Mandatory = $true)] [string]$CanonicalName,
-        [Parameter(Mandatory = $true)] [string[]]$Aliases
-    )
-
-    $Values = @{}
-    foreach ($Name in $Aliases) {
-        if ($Object.PSObject.Properties[$Name]) {
-            $Value = ([string]$Object.PSObject.Properties[$Name].Value).Trim()
-            if ($Value) {
-                $Values[$Name] = $Value
-            }
-        }
-    }
-    $UniqueValues = @($Values.Values | Select-Object -Unique)
-    if ($UniqueValues.Count -gt 1) {
-        $Details = ($Values.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)='$($_.Value)'" }) -join ", "
-        throw "app_update_config.json $CanonicalName aliases conflict: $Details"
-    }
-    if ($UniqueValues.Count -eq 1) {
-        $UpdateConfig[$CanonicalName] = $UniqueValues[0]
-    }
-}
-
 if ($Clean -and (Test-Path $ResolvedOutputDir)) {
     Remove-Item -Recurse -Force $ResolvedOutputDir
 }
@@ -155,51 +128,37 @@ New-Item -ItemType Directory -Force -Path $SpecDir | Out-Null
 $FrontendBundle = Join-Path $ProjectRoot "ui_prototype\app.bundle.js"
 $BuildUpdateConfig = Join-Path $SpecDir "app_update_config.json"
 $ProjectUpdateConfig = Join-Path $ProjectRoot "app_update_config.json"
-$UpdateConfig = [ordered]@{
-    appId = "ClassInEDBMVP"
-    appName = $AppName
-    version = "0.1.0"
-    updateFeedUrl = ""
-    downloadUrl = ""
-    releaseNotesUrl = ""
+$UpdateConfigScript = Join-Path $ProjectRoot "scripts\build_app_update_config.py"
+$UpdateConfigEnv = @{
+    EDB_PACKAGE_APP_ID = $AppId
+    EDB_PACKAGE_APP_NAME = $AppName
+    EDB_PACKAGE_APP_VERSION = $Version
+    EDB_PACKAGE_UPDATE_FEED_URL = $UpdateFeedUrl
+    EDB_PACKAGE_DOWNLOAD_URL = $DownloadUrl
+    EDB_PACKAGE_RELEASE_NOTES_URL = $ReleaseNotesUrl
 }
-if (Test-Path $ProjectUpdateConfig) {
-    try {
-        $ExistingUpdateConfig = Get-Content -Raw -Path $ProjectUpdateConfig | ConvertFrom-Json
-        $AliasGroups = @(
-            [pscustomobject]@{ CanonicalName = "appId"; Aliases = @("appId", "app_id") },
-            [pscustomobject]@{ CanonicalName = "appName"; Aliases = @("appName", "app_name") },
-            [pscustomobject]@{ CanonicalName = "updateFeedUrl"; Aliases = @("updateFeedUrl", "update_feed_url") },
-            [pscustomobject]@{ CanonicalName = "downloadUrl"; Aliases = @("downloadUrl", "download_url") },
-            [pscustomobject]@{ CanonicalName = "releaseNotesUrl"; Aliases = @("releaseNotesUrl", "release_notes_url") }
-        )
-        foreach ($AliasGroup in $AliasGroups) {
-            Set-EDBUpdateConfigAliasValue -UpdateConfig $UpdateConfig -Object $ExistingUpdateConfig -CanonicalName $AliasGroup.CanonicalName -Aliases $AliasGroup.Aliases
-        }
-        $ExistingVersion = Get-EDBJsonStringProperty -Object $ExistingUpdateConfig -Names @("version")
-        if ($ExistingVersion) {
-            $UpdateConfig["version"] = $ExistingVersion
-        }
-    } catch {
-        if ($_.Exception.Message -like "app_update_config.json * aliases conflict:*") {
-            throw
-        }
-        Write-Warning "Could not read app_update_config.json; using defaults."
+$PreviousUpdateConfigEnv = @{}
+foreach ($Name in $UpdateConfigEnv.Keys) {
+    $PreviousUpdateConfigEnv[$Name] = [Environment]::GetEnvironmentVariable($Name, "Process")
+    [Environment]::SetEnvironmentVariable($Name, $UpdateConfigEnv[$Name], "Process")
+}
+try {
+    & $PythonExe $UpdateConfigScript $ProjectUpdateConfig $BuildUpdateConfig
+    if ($LASTEXITCODE -ne 0) {
+        throw "app_update_config generation failed."
+    }
+} finally {
+    foreach ($Name in $PreviousUpdateConfigEnv.Keys) {
+        [Environment]::SetEnvironmentVariable($Name, $PreviousUpdateConfigEnv[$Name], "Process")
     }
 }
-if ($AppId) { $UpdateConfig["appId"] = $AppId }
-$UpdateConfig["appName"] = $AppName
-if ($Version) { $UpdateConfig["version"] = $Version }
-if ($UpdateFeedUrl) { $UpdateConfig["updateFeedUrl"] = $UpdateFeedUrl }
-if ($DownloadUrl) { $UpdateConfig["downloadUrl"] = $DownloadUrl }
-if ($ReleaseNotesUrl) { $UpdateConfig["releaseNotesUrl"] = $ReleaseNotesUrl }
-$UpdateConfig | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $BuildUpdateConfig
-$EffectiveAppId = [string]$UpdateConfig["appId"]
-$EffectiveAppName = [string]$UpdateConfig["appName"]
-$EffectiveAppVersion = [string]$UpdateConfig["version"]
-$EffectiveUpdateFeedUrl = [string]$UpdateConfig["updateFeedUrl"]
-$EffectiveDownloadUrl = [string]$UpdateConfig["downloadUrl"]
-$EffectiveReleaseNotesUrl = [string]$UpdateConfig["releaseNotesUrl"]
+$UpdateConfig = Get-Content -Raw -Path $BuildUpdateConfig | ConvertFrom-Json
+$EffectiveAppId = Get-EDBJsonStringProperty -Object $UpdateConfig -Names @("appId")
+$EffectiveAppName = Get-EDBJsonStringProperty -Object $UpdateConfig -Names @("appName")
+$EffectiveAppVersion = Get-EDBJsonStringProperty -Object $UpdateConfig -Names @("version")
+$EffectiveUpdateFeedUrl = Get-EDBJsonStringProperty -Object $UpdateConfig -Names @("updateFeedUrl")
+$EffectiveDownloadUrl = Get-EDBJsonStringProperty -Object $UpdateConfig -Names @("downloadUrl")
+$EffectiveReleaseNotesUrl = Get-EDBJsonStringProperty -Object $UpdateConfig -Names @("releaseNotesUrl")
 
 function Invoke-EDBPackagedAppVerifier {
     param([Parameter(Mandatory = $true)] [string]$PackageRoot)

@@ -324,75 +324,7 @@ EDB_PACKAGE_APP_VERSION="$APP_VERSION" \
 EDB_PACKAGE_UPDATE_FEED_URL="$UPDATE_FEED_URL" \
 EDB_PACKAGE_DOWNLOAD_URL="$DOWNLOAD_URL" \
 EDB_PACKAGE_RELEASE_NOTES_URL="$RELEASE_NOTES_URL" \
-"$PYTHON_EXE" - "$PROJECT_ROOT/app_update_config.json" "$APP_UPDATE_CONFIG" <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
-
-source = Path(sys.argv[1])
-target = Path(sys.argv[2])
-APP_UPDATE_CONFIG_ALIASES = (
-    ("appId", ("appId", "app_id")),
-    ("appName", ("appName", "app_name")),
-    ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
-    ("downloadUrl", ("downloadUrl", "download_url")),
-    ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
-)
-config = {
-    "appId": "ClassInEDBMVP",
-    "appName": "ClassInEDBMVP",
-    "version": "0.1.0",
-    "updateFeedUrl": "",
-    "downloadUrl": "",
-    "releaseNotesUrl": "",
-}
-def first_nonempty(payload, names):
-    for name in names:
-        value = str(payload.get(name) or "").strip()
-        if value:
-            return value
-    return ""
-
-def normalize_update_config(payload):
-    normalized = {key: value for key, value in payload.items() if value is not None}
-    for canonical, names in APP_UPDATE_CONFIG_ALIASES:
-        values = {
-            name: str(payload.get(name) or "").strip()
-            for name in names
-            if str(payload.get(name) or "").strip()
-        }
-        if len(set(values.values())) > 1:
-            details = ", ".join(f"{name}={value!r}" for name, value in values.items())
-            raise ValueError(f"app_update_config.json {canonical} aliases conflict: {details}")
-        value = first_nonempty(payload, names)
-        for name in names:
-            if name != canonical:
-                normalized.pop(name, None)
-        if value:
-            normalized[canonical] = value
-    return normalized
-
-if source.exists():
-    try:
-        existing = json.loads(source.read_text(encoding="utf-8"))
-        if isinstance(existing, dict):
-            config.update(normalize_update_config(existing))
-    except json.JSONDecodeError:
-        pass
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-overrides = {
-    "appId": os.environ.get("EDB_PACKAGE_APP_ID", "").strip(),
-    "appName": os.environ.get("EDB_PACKAGE_APP_NAME", "").strip(),
-    "version": os.environ.get("EDB_PACKAGE_APP_VERSION", "").strip(),
-    "updateFeedUrl": os.environ.get("EDB_PACKAGE_UPDATE_FEED_URL", "").strip(),
-    "downloadUrl": os.environ.get("EDB_PACKAGE_DOWNLOAD_URL", "").strip(),
-    "releaseNotesUrl": os.environ.get("EDB_PACKAGE_RELEASE_NOTES_URL", "").strip(),
-}
-config.update({key: value for key, value in overrides.items() if value})
-target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-PY
+"$PYTHON_EXE" "$PROJECT_ROOT/scripts/build_app_update_config.py" "$PROJECT_ROOT/app_update_config.json" "$APP_UPDATE_CONFIG"
 
 EFFECTIVE_APP_ID="$("$PYTHON_EXE" - "$APP_UPDATE_CONFIG" <<'PY'
 import json
