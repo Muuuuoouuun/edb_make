@@ -280,6 +280,7 @@ python3 scripts/build_update_feed.py \
 ```
 
 Upload `dist/update.json` to the URL used by `--update-feed-url`, and keep `dist/manifest.json` plus `dist/checksums.txt` with the same release assets.
+When a platform artifact file is supplied, its matching `--macos-url` or `--windows-url` is required and must be HTTPS, except for loopback HTTP used in local testing. This keeps installed apps from seeing an available update with no usable download action.
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 The feed builder also rejects known platform artifact mismatches, such as a `.exe` passed as a macOS DMG or the same local file reused for multiple platforms.
 

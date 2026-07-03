@@ -169,6 +169,84 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("dmg artifact must use expected file extension (.dmg)", result.stderr)
 
+    def test_rejects_artifact_without_download_url(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("macos artifact requires a download URL", result.stderr)
+
+    def test_rejects_non_https_download_url(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "http://example.test/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(tmpdir / "update.json"),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("macos download URL must use https or loopback http", result.stderr)
+
+    def test_allows_loopback_http_download_url_for_local_testing(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            dmg = tmpdir / "ClassInEDBMVP-macOS.dmg"
+            dmg.write_bytes(b"mac artifact")
+            output = tmpdir / "update.json"
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version",
+                    "0.1.1",
+                    "--macos-url",
+                    "http://127.0.0.1:8000/ClassInEDBMVP-macOS.dmg",
+                    "--macos-file",
+                    str(dmg),
+                    "--output",
+                    str(output),
+                ],
+                cwd=PROJECT_ROOT,
+                check=True,
+            )
+
+            feed = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual("http://127.0.0.1:8000/ClassInEDBMVP-macOS.dmg", feed["platforms"]["macos"]["downloadUrl"])
+
     def test_rejects_reusing_same_artifact_for_multiple_platforms(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

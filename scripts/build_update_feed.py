@@ -9,6 +9,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -72,6 +73,23 @@ def validate_version(version: str) -> str:
     return normalized
 
 
+def is_loopback_hostname(hostname: str | None) -> bool:
+    host = (hostname or "").strip().lower()
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
+def validate_update_url(label: str, value: str) -> str:
+    url = str(value or "").strip()
+    if not url:
+        raise ValueError(f"{label} must not be empty")
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        raise ValueError(f"{label} must be an absolute URL")
+    if parsed.scheme == "https" or (parsed.scheme == "http" and is_loopback_hostname(parsed.hostname)):
+        return url
+    raise ValueError(f"{label} must use https or loopback http")
+
+
 def validate_distinct_artifact_files(platform_paths: dict[str, str]) -> None:
     seen: dict[Path, str] = {}
     for platform, raw_path in platform_paths.items():
@@ -98,18 +116,24 @@ def platform_payload(
 ) -> dict[str, Any] | None:
     if not download_url and not artifact_path:
         return None
+    if artifact_path and not download_url:
+        raise ValueError(f"{platform} artifact requires a download URL")
+    safe_download_url = validate_update_url(f"{platform} download URL", download_url) if download_url else ""
+    safe_release_notes_url = (
+        validate_update_url("release notes URL", release_notes_url) if release_notes_url else ""
+    )
     payload: dict[str, Any] = {
         "version": version,
         "artifactType": artifact_type,
         "arch": arch,
     }
-    if download_url:
-        payload["downloadUrl"] = download_url
-    if release_notes_url:
-        payload["releaseNotesUrl"] = release_notes_url
+    if safe_download_url:
+        payload["downloadUrl"] = safe_download_url
+    if safe_release_notes_url:
+        payload["releaseNotesUrl"] = safe_release_notes_url
     payload.update(artifact_metadata(artifact_path, artifact_type=artifact_type))
-    if "fileName" not in payload and download_url:
-        payload["fileName"] = Path(download_url.rstrip("/")).name or f"{platform}-{version}"
+    if "fileName" not in payload and safe_download_url:
+        payload["fileName"] = Path(safe_download_url.rstrip("/")).name or f"{platform}-{version}"
     return payload
 
 
