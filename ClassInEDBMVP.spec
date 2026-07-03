@@ -17,6 +17,10 @@ def project_path(rel_path: str) -> Path:
     return PROJECT_ROOT / rel_path
 
 
+def pyinstaller_work_path() -> Path:
+    return Path(globals().get("workpath", project_path("build/ClassInEDBMVP"))).resolve()
+
+
 def verify_frontend_package() -> None:
     errors = collect_errors(PROJECT_ROOT)
     if errors:
@@ -58,7 +62,7 @@ def build_update_config() -> tuple[str, dict]:
         "releaseNotesUrl": os.environ.get("EDB_PACKAGE_RELEASE_NOTES_URL", os.environ.get("EDB_RELEASE_NOTES_URL", "")).strip(),
     }
     config.update({key: value for key, value in env_overrides.items() if value})
-    target = project_path("build/app_update_config.json")
+    target = pyinstaller_work_path() / "app_update_config.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return str(target), config
