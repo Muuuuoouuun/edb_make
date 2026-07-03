@@ -356,6 +356,17 @@ if [[ -f "$PLIST_PATH" && -x "/usr/libexec/PlistBuddy" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" >/dev/null 2>&1 || \
     /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH" >/dev/null
 fi
+
+PACKAGED_APP_ROOT=""
+if [[ -d "$APP_PATH" ]]; then
+  PACKAGED_APP_ROOT="$APP_PATH"
+elif [[ -d "$RESOLVED_OUTPUT_DIR/$APP_NAME" ]]; then
+  PACKAGED_APP_ROOT="$RESOLVED_OUTPUT_DIR/$APP_NAME"
+fi
+if [[ -n "$PACKAGED_APP_ROOT" ]]; then
+  "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "$PACKAGED_APP_ROOT"
+fi
+
 notarytool_submit() {
   local artifact_path="$1"
   local args=(notarytool submit "$artifact_path" --wait)

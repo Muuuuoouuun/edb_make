@@ -155,6 +155,9 @@ if ($HasPyInstaller) {
     & $PythonExe -m PyInstaller @PyInstallerArgs
 
     $PackageRoot = if ($OneFile) { Join-Path $ResolvedOutputDir "$AppName.exe" } else { Join-Path $ResolvedOutputDir $AppName }
+    if (-not $OneFile) {
+        & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot
+    }
     Write-Host "PyInstaller packaging complete."
 } else {
     if ($RequirePyInstaller) {
@@ -205,6 +208,7 @@ if ($HasPyInstaller) {
         }
     }
 
+    & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot
     Write-Warning "PyInstaller is not installed. Created source-package fallback instead."
 }
 
