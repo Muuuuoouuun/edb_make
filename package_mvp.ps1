@@ -80,6 +80,8 @@ if ($UpdateFeedUrl) { $UpdateConfig["updateFeedUrl"] = $UpdateFeedUrl }
 if ($DownloadUrl) { $UpdateConfig["downloadUrl"] = $DownloadUrl }
 if ($ReleaseNotesUrl) { $UpdateConfig["releaseNotesUrl"] = $ReleaseNotesUrl }
 $UpdateConfig | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $BuildUpdateConfig
+$EffectiveAppName = [string]$UpdateConfig["appName"]
+$EffectiveAppVersion = [string]$UpdateConfig["version"]
 
 if (-not $SkipFrontendBuild) {
     $NodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -156,7 +158,9 @@ if ($HasPyInstaller) {
 
     $PackageRoot = if ($OneFile) { Join-Path $ResolvedOutputDir "$AppName.exe" } else { Join-Path $ResolvedOutputDir $AppName }
     if (-not $OneFile) {
-        & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot
+        & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
+            --expected-app-name $EffectiveAppName `
+            --expected-version $EffectiveAppVersion
     }
     Write-Host "PyInstaller packaging complete."
 } else {
@@ -168,7 +172,6 @@ if ($HasPyInstaller) {
 
     $ItemsToCopy = @(
         "app_server.py",
-        "app_update_config.json",
         "build_mvp_export.py",
         "build_structured_page_json.py",
         "preprocess.py",
@@ -207,8 +210,11 @@ if ($HasPyInstaller) {
             Copy-Item -Recurse -Force $SourcePath $DestinationPath
         }
     }
+    Copy-Item -Force $BuildUpdateConfig (Join-Path $PackageRoot "app_update_config.json")
 
-    & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot
+    & $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot `
+        --expected-app-name $EffectiveAppName `
+        --expected-version $EffectiveAppVersion
     Write-Warning "PyInstaller is not installed. Created source-package fallback instead."
 }
 

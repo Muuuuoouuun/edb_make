@@ -56,7 +56,10 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         scripts_root = resource_root / "scripts"
         vendor_root.mkdir(parents=True)
         scripts_root.mkdir(parents=True)
-        (resource_root / "app_update_config.json").write_text('{"version":"test"}\n', encoding="utf-8")
+        (resource_root / "app_update_config.json").write_text(
+            '{"appName":"ClassInEDBMVP","version":"test"}\n',
+            encoding="utf-8",
+        )
         (scripts_root / "render_hwp_with_rhwp_core.mjs").write_text("console.log('ok');\n", encoding="utf-8")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
         (ui_root / "board.html").write_text(
@@ -184,6 +187,19 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("source digest" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_unexpected_update_metadata(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            self._write_packaged_runtime(package_root)
+
+            errors = collect_package_errors(
+                package_root,
+                expected_app_name="ClassInEDBMVP",
+                expected_version="0.2.0",
+            )
+
+        self.assertTrue(any("version mismatch" in error for error in errors))
+
     def test_packaged_app_layout_rejects_runtime_session_artifacts(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -276,6 +292,24 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn('"scripts\\render_hwp_with_rhwp_core.mjs"', source)
         self.assertNotRegex(source, r'(?m)^\s+"scripts",\s*$')
+
+    def test_windows_source_package_fallback_uses_generated_update_config(self) -> None:
+        source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertNotRegex(source, r'(?m)^\s+"app_update_config\.json",\s*$')
+        self.assertIn('Copy-Item -Force $BuildUpdateConfig (Join-Path $PackageRoot "app_update_config.json")', source)
+
+    def test_packaging_scripts_verify_expected_update_metadata(self) -> None:
+        shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn('--expected-app-name "$APP_NAME"', shell_source)
+        self.assertIn('--expected-version "$EFFECTIVE_APP_VERSION"', shell_source)
+
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn("--expected-app-name $EffectiveAppName", ps_source)
+        self.assertIn("--expected-version $EffectiveAppVersion", ps_source)
+
+        installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('"--expected-app-name"', installer_source)
+        self.assertIn('"--expected-version"', installer_source)
 
     def test_windows_installer_verifies_existing_app_before_installer_build(self) -> None:
         source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")

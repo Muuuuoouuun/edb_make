@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -60,6 +61,10 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _read_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def _resource_root_candidates(package_root: Path) -> list[Path]:
     explicit_candidates = (
         package_root,
@@ -93,7 +98,12 @@ def _resource_root_candidates(package_root: Path) -> list[Path]:
     return candidates
 
 
-def collect_package_errors(package_root: Path) -> list[str]:
+def collect_package_errors(
+    package_root: Path,
+    *,
+    expected_app_name: str = "",
+    expected_version: str = "",
+) -> list[str]:
     root = package_root.resolve()
     errors: list[str] = []
     if not root.exists():
@@ -112,6 +122,33 @@ def collect_package_errors(package_root: Path) -> list[str]:
     for rel_path in (*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_FILES):
         if not (resource_root / rel_path).is_file():
             errors.append(f"missing packaged runtime file: {rel_path}")
+
+    update_config_path = resource_root / "app_update_config.json"
+    if update_config_path.is_file():
+        try:
+            update_config = _read_json(update_config_path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"packaged app_update_config.json is not valid JSON: {exc}")
+        else:
+            if not isinstance(update_config, dict):
+                errors.append("packaged app_update_config.json must contain a JSON object")
+            else:
+                app_name = str(update_config.get("appName") or "").strip()
+                version = str(update_config.get("version") or "").strip()
+                if not app_name:
+                    errors.append("packaged app_update_config.json is missing appName")
+                if not version:
+                    errors.append("packaged app_update_config.json is missing version")
+                if expected_app_name and app_name != expected_app_name:
+                    errors.append(
+                        "packaged app_update_config.json appName mismatch: "
+                        f"expected {expected_app_name!r}, found {app_name!r}"
+                    )
+                if expected_version and version != expected_version:
+                    errors.append(
+                        "packaged app_update_config.json version mismatch: "
+                        f"expected {expected_version!r}, found {version!r}"
+                    )
 
     for rel_path in FORBIDDEN_PACKAGED_FRONTEND_FILES:
         if (resource_root / rel_path).exists():
@@ -158,9 +195,15 @@ def collect_package_errors(package_root: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify a built app package layout.")
     parser.add_argument("package_root", type=Path)
+    parser.add_argument("--expected-app-name", default="", help="Expected appName in packaged update metadata")
+    parser.add_argument("--expected-version", default="", help="Expected version in packaged update metadata")
     args = parser.parse_args(argv)
 
-    errors = collect_package_errors(args.package_root)
+    errors = collect_package_errors(
+        args.package_root,
+        expected_app_name=args.expected_app_name,
+        expected_version=args.expected_version,
+    )
     if errors:
         for error in errors:
             print(f"[packaged-app] ERROR: {error}", file=sys.stderr)

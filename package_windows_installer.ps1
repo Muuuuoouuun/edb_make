@@ -109,7 +109,16 @@ if (-not (Test-Path $PackageExe)) {
     throw "PyInstaller app output was not found: $PackageExe. Build the app first or remove -SkipAppBuild."
 }
 
-& $PythonExe (Join-Path $ProjectRoot "scripts\verify_packaged_app.py") $PackageRoot
+$VerifierArgs = @(
+    (Join-Path $ProjectRoot "scripts\verify_packaged_app.py"),
+    $PackageRoot,
+    "--expected-app-name",
+    $AppName
+)
+if ($Version) {
+    $VerifierArgs += @("--expected-version", $Version)
+}
+& $PythonExe @VerifierArgs
 
 if ($Sign -and $SkipAppBuild) {
     Invoke-EDBWindowsPackageSigning `
