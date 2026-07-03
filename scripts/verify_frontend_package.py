@@ -43,6 +43,7 @@ FRONTEND_BUNDLE_SOURCE_FILES = (
     "scripts/vendor/babel.min.js",
 )
 SOURCE_DIGEST_RE = re.compile(r"Source SHA256:\s*([0-9a-f]{64})")
+BUNDLE_CACHE_BUST_RE = re.compile(r"^app\.bundle\.js\?v=frontend-bundle-([0-9a-f]{64})$")
 
 
 def _read(path: Path) -> str:
@@ -67,9 +68,17 @@ def frontend_bundle_source_digest(project_root: Path) -> str | None:
     return digest.hexdigest()
 
 
+def bundle_cache_bust_digest(script_src: str) -> str | None:
+    match = BUNDLE_CACHE_BUST_RE.fullmatch(script_src)
+    if match is None:
+        return None
+    return match.group(1)
+
+
 def collect_errors(project_root: Path) -> list[str]:
     root = project_root.resolve()
     errors: list[str] = []
+    expected_digest = frontend_bundle_source_digest(root)
 
     for rel_path in REQUIRED_UI_FILES:
         if not (root / rel_path).is_file():
@@ -86,6 +95,10 @@ def collect_errors(project_root: Path) -> list[str]:
         bundle_srcs = [src for src in script_srcs if src.startswith("app.bundle.js?v=frontend-bundle-")]
         if len(bundle_srcs) != 1:
             errors.append("board.html must load exactly one cache-busted app.bundle.js")
+        elif (board_digest := bundle_cache_bust_digest(bundle_srcs[0])) is None:
+            errors.append("board.html app.bundle.js cache bust must use the 64-character source digest")
+        elif expected_digest is not None and board_digest != expected_digest:
+            errors.append("board.html app.bundle.js cache bust is stale; rebuild with scripts/build_frontend_bundle.mjs")
         forbidden_tokens = (
             "app.js?v=",
             "prototype_data.js",
@@ -106,7 +119,6 @@ def collect_errors(project_root: Path) -> list[str]:
             errors.append("app.bundle.js is missing the generated bundle banner")
         if "/* app.jsx */" not in bundle:
             errors.append("app.bundle.js does not include the app.jsx section")
-        expected_digest = frontend_bundle_source_digest(root)
         digest_match = SOURCE_DIGEST_RE.search(bundle)
         if expected_digest is None:
             errors.append("could not calculate app.bundle.js source digest because a bundle input is missing")
