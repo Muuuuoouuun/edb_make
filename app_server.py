@@ -516,8 +516,31 @@ def _copy_update_fields(target: dict[str, Any], source: dict[str, Any], field_na
             target[field_name] = value
 
 
+def _update_source_text(source: dict[str, Any], *field_names: str) -> str:
+    return _first_nonempty(*(source.get(field_name) for field_name in field_names))
+
+
+def _update_source_value(source: dict[str, Any], *field_names: str) -> Any:
+    for field_name in field_names:
+        value = source.get(field_name)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _copy_update_field_alias(
+    target: dict[str, Any],
+    source: dict[str, Any],
+    output_name: str,
+    *field_names: str,
+) -> None:
+    value = _update_source_text(source, *field_names)
+    if value:
+        target[output_name] = value
+
+
 def _copy_update_url_field(target: dict[str, Any], source: dict[str, Any], output_name: str, *field_names: str) -> None:
-    value = _normalize_update_url(_first_nonempty(*(source.get(field_name) for field_name in field_names)))
+    value = _normalize_update_url(_update_source_text(source, *field_names))
     if value:
         target[output_name] = value
 
@@ -542,29 +565,34 @@ def _normalize_positive_int(value: Any) -> int | None:
 
 
 def _update_integrity_error(source: dict[str, Any]) -> str:
-    for field_name in ("manifestSha256", "sha256"):
-        raw_value = str(source.get(field_name) or "").strip()
+    integrity_fields = (
+        ("manifestSha256", ("manifestSha256", "manifest_sha256")),
+        ("sha256", ("sha256",)),
+    )
+    for field_name, aliases in integrity_fields:
+        raw_value = _update_source_text(source, *aliases)
         if raw_value and not _normalize_update_sha256(raw_value):
             return f"update feed has invalid {field_name}"
-    if source.get("sizeBytes") not in (None, "") and _normalize_positive_int(source.get("sizeBytes")) is None:
+    raw_size = _update_source_value(source, "sizeBytes", "size_bytes")
+    if raw_size not in (None, "") and _normalize_positive_int(raw_size) is None:
         return "update feed has invalid sizeBytes"
     return ""
 
 
 def _copy_update_integrity_fields(target: dict[str, Any], source: dict[str, Any]) -> None:
-    manifest_digest = _normalize_update_sha256(source.get("manifestSha256"))
+    manifest_digest = _normalize_update_sha256(_update_source_text(source, "manifestSha256", "manifest_sha256"))
     if manifest_digest:
         target["manifestSha256"] = manifest_digest
-    artifact_digest = _normalize_update_sha256(source.get("sha256"))
+    artifact_digest = _normalize_update_sha256(_update_source_text(source, "sha256"))
     if artifact_digest:
         target["sha256"] = artifact_digest
-    size_bytes = _normalize_positive_int(source.get("sizeBytes"))
+    size_bytes = _normalize_positive_int(_update_source_value(source, "sizeBytes", "size_bytes"))
     if size_bytes is not None:
         target["sizeBytes"] = size_bytes
 
 
 def _update_artifact_file_name(source: dict[str, Any]) -> str:
-    file_name = str(source.get("fileName") or "").strip()
+    file_name = _update_source_text(source, "fileName", "file_name")
     if file_name:
         return file_name
     return _update_download_url_file_name(source)
@@ -596,8 +624,8 @@ def _update_platform_artifact_suffixes(platform: str) -> tuple[str, ...]:
 
 def _update_artifact_metadata_error(source: dict[str, Any], platform_key: str) -> str:
     platform = str(platform_key or "").strip().lower()
-    artifact_type = str(source.get("artifactType") or "").strip().lower()
-    explicit_file_name = str(source.get("fileName") or "").strip()
+    artifact_type = _update_source_text(source, "artifactType", "artifact_type").lower()
+    explicit_file_name = _update_source_text(source, "fileName", "file_name")
     download_file_name = _update_download_url_file_name(source)
     file_name = _update_artifact_file_name(source)
     has_download_url = bool(_update_download_url_value(source))
@@ -754,12 +782,12 @@ def build_app_update_status() -> dict[str, Any]:
         status["latest"],
         selected,
         (
-            "fileName",
-            "artifactType",
             "arch",
             "publishedAt",
         ),
     )
+    _copy_update_field_alias(status["latest"], selected, "fileName", "fileName", "file_name")
+    _copy_update_field_alias(status["latest"], selected, "artifactType", "artifactType", "artifact_type")
     _copy_update_url_field(status["latest"], selected, "manifestUrl", "manifestUrl", "manifest_url")
     _copy_update_integrity_fields(status, selected)
     _copy_update_integrity_fields(status["latest"], selected)

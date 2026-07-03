@@ -142,6 +142,56 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(12345, status["latest"]["sizeBytes"])
             self.assertEqual("https://example.test/ClassInEDBMVP-macOS.dmg", status["downloadUrl"])
 
+    def test_update_status_reports_snake_case_artifact_metadata_from_feed(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "app_id": "ClassInEDBMVP",
+                "version": "0.1.1",
+                "manifest_url": "https://example.test/releases/0.1.2/manifest.json",
+                "manifest_sha256": VALID_MANIFEST_SHA256,
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "download_url": "https://example.test/ClassInEDBMVP-macOS.zip",
+                        "release_notes_url": "https://example.test/releases/0.1.2",
+                        "file_name": "ClassInEDBMVP-macOS.zip",
+                        "artifact_type": "zip",
+                        "size_bytes": "23456",
+                        "sha256": VALID_ARTIFACT_SHA256,
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertTrue(status["updateAvailable"])
+            self.assertEqual("update_available", status["channelStatus"])
+            self.assertEqual("https://example.test/releases/0.1.2/manifest.json", status["manifestUrl"])
+            self.assertEqual(VALID_MANIFEST_SHA256, status["manifestSha256"])
+            self.assertEqual("ClassInEDBMVP-macOS.zip", status["latest"]["fileName"])
+            self.assertEqual("zip", status["latest"]["artifactType"])
+            self.assertEqual(VALID_ARTIFACT_SHA256, status["latest"]["sha256"])
+            self.assertEqual(23456, status["latest"]["sizeBytes"])
+            self.assertEqual("https://example.test/ClassInEDBMVP-macOS.zip", status["downloadUrl"])
+
     def test_update_status_rejects_mismatched_feed_app_id(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -473,6 +523,48 @@ class TestStaticAssetCaching(unittest.TestCase):
                         "downloadUrl": "https://example.test/ClassInEDBMVP-macOS-old.dmg",
                         "fileName": "ClassInEDBMVP-macOS.dmg",
                         "artifactType": "dmg",
+                    }
+                },
+            }
+            with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
+                    patch.object(app_server, "BASE_DIR", tmpdir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }), \
+                    patch.object(app_server, "_fetch_update_feed", return_value=feed):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_feed", status["channelStatus"])
+            self.assertEqual(
+                "update feed fileName 'ClassInEDBMVP-macOS.dmg' "
+                "does not match download URL file name 'ClassInEDBMVP-macOS-old.dmg'",
+                status["error"],
+            )
+
+    def test_update_status_rejects_snake_case_file_name_download_url_mismatch(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            (tmpdir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "updateFeedUrl": "https://example.test/classin-edb/update.json",
+                }),
+                encoding="utf-8",
+            )
+            feed = {
+                "version": "0.1.2",
+                "platforms": {
+                    "macos": {
+                        "version": "0.1.2",
+                        "download_url": "https://example.test/ClassInEDBMVP-macOS-old.dmg",
+                        "file_name": "ClassInEDBMVP-macOS.dmg",
+                        "artifact_type": "dmg",
                     }
                 },
             }
