@@ -230,6 +230,14 @@ load_env_local()
 
 APP_NAME = "ClassIn EDB MVP Local App"
 APP_UPDATE_CONFIG_FILE = "app_update_config.json"
+APP_UPDATE_CONFIG_ALIAS_GROUPS = (
+    ("appId", ("appId", "app_id")),
+    ("appName", ("appName", "app_name")),
+    ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
+    ("downloadUrl", ("downloadUrl", "download_url")),
+    ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
+)
+APP_UPDATE_CONFIG_ERROR_KEY = "_configError"
 # Frontend uploads files as base64 inside JSON, so a 1 MB limit rejects many
 # normal PDFs/photos before parsing or AI recognition can start.
 MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
@@ -352,6 +360,33 @@ def _app_platform_key() -> str:
     return sys.platform
 
 
+def _app_update_config_alias_conflict_error(label: str, source: dict[str, Any], *field_names: str) -> str:
+    values = {
+        field_name: str(source.get(field_name) or "").strip()
+        for field_name in field_names
+        if str(source.get(field_name) or "").strip()
+    }
+    if len(set(values.values())) <= 1:
+        return ""
+    details = ", ".join(f"{field_name}={value!r}" for field_name, value in values.items())
+    return f"{APP_UPDATE_CONFIG_FILE} {label} aliases conflict: {details}"
+
+
+def _normalize_app_update_config_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    normalized = {key: value for key, value in payload.items() if value is not None}
+    normalized.pop(APP_UPDATE_CONFIG_ERROR_KEY, None)
+    for canonical_name, field_names in APP_UPDATE_CONFIG_ALIAS_GROUPS:
+        if alias_error := _app_update_config_alias_conflict_error(canonical_name, payload, *field_names):
+            return normalized, alias_error
+        value = _first_nonempty(*(payload.get(field_name) for field_name in field_names))
+        for field_name in field_names:
+            if field_name != canonical_name:
+                normalized.pop(field_name, None)
+        if value:
+            normalized[canonical_name] = value
+    return normalized, ""
+
+
 def load_app_update_config() -> dict[str, Any]:
     config: dict[str, Any] = {
         "appId": "ClassInEDBMVP",
@@ -370,7 +405,10 @@ def load_app_update_config() -> dict[str, Any]:
         if resolved in seen:
             continue
         seen.add(resolved)
-        config.update({k: v for k, v in _read_json_object(path).items() if v is not None})
+        payload, config_error = _normalize_app_update_config_payload(_read_json_object(path))
+        if config_error:
+            config[APP_UPDATE_CONFIG_ERROR_KEY] = config_error
+        config.update(payload)
     env_map = {
         "appId": "EDB_APP_ID",
         "version": "EDB_APP_VERSION",
@@ -718,6 +756,7 @@ def build_app_update_status() -> dict[str, Any]:
     config = load_app_update_config()
     platform_key = str(config.get("platform") or _app_platform_key())
     current_version = str(config.get("version") or "0.0.0")
+    config_error = str(config.get(APP_UPDATE_CONFIG_ERROR_KEY) or "").strip()
     feed_url = _normalize_update_url(config.get("updateFeedUrl") or config.get("update_feed_url"))
     fallback_download_url = _normalize_update_url(config.get("downloadUrl") or config.get("download_url"))
     fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
@@ -731,6 +770,7 @@ def build_app_update_status() -> dict[str, Any]:
         feed_url,
         fallback_download_url,
         fallback_notes_url,
+        config_error,
     )
     cached = _cached_update_status(cache_key)
     if cached is not None:
@@ -750,8 +790,16 @@ def build_app_update_status() -> dict[str, Any]:
         "latest": None,
     }
     if not feed_url:
+        if config_error:
+            status["channelStatus"] = "invalid_config"
+            status["error"] = config_error
+            return _remember_update_status(cache_key, status)
         if fallback_download_url:
             status["channelStatus"] = "manual_download"
+        return _remember_update_status(cache_key, status)
+    if config_error:
+        status["channelStatus"] = "invalid_config"
+        status["error"] = config_error
         return _remember_update_status(cache_key, status)
     try:
         feed = _fetch_update_feed(feed_url)

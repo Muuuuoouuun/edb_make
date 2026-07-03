@@ -32,6 +32,85 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("https://example.test/update.json", app_server._normalize_update_url("https://example.test/update.json"))
         self.assertEqual("http://127.0.0.1:9999/update.json", app_server._normalize_update_url("http://127.0.0.1:9999/update.json"))
 
+    def test_update_config_normalizes_local_snake_case_overrides(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            resource_dir = tmpdir / "resource"
+            base_dir = tmpdir / "base"
+            resource_dir.mkdir()
+            base_dir.mkdir()
+            (resource_dir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "downloadUrl": "https://example.test/old/ClassInEDBMVP-macOS.zip",
+                }),
+                encoding="utf-8",
+            )
+            (base_dir / "app_update_config.json").write_text(
+                json.dumps({
+                    "download_url": "https://example.test/new/ClassInEDBMVP-macOS.zip",
+                    "release_notes_url": "https://example.test/releases/new",
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.object(app_server, "RESOURCE_DIR", resource_dir), \
+                    patch.object(app_server, "BASE_DIR", base_dir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_ID": "",
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }):
+                config = app_server.load_app_update_config()
+                status = app_server.build_app_update_status()
+
+            self.assertEqual("https://example.test/new/ClassInEDBMVP-macOS.zip", config["downloadUrl"])
+            self.assertNotIn("download_url", config)
+            self.assertEqual("https://example.test/releases/new", config["releaseNotesUrl"])
+            self.assertEqual("manual_download", status["channelStatus"])
+            self.assertEqual("https://example.test/new/ClassInEDBMVP-macOS.zip", status["downloadUrl"])
+            self.assertEqual("https://example.test/releases/new", status["releaseNotesUrl"])
+
+    def test_update_status_rejects_conflicting_update_config_aliases(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            resource_dir = tmpdir / "resource"
+            resource_dir.mkdir()
+            (resource_dir / "app_update_config.json").write_text(
+                json.dumps({
+                    "appName": "ClassInEDBMVP",
+                    "version": "0.1.0",
+                    "downloadUrl": "https://example.test/old/ClassInEDBMVP-macOS.zip",
+                    "download_url": "https://example.test/new/ClassInEDBMVP-macOS.zip",
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.object(app_server, "RESOURCE_DIR", resource_dir), \
+                    patch.object(app_server, "BASE_DIR", resource_dir), \
+                    patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.dict(os.environ, {
+                        "EDB_APP_ID": "",
+                        "EDB_APP_VERSION": "",
+                        "EDB_UPDATE_FEED_URL": "",
+                        "EDB_DOWNLOAD_URL": "",
+                        "EDB_RELEASE_NOTES_URL": "",
+                    }):
+                status = app_server.build_app_update_status()
+
+            self.assertFalse(status["updateAvailable"])
+            self.assertEqual("invalid_config", status["channelStatus"])
+            self.assertEqual(
+                "app_update_config.json downloadUrl aliases conflict: "
+                "downloadUrl='https://example.test/old/ClassInEDBMVP-macOS.zip', "
+                "download_url='https://example.test/new/ClassInEDBMVP-macOS.zip'",
+                status["error"],
+            )
+
     def test_sanitize_edb_file_name_normalizes_requested_name(self):
         self.assertEqual("Lesson_1.edb", app_server.sanitize_edb_file_name("Lesson 1"))
         self.assertEqual("고1_샘플.edb", app_server.sanitize_edb_file_name("../고1 샘플.edb"))
