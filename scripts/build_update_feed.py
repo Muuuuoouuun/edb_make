@@ -46,16 +46,29 @@ def validate_artifact_type_filename(artifact: Path, artifact_type: str) -> None:
 
 
 def artifact_file_name_from_url(download_url: str) -> str:
-    return Path(urlparse(download_url).path).name
+    path = urlparse(download_url).path
+    if not path or path.endswith("/"):
+        return ""
+    return Path(path).name
 
 
 def validate_download_url_filename(platform: str, download_url: str, artifact_type: str) -> str:
     file_name = artifact_file_name_from_url(download_url)
-    if not file_name:
-        return ""
     expected_suffixes = ARTIFACT_TYPE_SUFFIXES.get(str(artifact_type or "").strip().lower())
+    if not file_name:
+        if expected_suffixes:
+            expected = ", ".join(expected_suffixes)
+            raise ValueError(
+                f"{platform} download URL file name must include {artifact_type} artifact extension ({expected})"
+            )
+        return ""
     suffix = Path(file_name).suffix.lower()
-    if suffix and expected_suffixes and suffix not in expected_suffixes:
+    if expected_suffixes and not suffix:
+        expected = ", ".join(expected_suffixes)
+        raise ValueError(
+            f"{platform} download URL file name must include {artifact_type} artifact extension ({expected})"
+        )
+    if expected_suffixes and suffix not in expected_suffixes:
         expected = ", ".join(expected_suffixes)
         raise ValueError(
             f"{platform} download URL file name does not match {artifact_type} artifact extension ({expected})"

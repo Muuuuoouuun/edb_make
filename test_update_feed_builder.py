@@ -222,6 +222,36 @@ class TestUpdateFeedBuilder(unittest.TestCase):
             result.stderr,
         )
 
+    def test_rejects_download_url_without_artifact_extension(self) -> None:
+        invalid_urls = (
+            "https://example.test/download",
+            "https://example.test/releases/0.1.1/",
+        )
+        for download_url in invalid_urls:
+            with self.subTest(download_url=download_url), TemporaryDirectory() as raw_tmp:
+                tmpdir = Path(raw_tmp)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                        "--version",
+                        "0.1.1",
+                        "--macos-url",
+                        download_url,
+                        "--output",
+                        str(tmpdir / "update.json"),
+                    ],
+                    cwd=PROJECT_ROOT,
+                    text=True,
+                    capture_output=True,
+                )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(
+                "macos download URL file name must include dmg artifact extension (.dmg)",
+                result.stderr,
+            )
+
     def test_derives_download_file_name_without_query_string(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
