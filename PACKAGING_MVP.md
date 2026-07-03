@@ -68,7 +68,7 @@ With in-app update metadata:
 .\package_windows_installer.ps1 -Clean -InstallPyInstaller `
   -Version 0.1.1 `
   -UpdateFeedUrl "https://example.com/classin-edb/update.json" `
-  -DownloadUrl "https://example.com/classin-edb/download"
+  -DownloadUrl "https://example.com/ClassInEDBMVP-Setup.exe"
 ```
 
 Expected installer:
@@ -152,7 +152,7 @@ With in-app update metadata:
   --version 0.1.1 \
   --bundle-id "local.classin.edbmvp" \
   --update-feed-url "https://example.com/classin-edb/update.json" \
-  --download-url "https://example.com/classin-edb/download"
+  --download-url "https://example.com/ClassInEDBMVP-macOS.dmg"
 ```
 
 If PyInstaller is already installed:

@@ -564,7 +564,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
     def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
-        self.assertIn('"scripts\\render_hwp_with_rhwp_core.mjs"', source)
+        for rel_path in (
+            "app_server.py",
+            "build_mvp_export.py",
+            "build_problem_board_edb.py",
+            "build_structured_page_json.py",
+            "image_reconstruction_backend.py",
+            "page_repair.py",
+            "pipeline_cache.py",
+            "pipeline_router.py",
+            "user_settings.py",
+            "scripts\\render_hwp_with_rhwp_core.mjs",
+        ):
+            with self.subTest(rel_path=rel_path):
+                self.assertIn(f'"{rel_path}"', source)
         self.assertNotRegex(source, r'(?m)^\s+"scripts",\s*$')
 
     def test_windows_source_package_fallback_copies_only_runtime_assets(self) -> None:
