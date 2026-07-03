@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from PIL import Image, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageOps, ImageStat
 
 from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
 
@@ -855,6 +855,152 @@ def _pdf_text_lines_in_region(
     return sorted(lines, key=lambda item: (item[0].top, item[0].left))
 
 
+def _mask_without_tall_vertical_rules(mask: Image.Image) -> Image.Image:
+    if mask.width <= 1 or mask.height <= 1:
+        return mask
+
+    column_projection = _column_dark_projection(mask)
+    threshold = max(60, int(mask.height * 0.65))
+    rule_runs = _find_active_runs(column_projection, threshold=threshold)
+    if not rule_runs:
+        return mask
+
+    max_rule_width = max(5, int(mask.width * 0.018))
+    cleaned = mask.copy()
+    draw = ImageDraw.Draw(cleaned)
+    changed = False
+    for run_left, run_right in rule_runs:
+        if run_right - run_left + 1 > max_rule_width:
+            continue
+        draw.rectangle((run_left, 0, run_right, mask.height), fill=0)
+        changed = True
+
+    return cleaned if changed else mask
+
+
+def _pdf_problem_ink_bottom(
+    image: Image.Image,
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+) -> tuple[float, bool]:
+    crop_box = (
+        max(0, int(left)),
+        max(0, int(top)),
+        min(image.width, int(right)),
+        min(image.height, int(bottom)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        return bottom, False
+
+    mask = _dark_mask(image.crop(crop_box), threshold=220)
+    mask = _mask_without_tall_vertical_rules(mask)
+    row_projection = _row_dark_projection(mask)
+    row_threshold = max(2, int(mask.width * 0.003))
+    runs = [
+        run
+        for run in _find_active_runs(row_projection, threshold=row_threshold)
+        if run[1] - run[0] + 1 >= 2
+    ]
+    if not runs:
+        return bottom, False
+
+    cluster_gap = max(80, int(float(image.height) * 0.04))
+    clusters: list[list[int]] = []
+    for run_top, run_bottom in runs:
+        if not clusters or run_top - clusters[-1][1] > cluster_gap:
+            clusters.append([run_top, run_bottom])
+        else:
+            clusters[-1][1] = max(clusters[-1][1], run_bottom)
+    if not clusters:
+        return bottom, False
+
+    selected_index = len(clusters) - 1
+    detached_gap = max(260.0, float(image.height) * 0.12)
+    lower_tail_start = float(crop_box[1]) + (float(crop_box[3] - crop_box[1]) * 0.45)
+    while selected_index > 0:
+        current = clusters[selected_index]
+        previous = clusters[selected_index - 1]
+        gap = float(current[0] - previous[1])
+        current_abs_top = float(crop_box[1] + current[0])
+        if gap <= detached_gap or current_abs_top < lower_tail_start:
+            break
+        selected_index -= 1
+
+    selected_cluster = clusters[selected_index]
+    padding = max(18.0, float(image.height) * 0.012)
+    trimmed_bottom = min(bottom, float(crop_box[1] + selected_cluster[1]) + padding)
+    if trimmed_bottom - top < 40.0:
+        return bottom, False
+    if bottom - trimmed_bottom < max(24.0, float(image.height) * 0.012):
+        return bottom, False
+    return trimmed_bottom, True
+
+
+def _pdf_choice_visual_tail_bottom(
+    image: Image.Image,
+    text_lines: list[dict[str, Any]],
+    *,
+    left: float,
+    right: float,
+    choice_bottom: float,
+    bottom: float,
+) -> float | None:
+    tail_start = choice_bottom + max(8.0, float(image.height) * 0.006)
+    crop_box = (
+        max(0, int(left)),
+        max(0, int(tail_start)),
+        min(image.width, int(right)),
+        min(image.height, int(bottom)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        return None
+
+    mask = _dark_mask(image.crop(crop_box), threshold=220)
+    tail_bbox = mask.getbbox()
+    if tail_bbox is None:
+        return None
+
+    tail_abs_top = float(crop_box[1] + tail_bbox[1])
+    tail_abs_bottom = float(crop_box[1] + tail_bbox[3])
+    tail_gap = tail_abs_top - choice_bottom
+    max_tail_gap = max(120.0, min(260.0, float(image.height) * 0.12))
+    if tail_gap > max_tail_gap:
+        return None
+
+    tail_width_ratio = float(tail_bbox[2] - tail_bbox[0]) / max(1.0, float(crop_box[2] - crop_box[0]))
+    tail_height = tail_abs_bottom - tail_abs_top
+    if tail_width_ratio < 0.16 or tail_height < max(42.0, float(image.height) * 0.025):
+        return None
+
+    tail_lines = _pdf_text_lines_in_region(
+        text_lines,
+        left=left,
+        right=right,
+        top=choice_bottom + 2.0,
+        bottom=bottom,
+    )
+    if tail_lines:
+        first_line_box = tail_lines[0][0]
+        column_width = max(1.0, right - left)
+        first_line_width_ratio = first_line_box.width / column_width
+        first_line_aligned_with_tail = abs(tail_abs_top - first_line_box.top) <= max(10.0, float(image.height) * 0.005)
+        if first_line_aligned_with_tail and first_line_width_ratio >= 0.28:
+            return None
+
+        text_span_top = min(line_box.top for line_box, _line in tail_lines)
+        text_span_bottom = max(line_box.bottom for line_box, _line in tail_lines)
+        max_text_width_ratio = max(line_box.width / column_width for line_box, _line in tail_lines)
+        text_span_height = max(1.0, text_span_bottom - text_span_top)
+        if max_text_width_ratio >= 0.24 and tail_height <= text_span_height * 1.6:
+            return None
+
+    padding = max(18.0, float(image.height) * 0.012)
+    return min(bottom, tail_abs_bottom + padding)
+
+
 def _trim_pdf_problem_bottom_to_last_choice(
     image: Image.Image,
     text_lines: list[dict[str, Any]],
@@ -863,7 +1009,7 @@ def _trim_pdf_problem_bottom_to_last_choice(
     right: float,
     top: float,
     bottom: float,
-) -> tuple[float, bool]:
+) -> tuple[float, bool, bool]:
     region_lines = _pdf_text_lines_in_region(
         text_lines,
         left=left,
@@ -872,7 +1018,7 @@ def _trim_pdf_problem_bottom_to_last_choice(
         bottom=bottom,
     )
     if not region_lines:
-        return bottom, False
+        return bottom, False, False
 
     choice_indexes = [
         index
@@ -880,7 +1026,7 @@ def _trim_pdf_problem_bottom_to_last_choice(
         if _text_contains_choice_marker(line.get("text"))
     ]
     if not choice_indexes:
-        return bottom, False
+        return bottom, False, False
 
     last_choice_index = choice_indexes[-1]
     last_choice_bottom = region_lines[last_choice_index][0].bottom
@@ -895,9 +1041,39 @@ def _trim_pdf_problem_bottom_to_last_choice(
 
     padding = max(18.0, float(image.height) * 0.012)
     trimmed_bottom = min(bottom, max(top + 40.0, last_choice_bottom + padding))
+    visual_tail_bottom = _pdf_choice_visual_tail_bottom(
+        image,
+        text_lines,
+        left=left,
+        right=right,
+        choice_bottom=last_choice_bottom,
+        bottom=bottom,
+    )
+    visual_tail_attached = False
+    if visual_tail_bottom is not None and visual_tail_bottom > trimmed_bottom:
+        trimmed_bottom = visual_tail_bottom
+        visual_tail_attached = True
+
     if bottom - trimmed_bottom < max(24.0, float(image.height) * 0.012):
-        return bottom, False
-    return trimmed_bottom, True
+        return bottom, False, False
+    return trimmed_bottom, True, visual_tail_attached
+
+
+def _trim_pdf_problem_bottom_to_ink(
+    image: Image.Image,
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+) -> tuple[float, bool]:
+    return _pdf_problem_ink_bottom(
+        image,
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+    )
 
 
 def _segment_pdf_problem_markers(
@@ -939,6 +1115,8 @@ def _segment_pdf_problem_markers(
     usable_text_lines = text_lines if isinstance(text_lines, list) else []
     blocks: list[ContentBlock] = []
     choice_bottom_trim_count = 0
+    content_bottom_trim_count = 0
+    choice_visual_tail_count = 0
 
     for column_index, column_markers, (left_bound, right_bound) in column_entries:
         usable_column_markers = [
@@ -976,8 +1154,9 @@ def _segment_pdf_problem_markers(
                 bottom=bottom,
             )
             choice_trimmed = False
+            choice_visual_tail_attached = False
             if usable_text_lines:
-                bottom, choice_trimmed = _trim_pdf_problem_bottom_to_last_choice(
+                bottom, choice_trimmed, choice_visual_tail_attached = _trim_pdf_problem_bottom_to_last_choice(
                     image,
                     usable_text_lines,
                     left=left_bound,
@@ -987,6 +1166,18 @@ def _segment_pdf_problem_markers(
                 )
                 if choice_trimmed:
                     choice_bottom_trim_count += 1
+                if choice_visual_tail_attached:
+                    choice_visual_tail_count += 1
+            if not choice_trimmed:
+                bottom, content_trimmed = _trim_pdf_problem_bottom_to_ink(
+                    image,
+                    left=left_bound,
+                    right=right_bound,
+                    top=top,
+                    bottom=bottom,
+                )
+                if content_trimmed:
+                    content_bottom_trim_count += 1
             box = Box.from_points(left_bound, top, right_bound, min(float(image.height), bottom))
             raw_number = marker.get("number")
             number = int(raw_number) if isinstance(raw_number, int) else None
@@ -1016,6 +1207,7 @@ def _segment_pdf_problem_markers(
                     "marker_text": marker_text,
                     "visual_column_bounds_used": visual_column_bounds_used,
                     "choice_bottom_trimmed": choice_trimmed,
+                    "choice_visual_tail_attached": choice_visual_tail_attached,
                 },
                 segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
                 block_area=box.area,
@@ -1056,6 +1248,8 @@ def _segment_pdf_problem_markers(
         "column_count": detected_column_count,
         "visual_column_bounds_used": visual_column_bounds_used,
         "pdf_choice_bottom_trim_count": choice_bottom_trim_count,
+        "pdf_content_bottom_trim_count": content_bottom_trim_count,
+        "pdf_choice_visual_tail_count": choice_visual_tail_count,
         "document_split_block_count": len(blocks),
         "document_split_applied": True,
         "content_box_area_ratio": 1.0,

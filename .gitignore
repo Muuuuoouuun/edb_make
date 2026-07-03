@@ -1,16 +1,25 @@
 __pycache__/
+.pytest_cache/
+.DS_Store
 *.pyc
 .venv/
 .env.local
 .claude/settings.local.json
 .DS_Store
 
+# Local runtime state
+.app_runtime/
+.app_runtime_server_pid.txt
+app_server_stdout.log
+app_server_stderr.log
+
+# Generated upload/export output directories
 samples/
 out_image1/
 out_images_sample4/
 .pipeline_cache/
-.app_runtime/
 pipeline_output*/
+smoke_pipeline_output/
 mvp_export*/
 mvp_output/
 smoke_server_export*/
@@ -28,11 +37,9 @@ generated_edb_pair*/
 ui_prototype/prototype_data.js
 ui_prototype/generated_session.js
 local_test_output/
+runtime/
 dist*/
 build/
-app_server_stdout.log
-app_server_stderr.log
-.app_runtime_server_pid.txt
 
 generated_*.edb
 *.edb

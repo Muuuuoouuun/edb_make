@@ -9,7 +9,7 @@ from build_structured_page_json import build_page_model
 from page_repair import build_ai_fallback_config
 import preprocess as preprocess_module
 from preprocess import prepare_source_pages
-from segment import segment_page
+from segment import PDF_CHOICE_MARKERS, segment_page
 from structured_schema import Subject
 
 
@@ -293,6 +293,99 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
         self.assertGreater(block.bbox.bottom, 280)
         self.assertLess(block.bbox.bottom, 330)
+
+    def test_pdf_marker_terminal_problem_trims_blank_tail_to_last_ink(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((60, 120), "29. problem stem", fill=(20, 20, 20))
+        draw.text((72, 190), "formula line", fill=(20, 20, 20))
+        draw.text((72, 250), "answer request", fill=(20, 20, 20))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 29,
+                            "text": "29. problem stem",
+                            "bbox": {"left": 60, "top": 116, "right": 180, "bottom": 134},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "29. problem stem",
+                            "bbox": {"left": 60, "top": 116, "right": 180, "bottom": 134},
+                        },
+                        {
+                            "text": "formula line",
+                            "bbox": {"left": 72, "top": 186, "right": 170, "bottom": 204},
+                        },
+                        {
+                            "text": "answer request",
+                            "bbox": {"left": 72, "top": 246, "right": 190, "bottom": 264},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-terminal-blank-tail.pdf"
+
+        segmented = segment_page(Source(image), page_id="terminal-blank-tail-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertLess(block.bbox.bottom, 320)
+        self.assertEqual(1, segmented.metadata.get("pdf_content_bottom_trim_count"))
+
+    def test_pdf_marker_choice_trim_keeps_visual_diagram_below_choices(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        choice_line = "    ".join(PDF_CHOICE_MARKERS)
+        draw.text((60, 80), "8. geometry problem stem", fill=(20, 20, 20))
+        draw.text((72, 150), "given conditions", fill=(20, 20, 20))
+        draw.text((72, 230), choice_line, fill=(20, 20, 20))
+        draw.ellipse((155, 355, 445, 645), outline=(20, 20, 20), width=2)
+        draw.arc((155, 430, 445, 555), 0, 180, fill=(20, 20, 20), width=2)
+        draw.line((190, 450, 410, 560), fill=(20, 20, 20), width=2)
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 8,
+                            "text": "8. geometry problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "8. geometry problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        },
+                        {
+                            "text": "given conditions",
+                            "bbox": {"left": 72, "top": 146, "right": 200, "bottom": 164},
+                        },
+                        {
+                            "text": choice_line,
+                            "bbox": {"left": 72, "top": 226, "right": 360, "bottom": 244},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-choice-diagram-tail.pdf"
+
+        segmented = segment_page(Source(image), page_id="choice-diagram-tail-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
+        self.assertTrue(block.metadata.get("choice_visual_tail_attached"))
+        self.assertGreater(block.bbox.bottom, 650)
 
     def test_pdf_text_stem_markers_segment_without_problem_numbers(self):
         image = Image.new("RGB", (600, 800), "white")

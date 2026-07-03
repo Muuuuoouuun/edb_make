@@ -144,8 +144,12 @@ class TestUiQueueActions(unittest.TestCase):
 
         mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
+        retry_source = source.split("const retryAiSession = useCallback(async (args) => {", 1)[1]
+        retry_source = retry_source.split("const recognizeCurrentSession = useCallback", 1)[0]
         self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || session", mutation_source)
         self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
+        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session)", retry_source)
+        self.assertLess(retry_source.index("await postRestore(snapshotBefore);"), retry_source.index("const result = await postRetryAi(args"))
 
     def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

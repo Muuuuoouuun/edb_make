@@ -8245,6 +8245,7 @@ function App(){
         : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
     });
     try {
+      await postRestore(snapshotBefore);
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
       if (job.controller.signal.aborted) return;
       const next = result.session;

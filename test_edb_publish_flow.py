@@ -465,6 +465,56 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(50, handoff["classinPageCountHint"])
             self.assertEqual(84, handoff["globalBoardPageCountEstimate"])
 
+    def test_edb_split_uses_rendered_record_bottom_not_estimated_slot_height(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = LayoutTemplate(name="academy-default", board_page_count=84)
+            entries = []
+            for index in range(42):
+                entry = self._make_problem_entry(root, f"p{index:02d}", Box(0, 0, 400, 972))
+                entry.actual_height_pages = problem_board.estimate_height_pages(
+                    (400, 972),
+                    template,
+                )
+                entries.append(entry)
+
+            def fake_record_image(placement, entry, **_kwargs):
+                return problem_board._ImageOnlyRecordImage(
+                    crop_path=entry.crop_path,
+                    board_render_path=entry.board_render_path,
+                    image_bytes=f"primary-{entry.problem_id}".encode("ascii"),
+                    secondary_bytes=f"secondary-{entry.problem_id}".encode("ascii"),
+                    width_px=400,
+                    height_px=972,
+                    scale_ratio=None,
+                )
+
+            with mock.patch.object(problem_board, "_build_image_only_record_image", side_effect=fake_record_image):
+                parts = problem_board.write_classin_limited_edb_files(
+                    entries,
+                    template,
+                    root,
+                    "height-gap.edb",
+                    record_mode="image-only",
+                    text_confidence_threshold=0.78,
+                    dark_board=True,
+                    board_theme=problem_board.DEFAULT_BOARD_THEME,
+                    crop_format=CROP_FORMAT_V1,
+                )
+
+            self.assertEqual([40, 2], [len(part["problemIds"]) for part in parts])
+            self.assertEqual(["height-gap_part01.edb", "height-gap_part02.edb"], [
+                Path(part["edbPath"]).name for part in parts
+            ])
+            for part in parts:
+                self.assertLessEqual(part["flowEndPages"], 50)
+                self.assertLessEqual(
+                    max(placement["record_bottom_y_pages"] for placement in part["placements"]),
+                    50,
+                )
+                validation = validate_edb_file(part["edbPath"], expected_min_records=part["recordCount"])
+                self.assertLessEqual(validation["pageCountHint"], 50)
+
     def test_problem_export_records_stage_timing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
