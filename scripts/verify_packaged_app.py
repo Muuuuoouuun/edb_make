@@ -30,6 +30,29 @@ REQUIRED_RUNTIME_FILES = (
     *REQUIRED_RUNTIME_SOURCE_FILES,
 )
 
+REQUIRED_SOURCE_PACKAGE_FILES = (
+    "app_server.py",
+    "build_mvp_export.py",
+    "build_problem_board_edb.py",
+    "build_structured_page_json.py",
+    "image_reconstruction_backend.py",
+    "page_repair.py",
+    "pipeline_cache.py",
+    "pipeline_router.py",
+    "preprocess.py",
+    "segment.py",
+    "ocr_backend.py",
+    "placement_engine.py",
+    "layout_template_schema.py",
+    "structured_schema.py",
+    "user_settings.py",
+    "assemble_page.py",
+    "edb_builder.py",
+    "inspect_edb.py",
+    "requirements-local.txt",
+    "run_local_app.ps1",
+)
+
 FORBIDDEN_PACKAGED_FRONTEND_FILES = (
     "ui_prototype/app.js",
     "ui_prototype/prototype_data.js",
@@ -191,6 +214,13 @@ def _resource_root_candidates(package_root: Path) -> list[Path]:
     return candidates
 
 
+def _looks_like_source_package(package_root: Path) -> bool:
+    return package_root.name == "source-package" or any(
+        (package_root / rel_path).exists()
+        for rel_path in ("run_local_app.ps1", "requirements-local.txt", "app_server.py")
+    )
+
+
 def collect_package_errors(
     package_root: Path,
     *,
@@ -221,6 +251,10 @@ def collect_package_errors(
     for rel_path in (*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_FILES):
         if not (resource_root / rel_path).is_file():
             errors.append(f"missing packaged runtime file: {rel_path}")
+    if _looks_like_source_package(root):
+        for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
+            if not (root / rel_path).is_file():
+                errors.append(f"missing source-package runtime file: {rel_path}")
 
     update_config_payloads: dict[str, list[str]] = {}
     for config_path in _packaged_update_config_paths(root, resource_roots):

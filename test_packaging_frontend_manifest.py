@@ -12,6 +12,7 @@ from scripts.verify_frontend_package import (
     frontend_bundle_source_digest,
 )
 from scripts.verify_packaged_app import collect_package_errors
+from scripts.verify_packaged_app import REQUIRED_SOURCE_PACKAGE_FILES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -455,6 +456,20 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("latest_session.json" in error for error in errors))
         self.assertTrue(any("uploads" in error for error in errors))
 
+    def test_source_package_layout_requires_runtime_python_files(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "source-package"
+            self._write_packaged_runtime(package_root, "")
+            for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
+                target = package_root / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# runtime\n", encoding="utf-8")
+            (package_root / "pipeline_cache.py").unlink()
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("missing source-package runtime file: pipeline_cache.py" in error for error in errors))
+
     def test_packaged_app_layout_rejects_build_time_frontend_tools(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -564,18 +579,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
     def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
-        for rel_path in (
-            "app_server.py",
-            "build_mvp_export.py",
-            "build_problem_board_edb.py",
-            "build_structured_page_json.py",
-            "image_reconstruction_backend.py",
-            "page_repair.py",
-            "pipeline_cache.py",
-            "pipeline_router.py",
-            "user_settings.py",
-            "scripts\\render_hwp_with_rhwp_core.mjs",
-        ):
+        for rel_path in (*REQUIRED_SOURCE_PACKAGE_FILES, "scripts\\render_hwp_with_rhwp_core.mjs"):
             with self.subTest(rel_path=rel_path):
                 self.assertIn(f'"{rel_path}"', source)
         self.assertNotRegex(source, r'(?m)^\s+"scripts",\s*$')
