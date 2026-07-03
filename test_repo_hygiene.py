@@ -24,6 +24,12 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([], result.stdout.splitlines())
 
+    def test_legacy_standalone_openai_image_backend_is_removed(self) -> None:
+        self.assertFalse(
+            (PROJECT_ROOT / "openai_image_backend.py").exists(),
+            "OpenAI image reconstruction lives in image_reconstruction_backend.py",
+        )
+
     def test_local_run_artifacts_are_ignored(self) -> None:
         samples = [
             ".DS_Store",
