@@ -134,6 +134,7 @@ CLASSIN_PREFLIGHT_MIN_DARK_PIXEL_RATIO = 0.002
 CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES = 0.01
 CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO = 0.65
 CLASSIN_PREFLIGHT_PASSAGE_SOURCE_REUSE_RATIO = 0.65
+CLASSIN_PREFLIGHT_STEP2_PAGE_CHROME_MAX_RATIO = 0.10
 CLASSIN_PREFLIGHT_MAX_ISSUES = 50
 CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
     "fallback_grouping",
@@ -150,6 +151,8 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "review_flags_remaining": "검수 플래그 남음",
     "small_problem_image": "문항 이미지 작음",
     "source_problem_bbox_overlap": "원본 영역 겹침",
+    "step2_page_chrome_artifact_rate": "2단계 페이지 장식 허용률 초과",
+    "step3_page_chrome_artifact": "3단계 페이지 장식",
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
@@ -3097,7 +3100,7 @@ def build_problem_entries(
                         chalk_color=chalk_color,
                         text_payload=text_fallback_payload or None,
                         text_title=problem_title if text_fallback_payload else None,
-                        trim_edge_guides=not trusted_pdf_marker_problem and not preserve_page_as_is,
+                        trim_edge_guides=not preserve_page_as_is,
                         pad_edges=not preserve_page_as_is,
                     ),
                 )
@@ -3451,7 +3454,7 @@ def recrop_problem(
             image_height=page_image.height,
         )
     )
-    crop = _trim_edge_vertical_guides(crop)
+    crop = _trim_source_page_chrome(crop)
     crop = _pad_problem_crop_edges(crop)
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)
@@ -4343,6 +4346,323 @@ def _dark_pixel_ratio(image: Image.Image, *, threshold: int = CLASSIN_PREFLIGHT_
     return float(dark_pixels) / float(total)
 
 
+def _problem_payload_processing_step(problem: dict[str, Any]) -> str:
+    return _normalize_processing_step(
+        problem.get("processingStep")
+        or problem.get("processing_step")
+        or problem.get("step")
+    )
+
+
+def _problem_payload_image_path(problem: dict[str, Any]) -> Path | None:
+    return (
+        _session_asset_path(problem.get("imagePath") or problem.get("image_path"))
+        or _session_asset_path(problem.get("boardRenderPath") or problem.get("board_render_path"))
+    )
+
+
+def _problem_image_page_chrome_artifact_stats(image: Image.Image) -> dict[str, Any]:
+    width, height = image.size
+    if width <= 24 or height <= 24:
+        return {
+            "hasArtifact": False,
+            "has_artifact": False,
+            "artifactTypes": [],
+            "artifact_types": [],
+        }
+
+    rgba = image.convert("RGBA")
+    if np is not None:
+        arr = np.asarray(rgba, dtype=np.uint8)
+        alpha = arr[..., 3]
+        rgb = arr[..., :3].astype(np.int16)
+        red = rgb[..., 0]
+        green = rgb[..., 1]
+        blue = rgb[..., 2]
+        luminance = (0.299 * red + 0.587 * green + 0.114 * blue).astype(np.float32)
+        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        has_transparency = int(alpha.min()) < 245
+        if has_transparency:
+            foreground = alpha >= 48
+        elif float(luminance.mean()) <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
+            foreground = (luminance >= 180.0) | (saturation >= 42)
+        else:
+            foreground = (luminance <= 110.0) | (saturation >= 72)
+
+        scan_width = min(width, max(8, min(80, int(round(width * 0.08)))))
+        left_counts = np.count_nonzero(foreground[:, :scan_width], axis=0)
+        right_counts = np.count_nonzero(foreground[:, width - scan_width:], axis=0)
+        min_edge_coverage = max(16, int(round(height * 0.55)))
+        edge_guide_column_count = int(np.count_nonzero(left_counts >= min_edge_coverage))
+        edge_guide_column_count += int(np.count_nonzero(right_counts >= min_edge_coverage))
+
+        bottom_scan_top = max(0, height - max(36, min(180, int(round(height * 0.18)))))
+        bottom_foreground = foreground[bottom_scan_top:, :]
+        row_counts = np.count_nonzero(bottom_foreground, axis=1)
+        bottom_line_rows = np.where(row_counts >= max(18, int(round(width * 0.72))))[0]
+        bottom_line_count = 0
+        if bottom_line_rows.size:
+            absolute_rows = bottom_scan_top + bottom_line_rows
+            near_bottom = absolute_rows >= height - max(18, int(round(height * 0.06)))
+            bottom_line_count = int(np.count_nonzero(near_bottom))
+
+        blue_mask = (
+            (alpha > 24)
+            & (blue >= red + BOTTOM_WATERMARK_BLUE_DELTA)
+            & (blue >= green + 8)
+            & (saturation >= 32)
+        )
+        bottom_blue_mask = blue_mask[bottom_scan_top:, :]
+        bottom_blue_count = int(np.count_nonzero(bottom_blue_mask))
+
+        corner_badge_count = _count_lower_corner_page_badges_from_mask(foreground)
+    else:
+        pixels = rgba.load()
+        alpha_values: list[int] = []
+        luminance_values: list[float] = []
+        for y in range(height):
+            for x in range(width):
+                red, green, blue, alpha = pixels[x, y]
+                alpha_values.append(alpha)
+                luminance_values.append(0.299 * red + 0.587 * green + 0.114 * blue)
+        has_transparency = min(alpha_values) < 245
+        mean_luminance = sum(luminance_values) / max(1, len(luminance_values))
+
+        def is_foreground(x: int, y: int) -> bool:
+            red, green, blue, alpha = pixels[x, y]
+            luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            saturation = max(red, green, blue) - min(red, green, blue)
+            if has_transparency:
+                return alpha >= 48
+            if mean_luminance <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
+                return luminance >= 180.0 or saturation >= 42
+            return luminance <= 110.0 or saturation >= 72
+
+        scan_width = min(width, max(8, min(80, int(round(width * 0.08)))))
+        min_edge_coverage = max(16, int(round(height * 0.55)))
+        edge_guide_column_count = 0
+        for x in [*range(scan_width), *range(width - scan_width, width)]:
+            if sum(1 for y in range(height) if is_foreground(x, y)) >= min_edge_coverage:
+                edge_guide_column_count += 1
+
+        bottom_scan_top = max(0, height - max(36, min(180, int(round(height * 0.18)))))
+        bottom_line_count = 0
+        for y in range(bottom_scan_top, height):
+            if y < height - max(18, int(round(height * 0.06))):
+                continue
+            if sum(1 for x in range(width) if is_foreground(x, y)) >= max(18, int(round(width * 0.72))):
+                bottom_line_count += 1
+
+        bottom_blue_count = 0
+        for y in range(bottom_scan_top, height):
+            for x in range(width):
+                red, green, blue, alpha = pixels[x, y]
+                saturation = max(red, green, blue) - min(red, green, blue)
+                if (
+                    alpha > 24
+                    and blue >= red + BOTTOM_WATERMARK_BLUE_DELTA
+                    and blue >= green + 8
+                    and saturation >= 32
+                ):
+                    bottom_blue_count += 1
+
+        foreground_mask = [[is_foreground(x, y) for x in range(width)] for y in range(height)]
+        corner_badge_count = _count_lower_corner_page_badges_from_mask(foreground_mask)
+
+    bottom_blue_threshold = max(18, int(round(width * height * 0.0003)))
+    artifact_types: list[str] = []
+    if edge_guide_column_count > 0:
+        artifact_types.append("edge_vertical_guide")
+    if bottom_line_count > 0:
+        artifact_types.append("bottom_page_line")
+    if bottom_blue_count >= bottom_blue_threshold:
+        artifact_types.append("bottom_blue_footer")
+    if corner_badge_count > 0:
+        artifact_types.append("corner_page_badge")
+    artifact_types = list(dict.fromkeys(artifact_types))
+
+    return {
+        "hasArtifact": bool(artifact_types),
+        "has_artifact": bool(artifact_types),
+        "artifactTypes": artifact_types,
+        "artifact_types": artifact_types,
+        "edgeGuideColumnCount": int(edge_guide_column_count),
+        "edge_guide_column_count": int(edge_guide_column_count),
+        "bottomLineRowCount": int(bottom_line_count),
+        "bottom_line_row_count": int(bottom_line_count),
+        "bottomBluePixelCount": int(bottom_blue_count),
+        "bottom_blue_pixel_count": int(bottom_blue_count),
+        "cornerPageBadgeCount": int(corner_badge_count),
+        "corner_page_badge_count": int(corner_badge_count),
+    }
+
+
+def _count_lower_corner_page_badges_from_mask(mask: Any) -> int:
+    height = len(mask)
+    if height <= 24:
+        return 0
+    width = len(mask[0]) if height else 0
+    if width <= 24:
+        return 0
+
+    roi_width = min(width, max(48, min(180, int(round(width * 0.18)))))
+    roi_height = min(height, max(48, min(160, int(round(height * 0.16)))))
+    seed_px = max(4, min(12, roi_width, roi_height))
+    badge_count = 0
+
+    def mask_get(y: int, x: int) -> bool:
+        if np is not None and hasattr(mask, "shape"):
+            return bool(mask[y, x])
+        return bool(mask[y][x])
+
+    for side in ("left", "right"):
+        left = 0 if side == "left" else width - roi_width
+        top = height - roi_height
+        visited = [[False] * roi_width for _ in range(roi_height)]
+        seeds: list[tuple[int, int]] = []
+        x_edge = range(0, seed_px) if side == "left" else range(roi_width - seed_px, roi_width)
+        for y in range(roi_height):
+            for x in x_edge:
+                if mask_get(top + y, left + x):
+                    seeds.append((x, y))
+        for y in range(roi_height - seed_px, roi_height):
+            for x in range(roi_width):
+                if mask_get(top + y, left + x):
+                    seeds.append((x, y))
+
+        for seed_x, seed_y in seeds:
+            if visited[seed_y][seed_x] or not mask_get(top + seed_y, left + seed_x):
+                continue
+            stack = [(seed_x, seed_y)]
+            visited[seed_y][seed_x] = True
+            min_x = max_x = seed_x
+            min_y = max_y = seed_y
+            count = 0
+            while stack:
+                cx, cy = stack.pop()
+                count += 1
+                min_x = min(min_x, cx)
+                max_x = max(max_x, cx)
+                min_y = min(min_y, cy)
+                max_y = max(max_y, cy)
+                for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                    if nx < 0 or nx >= roi_width or ny < 0 or ny >= roi_height:
+                        continue
+                    if visited[ny][nx] or not mask_get(top + ny, left + nx):
+                        continue
+                    visited[ny][nx] = True
+                    stack.append((nx, ny))
+
+            component_width = max_x - min_x + 1
+            component_height = max_y - min_y + 1
+            touches_side = min_x <= seed_px if side == "left" else max_x >= roi_width - seed_px - 1
+            touches_bottom = max_y >= roi_height - seed_px - 1
+            small_enough = (
+                component_width <= max(42, int(round(width * 0.18)))
+                and component_height <= max(36, int(round(height * 0.14)))
+                and count <= max(1200, int(round(width * height * 0.02)))
+            )
+            if touches_side and touches_bottom and small_enough:
+                badge_count += 1
+                break
+
+    return badge_count
+
+
+def _classin_page_chrome_artifact_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    s2_total = 0
+    s2_artifacts: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        step = _problem_payload_processing_step(problem)
+        if step not in {PROCESSING_STEP_CHALK, PROCESSING_STEP_RECONSTRUCT}:
+            continue
+        image_path = _problem_payload_image_path(problem)
+        if image_path is None or not image_path.is_file():
+            continue
+        try:
+            with Image.open(image_path) as image:
+                stats = _problem_image_page_chrome_artifact_stats(image)
+        except OSError:
+            continue
+        if step == PROCESSING_STEP_CHALK:
+            s2_total += 1
+            if stats.get("hasArtifact"):
+                s2_artifacts.append({"problem": problem, "path": image_path, "stats": stats})
+            continue
+        if step == PROCESSING_STEP_RECONSTRUCT and stats.get("hasArtifact"):
+            issues.append(
+                _classin_preflight_issue(
+                    "step3_page_chrome_artifact",
+                    severity="error",
+                    message=(
+                        "3단계 문항 이미지에 분할선, 하단 페이지 선, 페이지 번호 또는 footer 후보가 남아 있습니다. "
+                        "3단계 산출물은 EDB 등록 전 반드시 다시 정리해야 합니다."
+                    ),
+                    problem=problem,
+                    path=image_path,
+                    details={
+                        "processingStep": step,
+                        "processing_step": step,
+                        "artifactTypes": stats.get("artifactTypes", []),
+                        "artifact_types": stats.get("artifactTypes", []),
+                        "pageChromeArtifactStats": stats,
+                        "page_chrome_artifact_stats": stats,
+                    },
+                )
+            )
+
+    if s2_total > 0 and s2_artifacts:
+        artifact_ratio = len(s2_artifacts) / float(s2_total)
+        if artifact_ratio > CLASSIN_PREFLIGHT_STEP2_PAGE_CHROME_MAX_RATIO:
+            sample = s2_artifacts[:10]
+            problem_ids = [
+                str(item["problem"].get("id") or item["problem"].get("problem_id") or "")
+                for item in sample
+            ]
+            artifact_types = sorted(
+                {
+                    str(artifact_type)
+                    for item in s2_artifacts
+                    for artifact_type in item["stats"].get("artifactTypes", [])
+                    if str(artifact_type)
+                }
+            )
+            issues.append(
+                _classin_preflight_issue(
+                    "step2_page_chrome_artifact_rate",
+                    severity="warning",
+                    message=(
+                        "2단계 문항 이미지의 페이지 장식 후보가 허용률(10개 중 1개)을 초과했습니다. "
+                        "대표 문항을 확인하고 crop/재구성 단계를 다시 실행해 주세요."
+                    ),
+                    problem=sample[0]["problem"] if sample else None,
+                    path=sample[0]["path"] if sample else None,
+                    details={
+                        "processingStep": PROCESSING_STEP_CHALK,
+                        "processing_step": PROCESSING_STEP_CHALK,
+                        "artifactProblemCount": len(s2_artifacts),
+                        "artifact_problem_count": len(s2_artifacts),
+                        "checkedProblemCount": s2_total,
+                        "checked_problem_count": s2_total,
+                        "artifactRatio": round(artifact_ratio, 6),
+                        "artifact_ratio": round(artifact_ratio, 6),
+                        "maxArtifactRatio": CLASSIN_PREFLIGHT_STEP2_PAGE_CHROME_MAX_RATIO,
+                        "max_artifact_ratio": CLASSIN_PREFLIGHT_STEP2_PAGE_CHROME_MAX_RATIO,
+                        "problemIds": problem_ids,
+                        "problem_ids": problem_ids,
+                        "artifactTypes": artifact_types,
+                        "artifact_types": artifact_types,
+                    },
+                )
+            )
+
+    return issues
+
+
 def _classin_preflight_issue(
     issue_type: str,
     *,
@@ -4970,6 +5290,11 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
                 break
 
     if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
+        for issue in _classin_page_chrome_artifact_issues(problems):
+            issues.append(issue)
+            if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
+                break
+    if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
         for issue in _classin_missing_passage_child_question_issues(problems):
             issues.append(issue)
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
@@ -5005,6 +5330,7 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             "placementOverlapTolerancePages": CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES,
             "passageGroupSourceReuseRatio": CLASSIN_PREFLIGHT_PASSAGE_SOURCE_REUSE_RATIO,
             "sourceBboxOverlapRatio": CLASSIN_PREFLIGHT_SOURCE_BBOX_OVERLAP_RATIO,
+            "step2PageChromeMaxRatio": CLASSIN_PREFLIGHT_STEP2_PAGE_CHROME_MAX_RATIO,
         },
     }
 

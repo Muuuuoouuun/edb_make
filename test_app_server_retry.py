@@ -2754,6 +2754,171 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(2.4, remembered["problems"][1]["startYPages"])
             self.assertEqual(1.4, remembered["problems"][0]["placementScaleRatio"])
 
+    def test_session_publish_preserves_page_as_is_layout_metadata(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = {
+                "session_name": "page-as-is-publish",
+                "inputIntent": "page-as-is",
+                "input_intent": "page-as-is",
+                "output_dir": raw_tmp,
+                "pages": [{"id": "page-1", "problemIds": ["p-page"]}],
+                "problems": [
+                    {
+                        "id": "p-page",
+                        "title": "페이지 1",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 0, "top": 0, "width": 1000, "height": 1400},
+                        "riskFlags": [],
+                        "inputIntent": "page-as-is",
+                        "input_intent": "page-as-is",
+                        "placementMode": "continuous-page-as-is",
+                        "placement_mode": "continuous-page-as-is",
+                        "forceFullPageBounds": True,
+                        "force_full_page_bounds": True,
+                        "placementScaleRatio": 1.6,
+                    }
+                ],
+            }
+            handler, responses = self._publish(session)
+
+            def fake_problems_to_entries(problems, **_kwargs):
+                self.assertEqual("page-as-is", problems[0]["inputIntent"])
+                self.assertTrue(problems[0]["forceFullPageBounds"])
+                return [
+                    app_server.ProblemEntry(
+                        problem_id="p-page",
+                        title="페이지 1",
+                        problem_number=None,
+                        subject=app_server.resolve_subject("unknown"),
+                        source_page_id="page-1",
+                        source_path="page-1",
+                        prepared_page=None,
+                        bounds=Box(left=0, top=0, width=1000, height=1400),
+                        crop_path=root / "p-page.png",
+                        board_render_path=root / "p-page.png",
+                        blocks=[],
+                        actual_height_pages=1.2,
+                        overflow_allowed=False,
+                        reading_heavy=False,
+                        risk_flags=[],
+                        placement_scale_ratio=1.6,
+                        input_intent="page-as-is",
+                        force_full_page_bounds=True,
+                    )
+                ]
+
+            def fake_build_records(entries, _template, **_kwargs):
+                self.assertEqual("page-as-is", entries[0].input_intent)
+                self.assertTrue(entries[0].force_full_page_bounds)
+                return (
+                    [{"record": "p-page"}],
+                    [
+                        {
+                            "problem_id": "p-page",
+                            "title": "페이지 1",
+                            "record_index": 0,
+                            "crop_path": str(root / "p-page.png"),
+                            "board_render_path": str(root / "p-page.png"),
+                            "start_y_pages": 0.0,
+                            "snapped_next_start_y_pages": 1.9,
+                            "actual_height_pages": 1.2,
+                            "placement_scale_ratio": 1.6,
+                        }
+                    ],
+                    0,
+                )
+
+            def fake_build_ui_session(**_kwargs):
+                return {
+                    "session_name": "published",
+                    "inputIntent": "auto",
+                    "input_intent": "auto",
+                    "output_dir": str(root),
+                    "problems": [
+                        {
+                            "id": "p-page",
+                            "title": "페이지 1",
+                            "sourcePageId": "page-1",
+                            "imagePath": (root / "p-page.png").resolve().as_uri(),
+                            "bbox": {},
+                            "riskFlags": [],
+                            "inputIntent": "auto",
+                            "input_intent": "auto",
+                            "placementMode": "one-problem-per-page",
+                            "placement_mode": "one-problem-per-page",
+                            "forceFullPageBounds": False,
+                            "force_full_page_bounds": False,
+                            "placementScaleRatio": 1.6,
+                        }
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_classin_limited_edb_files(_entries, _template, output_dir, edb_name, **_kwargs):
+                path = Path(output_dir) / edb_name
+                path.write_bytes(b"edb")
+                return [
+                    {
+                        "partIndex": 1,
+                        "partCount": 1,
+                        "edbPath": str(path),
+                        "edbFileName": path.name,
+                        "recordCount": 1,
+                        "pageCountHint": 50,
+                    }
+                ]
+
+            def fake_write_handoff(output_dir, *, ui_session, **_kwargs):
+                problem = ui_session["problems"][0]
+                self.assertEqual("page-as-is", problem["inputIntent"])
+                self.assertEqual("continuous-page-as-is", problem["placementMode"])
+                self.assertTrue(problem["forceFullPageBounds"])
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps({
+                        "classinPreflight": {
+                            "status": "passed",
+                            "passed": True,
+                            "issueCount": 0,
+                            "issues": [],
+                        }
+                    }),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "_problems_to_entries", side_effect=fake_problems_to_entries),
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "write_classin_limited_edb_files", side_effect=fake_write_classin_limited_edb_files),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 50,
+                    "recordCountHint": 1,
+                    "recordCountActual": 1,
+                }),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
+                handler._handle_session_publish()
+
+            body, _kwargs = responses[0]
+            self.assertTrue(body["ok"], body)
+            remembered = handler.server.remembered_session
+            self.assertEqual("page-as-is", remembered["inputIntent"])
+            self.assertEqual("page-as-is", remembered["input_intent"])
+            remembered_problem = remembered["problems"][0]
+            self.assertEqual("page-as-is", remembered_problem["inputIntent"])
+            self.assertEqual("page-as-is", remembered_problem["input_intent"])
+            self.assertEqual("continuous-page-as-is", remembered_problem["placementMode"])
+            self.assertEqual("continuous-page-as-is", remembered_problem["placement_mode"])
+            self.assertTrue(remembered_problem["forceFullPageBounds"])
+            self.assertTrue(remembered_problem["force_full_page_bounds"])
+
     def test_session_publish_blocks_unresolved_passage_review_queue_before_build(self):
         with TemporaryDirectory() as raw_tmp:
             session = {

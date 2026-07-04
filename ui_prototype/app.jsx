@@ -1249,7 +1249,10 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
-function ReviewStage({ session, items, activeId, setActive, mutateSession, retryAiSession, mutating, aiAvailable, aiBusy, onConfirm, reviewFocus }){
+function ReviewStage({
+  session, items, activeId, setActive, mutateSession, retryAiSession, mutating,
+  aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
+}){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
     const map = new Map();
@@ -1486,6 +1489,13 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
   const selectedSourcePage = selectedSinglePage || (sameSourcePage
     ? pages.find(page => page.id === selectedProblems[0]?.sourcePageId)
     : null);
+  const selectedPageChromeProblemIds = listUnique(
+    selectedProblems
+      .filter(hasPageChromeArtifactFlag)
+      .map(problem => problem.id)
+      .filter(Boolean)
+  );
+  const selectedHasPageChromeArtifact = selectedPageChromeProblemIds.length > 0;
   const selectedCanManualSplit = Boolean(
     selectedProblems.length
     && selectedSourcePage?.width
@@ -2403,6 +2413,13 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       : mutating
         ? '처리 중입니다'
       : '';
+  const imageEnhanceDisabledReason = !aiAvailable
+    ? 'Gemini API 키를 먼저 저장해 주세요'
+    : imageEnhanceBusy
+      ? 'AI 재구성 중입니다'
+      : mutating
+        ? '처리 중입니다'
+        : '';
   const bulkRetryPageIds = activeReviewFilter ? visibleReviewScope.retryPageIds : pageRetryIds;
   const bulkRetryProblemCount = activeReviewFilter ? visibleReviewScope.problemCount : riskyCount;
   const showBulkRetry = reviewFilter !== 'normal' && reviewFilter !== 'supplemental' && bulkRetryProblemCount > 0 && bulkRetryPageIds.length > 0;
@@ -2554,7 +2571,9 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       <div className="review-actionbar-copy">
         <span className="count-chip">{selectedList.length}개 선택됨</span>
         <span className="hint">
-          {selectedList.length === 1
+          {selectedHasPageChromeArtifact
+            ? '페이지 선/번호가 감지된 문제입니다. 3단계 재구성으로 다시 뽑거나 원본 틀을 조정하세요.'
+            : selectedList.length === 1
             ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
             : sameSourcePage
               ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
@@ -2563,6 +2582,17 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
       </div>
       <div className="review-actionbar-actions">
         <div className="review-action-group review-action-group-main">
+          {selectedHasPageChromeArtifact && (
+            <button
+              className="btn danger"
+              type="button"
+              title={imageEnhanceDisabledReason || `${selectedPageChromeProblemIds.length}개 문항을 3단계 재구성으로 다시 생성`}
+              onClick={() => onEnhanceImage?.(selectedPageChromeProblemIds)}
+              disabled={!aiAvailable || imageEnhanceBusy || mutating || !onEnhanceImage}
+            >
+              {Icon.wand} 3단계 재구성 {selectedPageChromeProblemIds.length}
+            </button>
+          )}
           {selectedList.length >= 2 && (
             <button
               className="btn"
@@ -2994,11 +3024,14 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                     const order = orderMap.get(prob.id);
                     const tooltipParts = [prob.title || ''];
                     const problemRiskFlags = riskFlagsFor(prob);
+                    const hasPageChrome = hasPageChromeArtifactFlag(prob);
                     if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
+                    if (hasPageChrome) tooltipParts.push('페이지 선/번호 감지');
                     if (isPassage) tooltipParts.push(`긴 지문 ${passageGroupId}`);
                     const classes = [
                       'review-bbox',
                       isPassage ? 'review-bbox-passage' : '',
+                      hasPageChrome ? 'page-chrome-artifact' : '',
                       isSelected ? 'selected' : '',
                       isActive ? 'active' : '',
                       isRisky ? 'risky' : '',
@@ -3030,7 +3063,9 @@ function ReviewStage({ session, items, activeId, setActive, mutateSession, retry
                         <div className="review-bbox-label">
                           {String(order || '?').padStart(2, '0')}
                           {isPassage && <span className="review-bbox-passage-tag">지문</span>}
-                          {isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
+                          {hasPageChrome
+                            ? <span className="review-bbox-risk">페이지 장식</span>
+                            : isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
                         {isEditing && (
                           <>
@@ -3527,6 +3562,7 @@ function ItemsRail({
           const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
+          const hasPageChrome = hasPageChromeArtifactFlag(it);
           const downloadTitle = isDownloading
             ? '다운로드 준비 중'
             : canDownloadItem
@@ -3539,7 +3575,7 @@ function ItemsRail({
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
             onClick={() => {
               if (suppressClickRef.current) return;
@@ -3589,6 +3625,7 @@ function ItemsRail({
                 {it.step === 's2' && <span className="tag s2">AI</span>}
                 {it.step === 's3' && <span className="tag s3">재구성</span>}
                 {it.step === 'raw' && <span className="tag">대기</span>}
+                {hasPageChrome && <span className="tag page-chrome-tag">페이지 장식</span>}
                 <span className="source-label">{it.source}</span>
               </div>
             </div>
@@ -4015,6 +4052,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                   const xRatio = normalizePlacementXRatio(p.xRatio);
                   const yRatio = normalizePlacementYRatio(p.yRatio);
                   const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
+                  const hasPageChrome = hasPageChromeArtifactFlag(it);
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
                     height: scaledHeight,
@@ -4024,7 +4062,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
                       onClick={() => onTileClick(it.id)}
                       title={it.name}
                       style={tileStyle}
@@ -4044,6 +4082,9 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                         )}
                         {p.rowHeightPages > p.renderedHeightPages + 0.05 && (
                           <span className="row-mark">{p.rowHeightPages.toFixed(1)}p</span>
+                        )}
+                        {hasPageChrome && (
+                          <span className="page-chrome-mark">페이지 장식</span>
                         )}
                         <span className={`step-mark ${it.step}`}>
                           {it.step === 's1' ? '1' : it.step === 's2' ? 'AI' : it.step === 's3' ? 'HQ' : '··'}
@@ -6013,7 +6054,7 @@ function mapProblemToItem(problem, idx){
   // strip the noisy "...page-001 problem 1" suffix when present
   const cleanTitle = title.replace(/page-\d+\s+problem\s+\d+\s*$/i, '').trim();
   const name = cleanTitle || `문항 ${idx + 1}`;
-  const riskFlags = Array.isArray(problem.riskFlags) ? problem.riskFlags : [];
+  const riskFlags = riskFlagsFor(problem);
   const reviewStatus = deriveProblemStatus(problem);
   const statusMeta = reviewStatusMeta(reviewStatus);
   const initialScale = normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio);
@@ -6170,6 +6211,11 @@ const REVIEW_STATUS_META = {
   failed: { label: '인식 실패', shortLabel: '실패', tone: 'failed' },
 };
 
+const PAGE_CHROME_PREFLIGHT_ISSUE_TYPES = new Set([
+  'step2_page_chrome_artifact_rate',
+  'step3_page_chrome_artifact',
+]);
+
 const RISK_FLAG_META = {
   ai_image_missing_source: '이미지 원본 없음',
   ai_image_reconstructed_check_text: 'AI 보정 확인',
@@ -6190,6 +6236,8 @@ const RISK_FLAG_META = {
   problem_per_block: '블록 단위 분리',
   sparse_segmentation: '성긴 분할',
   source_problem_bbox_overlap: '원본 영역 겹침',
+  step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
+  step3_page_chrome_artifact: '3단계 페이지 장식',
 };
 
 const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
@@ -6203,6 +6251,8 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   review_flags_remaining: '검수 플래그 남음',
   small_problem_image: '문항 이미지 작음',
   source_problem_bbox_overlap: '원본 영역 겹침',
+  step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
+  step3_page_chrome_artifact: '3단계 페이지 장식',
   unreadable_problem_image: '문항 이미지 흐림',
 };
 const PASSAGE_REVIEW_REASON_LABELS = {
@@ -6312,6 +6362,8 @@ function publishBlockedTarget(blockedPublish){
     'duplicate_problem_number',
     'passage_group_source_reuse',
     'passage_missing_child_questions',
+    'step2_page_chrome_artifact_rate',
+    'step3_page_chrome_artifact',
   ];
   const passageReviewIssueTypes = [
     'passage_review_queue_remaining',
@@ -6356,6 +6408,130 @@ function publishBlockedTarget(blockedPublish){
     };
   }
   return { view: 'review', reviewFocus: null };
+}
+
+function preflightIssueType(issue){
+  return String(issue?.type || issue?.issueType || issue?.issue_type || '').trim();
+}
+
+function uniquePreflightStrings(values){
+  return Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function preflightIssueProblemIds(issue){
+  const rawProblemIds = issue?.problemIds || issue?.problem_ids;
+  return uniquePreflightStrings([
+    ...(Array.isArray(rawProblemIds) ? rawProblemIds : []),
+    issue?.problemId || issue?.problem_id,
+    issue?.nextProblemId || issue?.next_problem_id,
+  ]);
+}
+
+function preflightBlockingProblemIds(blockedPublish){
+  const rawIds = Array.isArray(blockedPublish?.blockingProblemIds)
+    ? blockedPublish.blockingProblemIds
+    : Array.isArray(blockedPublish?.blocking_problem_ids)
+      ? blockedPublish.blocking_problem_ids
+      : [];
+  return uniquePreflightStrings(rawIds);
+}
+
+function preflightIssueTypes(blockedPublish){
+  const issues = Array.isArray(blockedPublish?.classinPreflight?.issues)
+    ? blockedPublish.classinPreflight.issues
+    : [];
+  const explicitTypes = Array.isArray(blockedPublish?.issueTypes)
+    ? blockedPublish.issueTypes
+    : Array.isArray(blockedPublish?.issue_types)
+      ? blockedPublish.issue_types
+      : [];
+  return uniquePreflightStrings([
+    ...explicitTypes,
+    ...issues.map(preflightIssueType),
+  ]);
+}
+
+function isPageChromePreflightIssueType(type){
+  return PAGE_CHROME_PREFLIGHT_ISSUE_TYPES.has(String(type || '').trim());
+}
+
+function hasPageChromeArtifactFlag(entity){
+  const flags = entity?.riskFlags || entity?.risk_flags || [];
+  return uniquePreflightStrings(flags).some(isPageChromePreflightIssueType);
+}
+
+function pageChromePreflightBlockToast(blockedPublish){
+  const types = preflightIssueTypes(blockedPublish);
+  if (types.includes('step3_page_chrome_artifact')) {
+    return '3단계 이미지에 분할선·페이지 번호가 남아 제작을 멈췄어요. 빨간 문제를 3단계 재구성으로 다시 뽑아주세요.';
+  }
+  if (types.includes('step2_page_chrome_artifact_rate')) {
+    return '2단계 페이지 장식 비율이 기준을 넘어 제작을 멈췄어요. 빨간 문제를 재인식하거나 3단계 재구성으로 다시 뽑아주세요.';
+  }
+  return '';
+}
+
+function applyPublishPreflightIssuesToSession(rawSession, blockedPublish){
+  if (!rawSession || !Array.isArray(rawSession.problems)) return rawSession;
+  const issues = Array.isArray(blockedPublish?.classinPreflight?.issues)
+    ? blockedPublish.classinPreflight.issues
+    : [];
+  const problemIssueTypes = new Map();
+  const addIssue = (problemId, issueType) => {
+    const id = String(problemId || '').trim();
+    const type = String(issueType || '').trim();
+    if (!id || !isPageChromePreflightIssueType(type)) return;
+    if (!problemIssueTypes.has(id)) problemIssueTypes.set(id, new Set());
+    problemIssueTypes.get(id).add(type);
+  };
+  issues.forEach(issue => {
+    const type = preflightIssueType(issue);
+    if (!isPageChromePreflightIssueType(type)) return;
+    preflightIssueProblemIds(issue).forEach(problemId => addIssue(problemId, type));
+  });
+  if (problemIssueTypes.size === 0) {
+    const pageChromeTypes = preflightIssueTypes(blockedPublish).filter(isPageChromePreflightIssueType);
+    const fallbackType = pageChromeTypes.includes('step3_page_chrome_artifact')
+      ? 'step3_page_chrome_artifact'
+      : pageChromeTypes[0];
+    if (fallbackType) {
+      preflightBlockingProblemIds(blockedPublish).forEach(problemId => addIssue(problemId, fallbackType));
+    }
+  }
+  if (problemIssueTypes.size === 0) return rawSession;
+
+  const snapshot = JSON.parse(JSON.stringify(rawSession));
+  snapshot.problems = snapshot.problems.map(problem => {
+    const id = String(problem?.id || problem?.problem_id || '').trim();
+    const issueTypeSet = problemIssueTypes.get(id);
+    if (!issueTypeSet || issueTypeSet.size === 0) return problem;
+    const issueTypes = Array.from(issueTypeSet);
+    const flags = uniquePreflightStrings([
+      ...(Array.isArray(problem.riskFlags || problem.risk_flags) ? (problem.riskFlags || problem.risk_flags) : []),
+      ...issueTypes,
+    ]);
+    const existingIssues = Array.isArray(problem.publishPreflightIssues || problem.publish_preflight_issues)
+      ? (problem.publishPreflightIssues || problem.publish_preflight_issues)
+      : [];
+    const publishPreflightIssues = [
+      ...existingIssues,
+      ...issueTypes.map(type => ({ type, label: classinPreflightIssueLabel(type) })),
+    ];
+    return {
+      ...problem,
+      riskFlags: flags,
+      risk_flags: flags,
+      reviewStatus: 'failed',
+      review_status: 'failed',
+      publishPreflightIssues,
+      publish_preflight_issues: publishPreflightIssues,
+    };
+  });
+  return snapshot;
 }
 
 const NON_ACTIONABLE_RISK_FLAGS = new Set([
@@ -9503,11 +9679,17 @@ function App(){
       if (!resp.ok || !json.ok) {
         const blockedPublish = normalizePublishPreflightBlock(json);
         if (blockedPublish) {
+          const markedSession = applyPublishPreflightIssuesToSession(sessionForPublish, blockedPublish);
           const blockedTarget = publishBlockedTarget(blockedPublish);
+          if (markedSession && markedSession !== sessionForPublish) {
+            setSession(markedSession);
+            setItems((markedSession.problems || []).map((problem, idx) => mapProblemToItem(problem, idx)));
+          }
           setReviewFocus(blockedTarget.reviewFocus);
           setView(blockedTarget.view);
           showToast(
-            `서버 사전점검에서 제작을 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}`
+            pageChromePreflightBlockToast(blockedPublish)
+              || `서버 사전점검에서 제작을 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}`
           );
           return;
         }
@@ -9593,6 +9775,8 @@ function App(){
             aiBusy={hasRunningSessionRecognition}
             onConfirm={onConfirm}
             reviewFocus={reviewFocus}
+            onEnhanceImage={enhanceImageSession}
+            imageEnhanceBusy={hasRunningImageEnhance}
           />
         ) : (
           <BoardStage

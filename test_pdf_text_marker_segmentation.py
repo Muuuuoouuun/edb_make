@@ -50,6 +50,142 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             )
             self.assertEqual(4, len(page_model.problems))
 
+    def test_pdf_passage_range_block_attaches_to_child_problems_without_ocr(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "passage_range_exam.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 92), "[1~2] 다음 글을 읽고 물음에 답하시오.", fontsize=14)
+            page.insert_text((48, 138), "shared passage first line", fontsize=12)
+            page.insert_text((48, 170), "shared passage second line", fontsize=12)
+            page.insert_text((48, 320), "1. first question", fontsize=14)
+            page.insert_text((330, 320), "2. second question", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.KOREAN,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            by_number = {
+                problem.metadata.get("problem_number"): problem
+                for problem in page_model.problems
+            }
+            self.assertEqual({1, 2}, set(by_number))
+            shared_ids = by_number[1].metadata.get("shared_passage_block_ids")
+            self.assertTrue(shared_ids)
+            self.assertEqual(shared_ids, by_number[2].metadata.get("shared_passage_block_ids"))
+
+            shared_block = next(
+                block for block in page_model.blocks if block.block_id == shared_ids[0]
+            )
+            first_problem_block = next(
+                block for block in page_model.blocks if block.metadata.get("problem_number") == 1
+            )
+            self.assertEqual("pdf-passage-range", shared_block.metadata.get("segmenter"))
+            self.assertLess(shared_block.bbox.top, first_problem_block.bbox.top)
+            self.assertLess(shared_block.bbox.bottom, first_problem_block.bbox.top)
+
+    def test_pdf_passage_range_block_can_attach_to_prior_column_child_markers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "cross_column_passage_range_exam.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((330, 120), "1. first question", fontsize=14)
+            page.insert_text((330, 320), "2. second question", fontsize=14)
+            page.insert_text((48, 540), "[1~2] 다음 글을 읽고 물음에 답하시오.", fontsize=14)
+            page.insert_text((48, 590), "shared passage first line", fontsize=12)
+            page.insert_text((48, 630), "shared passage second line", fontsize=12)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.ENGLISH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            by_number = {
+                problem.metadata.get("problem_number"): problem
+                for problem in page_model.problems
+            }
+            self.assertEqual({1, 2}, set(by_number))
+            shared_ids = by_number[1].metadata.get("shared_passage_block_ids")
+            self.assertTrue(shared_ids)
+            self.assertEqual(shared_ids, by_number[2].metadata.get("shared_passage_block_ids"))
+
+            shared_block = next(
+                block for block in page_model.blocks if block.block_id == shared_ids[0]
+            )
+            first_problem_block = next(
+                block for block in page_model.blocks if block.metadata.get("problem_number") == 1
+            )
+            self.assertEqual("pdf-passage-range", shared_block.metadata.get("segmenter"))
+            self.assertGreater(shared_block.bbox.top, first_problem_block.bbox.top)
+
+    def test_pdf_workbook_example_markers_ignore_section_headings_and_footer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "math_workbook_examples.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((32, 54), "1. 삼각비", fontsize=18)
+            page.insert_text((250, 118), "#1. 삼각비의 뜻", fontsize=14)
+            page.insert_text((32, 220), "ex) 다음 그림에서 x의 값을 구하시오.", fontsize=14)
+            page.draw_rect(fitz.Rect(90, 270, 300, 390), color=(0, 0, 0), width=1)
+            page.insert_text((120, 330), "45°", fontsize=14)
+            page.insert_text((250, 440), "#2. 특수각", fontsize=14)
+            page.insert_text((32, 520), "ex) 다음 표를 완성하시오.", fontsize=14)
+            page.draw_rect(fitz.Rect(90, 570, 360, 680), color=(0, 0, 0), width=1)
+            page.insert_text((32, 760), "중3-2 수학", fontsize=12)
+            page.insert_text((280, 760), "- 1 -", fontsize=12)
+            page.insert_text((455, 760), "YouTube - 친절한카수박", fontsize=12)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.MATH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertEqual("pdf-example-markers", page_model.metadata.get("segmenter"))
+            self.assertEqual(2, len(page_model.problems))
+            self.assertEqual(
+                [None, None],
+                [problem.metadata.get("problem_number") for problem in page_model.problems],
+            )
+            for problem in page_model.problems:
+                self.assertTrue(problem.figure_block_ids)
+
+            footer_top = prepared.image.height * 0.9
+            self.assertTrue(all(block.bbox.bottom < footer_top for block in page_model.blocks))
+
     def test_pdf_render_uses_external_pymupdf_when_module_missing(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
             pdf_path = Path(temp_dir) / "single_problem.pdf"
@@ -119,6 +255,25 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
 
             markers = pages[0].metadata.get("pdf_problem_markers") or []
             self.assertEqual([13, 14], [marker.get("number") for marker in markers])
+
+    def test_pdf_problem_markers_keep_year_started_problem_title(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "year_problem_title.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=360, height=420)
+            page.insert_text((48, 120), "9. 2024 Grand Butterfly Circus", fontsize=14)
+            page.insert_text((48, 260), "10. next problem stem", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            pages = preprocess_module.render_pdf_pages(
+                pdf_path,
+                Path(temp_dir) / "rendered",
+                dpi=72,
+            )
+
+            markers = pages[0].metadata.get("pdf_problem_markers") or []
+            self.assertEqual([9, 10], [marker.get("number") for marker in markers])
 
     def test_pdf_marker_last_problem_excludes_isolated_footer_page_number(self):
         image = Image.new("RGB", (600, 800), "white")

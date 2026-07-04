@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 1
+PDF_NORMALIZED_CACHE_VERSION = 2
 IMAGE_NORMALIZED_CACHE_VERSION = 1
 HWP_NORMALIZED_CACHE_VERSION = 5
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
@@ -126,6 +126,11 @@ def looks_like_pdf_print_date_header(text):
     return False
 
 
+def looks_like_decimal_continuation(text, match):
+    after_dot_index = match.end(1) + 1
+    return after_dot_index < len(text) and text[after_dot_index].isdigit()
+
+
 def extract_pdf_problem_markers(page, scale):
     markers = []
     try:
@@ -148,8 +153,7 @@ def extract_pdf_problem_markers(page, scale):
             match = re.match(r"^([1-9][0-9]?)\.\s*", text)
             if not match:
                 continue
-            suffix = text[match.end():].lstrip()
-            if suffix[:1].isdigit():
+            if looks_like_decimal_continuation(text, match):
                 continue
             bbox = line.get("bbox")
             if not bbox or len(bbox) != 4:
@@ -1902,6 +1906,11 @@ def _looks_like_pdf_print_date_header(text: str) -> bool:
     return False
 
 
+def _looks_like_decimal_continuation(text: str, match: Any) -> bool:
+    after_dot_index = match.end(1) + 1
+    return after_dot_index < len(text) and text[after_dot_index].isdigit()
+
+
 def _file_sha1(path: Path, chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha1()
     with path.open("rb") as handle:
@@ -2997,8 +3006,7 @@ def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]
             match = re.match(r"^([1-9][0-9]?)\.\s*", text)
             if not match:
                 continue
-            suffix = text[match.end():].lstrip()
-            if suffix[:1].isdigit():
+            if _looks_like_decimal_continuation(text, match):
                 continue
             number = int(match.group(1))
             if not 1 <= number <= 99:

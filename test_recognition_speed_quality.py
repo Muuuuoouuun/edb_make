@@ -388,6 +388,58 @@ def test_build_page_model_passes_stable_cache_identity_to_primary_and_escalated_
     assert page.metadata["ai_stages"]["ocr_escalation"]["applied_block_count"] == 1
 
 
+def test_page_worker_count_defaults_scale_for_basic_recognition(monkeypatch):
+    import build_structured_page_json as pipeline
+
+    monkeypatch.delenv("EDB_RECOGNITION_PAGE_WORKERS", raising=False)
+    monkeypatch.delenv("EDB_RECOGNITION_WORKERS", raising=False)
+    monkeypatch.delenv("EDB_AI_MAX_WORKERS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 16)
+
+    assert pipeline.resolve_recognition_worker_count(8, ocr_mode="auto") == 4
+    assert pipeline.resolve_recognition_worker_count(3, ocr_mode="noop") == 3
+    assert pipeline.resolve_recognition_worker_count(1, ocr_mode="auto") == 1
+
+
+def test_page_worker_count_defaults_respect_network_ai_cap(monkeypatch):
+    import build_structured_page_json as pipeline
+
+    monkeypatch.delenv("EDB_RECOGNITION_PAGE_WORKERS", raising=False)
+    monkeypatch.delenv("EDB_RECOGNITION_WORKERS", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.delenv("EDB_AI_MAX_WORKERS", raising=False)
+
+    assert pipeline.resolve_recognition_worker_count(8, ocr_mode="auto") == 3
+
+    monkeypatch.setenv("EDB_AI_MAX_WORKERS", "5")
+    assert pipeline.resolve_recognition_worker_count(8, ocr_mode="auto") == 3
+
+    monkeypatch.setenv("EDB_RECOGNITION_PAGE_WORKERS", "8")
+    assert pipeline.resolve_recognition_worker_count(8, ocr_mode="auto") == 5
+
+
+def test_source_worker_count_uses_basic_recognition_default(monkeypatch):
+    import build_problem_board_edb as builder
+    import build_structured_page_json as pipeline
+
+    monkeypatch.delenv("EDB_RECOGNITION_PAGE_WORKERS", raising=False)
+    monkeypatch.delenv("EDB_RECOGNITION_WORKERS", raising=False)
+    monkeypatch.delenv("EDB_AI_MAX_WORKERS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 16)
+
+    assert (
+        builder.resolve_source_build_worker_count(
+            8,
+            input_intent="multi-problem",
+            ocr_mode="auto",
+            ai_fallback_config={"mode": "off"},
+        )
+        == 4
+    )
+
+
 def test_block_worker_count_defaults_and_env_override(monkeypatch):
     import build_structured_page_json as pipeline
 

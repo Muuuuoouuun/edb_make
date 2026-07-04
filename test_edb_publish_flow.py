@@ -251,7 +251,9 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             self.assertEqual(110.0, entries[0].bounds.top)
             self.assertEqual(80.0 - problem_board.PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX, entries[0].bounds.left)
-            self.assertEqual(round(entries[0].bounds.width), Image.open(entries[0].crop_path).size[0])
+            crop_width = Image.open(entries[0].crop_path).size[0]
+            self.assertLessEqual(crop_width, round(entries[0].bounds.width))
+            self.assertGreater(crop_width, round(entries[0].bounds.width) - 32)
 
     def test_build_problem_entries_restores_ignored_hwp_marker_from_text_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -755,6 +757,80 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertTrue(preflight["passed"])
             self.assertEqual("passed", preflight["status"])
             self.assertEqual([], duplicate_groups)
+
+    def test_publish_preflight_blocks_any_s3_page_chrome_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "s3-artifact.png"
+            image = Image.new("RGB", (320, 240), "white")
+            draw = ImageDraw.Draw(image)
+            draw.text((64, 48), "1. reconstructed", fill="black")
+            draw.line((0, 0, 0, 239), fill="black", width=3)
+            image.save(artifact)
+            problem = {
+                "id": "problem-1",
+                "title": "1.",
+                "imagePath": artifact.resolve().as_uri(),
+                "processingStep": "s3",
+                "riskFlags": [],
+            }
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                [problem],
+                session={"problems": [problem], "pages": []},
+            )
+
+            self.assertFalse(preflight["passed"])
+            self.assertEqual("blocked", preflight["status"])
+            self.assertEqual([], duplicate_groups)
+            self.assertEqual(["step3_page_chrome_artifact"], [issue["type"] for issue in preflight["issues"]])
+            self.assertEqual(["edge_vertical_guide"], preflight["issues"][0]["artifactTypes"])
+
+    def test_publish_preflight_allows_one_s2_page_chrome_artifact_per_ten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            clean = root / "clean.png"
+            clean_image = Image.new("RGB", (320, 240), "white")
+            ImageDraw.Draw(clean_image).text((64, 48), "clean problem", fill="black")
+            clean_image.save(clean)
+            artifact = root / "s2-artifact.png"
+            artifact_image = clean_image.copy()
+            ImageDraw.Draw(artifact_image).line((0, 0, 0, 239), fill="black", width=3)
+            artifact_image.save(artifact)
+
+            def make_problem(index: int, *, has_artifact: bool) -> dict[str, object]:
+                path = artifact if has_artifact else clean
+                return {
+                    "id": f"problem-{index}",
+                    "title": f"{index}.",
+                    "imagePath": path.resolve().as_uri(),
+                    "processingStep": "s2",
+                    "riskFlags": [],
+                }
+
+            one_bad = [
+                make_problem(index, has_artifact=index == 1)
+                for index in range(1, 11)
+            ]
+            preflight, _duplicate_groups = _session_publish_blocking_preflight(
+                one_bad,
+                session={"problems": one_bad, "pages": []},
+            )
+            self.assertTrue(preflight["passed"])
+
+            two_bad = [
+                make_problem(index, has_artifact=index in {1, 2})
+                for index in range(1, 11)
+            ]
+            preflight, _duplicate_groups = _session_publish_blocking_preflight(
+                two_bad,
+                session={"problems": two_bad, "pages": []},
+            )
+            self.assertFalse(preflight["passed"])
+            self.assertEqual(["step2_page_chrome_artifact_rate"], [issue["type"] for issue in preflight["issues"]])
+            self.assertEqual(2, preflight["issues"][0]["artifactProblemCount"])
+            self.assertEqual(10, preflight["issues"][0]["checkedProblemCount"])
+            self.assertGreater(preflight["issues"][0]["artifactRatio"], 0.10)
 
     def test_problem_ui_session_flags_duplicate_problem_numbers_for_review(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3790,6 +3866,140 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertGreater(cleaned.width, 650)
         self.assertGreater(cleaned.height, 900)
         self.assertEqual(cleaned.getpixel((8, cleaned.height - 8)), (255, 255, 255))
+
+    def test_trusted_pdf_marker_crop_trims_column_divider_and_footer_badge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            image = Image.new("RGB", (900, 1120), "white")
+            draw = ImageDraw.Draw(image)
+            draw.line((450, 140, 450, 1042), fill="black", width=3)
+            draw.text((500, 180), "3. problem body", fill="black")
+            draw.text((500, 340), "choices 1 2 3 4 5", fill="black")
+            draw.rectangle((410, 1040, 490, 1094), outline="black", width=2)
+            draw.line((410, 1094, 490, 1040), fill="black", width=2)
+            draw.text((424, 1056), "1", fill="black")
+            draw.text((462, 1068), "20", fill="black")
+            draw.text((560, 1090), "copyright footer", fill=(30, 70, 250))
+            image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=image,
+                original_size=(900, 1120),
+            )
+            block = ContentBlock(
+                block_id="p3-stem",
+                block_type=BlockType.STEM,
+                bbox=Box(486, 160, 350, 920),
+                reading_order=0,
+                text="3. problem body",
+                metadata={
+                    "segmenter": "pdf-text-markers",
+                    "problem_number_source": "pdf_text_marker",
+                    "column_index": 1,
+                },
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1120,
+                subject=Subject.MATH,
+                source_path=str(source),
+                blocks=[block],
+                problems=[
+                    ProblemUnit(
+                        unit_id="problem-3",
+                        subject=Subject.MATH,
+                        title="3.",
+                        stem_block_ids=["p3-stem"],
+                        metadata={
+                            "problem_number": 3,
+                            "problem_number_source": "pdf_text_marker",
+                            "column_index": 1,
+                        },
+                    )
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            crop = Image.open(entries[0].crop_path).convert("RGB")
+            gray = crop.convert("L")
+            left_band_dark = sum(
+                1
+                for x in range(min(14, crop.width))
+                for y in range(crop.height)
+                if gray.getpixel((x, y)) < 80
+            )
+            bottom_left_dark = sum(
+                1
+                for x in range(min(70, crop.width))
+                for y in range(max(0, crop.height - 70), crop.height)
+                if gray.getpixel((x, y)) < 80
+            )
+            bottom_blue = sum(
+                1
+                for x in range(crop.width)
+                for y in range(max(0, crop.height - 34), crop.height)
+                if (pixel := crop.getpixel((x, y)))[2] >= pixel[0] + 22 and pixel[2] >= pixel[1] + 8
+            )
+
+            self.assertLess(left_band_dark, 20)
+            self.assertLess(bottom_left_dark, 20)
+            self.assertLess(bottom_blue, 10)
+
+    def test_recrop_problem_uses_full_page_chrome_trim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = Image.new("RGB", (640, 760), "white")
+            draw = ImageDraw.Draw(image)
+            draw.line((320, 40, 320, 690), fill="black", width=3)
+            draw.text((360, 80), "12. recropped problem", fill="black")
+            draw.rectangle((290, 690, 350, 735), outline="black", width=2)
+            draw.line((290, 735, 350, 690), fill="black", width=2)
+            draw.text((302, 706), "6", fill="black")
+            draw.text((332, 710), "20", fill="black")
+            draw.text((390, 732), "copyright footer", fill=(30, 70, 250))
+            crop_path = root / "crop.png"
+
+            problem_board.recrop_problem(
+                image,
+                Box(left=312, top=54, width=280, height=700),
+                crop_path,
+            )
+
+            crop = Image.open(crop_path).convert("RGB")
+            gray = crop.convert("L")
+            left_band_dark = sum(
+                1
+                for x in range(min(14, crop.width))
+                for y in range(crop.height)
+                if gray.getpixel((x, y)) < 80
+            )
+            bottom_left_dark = sum(
+                1
+                for x in range(min(70, crop.width))
+                for y in range(max(0, crop.height - 70), crop.height)
+                if gray.getpixel((x, y)) < 80
+            )
+            bottom_blue = sum(
+                1
+                for x in range(crop.width)
+                for y in range(max(0, crop.height - 34), crop.height)
+                if (pixel := crop.getpixel((x, y)))[2] >= pixel[0] + 22 and pixel[2] >= pixel[1] + 8
+            )
+
+            self.assertLess(left_band_dark, 20)
+            self.assertLess(bottom_left_dark, 20)
+            self.assertLess(bottom_blue, 10)
 
     def test_problem_crops_use_same_column_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -744,6 +744,69 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             """
         )
 
+    def test_publish_preflight_page_chrome_issues_mark_problem_flags(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('const NON_ACTIONABLE_RISK_FLAGS');
+            if (start < 0 || end < 0) throw new Error('publish preflight helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+            if (typeof sandbox.applyPublishPreflightIssuesToSession !== 'function') {
+              throw new Error('applyPublishPreflightIssuesToSession missing');
+            }
+            const session = {
+              problems: [
+                { id: 'p1', reviewStatus: 'normal', riskFlags: [], bbox: { width: 10, height: 10 } },
+                { id: 'p2', reviewStatus: 'normal', riskFlags: [], bbox: { width: 10, height: 10 } },
+                { id: 'p3', reviewStatus: 'normal', riskFlags: [], bbox: { width: 10, height: 10 } },
+              ],
+              pages: [{ id: 'page-1', problemIds: ['p1', 'p2', 'p3'], riskFlags: [] }],
+            };
+            const blocked = {
+              issueTypes: ['step3_page_chrome_artifact'],
+              classinPreflight: {
+                issues: [
+                  { type: 'step3_page_chrome_artifact', problemIds: ['p2'] },
+                ],
+              },
+            };
+            const marked = sandbox.applyPublishPreflightIssuesToSession(session, blocked);
+            const p1 = marked.problems.find(problem => problem.id === 'p1');
+            const p2 = marked.problems.find(problem => problem.id === 'p2');
+            if (p1.reviewStatus !== 'normal' || p1.riskFlags.length !== 0) {
+              throw new Error(`unexpected p1 mutation: ${JSON.stringify(p1)}`);
+            }
+            if (p2.reviewStatus !== 'failed') {
+              throw new Error(`expected p2 failed, got ${p2.reviewStatus}`);
+            }
+            if (!p2.riskFlags.includes('step3_page_chrome_artifact')) {
+              throw new Error(`expected p2 page chrome flag, got ${p2.riskFlags}`);
+            }
+            if (!p2.publishPreflightIssues?.some(issue => issue.type === 'step3_page_chrome_artifact')) {
+              throw new Error(`expected p2 publish preflight details, got ${JSON.stringify(p2.publishPreflightIssues)}`);
+            }
+            if (!sandbox.hasPageChromeArtifactFlag(p2)) {
+              throw new Error('expected page chrome helper to recognize marked problem');
+            }
+            const target = sandbox.publishBlockedTarget(blocked);
+            if (target.view !== 'review') {
+              throw new Error(`expected review target, got ${target.view}`);
+            }
+            if (target.reviewFocus?.problemIds?.join(',') !== 'p2') {
+              throw new Error(`expected p2 focus, got ${target.reviewFocus?.problemIds}`);
+            }
+            const toast = sandbox.pageChromePreflightBlockToast(blocked);
+            if (!toast.includes('3단계 이미지') || !toast.includes('빨간 문제')) {
+              throw new Error(`expected page chrome toast, got ${toast}`);
+            }
+            """
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

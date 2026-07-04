@@ -320,10 +320,17 @@ def resolve_recognition_worker_count(
             return max(1, min(item_count, requested_workers, max(1, network_cap)))
         return max(1, min(item_count, requested_workers))
 
-    # OCR/AI repair is mostly network-bound when Gemini is active, but each
-    # page already parallelizes block OCR. Keep the default modest to overlap
-    # page waits without inviting rate-limit failures.
-    default_workers = 2 if gemini_primary or ai_enabled else min(2, os.cpu_count() or 2)
+    # Local/default recognition is CPU-heavy before OCR, so match the
+    # preprocessing stage's modest four-worker cap. Network AI defaults to
+    # three workers and remains bounded by EDB_AI_MAX_WORKERS.
+    if network_bound:
+        try:
+            network_cap = int(os.environ.get("EDB_AI_MAX_WORKERS", "3").strip() or "3")
+        except ValueError:
+            network_cap = 3
+        default_workers = min(3, max(1, network_cap))
+    else:
+        default_workers = min(4, os.cpu_count() or 2)
     return max(1, min(item_count, default_workers))
 
 

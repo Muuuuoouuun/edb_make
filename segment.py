@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Iterable
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageOps, ImageStat
 
@@ -64,6 +66,54 @@ LARGE_BLOCK_AREA_RATIO = 0.18
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX = 3.0
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO = 0.001
 PDF_CHOICE_MARKERS = ("①", "②", "③", "④", "⑤")
+PDF_PASSAGE_RANGE_BRACKET_RE = re.compile(
+    r"^\s*[\[［（(<]"
+    r"(?P<start>[0-9０-９]{1,3})\s*[~\-〜－]\s*(?P<end>[0-9０-９]{1,3})\s*(?:번)?"
+    r"[\]］）)>]"
+)
+PDF_PASSAGE_RANGE_KOREAN_RE = re.compile(
+    r"^\s*(?:제\s*)?(?P<start>[0-9０-９]{1,3})\s*(?:번\s*)?"
+    r"(?:[~\-〜－]|부터|에서)\s*"
+    r"(?:제\s*)?(?P<end>[0-9０-９]{1,3})\s*번(?:까지)?"
+)
+PDF_PASSAGE_RANGE_COMPACT_RE = re.compile(
+    r"^\s*(?:(?:문항|문제|questions?)\s*)?"
+    r"(?P<start>[0-9０-９]{1,3})\s*[~\-\u2010-\u2015]\s*(?P<end>[0-9０-９]{1,3})\s*(?:번)?",
+    re.IGNORECASE,
+)
+PDF_PASSAGE_RANGE_CUES = (
+    "다음",
+    "글",
+    "자료",
+    "지문",
+    "대화",
+    "담화",
+    "발표",
+    "작품",
+    "도표",
+    "그림",
+    "실험",
+    "보기",
+    "읽고",
+    "보고",
+    "물음",
+    "답하시오",
+    "following",
+    "read",
+    "passage",
+    "text",
+    "questions",
+    "conversation",
+    "dialogue",
+    "article",
+    "chart",
+    "graph",
+)
+PDF_EXAMPLE_MARKER_RE = re.compile(r"^\s*(?:ex|example|예제)\s*[\)\.]?", re.IGNORECASE)
+PDF_WORKBOOK_HASH_SECTION_RE = re.compile(r"^\s*#\s*[0-9０-９]{1,3}\s*[\.\)]?")
+PDF_WORKBOOK_NUMBER_SECTION_RE = re.compile(
+    r"^\s*[0-9０-９]{1,2}\.\s*[가-힣A-Za-z][가-힣A-Za-z0-9\s·ㆍ\-()]{0,32}$"
+)
 
 
 def _pil_to_gray_array(image: Image.Image):
@@ -1076,6 +1126,473 @@ def _trim_pdf_problem_bottom_to_ink(
     )
 
 
+def _extract_pdf_passage_range(text: Any) -> tuple[int, int] | None:
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    compact = re.sub(r"\s+", " ", normalized).strip()
+    if not compact:
+        return None
+    lower = compact.lower()
+    bracket_or_suffix_match = PDF_PASSAGE_RANGE_BRACKET_RE.match(compact) or PDF_PASSAGE_RANGE_KOREAN_RE.match(compact)
+    if bracket_or_suffix_match:
+        match = bracket_or_suffix_match
+    elif any(cue in lower for cue in PDF_PASSAGE_RANGE_CUES):
+        match = PDF_PASSAGE_RANGE_COMPACT_RE.match(compact)
+    else:
+        return None
+    if not match:
+        return None
+    try:
+        start = int(unicodedata.normalize("NFKC", match.group("start")))
+        end = int(unicodedata.normalize("NFKC", match.group("end")))
+    except (TypeError, ValueError):
+        return None
+    if start <= 0 or end <= start or end - start > 12:
+        return None
+    return start, end
+
+
+def _pdf_column_bounds_for_x(
+    column_entries: list[tuple[int, list[dict[str, Any]], tuple[float, float]]],
+    center_x: float,
+    image: Image.Image,
+) -> tuple[int, float, float]:
+    for column_index, _markers, (left_bound, right_bound) in column_entries:
+        if left_bound - 8.0 <= center_x <= right_bound + 8.0:
+            return column_index, left_bound, right_bound
+    visual_columns = _detect_pdf_visual_column_boxes(image)
+    if len(visual_columns) == 2:
+        for column_index, column_box in enumerate(visual_columns, start=1):
+            if column_box.left - 8.0 <= center_x <= column_box.right + 8.0:
+                return column_index, column_box.left, column_box.right
+    return 1, 0.0, float(image.width)
+
+
+def _looks_like_pdf_footer_text_line(text: Any, box: Box, image_height: int) -> bool:
+    compact = unicodedata.normalize("NFKC", str(text or ""))
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if not compact or box.top < float(image_height) * 0.82:
+        return False
+    if re.fullmatch(r"[-–—]?\s*[0-9]{1,3}\s*[-–—]?", compact):
+        return True
+    lower = compact.lower()
+    return any(token in lower for token in ("copyright", "저작권", "확인 사항", "답안지"))
+
+
+def _pdf_same_column_text_bottom_after_header(
+    text_lines: list[dict[str, Any]],
+    header_box: Box,
+    *,
+    left_bound: float,
+    right_bound: float,
+    image_height: int,
+) -> float | None:
+    bottoms: list[float] = []
+    for line in text_lines:
+        line_box = _marker_bbox(line)
+        if line_box is None or line_box.top <= header_box.top:
+            continue
+        line_center_x = (line_box.left + line_box.right) / 2.0
+        if not left_bound - 8.0 <= line_center_x <= right_bound + 8.0:
+            continue
+        if _looks_like_pdf_footer_text_line(line.get("text"), line_box, image_height):
+            continue
+        bottoms.append(line_box.bottom)
+    if not bottoms:
+        return None
+    return min(float(image_height), max(bottoms) + max(18.0, float(image_height) * 0.012))
+
+
+def _trim_pdf_passage_column_bottom_to_ink(
+    image: Image.Image,
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+) -> float:
+    crop_box = (
+        max(0, int(left)),
+        max(0, int(top)),
+        min(image.width, int(right)),
+        min(image.height, int(bottom)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        return bottom
+
+    mask = _dark_mask(image.crop(crop_box), threshold=220)
+    row_projection = _row_dark_projection(mask)
+    row_threshold = max(2, int(mask.width * 0.004))
+    runs = [
+        run
+        for run in _find_active_runs(row_projection, threshold=row_threshold)
+        if run[1] - run[0] + 1 >= 2
+    ]
+    if not runs:
+        return bottom
+
+    meaningful_runs: list[tuple[int, int]] = []
+    for run in runs:
+        abs_top = crop_box[1] + run[0]
+        run_projection = row_projection[run[0] : run[1] + 1]
+        max_dark_pixels = max(run_projection) if run_projection else 0
+        width_ratio = float(max_dark_pixels) / max(1.0, float(mask.width))
+        if abs_top >= float(image.height) * 0.86 and width_ratio < 0.12:
+            continue
+        meaningful_runs.append(run)
+
+    if not meaningful_runs:
+        return bottom
+    last_run = meaningful_runs[-1]
+    padding = max(16.0, float(image.height) * 0.012)
+    trimmed_bottom = min(bottom, float(crop_box[1] + last_run[1]) + padding)
+    return trimmed_bottom if trimmed_bottom - top >= 40.0 else bottom
+
+
+def _is_pdf_example_marker_text(text: Any) -> bool:
+    return bool(PDF_EXAMPLE_MARKER_RE.match(unicodedata.normalize("NFKC", str(text or "")).strip()))
+
+
+def _is_pdf_workbook_section_heading_text(text: Any) -> bool:
+    compact = unicodedata.normalize("NFKC", str(text or ""))
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if not compact:
+        return False
+    return bool(
+        PDF_WORKBOOK_HASH_SECTION_RE.match(compact)
+        or PDF_WORKBOOK_NUMBER_SECTION_RE.match(compact)
+    )
+
+
+def _looks_like_pdf_workbook_footer_line(text: Any, box: Box, image_height: int) -> bool:
+    compact = unicodedata.normalize("NFKC", str(text or ""))
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if not compact or box.top < float(image_height) * 0.84:
+        return False
+    lower = compact.lower()
+    if re.fullmatch(r"[-–—]?\s*[0-9]{1,3}\s*[-–—]?", compact):
+        return True
+    return any(token in lower for token in ("youtube", "중3", "중학교", "친절한"))
+
+
+def _pdf_workbook_footer_top(text_lines: list[dict[str, Any]], image_height: int) -> float | None:
+    footer_tops: list[float] = []
+    for line in text_lines:
+        line_box = _marker_bbox(line)
+        if line_box is None:
+            continue
+        if _looks_like_pdf_workbook_footer_line(line.get("text"), line_box, image_height):
+            footer_tops.append(line_box.top)
+    return min(footer_tops) if footer_tops else None
+
+
+def _pdf_example_boundary_lines(text_lines: list[dict[str, Any]]) -> list[tuple[float, dict[str, Any]]]:
+    boundaries: list[tuple[float, dict[str, Any]]] = []
+    for line in text_lines:
+        line_box = _marker_bbox(line)
+        if line_box is None:
+            continue
+        text = line.get("text")
+        if _is_pdf_example_marker_text(text) or _is_pdf_workbook_section_heading_text(text):
+            boundaries.append((line_box.top, line))
+    boundaries.sort(key=lambda item: item[0])
+    return boundaries
+
+
+def _pdf_example_meaningful_bottom(crop_mask: Image.Image, *, page_height: int, crop_top: int) -> int | None:
+    row_projection = _row_dark_projection(crop_mask)
+    if not row_projection:
+        return None
+    row_threshold = max(2, int(crop_mask.width * 0.004))
+    runs = [
+        run
+        for run in _find_active_runs(row_projection, threshold=row_threshold)
+        if run[1] - run[0] + 1 >= 2
+    ]
+    meaningful_runs: list[tuple[int, int]] = []
+    for run in runs:
+        run_projection = row_projection[run[0] : run[1] + 1]
+        max_dark_pixels = max(run_projection) if run_projection else 0
+        width_ratio = float(max_dark_pixels) / max(1.0, float(crop_mask.width))
+        run_height = run[1] - run[0] + 1
+        abs_top = crop_top + run[0]
+        if abs_top >= float(page_height) * 0.8 and run_height <= 6 and width_ratio > 0.72:
+            continue
+        meaningful_runs.append(run)
+    if not meaningful_runs:
+        return None
+    return meaningful_runs[-1][1] + 1
+
+
+def _should_use_pdf_example_marker_segmentation(
+    markers: list[dict[str, Any]],
+    text_lines: list[dict[str, Any]],
+) -> bool:
+    example_count = sum(1 for line in text_lines if _is_pdf_example_marker_text(line.get("text")))
+    if example_count <= 0:
+        return False
+    if not markers:
+        return True
+    if len(markers) <= 1:
+        return True
+    section_like_count = sum(
+        1 for marker in markers if _is_pdf_workbook_section_heading_text(marker.get("text"))
+    )
+    return section_like_count >= len(markers)
+
+
+def _segment_pdf_example_markers(
+    image: Image.Image,
+    page_id: str,
+    text_lines: list[dict[str, Any]],
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    if not text_lines:
+        return None
+
+    sorted_lines = sorted(
+        (line for line in text_lines if isinstance(line, dict)),
+        key=lambda line: (
+            (_marker_bbox(line).top if _marker_bbox(line) else 0.0),
+            (_marker_bbox(line).left if _marker_bbox(line) else 0.0),
+        ),
+    )
+    example_lines = [
+        line for line in sorted_lines if _is_pdf_example_marker_text(line.get("text"))
+    ]
+    if not example_lines:
+        return None
+
+    mask = _dark_mask(image, threshold=220)
+    content_box = _find_document_content_box(mask, image.width, image.height)
+    footer_top = _pdf_workbook_footer_top(sorted_lines, image.height)
+    boundaries = _pdf_example_boundary_lines(sorted_lines)
+    blocks: list[ContentBlock] = []
+    page_area = _page_area_px(image.width, image.height)
+    padding = max(16.0, float(image.height) * 0.012)
+
+    for example_index, line in enumerate(example_lines, start=1):
+        marker_box = _marker_bbox(line)
+        if marker_box is None:
+            continue
+        next_boundaries = [
+            top
+            for top, boundary_line in boundaries
+            if top > marker_box.top + max(28.0, marker_box.height * 0.8)
+            and boundary_line is not line
+        ]
+        boundary_bottom = min(next_boundaries) - padding if next_boundaries else float(image.height)
+        if footer_top is not None:
+            boundary_bottom = min(boundary_bottom, footer_top - padding)
+
+        top = max(0.0, marker_box.top - padding)
+        rough_bottom = min(float(image.height), boundary_bottom)
+        if rough_bottom - top < max(44.0, float(image.height) * 0.025):
+            continue
+
+        horizontal_padding = max(10.0, padding * 0.5)
+        crop_left = max(content_box.left, marker_box.left - horizontal_padding)
+        crop_right = min(content_box.right, float(image.width) - horizontal_padding)
+        crop_box = (
+            max(0, int(crop_left)),
+            max(0, int(top)),
+            min(image.width, int(crop_right)),
+            min(image.height, int(rough_bottom)),
+        )
+        if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+            continue
+        crop_mask = mask.crop(crop_box)
+        meaningful_bottom = _pdf_example_meaningful_bottom(
+            crop_mask,
+            page_height=image.height,
+            crop_top=crop_box[1],
+        )
+        if meaningful_bottom is not None:
+            crop_mask = crop_mask.crop((0, 0, crop_mask.width, meaningful_bottom))
+        ink_bbox = crop_mask.getbbox()
+        if ink_bbox is None:
+            continue
+
+        left = max(0.0, float(crop_box[0] + ink_bbox[0]) - padding)
+        right = min(float(image.width), float(crop_box[0] + ink_bbox[2]) + padding)
+        bottom = min(float(image.height), float(crop_box[1] + ink_bbox[3]) + padding)
+        if right - left < max(80.0, float(image.width) * 0.08):
+            left = content_box.left
+            right = content_box.right
+        if bottom - top < max(60.0, float(image.height) * 0.04):
+            continue
+
+        box = Box.from_points(left, top, right, bottom)
+        text = str(line.get("text") or "").strip()
+        metadata = _enrich_block_segmentation_metadata(
+            {
+                "segmenter": "pdf-example-markers",
+                "marker_kind": "example",
+                "example_index": example_index,
+                "question_band_index": example_index,
+                "source_band_index": example_index,
+                "force_problem_start": True,
+                "force_image_record": True,
+                "display_title": text[:120] or f"ex {example_index}",
+            },
+            segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+            block_area=box.area,
+            page_area=page_area,
+            large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+            page_width=image.width,
+            page_height=image.height,
+        )
+        blocks.append(
+            ContentBlock(
+                block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
+                block_type=BlockType.IMAGE,
+                bbox=box,
+                reading_order=len(blocks),
+                text=None,
+                confidence=1.0,
+                metadata=metadata,
+            )
+        )
+
+    if not blocks:
+        return None
+    return blocks, {
+        "segmenter": "pdf-example-markers",
+        "pdf_example_marker_count": len(example_lines),
+        "document_split_block_count": len(blocks),
+        "document_split_applied": True,
+        "content_box_area_ratio": content_box.area / max(1.0, page_area),
+    }
+
+
+def _build_pdf_passage_range_blocks(
+    image: Image.Image,
+    page_id: str,
+    text_lines: list[dict[str, Any]],
+    column_entries: list[tuple[int, list[dict[str, Any]], tuple[float, float]]],
+    *,
+    page_area: float,
+    start_index: int,
+) -> list[ContentBlock]:
+    blocks: list[ContentBlock] = []
+    if not text_lines or not column_entries:
+        return blocks
+
+    seen_ranges: set[tuple[int, int, int]] = set()
+    sorted_lines = sorted(
+        (line for line in text_lines if isinstance(line, dict)),
+        key=lambda line: (
+            (_marker_bbox(line).top if _marker_bbox(line) else 0.0),
+            (_marker_bbox(line).left if _marker_bbox(line) else 0.0),
+        ),
+    )
+    for line in sorted_lines:
+        text = str(line.get("text") or "").strip()
+        passage_range = _extract_pdf_passage_range(text)
+        if passage_range is None:
+            continue
+        header_box = _marker_bbox(line)
+        if header_box is None:
+            continue
+        start, end = passage_range
+        seen_key = (start, end, int(round(header_box.top / 8.0)))
+        if seen_key in seen_ranges:
+            continue
+
+        header_center_x = (header_box.left + header_box.right) / 2.0
+        column_index, left_bound, right_bound = _pdf_column_bounds_for_x(
+            column_entries,
+            header_center_x,
+            image,
+        )
+        child_boxes_in_column_after_header: list[Box] = []
+        child_boxes_any_column: list[Box] = []
+        marker_boxes_in_column_after_header: list[Box] = []
+        for _entry_column_index, markers, (entry_left, entry_right) in column_entries:
+            for marker in markers:
+                number = marker.get("number")
+                if not isinstance(number, int):
+                    continue
+                marker_box = _marker_bbox(marker)
+                if marker_box is None:
+                    continue
+                marker_center_x = (marker_box.left + marker_box.right) / 2.0
+                in_header_column = left_bound - 8.0 <= marker_center_x <= right_bound + 8.0
+                if marker_box.top > header_box.top and in_header_column:
+                    marker_boxes_in_column_after_header.append(marker_box)
+                if not start <= number <= end:
+                    continue
+                child_boxes_any_column.append(marker_box)
+                if (
+                    marker_box.top > header_box.top
+                    and in_header_column
+                ):
+                    child_boxes_in_column_after_header.append(marker_box)
+        if not child_boxes_any_column:
+            continue
+
+        top = max(0.0, header_box.top - max(8.0, float(image.height) * 0.004))
+        if child_boxes_in_column_after_header:
+            first_child_top = min(box.top for box in child_boxes_in_column_after_header)
+            bottom = min(float(image.height), first_child_top - max(14.0, float(image.height) * 0.007))
+        elif marker_boxes_in_column_after_header:
+            first_marker_top = min(box.top for box in marker_boxes_in_column_after_header)
+            bottom = min(float(image.height), first_marker_top - max(14.0, float(image.height) * 0.007))
+        else:
+            text_bottom = _pdf_same_column_text_bottom_after_header(
+                sorted_lines,
+                header_box,
+                left_bound=left_bound,
+                right_bound=right_bound,
+                image_height=image.height,
+            )
+            ink_bottom = _trim_pdf_passage_column_bottom_to_ink(
+                image,
+                left=left_bound,
+                right=right_bound,
+                top=top,
+                bottom=float(image.height),
+            )
+            bottom = max(text_bottom, ink_bottom) if text_bottom is not None else ink_bottom
+        if bottom - top < max(40.0, float(image.height) * 0.02):
+            continue
+
+        box = Box.from_points(left_bound, top, right_bound, bottom)
+        metadata = _enrich_block_segmentation_metadata(
+            {
+                "segmenter": "pdf-passage-range",
+                "column_index": column_index,
+                "question_band_index": 0,
+                "source_band_index": 0,
+                "marker_kind": "passage_range",
+                "passage_range_start": start,
+                "passage_range_end": end,
+                "passage_range": {"start": start, "end": end},
+                "display_title": text[:120],
+                "force_image_record": True,
+                "shared_passage": True,
+            },
+            segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+            block_area=box.area,
+            page_area=page_area,
+            large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+            page_width=image.width,
+            page_height=image.height,
+        )
+        blocks.append(
+            ContentBlock(
+                block_id=f"{page_id}-block-{start_index + len(blocks):03d}",
+                block_type=BlockType.IMAGE,
+                bbox=box,
+                reading_order=0,
+                text=text[:180],
+                confidence=1.0,
+                metadata=metadata,
+            )
+        )
+        seen_ranges.add(seen_key)
+
+    return blocks
+
+
 def _segment_pdf_problem_markers(
     image: Image.Image,
     page_id: str,
@@ -1231,6 +1748,16 @@ def _segment_pdf_problem_markers(
     if not blocks:
         return None
 
+    passage_range_blocks = _build_pdf_passage_range_blocks(
+        image,
+        page_id,
+        usable_text_lines,
+        column_entries,
+        page_area=page_area,
+        start_index=len(blocks) + 1,
+    )
+    blocks.extend(passage_range_blocks)
+
     blocks = sorted(
         blocks,
         key=lambda block: (
@@ -1250,6 +1777,7 @@ def _segment_pdf_problem_markers(
         "pdf_choice_bottom_trim_count": choice_bottom_trim_count,
         "pdf_content_bottom_trim_count": content_bottom_trim_count,
         "pdf_choice_visual_tail_count": choice_visual_tail_count,
+        "pdf_passage_range_block_count": len(passage_range_blocks),
         "document_split_block_count": len(blocks),
         "document_split_applied": True,
         "content_box_area_ratio": 1.0,
@@ -2578,12 +3106,20 @@ def segment_page(
         raw_markers = source_metadata.get("pdf_problem_markers")
         if isinstance(raw_markers, list):
             raw_text_lines = source_metadata.get("pdf_text_lines")
-            marker_result = _segment_pdf_problem_markers(
-                image,
-                page_id,
-                raw_markers,
-                text_lines=raw_text_lines if isinstance(raw_text_lines, list) else None,
-            )
+            usable_text_lines = raw_text_lines if isinstance(raw_text_lines, list) else []
+            if _should_use_pdf_example_marker_segmentation(raw_markers, usable_text_lines):
+                marker_result = _segment_pdf_example_markers(
+                    image,
+                    page_id,
+                    usable_text_lines,
+                )
+            if marker_result is None:
+                marker_result = _segment_pdf_problem_markers(
+                    image,
+                    page_id,
+                    raw_markers,
+                    text_lines=usable_text_lines if usable_text_lines else None,
+                )
         if marker_result is not None:
             blocks, metadata = marker_result
         else:

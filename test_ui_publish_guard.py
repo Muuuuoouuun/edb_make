@@ -95,6 +95,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("normalizePublishPreflightBlock(json)", on_publish)
         self.assertIn("publishBlockedTarget(blockedPublish)", on_publish)
+        self.assertIn("applyPublishPreflightIssuesToSession(sessionForPublish, blockedPublish)", on_publish)
+        self.assertIn("pageChromePreflightBlockToast(blockedPublish)", on_publish)
         self.assertIn("setReviewFocus(blockedTarget.reviewFocus)", on_publish)
         self.assertIn("reviewFocus={reviewFocus}", source)
         self.assertIn("reviewFocus", review_stage_signature)
@@ -107,10 +109,32 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("source_problem_bbox_overlap", target_helper)
         self.assertIn("duplicate_problem_number", target_helper)
         self.assertIn("passage_group_source_reuse", target_helper)
+        self.assertIn("step2_page_chrome_artifact_rate", target_helper)
+        self.assertIn("step3_page_chrome_artifact", target_helper)
         self.assertIn("blockedPublish?.blockingProblemIds", target_helper)
         self.assertIn("problemIds: focusedProblemIds", target_helper)
         self.assertIn("서버 사전점검", on_publish)
         self.assertIn("setView('review')", on_publish)
+
+    def test_publish_blocked_page_chrome_artifacts_get_retry_ui(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+        review_usage = source.split("<ReviewStage", 1)[1]
+        review_usage = review_usage.split("/>", 1)[0]
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        self.assertIn("hasPageChromeArtifactFlag", source)
+        self.assertIn("selectedPageChromeProblemIds", review_stage)
+        self.assertIn("onEnhanceImage?.(selectedPageChromeProblemIds)", review_stage)
+        self.assertIn("imageEnhanceBusy", review_stage)
+        self.assertIn("3단계 재구성", review_stage)
+        self.assertIn("page-chrome-artifact", review_stage)
+        self.assertIn("onEnhanceImage={enhanceImageSession}", review_usage)
+        self.assertIn("imageEnhanceBusy={hasRunningImageEnhance}", review_usage)
+        self.assertIn(".item.page-chrome-artifact", html)
+        self.assertIn(".stage-tile.page-chrome-artifact", html)
+        self.assertIn(".review-bbox.page-chrome-artifact", html)
 
     def test_board_uses_publish_guard_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")

@@ -116,6 +116,10 @@ def _classin_passage_group_source_reuse_issues(*args: Any, **kwargs: Any) -> Any
     return _lazy_call("build_problem_board_edb", "_classin_passage_group_source_reuse_issues", *args, **kwargs)
 
 
+def _classin_page_chrome_artifact_issues(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_classin_page_chrome_artifact_issues", *args, **kwargs)
+
+
 def _classin_source_bbox_overlap_issues(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_classin_source_bbox_overlap_issues", *args, **kwargs)
 
@@ -2009,6 +2013,7 @@ def _session_publish_blocking_preflight(
         _duplicate_problem_number_group_issue(group)
         for group in duplicate_groups
     ]
+    issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
     issues.extend(
@@ -3229,6 +3234,44 @@ def _copy_session_metadata_aliases(
 def _copy_publish_problem_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
     for aliases in PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS:
         _copy_session_metadata_aliases(target, source, aliases)
+
+
+def _copy_session_metadata_aliases_overwrite(
+    target: dict[str, Any],
+    source: dict[str, Any],
+    aliases: tuple[str, ...],
+) -> None:
+    source_metadata = source.get("metadata")
+    if not isinstance(source_metadata, dict):
+        source_metadata = {}
+    value: Any = None
+    found = False
+    for key in aliases:
+        candidate = source.get(key)
+        if _has_session_metadata_value(candidate):
+            value = candidate
+            found = True
+            break
+    if not found:
+        for key in aliases:
+            candidate = source_metadata.get(key)
+            if _has_session_metadata_value(candidate):
+                value = candidate
+                found = True
+                break
+    if not found:
+        return
+    for key in aliases:
+        target[key] = _clone_session_metadata_value(value)
+
+
+def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for aliases in (
+        ("inputIntent", "input_intent"),
+        ("placementMode", "placement_mode"),
+        ("forceFullPageBounds", "force_full_page_bounds"),
+    ):
+        _copy_session_metadata_aliases_overwrite(target, source, aliases)
 
 
 def _session_actionable_problem_ids(
@@ -5508,6 +5551,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # carry over user-facing labels so the rename doesn't get lost
         if session.get("session_name"):
             new_session["session_name"] = session["session_name"]
+        _copy_session_metadata_aliases_overwrite(
+            new_session,
+            session,
+            ("inputIntent", "input_intent"),
+        )
         new_session["crop_format"] = crop_format
         # publish only re-renders records; page-level review metadata
         # (sourceImageUri, dimensions, riskFlags) is still meaningful for the
@@ -5532,6 +5580,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if not prior:
                 continue
             _copy_publish_problem_metadata(problem, prior)
+            _copy_publish_problem_layout_metadata(problem, prior)
             if "bbox" not in problem or not problem["bbox"]:
                 problem["bbox"] = prior.get("bbox") or {}
             problem["riskFlags"] = [
