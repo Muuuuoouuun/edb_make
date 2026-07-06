@@ -2171,61 +2171,32 @@ def _marker_document_dedupe_scope(page: PageModel) -> str:
     return str(page.source_path or "__unknown_source__")
 
 
-def _hwp_text_signal_count_for_dedupe(page: PageModel) -> int:
-    quality = page.metadata.get("hwp_conversion_quality")
-    if not isinstance(quality, dict):
-        return 0
-    numbered = _coerce_int(quality.get("hwp_text_numbered_problem_count")) or 0
-    stem = _coerce_int(quality.get("hwp_text_stem_problem_count")) or 0
-    return max(numbered, stem)
-
-
-def _marker_document_duplicate_number_scopes_to_preserve(pages: list[PageModel]) -> set[str]:
-    by_scope: dict[str, dict[str, Any]] = {}
-    for page in pages:
-        if not _hwp_conversion_has_pdf_problem_markers(page.metadata):
-            continue
-        scope = _marker_document_dedupe_scope(page)
-        bucket = by_scope.setdefault(scope, {"numbers": [], "signal": 0})
-        bucket["signal"] = max(int(bucket["signal"]), _hwp_text_signal_count_for_dedupe(page))
-        for problem in page.problems:
-            number = _problem_metadata_number(problem)
-            if number is not None:
-                bucket["numbers"].append(number)
-
-    preserve: set[str] = set()
-    for scope, bucket in by_scope.items():
-        numbers = list(bucket["numbers"])
-        signal = int(bucket["signal"])
-        if signal > len(set(numbers)):
-            preserve.add(scope)
-    return preserve
-
-
 def _remove_duplicate_marker_document_problem_numbers(pages: list[PageModel]) -> None:
-    preserve_duplicate_scopes = _marker_document_duplicate_number_scopes_to_preserve(pages)
+    # Repeated visible problem numbers are valid in official source documents
+    # that contain alternate sections. Preserve page/file order and keep the
+    # duplicate-number fact as metadata only; do not drop later pages/problems.
     seen_by_scope: dict[str, set[int]] = {}
+    duplicate_scopes: set[str] = set()
     for page in pages:
         if not _hwp_conversion_has_pdf_problem_markers(page.metadata):
             continue
         scope = _marker_document_dedupe_scope(page)
-        if scope in preserve_duplicate_scopes:
-            page.metadata["duplicate_problem_numbers_preserved"] = True
-            continue
         seen = seen_by_scope.setdefault(scope, set())
-        retained: list[ProblemUnit] = []
-        skipped: list[int] = []
         for problem in page.problems:
             number = _problem_metadata_number(problem)
             if number is not None and number in seen:
-                skipped.append(number)
-                continue
+                duplicate_scopes.add(scope)
             if number is not None:
                 seen.add(number)
-            retained.append(problem)
-        if skipped:
-            page.problems = retained
-            page.metadata["duplicate_problem_numbers_skipped"] = skipped
+    if not duplicate_scopes:
+        return
+    for page in pages:
+        if (
+            _hwp_conversion_has_pdf_problem_markers(page.metadata)
+            and _marker_document_dedupe_scope(page) in duplicate_scopes
+        ):
+            page.metadata["duplicate_problem_numbers_preserved"] = True
+            page.metadata.pop("duplicate_problem_numbers_skipped", None)
 
 
 def _has_hwp_template_instruction_text(page: PageModel) -> bool:
@@ -4036,10 +4007,16 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
         max_occurrences = max(occurrence_counts)
         label = str(start) if start == end else f"{start}-{end}"
         if min_occurrences == max_occurrences:
-            message = f"문항 번호 {label}가 각 {min_occurrences}회 등장합니다."
+            message = (
+                f"문항 번호 {label}가 각 {min_occurrences}회 등장합니다. "
+                "EDB 제작 순서는 문항 번호가 아니라 전체 페이지 순서를 따릅니다."
+            )
         else:
-            message = f"문항 번호 {label} 범위에서 중복 번호가 {sum(counts[number] - 1 for number in numbers)}개 있습니다."
-        classification = "alternate_section" if (
+            message = (
+                f"문항 번호 {label} 범위에서 중복 번호가 {sum(counts[number] - 1 for number in numbers)}개 있습니다. "
+                "EDB 제작 순서는 문항 번호가 아니라 전체 페이지 순서를 따릅니다."
+            )
+        looks_like_alternate_section = (
             _duplicate_number_group_looks_like_alternate_section(
                 start=start,
                 end=end,
@@ -4052,8 +4029,8 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
                 min_occurrences=min_occurrences,
                 max_occurrences=max_occurrences,
             )
-        ) else "duplicate"
-        blocking = classification != "alternate_section"
+        )
+        classification = "alternate_section" if looks_like_alternate_section else "duplicate_number_reuse"
         groups.append(
             {
                 "numberStart": start,
@@ -4066,7 +4043,9 @@ def _session_duplicate_problem_number_groups(problems: list[dict[str, Any]]) -> 
                 "sourcePageIds": _ordered_unique_strings(item["sourcePageId"] for item in group_items),
                 "problemIds": _ordered_unique_strings(item["problemId"] for item in group_items),
                 "classification": classification,
-                "blocking": blocking,
+                "blocking": False,
+                "pageOrderPreserved": True,
+                "orderBasis": "edb_page_order",
                 "message": message,
             }
         )
@@ -4317,13 +4296,26 @@ def _mark_source_problem_overlap_review_flags(
 def _duplicate_problem_number_note(groups: Sequence[dict[str, Any]]) -> str:
     parts: list[str] = []
     for group in groups:
-        if group.get("blocking") is False:
-            continue
         label = str(group.get("numberLabel") or "").strip()
         occurrences = int(group.get("occurrencesPerNumber") or 0)
         if label and occurrences > 1:
             parts.append(f"{label} x{occurrences}")
-    return f"Duplicate problem numbers: {', '.join(parts)}" if parts else ""
+    return f"Duplicate problem numbers preserved in page order: {', '.join(parts)}" if parts else ""
+
+
+def _duplicate_problem_number_groups_as_nonblocking(groups: Sequence[object]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        item = dict(group)
+        item["blocking"] = False
+        item["pageOrderPreserved"] = True
+        item["orderBasis"] = str(item.get("orderBasis") or item.get("order_basis") or "edb_page_order")
+        if not str(item.get("classification") or "").strip():
+            item["classification"] = "duplicate_number_reuse"
+        normalized.append(item)
+    return normalized
 
 
 def _session_asset_path(value: Any) -> Path | None:
@@ -5180,9 +5172,10 @@ def _classin_preflight_has_actionable_review_state(risk_flags: Sequence[str], re
     if status == "failed":
         return True
     normalized_flags = {str(flag or "").strip() for flag in risk_flags if str(flag or "").strip()}
-    if normalized_flags and normalized_flags.issubset(CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS):
-        return "marker_document_continuation" not in normalized_flags
-    if normalized_flags:
+    review_flags = normalized_flags - {DUPLICATE_PROBLEM_NUMBER_RISK_FLAG}
+    if review_flags and review_flags.issubset(CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS):
+        return "marker_document_continuation" not in review_flags
+    if review_flags:
         return True
     return status == "check_needed" and not risk_flags
 
@@ -5750,17 +5743,8 @@ def write_classin_handoff_manifest(
     )
     if not isinstance(duplicate_problem_number_groups, list):
         duplicate_problem_number_groups = []
-    blocking_duplicate_problem_number_groups = (
-        ui_session.get("blockingDuplicateProblemNumberGroups")
-        or ui_session.get("blocking_duplicate_problem_number_groups")
-        or [
-            group
-            for group in duplicate_problem_number_groups
-            if isinstance(group, dict) and group.get("blocking") is not False
-        ]
-    )
-    if not isinstance(blocking_duplicate_problem_number_groups, list):
-        blocking_duplicate_problem_number_groups = []
+    duplicate_problem_number_groups = _duplicate_problem_number_groups_as_nonblocking(duplicate_problem_number_groups)
+    blocking_duplicate_problem_number_groups: list[dict[str, Any]] = []
     duplicate_problem_number_note = _duplicate_problem_number_note(duplicate_problem_number_groups)
     classin_preflight = _classin_handoff_preflight(ui_session)
     raw_problems = ui_session.get("problems")

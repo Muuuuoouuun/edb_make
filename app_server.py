@@ -132,10 +132,6 @@ def _normalize_processing_step(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_normalize_processing_step", *args, **kwargs)
 
 
-def _session_duplicate_problem_number_groups(*args: Any, **kwargs: Any) -> Any:
-    return _lazy_call("build_problem_board_edb", "_session_duplicate_problem_number_groups", *args, **kwargs)
-
-
 def _session_problem_count_payload(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_session_problem_count_payload", *args, **kwargs)
 
@@ -1866,28 +1862,6 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
     return annotated
 
 
-def _duplicate_problem_number_group_issue(group: dict[str, Any]) -> dict[str, Any]:
-    problem_ids = [str(value) for value in (group.get("problemIds") or []) if str(value or "")]
-    source_page_ids = [str(value) for value in (group.get("sourcePageIds") or []) if str(value or "")]
-    number_label = str(group.get("numberLabel") or "")
-    message = str(group.get("message") or "").strip()
-    if not message:
-        message = f"문항 번호 {number_label}가 중복되었습니다. EDB publish 전에 분리/병합 상태를 확인해 주세요."
-    return {
-        "type": "duplicate_problem_number",
-        "severity": "warning",
-        "message": message,
-        "problemId": problem_ids[0] if problem_ids else "",
-        "problemTitle": number_label,
-        "numberLabel": number_label,
-        "problemNumbers": list(group.get("problemNumbers") or []),
-        "problemIds": problem_ids,
-        "sourcePageIds": source_page_ids,
-        "classification": str(group.get("classification") or "duplicate"),
-        "blocking": True,
-    }
-
-
 def _passage_review_queue_issue(item: dict[str, Any]) -> dict[str, Any]:
     problem_ids = _passage_review_item_problem_ids(item)
     fragment_problem_ids: list[str] = []
@@ -2004,15 +1978,8 @@ def _session_publish_blocking_preflight(
     review_session["pages"] = pages
     review_summary = _session_review_summary(review_session)
     actionable_flags = set(review_summary.get("actionableRiskFlagCounts") or {})
-    duplicate_groups = [
-        dict(group)
-        for group in _session_duplicate_problem_number_groups(checked_problems)
-        if isinstance(group, dict) and group.get("blocking") is not False
-    ]
-    issues: list[dict[str, Any]] = [
-        _duplicate_problem_number_group_issue(group)
-        for group in duplicate_groups
-    ]
+    duplicate_groups: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
@@ -3143,6 +3110,7 @@ def _session_warning_messages(session: dict[str, Any]) -> list[str]:
 
 
 NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
+    "duplicate_problem_number",
     "marker_document_continuation",
     "ocr_disabled",
 }
@@ -5586,7 +5554,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             problem["riskFlags"] = [
                 str(flag)
                 for flag in (prior.get("riskFlags") or [])
-                if str(flag) != "fallback_grouping"
+                if str(flag) not in {"duplicate_problem_number", "fallback_grouping"}
             ]
             problem["reviewStatus"] = "check_needed" if problem["riskFlags"] else "normal"
             if "placementXRatio" not in problem:

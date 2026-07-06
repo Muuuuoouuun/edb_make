@@ -58,17 +58,14 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("문항 원본 영역이 겹칠 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
 
-    def test_publish_blocks_duplicate_problem_number_groups_before_request(self) -> None:
+    def test_publish_does_not_block_duplicate_problem_number_groups_before_request(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         on_publish = source.split("const onPublish = async () => {", 1)[1]
         on_publish = on_publish.split("  return (", 1)[0]
 
-        self.assertIn("blockingDuplicateProblemNumberGroups", on_publish)
-        self.assertIn("duplicateProblemNumberGroups.flatMap", on_publish)
-        self.assertIn("source: 'duplicate-number-preflight'", on_publish)
-        self.assertIn("중복 문항 번호", on_publish)
-        self.assertIn("제작을 멈췄어요", on_publish)
-        self.assertIn("setView('review')", on_publish)
+        self.assertNotIn("duplicateProblemNumberGroups.flatMap", on_publish)
+        self.assertNotIn("source: 'duplicate-number-preflight'", on_publish)
+        self.assertNotIn("중복 문항 번호가 있어 제작을 멈췄어요", on_publish)
 
     def test_publish_blocks_passage_group_source_reuse_before_request(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

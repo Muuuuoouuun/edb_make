@@ -628,8 +628,12 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(3, groups[0]["duplicateRecordCount"])
             self.assertEqual(6, groups[0]["totalRecordCount"])
             self.assertEqual(["page-choice-a", "page-choice-b"], groups[0]["sourcePageIds"])
+            self.assertFalse(groups[0]["blocking"])
+            self.assertTrue(groups[0]["pageOrderPreserved"])
+            self.assertEqual("edb_page_order", groups[0]["orderBasis"])
             self.assertEqual(groups, ui_session["duplicate_problem_number_groups"])
             self.assertEqual(1, ui_session["duplicateProblemNumberGroupCount"])
+            self.assertEqual([], ui_session["blockingDuplicateProblemNumberGroups"])
 
     def test_problem_ui_session_marks_official_alternate_section_duplicate_ranges_nonblocking(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -758,6 +762,24 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual("passed", preflight["status"])
             self.assertEqual([], duplicate_groups)
 
+            legacy_flagged_problems = [
+                {
+                    **problem,
+                    "riskFlags": ["duplicate_problem_number"],
+                    "reviewStatus": "check_needed",
+                }
+                if problem["problemNumber"] == 24
+                else problem
+                for problem in ui_session["problems"]
+            ]
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                legacy_flagged_problems,
+                session={**ui_session, "problems": legacy_flagged_problems},
+            )
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual([], duplicate_groups)
+
     def test_publish_preflight_blocks_any_s3_page_chrome_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -832,7 +854,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(10, preflight["issues"][0]["checkedProblemCount"])
             self.assertGreater(preflight["issues"][0]["artifactRatio"], 0.10)
 
-    def test_problem_ui_session_flags_duplicate_problem_numbers_for_review(self):
+    def test_problem_ui_session_keeps_duplicate_problem_numbers_nonblocking(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.hwp"
@@ -879,19 +901,18 @@ class TestEdbPublishFlow(unittest.TestCase):
                 record_mode="image-only",
             )
 
-            duplicate_problems = {
-                problem["id"]: problem
-                for problem in ui_session["problems"]
-                if problem["problemNumber"] == 24
-            }
-            self.assertEqual({"problem-1", "problem-3"}, set(duplicate_problems))
-            for problem in duplicate_problems.values():
-                self.assertIn("duplicate_problem_number", problem["riskFlags"])
-                self.assertEqual("check_needed", problem["reviewStatus"])
+            duplicate_groups = ui_session["duplicateProblemNumberGroups"]
+            self.assertEqual(1, len(duplicate_groups))
+            self.assertFalse(duplicate_groups[0]["blocking"])
+            self.assertEqual([], ui_session["blockingDuplicateProblemNumberGroups"])
+            for problem in ui_session["problems"]:
+                self.assertNotIn("duplicate_problem_number", problem["riskFlags"])
+                self.assertEqual("normal", problem["reviewStatus"])
 
-            unique_problem = next(problem for problem in ui_session["problems"] if problem["problemNumber"] == 25)
-            self.assertNotIn("duplicate_problem_number", unique_problem["riskFlags"])
-            self.assertEqual("normal", unique_problem["reviewStatus"])
+            preflight, duplicate_groups = _session_publish_blocking_preflight(ui_session["problems"], session=ui_session)
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual([], duplicate_groups)
 
     def test_problem_ui_session_flags_source_bbox_overlap_for_review(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2345,11 +2366,14 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             handoff = json.loads(json_path.read_text(encoding="utf-8"))
             markdown = md_path.read_text(encoding="utf-8")
-            self.assertEqual("needs_attention_before_classin", handoff["status"])
-            self.assertFalse(handoff["readyForClassIn"])
-            self.assertEqual(duplicate_groups, handoff["duplicateProblemNumberGroups"])
+            self.assertEqual("ready_for_classin_review", handoff["status"])
+            self.assertTrue(handoff["readyForClassIn"])
+            self.assertFalse(handoff["duplicateProblemNumberGroups"][0]["blocking"])
+            self.assertTrue(handoff["duplicateProblemNumberGroups"][0]["pageOrderPreserved"])
+            self.assertEqual("edb_page_order", handoff["duplicateProblemNumberGroups"][0]["orderBasis"])
+            self.assertEqual([], handoff["blockingDuplicateProblemNumberGroups"])
             self.assertIn("35-45 x2", handoff["duplicateProblemNumberNote"])
-            self.assertIn("Duplicate problem numbers: 35-45 x2", markdown)
+            self.assertIn("Duplicate problem numbers preserved in page order: 35-45 x2", markdown)
 
     def test_ui_session_exposes_long_image_layout_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4687,7 +4711,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             ]
         )
 
-    def test_mvp_export_deduplicates_repeated_marker_problem_numbers(self):
+    def test_mvp_export_preserves_repeated_marker_problem_numbers_in_page_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.hwp"
@@ -4772,11 +4796,16 @@ class TestEdbPublishFlow(unittest.TestCase):
                     sync_ui=False,
                 )
 
-            self.assertEqual(["page-1-problem-1"], list(result["problem_crop_paths"]))
-            self.assertEqual(["page-1-problem-1"], [problem["id"] for problem in result["ui_session"]["problems"]])
+            self.assertEqual(["page-1-problem-1", "page-2-problem-1"], list(result["problem_crop_paths"]))
+            self.assertEqual(
+                ["page-1-problem-1", "page-2-problem-1"],
+                [problem["id"] for problem in result["ui_session"]["problems"]],
+            )
             pages_payload = json.loads((root / "out" / "pages.json").read_text(encoding="utf-8"))
-            self.assertEqual([], pages_payload[1]["problems"])
-            self.assertEqual([1], pages_payload[1]["metadata"]["duplicate_problem_numbers_skipped"])
+            self.assertEqual(["page-2-problem-1"], [problem["unit_id"] for problem in pages_payload[1]["problems"]])
+            self.assertTrue(pages_payload[0]["metadata"]["duplicate_problem_numbers_preserved"])
+            self.assertTrue(pages_payload[1]["metadata"]["duplicate_problem_numbers_preserved"])
+            self.assertNotIn("duplicate_problem_numbers_skipped", pages_payload[1]["metadata"])
 
     def test_mvp_export_preserves_repeated_numbers_when_hwp_text_signal_expects_them(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4872,6 +4901,8 @@ class TestEdbPublishFlow(unittest.TestCase):
                 list(result["problem_crop_paths"]),
             )
             pages_payload = json.loads((root / "out" / "pages.json").read_text(encoding="utf-8"))
+            self.assertTrue(pages_payload[0]["metadata"]["duplicate_problem_numbers_preserved"])
+            self.assertTrue(pages_payload[1]["metadata"]["duplicate_problem_numbers_preserved"])
             self.assertNotIn("duplicate_problem_numbers_skipped", pages_payload[1]["metadata"])
 
     def test_mvp_export_flags_hwp_problem_count_mismatch_for_review(self):

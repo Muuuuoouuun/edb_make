@@ -6535,6 +6535,7 @@ function applyPublishPreflightIssuesToSession(rawSession, blockedPublish){
 }
 
 const NON_ACTIONABLE_RISK_FLAGS = new Set([
+  'duplicate_problem_number',
   'marker_document_continuation',
   'ocr_disabled',
 ]);
@@ -7181,11 +7182,7 @@ function sessionReviewSummary(session){
     : Array.isArray(session?.duplicate_problem_number_groups)
       ? session.duplicate_problem_number_groups
       : [];
-  const blockingDuplicateProblemNumberGroups = Array.isArray(session?.blockingDuplicateProblemNumberGroups)
-    ? session.blockingDuplicateProblemNumberGroups
-    : Array.isArray(session?.blocking_duplicate_problem_number_groups)
-      ? session.blocking_duplicate_problem_number_groups
-      : duplicateProblemNumberGroups.filter(group => group?.blocking !== false);
+  const blockingDuplicateProblemNumberGroups = [];
   const duplicateProblemNumberLabel = duplicateProblemNumberGroups
     .map(group => {
       const label = String(group?.numberLabel || group?.number_label || '').trim();
@@ -9573,22 +9570,6 @@ function App(){
     const itemsForPublish = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     const sessionForPublish = materializeSessionForItems(session, itemsForPublish, fileName, boardColumns) || session;
     const publishReviewSummary = sessionReviewSummary(sessionForPublish);
-    const duplicateProblemNumberGroups = Array.isArray(publishReviewSummary.blockingDuplicateProblemNumberGroups)
-      ? publishReviewSummary.blockingDuplicateProblemNumberGroups
-      : [];
-    if (duplicateProblemNumberGroups.length > 0) {
-      setReviewFocus({
-        filter: 'all',
-        problemIds: duplicateProblemNumberGroups.flatMap(group => (
-          Array.isArray(group?.problemIds || group?.problem_ids) ? (group.problemIds || group.problem_ids) : []
-        )),
-        source: 'duplicate-number-preflight',
-      });
-      setView('review');
-      const duplicateLabel = publishReviewSummary.duplicateProblemNumberLabel || `${duplicateProblemNumberGroups.length}그룹`;
-      showToast(`중복 문항 번호가 있어 제작을 멈췄어요. ${duplicateLabel}`);
-      return;
-    }
     const passageSourceReuseIssues = findPassageGroupSourceReuse(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'passage_group_source_reuse');
     if (passageSourceReuseIssues.length > 0) {

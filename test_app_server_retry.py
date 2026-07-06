@@ -2556,8 +2556,9 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(["p22", "p23"], body["blocking_problem_ids"])
             entries.assert_not_called()
 
-    def test_session_publish_blocks_duplicate_problem_numbers_before_build(self):
+    def test_session_publish_allows_duplicate_problem_numbers_in_page_order(self):
         with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
             session = {
                 "session_name": "duplicate-number",
                 "output_dir": raw_tmp,
@@ -2583,20 +2584,127 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                 ],
             }
             handler, responses = self._publish(session)
+            captured: dict[str, object] = {}
+            entry_objects = [object(), object()]
 
-            with patch.object(app_server, "_problems_to_entries", side_effect=AssertionError("build should be blocked")) as entries:
+            def fake_problems_to_entries(problems, **_kwargs):
+                captured["problem_order"] = [problem["id"] for problem in problems]
+                return entry_objects
+
+            def fake_build_records(received_entries, _template, **_kwargs):
+                captured["entry_count"] = len(received_entries)
+                return (
+                    [{"record": "p7-a"}, {"record": "p7-b"}],
+                    [
+                        {
+                            "problem_id": "p7-a",
+                            "title": "7.",
+                            "problem_number": 7,
+                            "subject": "math",
+                            "source_page_id": "page-1",
+                            "crop_path": str(root / "p7-a.png"),
+                            "board_render_path": str(root / "p7-a.png"),
+                            "source_path": "page-1",
+                            "bbox": {"left": 10, "top": 10, "width": 120, "height": 100},
+                            "actual_content_height_pages": 0.8,
+                            "overflow_allowed": False,
+                            "start_y_pages": 0.0,
+                            "snapped_next_start_y_pages": 1.2,
+                            "overflow_amount_pages": 0.0,
+                            "overflow_violation": False,
+                            "slot_span_count": 1,
+                            "placement_x_ratio": 0.0,
+                            "placement_y_ratio": 0.0,
+                            "placement_scale_ratio": 1.0,
+                            "risk_flags": [],
+                        },
+                        {
+                            "problem_id": "p7-b",
+                            "title": "7.",
+                            "problem_number": 7,
+                            "subject": "math",
+                            "source_page_id": "page-2",
+                            "crop_path": str(root / "p7-b.png"),
+                            "board_render_path": str(root / "p7-b.png"),
+                            "source_path": "page-2",
+                            "bbox": {"left": 10, "top": 140, "width": 120, "height": 100},
+                            "actual_content_height_pages": 0.8,
+                            "overflow_allowed": False,
+                            "start_y_pages": 1.2,
+                            "snapped_next_start_y_pages": 2.4,
+                            "overflow_amount_pages": 0.0,
+                            "overflow_violation": False,
+                            "slot_span_count": 1,
+                            "placement_x_ratio": 0.0,
+                            "placement_y_ratio": 0.0,
+                            "placement_scale_ratio": 1.0,
+                            "risk_flags": [],
+                        },
+                    ],
+                    0,
+                )
+
+            def fake_write_classin_limited_edb_files(_entries, _template, output_dir, edb_name, **_kwargs):
+                path = Path(output_dir) / edb_name
+                path.write_bytes(b"edb")
+                return [
+                    {
+                        "partIndex": 1,
+                        "partCount": 1,
+                        "edbPath": str(path),
+                        "edbFileName": path.name,
+                        "recordCount": 2,
+                        "pageCountHint": 4,
+                    }
+                ]
+
+            def fake_build_ui_session(**_kwargs):
+                return {
+                    "session_name": "published",
+                    "output_dir": str(root),
+                    "problems": [
+                        {"id": "p7-a", "title": "7.", "problemNumber": 7, "riskFlags": [], "bbox": {}},
+                        {"id": "p7-b", "title": "7.", "problemNumber": 7, "riskFlags": [], "bbox": {}},
+                    ],
+                    "pages": [],
+                }
+
+            def fake_write_handoff(output_dir, **_kwargs):
+                handoff_path = Path(output_dir) / "classin_handoff.json"
+                handoff_md_path = Path(output_dir) / "classin_handoff.md"
+                handoff_path.write_text(
+                    json.dumps({
+                        "status": "ready_for_classin_review",
+                        "readyForClassIn": True,
+                        "classinPreflight": {"status": "passed", "passed": True, "issueCount": 0, "issues": []},
+                    }),
+                    encoding="utf-8",
+                )
+                handoff_md_path.write_text("# handoff", encoding="utf-8")
+                return handoff_path, handoff_md_path
+
+            with (
+                patch.object(app_server, "_problems_to_entries", side_effect=fake_problems_to_entries) as entries,
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "write_classin_limited_edb_files", side_effect=fake_write_classin_limited_edb_files),
+                patch.object(app_server, "build_ui_session", side_effect=fake_build_ui_session),
+                patch.object(app_server, "validate_edb_file", return_value={
+                    "outerSize": 10,
+                    "innerSize": 8,
+                    "pageCountHint": 4,
+                    "recordCountHint": 2,
+                    "recordCountActual": 2,
+                }),
+                patch.object(app_server, "write_classin_handoff_manifest", side_effect=fake_write_handoff),
+            ):
                 handler._handle_session_publish()
 
             body, kwargs = responses[0]
-            self.assertFalse(body["ok"])
-            self.assertEqual("publish_preflight_blocked", body["errorKind"])
-            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
-            issue_types = {issue["type"] for issue in body["classinPreflight"]["issues"]}
-            self.assertIn("duplicate_problem_number", issue_types)
-            self.assertEqual("7", body["blockingDuplicateProblemNumberGroups"][0]["numberLabel"])
-            self.assertEqual(["p7-a", "p7-b"], body["blockingProblemIds"])
-            self.assertEqual(["p7-a", "p7-b"], body["blocking_problem_ids"])
-            entries.assert_not_called()
+            self.assertTrue(body["ok"], body)
+            self.assertNotEqual(app_server.HTTPStatus.CONFLICT, kwargs.get("status"))
+            self.assertEqual(["p7-a", "p7-b"], captured["problem_order"])
+            self.assertEqual(2, captured["entry_count"])
+            entries.assert_called_once()
 
     def test_session_publish_reflows_board_placement_overlap_before_build(self):
         with TemporaryDirectory() as raw_tmp:
