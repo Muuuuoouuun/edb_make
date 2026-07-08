@@ -1,39 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ClassIn EDB app icon">
   <defs>
-    <linearGradient id="bg" x1="150" y1="70" x2="880" y2="940" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="120" y1="60" x2="900" y2="960" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#fbfff8"/>
-      <stop offset=".58" stop-color="#ebfff3"/>
       <stop offset="1" stop-color="#eef8ff"/>
     </linearGradient>
-    <linearGradient id="flow" x1="250" y1="230" x2="800" y2="770" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#b8f76b"/>
-      <stop offset=".52" stop-color="#44dcc7"/>
-      <stop offset="1" stop-color="#78b8ff"/>
+    <linearGradient id="flow" x1="280" y1="210" x2="812" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a8f05b"/>
+      <stop offset=".48" stop-color="#42d9c6"/>
+      <stop offset="1" stop-color="#6fb6fa"/>
     </linearGradient>
-    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="125%">
-      <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#0f4e3d" flood-opacity=".18"/>
+    <filter id="softShadow" x="-12%" y="-12%" width="124%" height="130%">
+      <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#114e3e" flood-opacity=".16"/>
     </filter>
   </defs>
-  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
   <rect x="40" y="40" width="944" height="944" rx="205" fill="none" stroke="#d7f4e7" stroke-width="8"/>
-  <g fill="#fbfff8" opacity=".9" filter="url(#softShadow)">
-    <rect x="150" y="300" width="126" height="424" rx="54"/>
-    <rect x="150" y="300" width="290" height="126" rx="54"/>
-    <rect x="150" y="450" width="250" height="122" rx="52"/>
-    <rect x="150" y="598" width="304" height="126" rx="54"/>
+  <g fill="none" stroke="url(#flow)" stroke-width="88" stroke-linecap="round" filter="url(#softShadow)">
+    <path d="M322 516C282 318 438 214 570 250C748 300 812 410 768 580"/>
+    <path d="M760 586C672 782 450 802 323 707"/>
   </g>
-  <g fill="none" stroke="#fbfff8" stroke-width="94" stroke-linecap="round" stroke-linejoin="round" opacity=".9" filter="url(#softShadow)">
-    <path d="M464 358V666M464 358C700 358 700 666 464 666"/>
-    <path d="M704 358V666M704 358C878 358 878 512 704 512M704 512C902 512 902 666 704 666"/>
+  <g fill="none" stroke-linecap="round" stroke-width="78" filter="url(#softShadow)">
+    <path d="M672 502 779 609" stroke="#62ddcc"/>
+    <path d="M774 584 678 680" stroke="#68c7e8"/>
   </g>
-  <g fill="url(#flow)" filter="url(#softShadow)">
-    <rect x="190" y="342" width="58" height="340" rx="29"/>
-    <rect x="190" y="342" width="205" height="58" rx="29"/>
-    <rect x="190" y="483" width="180" height="58" rx="29"/>
-    <rect x="190" y="624" width="222" height="58" rx="29"/>
-  </g>
-  <g fill="none" stroke="url(#flow)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round" filter="url(#softShadow)">
-    <path d="M464 358V666M464 358C700 358 700 666 464 666"/>
-    <path d="M704 358V666M704 358C878 358 878 512 704 512M704 512C902 512 902 666 704 666"/>
-  </g>
+  <circle cx="676" cy="669" r="39" fill="#70b4f9"/>
+  <rect x="228" y="356" width="568" height="284" rx="70" fill="#fbfff8" fill-opacity=".84" stroke="#d7f4e7" stroke-width="5" filter="url(#softShadow)"/>
+  <text x="512" y="586" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="220" font-weight="800" letter-spacing="8" fill="#143a43">EDB</text>
 </svg>

@@ -973,32 +973,23 @@ function BrandMark(){
     <span className="logo" aria-hidden="true">
       <svg viewBox="0 0 192 128" focusable="false">
         <defs>
-          <linearGradient id="brandFlow" x1="24" y1="18" x2="168" y2="112" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="#b8f76b" />
-            <stop offset=".52" stopColor="#44dcc7" />
-            <stop offset="1" stopColor="#78b8ff" />
+          <linearGradient id="brandFlow" x1="46" y1="16" x2="154" y2="112" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="#a8f05b" />
+            <stop offset=".48" stopColor="#42d9c6" />
+            <stop offset="1" stopColor="#6fb6fa" />
           </linearGradient>
         </defs>
-        <g fill="#fbfff8" opacity=".82">
-          <rect x="26" y="35" width="20" height="58" rx="8" />
-          <rect x="26" y="35" width="40" height="20" rx="8" />
-          <rect x="26" y="55" width="34" height="18" rx="7" />
-          <rect x="26" y="73" width="42" height="20" rx="8" />
+        <g fill="none" stroke="url(#brandFlow)" strokeWidth="14" strokeLinecap="round">
+          <path d="M59 69C52 41 77 24 102 31C128 38 138 57 130 80" />
+          <path d="M129 79C113 108 79 109 59 91" />
         </g>
-        <g fill="none" stroke="#fbfff8" strokeWidth="17" strokeLinecap="round" strokeLinejoin="round" opacity=".82">
-          <path d="M76 43V85M76 43C111 43 111 85 76 85" />
-          <path d="M122 43V85M122 43C153 43 153 64 122 64M122 64C158 64 158 85 122 85" />
+        <g fill="none" strokeLinecap="round" strokeWidth="13">
+          <path d="M125 61 143 79" stroke="#62ddcc" />
+          <path d="M143 75 127 91" stroke="#68c7e8" />
         </g>
-        <g fill="url(#brandFlow)">
-          <rect x="31" y="40" width="10" height="48" rx="5" />
-          <rect x="31" y="40" width="31" height="10" rx="5" />
-          <rect x="31" y="59" width="25" height="10" rx="5" />
-          <rect x="31" y="78" width="33" height="10" rx="5" />
-        </g>
-        <g fill="none" stroke="url(#brandFlow)" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M76 43V85M76 43C111 43 111 85 76 85" />
-          <path d="M122 43V85M122 43C153 43 153 64 122 64M122 64C158 64 158 85 122 85" />
-        </g>
+        <circle cx="126" cy="90" r="7" fill="#70b4f9" />
+        <rect x="39" y="41" width="112" height="55" rx="15" fill="#fbfff8" fillOpacity=".86" stroke="#d7f4e7" strokeWidth="1.5" />
+        <text x="96" y="78" textAnchor="middle" fontFamily="Inter, Arial, Helvetica, sans-serif" fontSize="39" fontWeight="800" letterSpacing="1.5" fill="#143a43">EDB</text>
       </svg>
     </span>
   );
