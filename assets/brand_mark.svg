@@ -1,20 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 128" role="img" aria-label="ClassIn EDB brand mark">
-  <defs>
-    <linearGradient id="flow" x1="46" y1="16" x2="154" y2="112" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#a8f05b"/>
-      <stop offset=".48" stop-color="#42d9c6"/>
-      <stop offset="1" stop-color="#6fb6fa"/>
-    </linearGradient>
-  </defs>
-  <g fill="none" stroke="url(#flow)" stroke-width="14" stroke-linecap="round">
-    <path d="M59 69C52 41 77 24 102 31C128 38 138 57 130 80"/>
-    <path d="M129 79C113 108 79 109 59 91"/>
+  <text x="78" y="83" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="63" font-weight="900" letter-spacing="1.5" fill="#101923">EDB</text>
+  <g fill="none" stroke-linecap="round">
+    <path d="M124 95 164 55" stroke="#101923" stroke-width="9"/>
+    <path d="M160 59 171 48" stroke="#22c9bd" stroke-width="9"/>
   </g>
-  <g fill="none" stroke-linecap="round" stroke-width="13">
-    <path d="M125 61 143 79" stroke="#62ddcc"/>
-    <path d="M143 75 127 91" stroke="#68c7e8"/>
+  <g fill="#22c9bd">
+    <path d="M174 34 177 42 185 45 177 48 174 56 171 48 163 45 171 42z"/>
+    <path d="M184 58 186 63 191 65 186 67 184 72 182 67 177 65 182 63z"/>
+    <path d="M177 77 180 84 187 87 180 90 177 97 174 90 167 87 174 84z"/>
   </g>
-  <circle cx="126" cy="90" r="7" fill="#70b4f9"/>
-  <rect x="39" y="41" width="112" height="55" rx="15" fill="#fbfff8" fill-opacity=".86" stroke="#d7f4e7" stroke-width="1.5"/>
-  <text x="96" y="78" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="39" font-weight="800" letter-spacing="1.5" fill="#143a43">EDB</text>
 </svg>

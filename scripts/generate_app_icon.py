@@ -140,68 +140,10 @@ def draw_symbol(base: Image.Image, scale: int) -> None:
     def s(value: float) -> int:
         return int(round(value * scale))
 
-    arc_stops = [(0.0, "#A8F05B"), (0.48, "#42D9C6"), (1.0, "#6FB6FA")]
-    top_arc = sample_bezier_path(
-        [
-            ((322, 516), (282, 318), (438, 214), (570, 250)),
-            ((570, 250), (748, 300), (812, 410), (768, 580)),
-        ],
-        60,
-    )
-    lower_arc = sample_bezier_path(
-        [
-            ((760, 586), (672, 782), (450, 802), (323, 707)),
-        ],
-        74,
-    )
-    draw_shadowed_gradient_path(
-        base,
-        scaled_points(top_arc, scale),
-        width=s(88),
-        shadow_offset=(0, s(24)),
-        shadow_blur=s(22),
-        shadow_alpha=34,
-        stops=arc_stops,
-    )
-    draw_shadowed_gradient_path(
-        base,
-        scaled_points(lower_arc, scale),
-        width=s(88),
-        shadow_offset=(0, s(24)),
-        shadow_blur=s(22),
-        shadow_alpha=34,
-        stops=arc_stops,
-    )
-
     draw = ImageDraw.Draw(base)
 
-    wand_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(wand_shadow)
-    shadow_draw.line((s(664), s(498), s(775), s(609)), fill=(21, 85, 87, 55), width=s(78))
-    shadow_draw.line((s(773), s(589), s(678), s(684)), fill=(21, 85, 87, 48), width=s(78))
-    wand_shadow = wand_shadow.filter(ImageFilter.GaussianBlur(s(14)))
-    base.alpha_composite(wand_shadow)
-
-    draw.line((s(672), s(502), s(779), s(609)), fill="#62DDCC", width=s(78))
-    draw.line((s(774), s(584), s(678), s(680)), fill="#68C7E8", width=s(78))
-    radius = s(39)
-    draw.ellipse((s(676) - radius, s(669) - radius, s(676) + radius, s(669) + radius), fill="#70B4F9")
-
-    card_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(card_shadow)
-    shadow_draw.rounded_rectangle((s(230), s(365), s(794), s(650)), radius=s(70), fill=(20, 64, 67, 38))
-    card_shadow = card_shadow.filter(ImageFilter.GaussianBlur(s(18)))
-    base.alpha_composite(card_shadow)
-
-    draw.rounded_rectangle(
-        (s(228), s(356), s(796), s(640)),
-        radius=s(70),
-        fill=(251, 255, 248, 214),
-        outline="#D7F4E7",
-        width=s(5),
-    )
-
     font_paths = [
+        "/System/Library/Fonts/Supplemental/Arial Black.ttf",
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/Library/Fonts/Arial Bold.ttf",
         "/System/Library/Fonts/Supplemental/Helvetica.ttc",
@@ -209,7 +151,7 @@ def draw_symbol(base: Image.Image, scale: int) -> None:
     font = None
     for font_path in font_paths:
         try:
-            font = ImageFont.truetype(font_path, s(214))
+            font = ImageFont.truetype(font_path, s(430))
             break
         except OSError:
             continue
@@ -219,11 +161,39 @@ def draw_symbol(base: Image.Image, scale: int) -> None:
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
     draw.text(
-        (s(512) - text_width // 2, s(512) - text_height // 2 - bbox[1] + s(10)),
+        (s(495) - text_width // 2, s(516) - text_height // 2 - bbox[1] + s(12)),
         "EDB",
-        fill="#143A43",
+        fill="#101923",
         font=font,
     )
+
+    def round_line(
+        start: tuple[int, int],
+        end: tuple[int, int],
+        *,
+        fill: str,
+        width: int,
+    ) -> None:
+        draw.line((*start, *end), fill=fill, width=width)
+        radius = width // 2
+        for x, y in (start, end):
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
+
+    wand_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(wand_shadow)
+    shadow_draw.line((s(660), s(780), s(892), s(548)), fill=(0, 0, 0, 42), width=s(54))
+    wand_shadow = wand_shadow.filter(ImageFilter.GaussianBlur(s(14)))
+    base.alpha_composite(wand_shadow)
+
+    round_line((s(660), s(780)), (s(858), s(582)), fill="#101923", width=s(46))
+    round_line((s(848), s(592)), (s(892), s(548)), fill="#22C9BD", width=s(46))
+
+    for points in [
+        [(914, 428), (925, 456), (953, 467), (925, 478), (914, 506), (903, 478), (875, 467), (903, 456)],
+        [(959, 506), (967, 526), (987, 534), (967, 542), (959, 562), (951, 542), (931, 534), (951, 526)],
+        [(922, 604), (931, 625), (952, 634), (931, 642), (922, 663), (914, 642), (893, 634), (914, 625)],
+    ]:
+        draw.polygon([(s(x), s(y)) for x, y in points], fill="#22C9BD")
 
 
 def draw_icon(size: int = 1024, scale: int = 4) -> Image.Image:
@@ -234,16 +204,14 @@ def draw_icon(size: int = 1024, scale: int = 4) -> Image.Image:
         return int(round(value * scale))
 
     background_mask = rounded_mask((canvas_size, canvas_size), s(232))
-    background = Image.new("RGBA", (canvas_size, canvas_size), "#FBFFF8")
+    background = Image.new("RGBA", (canvas_size, canvas_size), "#FFFDF8")
     bg_draw = ImageDraw.Draw(background)
     for i in range(canvas_size):
         ratio = i / max(canvas_size - 1, 1)
-        r, g, b = mix("#FBFFF8", "#EEF8FF", ratio)
+        r, g, b = mix("#FFFDF8", "#F8F0E5", ratio)
         bg_draw.line((0, i, canvas_size, i), fill=(r, g, b, 255))
     image.paste(background, (0, 0), background_mask)
 
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((s(40), s(40), s(984), s(984)), radius=s(205), outline="#D7F4E7", width=s(8))
     draw_symbol(image, scale)
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
@@ -251,53 +219,38 @@ def draw_icon(size: int = 1024, scale: int = 4) -> Image.Image:
 def write_svg_files() -> None:
     app_svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ClassIn EDB app icon">
   <defs>
-    <linearGradient id="bg" x1="120" y1="60" x2="900" y2="960" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#fbfff8"/>
-      <stop offset="1" stop-color="#eef8ff"/>
+    <linearGradient id="bg" x1="132" y1="76" x2="884" y2="948" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fffdf8"/>
+      <stop offset="1" stop-color="#f8f0e5"/>
     </linearGradient>
-    <linearGradient id="flow" x1="280" y1="210" x2="812" y2="800" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#a8f05b"/>
-      <stop offset=".48" stop-color="#42d9c6"/>
-      <stop offset="1" stop-color="#6fb6fa"/>
-    </linearGradient>
-    <filter id="softShadow" x="-12%" y="-12%" width="124%" height="130%">
-      <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#114e3e" flood-opacity=".16"/>
+    <filter id="wandShadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#000000" flood-opacity=".18"/>
     </filter>
   </defs>
   <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
-  <rect x="40" y="40" width="944" height="944" rx="205" fill="none" stroke="#d7f4e7" stroke-width="8"/>
-  <g fill="none" stroke="url(#flow)" stroke-width="88" stroke-linecap="round" filter="url(#softShadow)">
-    <path d="M322 516C282 318 438 214 570 250C748 300 812 410 768 580"/>
-    <path d="M760 586C672 782 450 802 323 707"/>
+  <text x="492" y="674" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="428" font-weight="900" letter-spacing="12" fill="#101923">EDB</text>
+  <g fill="none" stroke-linecap="round" filter="url(#wandShadow)">
+    <path d="M660 780 858 582" stroke="#101923" stroke-width="46"/>
+    <path d="M848 592 892 548" stroke="#22c9bd" stroke-width="46"/>
   </g>
-  <g fill="none" stroke-linecap="round" stroke-width="78" filter="url(#softShadow)">
-    <path d="M672 502 779 609" stroke="#62ddcc"/>
-    <path d="M774 584 678 680" stroke="#68c7e8"/>
+  <g fill="#22c9bd">
+    <path d="M914 428 925 456 953 467 925 478 914 506 903 478 875 467 903 456z"/>
+    <path d="M959 506 967 526 987 534 967 542 959 562 951 542 931 534 951 526z"/>
+    <path d="M922 604 931 625 952 634 931 642 922 663 914 642 893 634 914 625z"/>
   </g>
-  <circle cx="676" cy="669" r="39" fill="#70b4f9"/>
-  <rect x="228" y="356" width="568" height="284" rx="70" fill="#fbfff8" fill-opacity=".84" stroke="#d7f4e7" stroke-width="5" filter="url(#softShadow)"/>
-  <text x="512" y="586" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="220" font-weight="800" letter-spacing="8" fill="#143a43">EDB</text>
 </svg>
 """
     mark_svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 128" role="img" aria-label="ClassIn EDB brand mark">
-  <defs>
-    <linearGradient id="flow" x1="46" y1="16" x2="154" y2="112" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#a8f05b"/>
-      <stop offset=".48" stop-color="#42d9c6"/>
-      <stop offset="1" stop-color="#6fb6fa"/>
-    </linearGradient>
-  </defs>
-  <g fill="none" stroke="url(#flow)" stroke-width="14" stroke-linecap="round">
-    <path d="M59 69C52 41 77 24 102 31C128 38 138 57 130 80"/>
-    <path d="M129 79C113 108 79 109 59 91"/>
+  <text x="78" y="83" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="63" font-weight="900" letter-spacing="1.5" fill="#101923">EDB</text>
+  <g fill="none" stroke-linecap="round">
+    <path d="M124 95 164 55" stroke="#101923" stroke-width="9"/>
+    <path d="M160 59 171 48" stroke="#22c9bd" stroke-width="9"/>
   </g>
-  <g fill="none" stroke-linecap="round" stroke-width="13">
-    <path d="M125 61 143 79" stroke="#62ddcc"/>
-    <path d="M143 75 127 91" stroke="#68c7e8"/>
+  <g fill="#22c9bd">
+    <path d="M174 34 177 42 185 45 177 48 174 56 171 48 163 45 171 42z"/>
+    <path d="M184 58 186 63 191 65 186 67 184 72 182 67 177 65 182 63z"/>
+    <path d="M177 77 180 84 187 87 180 90 177 97 174 90 167 87 174 84z"/>
   </g>
-  <circle cx="126" cy="90" r="7" fill="#70b4f9"/>
-  <rect x="39" y="41" width="112" height="55" rx="15" fill="#fbfff8" fill-opacity=".86" stroke="#d7f4e7" stroke-width="1.5"/>
-  <text x="96" y="78" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="39" font-weight="800" letter-spacing="1.5" fill="#143a43">EDB</text>
 </svg>
 """
     SVG_PATH.write_text(app_svg, encoding="utf-8")

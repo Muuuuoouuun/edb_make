@@ -972,24 +972,16 @@ function BrandMark(){
   return (
     <span className="logo" aria-hidden="true">
       <svg viewBox="0 0 192 128" focusable="false">
-        <defs>
-          <linearGradient id="brandFlow" x1="46" y1="16" x2="154" y2="112" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="#a8f05b" />
-            <stop offset=".48" stopColor="#42d9c6" />
-            <stop offset="1" stopColor="#6fb6fa" />
-          </linearGradient>
-        </defs>
-        <g fill="none" stroke="url(#brandFlow)" strokeWidth="14" strokeLinecap="round">
-          <path d="M59 69C52 41 77 24 102 31C128 38 138 57 130 80" />
-          <path d="M129 79C113 108 79 109 59 91" />
+        <text x="78" y="83" textAnchor="middle" fontFamily="Arial Black, Arial, Helvetica, sans-serif" fontSize="63" fontWeight="900" letterSpacing="1.5" fill="#101923">EDB</text>
+        <g fill="none" strokeLinecap="round">
+          <path d="M124 95 164 55" stroke="#101923" strokeWidth="9" />
+          <path d="M160 59 171 48" stroke="#22c9bd" strokeWidth="9" />
         </g>
-        <g fill="none" strokeLinecap="round" strokeWidth="13">
-          <path d="M125 61 143 79" stroke="#62ddcc" />
-          <path d="M143 75 127 91" stroke="#68c7e8" />
+        <g fill="#22c9bd">
+          <path d="M174 34 177 42 185 45 177 48 174 56 171 48 163 45 171 42z" />
+          <path d="M184 58 186 63 191 65 186 67 184 72 182 67 177 65 182 63z" />
+          <path d="M177 77 180 84 187 87 180 90 177 97 174 90 167 87 174 84z" />
         </g>
-        <circle cx="126" cy="90" r="7" fill="#70b4f9" />
-        <rect x="39" y="41" width="112" height="55" rx="15" fill="#fbfff8" fillOpacity=".86" stroke="#d7f4e7" strokeWidth="1.5" />
-        <text x="96" y="78" textAnchor="middle" fontFamily="Inter, Arial, Helvetica, sans-serif" fontSize="39" fontWeight="800" letterSpacing="1.5" fill="#143a43">EDB</text>
       </svg>
     </span>
   );
