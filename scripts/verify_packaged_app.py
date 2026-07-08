@@ -97,6 +97,59 @@ FORBIDDEN_PACKAGED_RUNTIME_PATHS = (
     "app.log",
 )
 
+FORBIDDEN_PACKAGED_SECRET_FILE_NAMES = (
+    ".env",
+    "user_settings.json",
+)
+
+FORBIDDEN_PACKAGED_SECRET_FILE_SUFFIXES = (
+    ".pem",
+    ".p8",
+    ".p12",
+    ".pfx",
+)
+
+FORBIDDEN_PACKAGED_SECRET_FILE_TOKENS = (
+    "credential",
+    "secret",
+    "service-account",
+)
+
+PACKAGED_SECRET_TEXT_SUFFIXES = (
+    ".cfg",
+    ".css",
+    ".env",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".jsx",
+    ".md",
+    ".mjs",
+    ".plist",
+    ".ps1",
+    ".py",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+)
+
+PACKAGED_SECRET_VALUE_PATTERNS = (
+    ("OpenAI API key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")),
+    ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("GitHub token", re.compile(r"\b(?:ghp_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{60,})\b")),
+    ("Slack token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
+    ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    (
+        "private key block",
+        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+    ),
+)
+
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
@@ -148,6 +201,52 @@ def _relative_label(root: Path, path: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _is_forbidden_secret_path(path: Path) -> bool:
+    lowered_parts = [part.lower() for part in path.parts]
+    name = path.name.lower()
+    if name in FORBIDDEN_PACKAGED_SECRET_FILE_NAMES or name.startswith(".env."):
+        return True
+    if any(name.endswith(suffix) for suffix in FORBIDDEN_PACKAGED_SECRET_FILE_SUFFIXES):
+        return True
+    return any(token in part for token in FORBIDDEN_PACKAGED_SECRET_FILE_TOKENS for part in lowered_parts)
+
+
+def _should_scan_packaged_text(path: Path) -> bool:
+    return path.suffix.lower() in PACKAGED_SECRET_TEXT_SUFFIXES or path.name == "Info.plist"
+
+
+def _collect_packaged_secret_errors(root: Path, scan_roots: list[Path]) -> list[str]:
+    errors: list[str] = []
+    seen: set[Path] = set()
+    for scan_root in scan_roots:
+        if not scan_root.exists():
+            continue
+        for candidate in scan_root.rglob("*"):
+            if not candidate.is_file():
+                continue
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            relative_label = _relative_label(root, candidate)
+            if _is_forbidden_secret_path(candidate):
+                errors.append(f"forbidden packaged secret file exists: {relative_label}")
+            if not _should_scan_packaged_text(candidate):
+                continue
+            try:
+                text = _read(candidate)
+            except OSError as exc:
+                errors.append(f"could not inspect packaged text file {relative_label}: {exc}")
+                continue
+            for label, pattern in PACKAGED_SECRET_VALUE_PATTERNS:
+                if pattern.search(text):
+                    errors.append(f"forbidden packaged secret value in {relative_label}: {label}")
+    return errors
 
 
 def _packaged_update_config_paths(root: Path, resource_roots: list[Path]) -> list[Path]:
@@ -383,6 +482,7 @@ def collect_package_errors(
             candidate = scan_root / rel_path
             if candidate.exists():
                 errors.append(f"forbidden packaged runtime artifact exists: {candidate.relative_to(scan_root)}")
+    errors.extend(_collect_packaged_secret_errors(root, runtime_scan_roots))
 
     packaged_bundle_digest = None
     bundle_path = resource_root / "ui_prototype" / "app.bundle.js"

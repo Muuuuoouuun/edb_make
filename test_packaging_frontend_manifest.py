@@ -471,6 +471,38 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("latest_session.json" in error for error in errors))
         self.assertTrue(any("uploads" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_secret_files(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / ".env").write_text("OPENAI_API_KEY=placeholder\n", encoding="utf-8")
+            (resource_root / "user_settings.json").write_text(
+                '{"openai_api_key":"placeholder"}\n',
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("forbidden packaged secret file exists" in error for error in errors))
+        self.assertTrue(any(".env" in error for error in errors))
+        self.assertTrue(any("user_settings.json" in error for error in errors))
+
+    def test_packaged_app_layout_rejects_secret_values(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            fake_openai_key = "sk-" + ("a" * 40)
+            bundle_path = resource_root / "ui_prototype" / "app.bundle.js"
+            bundle_path.write_text(
+                bundle_path.read_text(encoding="utf-8") + f"const leaked = '{fake_openai_key}';\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("forbidden packaged secret value" in error for error in errors))
+        self.assertTrue(any("OpenAI API key" in error for error in errors))
+
     def test_source_package_layout_requires_runtime_python_files(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "source-package"
