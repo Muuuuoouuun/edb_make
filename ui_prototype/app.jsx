@@ -127,12 +127,14 @@ const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 const BOARD_COLUMN_MIN = 1;
 const BOARD_COLUMN_MAX = 3;
 const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
+const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
 const DEFAULT_PLACEMENT_X_RATIO = 0;
 const DEFAULT_PLACEMENT_Y_RATIO = 0;
 const DEFAULT_PLACEMENT_SCALE_RATIO = 1;
 const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
+const PLACEMENT_FIT_WIDTH_SCALE_RATIO = 3.0;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
 const ADJACENT_RETRY_PADDING_RATIO = 0.16;
@@ -171,7 +173,7 @@ function normalizePlacementYRatio(value){
 function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
   const n = Number(value);
   const resolvedMax = Number.isFinite(Number(maxRatio))
-    ? Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, Number(maxRatio)))
+    ? Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_FIT_WIDTH_SCALE_RATIO, Number(maxRatio)))
     : PLACEMENT_SCALE_MAX;
   return Number.isFinite(n)
     ? Math.max(PLACEMENT_SCALE_MIN, Math.min(resolvedMax, n))
@@ -198,12 +200,12 @@ function boardColumnRatios(columnCount){
 
 function nearestBoardColumnMagnet(xRatio, columnCount, contentWidthPx = 0, tileWidthPx = 0){
   const ratios = boardColumnRatios(columnCount);
+  const normalized = normalizePlacementXRatio(xRatio);
   if (ratios.length <= 1) {
-    return { index: 0, ratio: DEFAULT_PLACEMENT_X_RATIO, snapped: false, distancePx: 0 };
+    return { index: 0, ratio: normalized, snapped: false, distancePx: 0 };
   }
   const travelPx = Math.max(1, Number(contentWidthPx || 0) - Number(tileWidthPx || 0));
   const thresholdRatio = BOARD_COLUMN_MAGNET_THRESHOLD_PX / travelPx;
-  const normalized = normalizePlacementXRatio(xRatio);
   let nearest = { index: 0, ratio: ratios[0], distance: Math.abs(normalized - ratios[0]) };
   ratios.forEach((ratio, index) => {
     const distance = Math.abs(normalized - ratio);
@@ -216,6 +218,32 @@ function nearestBoardColumnMagnet(xRatio, columnCount, contentWidthPx = 0, tileW
     snapped,
     distancePx: Math.round(nearest.distance * travelPx),
   };
+}
+
+function resolveBoardDragMagnet(rawXRatio, drag, contentWidthPx = 0){
+  const magnet = nearestBoardColumnMagnet(
+    rawXRatio,
+    drag?.columnCount,
+    contentWidthPx,
+    drag?.tileWidth
+  );
+  const normalized = normalizePlacementXRatio(rawXRatio);
+  const startIndex = Number(drag?.startMagnetColumnIndex);
+  const dxPx = Math.abs(Number(drag?.currentDxPx || 0));
+  if (
+    magnet.snapped
+    && Number.isFinite(startIndex)
+    && magnet.index === Math.round(startIndex)
+    && dxPx >= BOARD_COLUMN_UNSNAP_THRESHOLD_PX
+  ) {
+    return {
+      index: magnet.index,
+      ratio: normalized,
+      snapped: false,
+      distancePx: magnet.distancePx,
+    };
+  }
+  return magnet;
 }
 
 function normalizeManualCropEdgeRatio(value){
@@ -382,10 +410,21 @@ function itemHeightPages(item){
   return Math.max(0.12, item?.heightFrac || item?.actualHeightPages || item?.actual_height_pages || 0.8);
 }
 
+function itemUsesContinuousPageFlow(item){
+  if (!item) return false;
+  const intent = item.inputIntent ? normalizeInputIntent(item.inputIntent) : null;
+  if (intent) return intent === 'page-as-is';
+  return item.placementMode === 'continuous-page-as-is' || item.placement_mode === 'continuous-page-as-is';
+}
+
+function placementScaleLimitForItem(item){
+  return itemUsesContinuousPageFlow(item) ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX;
+}
+
 function itemRenderedHeightPages(item, scaleRatio = item?.placementScaleRatio){
   const heightPages = itemHeightPages(item);
   const rawScale = Number.isFinite(Number(scaleRatio)) ? Number(scaleRatio) : DEFAULT_PLACEMENT_SCALE_RATIO;
-  const scale = Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, rawScale));
+  const scale = Math.max(PLACEMENT_SCALE_MIN, Math.min(placementScaleLimitForItem(item), rawScale));
   return heightPages * scale;
 }
 
@@ -402,6 +441,7 @@ function placementSlotHeightPages(item){
 
 function maxPlacementScaleRatio(item){
   if (!item) return PLACEMENT_SCALE_MAX;
+  if (itemUsesContinuousPageFlow(item)) return PLACEMENT_FIT_WIDTH_SCALE_RATIO;
   const heightPages = itemHeightPages(item);
   const slotHeightPages = placementSlotHeightPages(item);
   return Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, slotHeightPages / heightPages));
@@ -414,11 +454,41 @@ function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio
   return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
 }
 
+function fitWidthContinuousPageItem(item, options = {}){
+  if (!item) return item;
+  const next = { ...item };
+  const hasOption = key => Object.prototype.hasOwnProperty.call(options || {}, key);
+  const heightPages = itemHeightPages(next);
+  const startPages = Number.isFinite(next.startYPages) ? Math.max(0, next.startYPages) : 0;
+  const targetScale = normalizePlacementScaleRatio(
+    hasOption('scaleRatio') ? options.scaleRatio : PLACEMENT_FIT_WIDTH_SCALE_RATIO,
+    PLACEMENT_FIT_WIDTH_SCALE_RATIO
+  );
+  const slotSpanPages = heightPages * targetScale;
+  next.inputIntent = 'page-as-is';
+  next.input_intent = 'page-as-is';
+  next.placementMode = 'continuous-page-as-is';
+  next.placement_mode = 'continuous-page-as-is';
+  next.forceFullPageBounds = true;
+  next.force_full_page_bounds = true;
+  next.placementXRatio = hasOption('xRatio') ? normalizePlacementXRatio(options.xRatio) : DEFAULT_PLACEMENT_X_RATIO;
+  next.placementXEdited = options.xEdited === true;
+  next.placement_x_edited = next.placementXEdited;
+  next.placementMagnetColumnIndex = next.placementXEdited && hasOption('magnetColumnIndex') ? options.magnetColumnIndex : null;
+  next.placement_magnet_column_index = next.placementMagnetColumnIndex;
+  next.placementYRatio = hasOption('yRatio') ? normalizePlacementYRatio(options.yRatio) : DEFAULT_PLACEMENT_Y_RATIO;
+  next.placement_y_ratio = next.placementYRatio;
+  next.placementScaleRatio = targetScale;
+  next.placement_scale_ratio = targetScale;
+  next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));
+  next.snapped_next_start_y_pages = next.snappedNextStartYPages;
+  next.slotSpanCount = Math.max(1, Math.ceil(slotSpanPages / DEFAULT_SLOT_HEIGHT_PAGES));
+  next.slot_span_count = next.slotSpanCount;
+  return next;
+}
+
 function isContinuousPlacementItem(item){
-  if (!item) return false;
-  const intent = item.inputIntent ? normalizeInputIntent(item.inputIntent) : null;
-  if (intent) return intent === 'page-as-is';
-  return item.placementMode === 'continuous-page-as-is';
+  return itemUsesContinuousPageFlow(item);
 }
 
 function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
@@ -1273,6 +1343,7 @@ function ReviewStage({
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
   const manualSplitFocusRef = useRef('');
+  const pendingBoxEditProblemIdRef = useRef('');
   const reviewWrapRef = useRef(null);
 
   // Cancel split mode if the session changes underneath (e.g. after a mutation).
@@ -1280,11 +1351,29 @@ function ReviewStage({
     setSplitTarget(null);
     boxEditCommitRef.current = false;
     manualSplitCommitRef.current = false;
-    setBoxEdit(null);
     setManualSplit(null);
     setManualSplitDraftBox(null);
-    setSelectedIds(new Set());
     setReviewRiskFilter(null);
+    const pendingProblemId = String(pendingBoxEditProblemIdRef.current || '').trim();
+    pendingBoxEditProblemIdRef.current = '';
+    if (pendingProblemId) {
+      const nextProblem = (session?.problems || []).find(problem => String(problem?.id || '') === pendingProblemId);
+      const nextPage = nextProblem
+        ? (session?.pages || []).find(page => page.id === (nextProblem.sourcePageId || nextProblem.source_page_id))
+        : null;
+      if (nextProblem && nextPage) {
+        setSelectedIds(new Set([pendingProblemId]));
+        if (setActive) setActive(pendingProblemId);
+        setBoxEdit({
+          problemId: pendingProblemId,
+          pageId: nextPage.id,
+          box: clampReviewBox(nextProblem.bbox, nextPage),
+        });
+        return;
+      }
+    }
+    setBoxEdit(null);
+    setSelectedIds(new Set());
   }, [session]);
   useEffect(() => {
     if (reviewFocus === null) {
@@ -1347,7 +1436,14 @@ function ReviewStage({
   const onBoxClick = (probId, evt) => {
     if (manualSplit) return;
     if (splitTarget) return;  // ignore clicks while splitting
-    if (boxEdit) return;  // keep the crop frame stable while editing
+    if (boxEdit) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      if (boxEdit.problemId !== probId) {
+        void applyBoxEdit({ continueWithProblemId: probId });
+      }
+      return;
+    }
     if (evt.shiftKey) {
       setSelectedIds(prev => {
         const next = new Set(prev);
@@ -2006,31 +2102,30 @@ function ReviewStage({
     boxEditCommitRef.current = false;
     setBoxEdit(null);
   };
-  const applyBoxEdit = useCallback(async () => {
+  const applyBoxEdit = useCallback(async (options = {}) => {
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
+    const continueWithProblemId = String(options?.continueWithProblemId || '').trim();
+    const shouldContinue = continueWithProblemId && continueWithProblemId !== boxEdit.problemId;
     boxEditCommitRef.current = true;
+    if (shouldContinue) pendingBoxEditProblemIdRef.current = continueWithProblemId;
     try {
       const nextSession = await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
-      if (nextSession) setBoxEdit(null);
+      if (nextSession && !shouldContinue) setBoxEdit(null);
+      if (!nextSession && shouldContinue) pendingBoxEditProblemIdRef.current = '';
     } finally {
       boxEditCommitRef.current = false;
     }
   }, [boxEdit, mutateSession]);
-  const retryPartialAi = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
+  const applyExpandedCrop = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
     if (!problem?.id || !page?.id) return;
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
-    await retryAiSession?.({
-      partial: true,
-      problemIds: [problem.id],
-      cropBoxes: { [problem.id]: retryBox },
-      inputIntent: 'single-problem',
-    });
+    await mutateSession?.('crop', { problemId: problem.id, cropBox: retryBox });
   };
-  const retryBoxEdit = async () => {
+  const applyExpandedBoxEdit = async () => {
     if (!boxEdit?.problemId || !boxEdit?.box) return;
     const problem = problemsById.get(boxEdit.problemId);
     const page = pages.find(item => item.id === (problem?.sourcePageId || boxEdit.pageId));
-    await retryPartialAi(problem, page, boxEdit.box);
+    await applyExpandedCrop(problem, page, boxEdit.box);
     setBoxEdit(null);
   };
   const beginBoxDrag = (evt, mode, page) => {
@@ -2138,6 +2233,7 @@ function ReviewStage({
       if (boxEditDragRef.current || boxEditCommitRef.current) return;
       const target = evt.target;
       if (target?.closest?.('.review-bbox.editing')) return;
+      if (target?.closest?.('.review-bbox')) return;
       if (target?.closest?.('.crop-frame-handle')) return;
       if (target?.closest?.('.review-actionbar')) return;
       evt.preventDefault();
@@ -2387,7 +2483,7 @@ function ReviewStage({
     filterOptions.push(['supplemental', '자료', sessionCounts.supplemental]);
   }
   if (statusCounts.passage > 0) {
-    filterOptions.push(['passage', '긴 지문', statusCounts.passage]);
+    filterOptions.push(['passage', '지문', statusCounts.passage]);
   }
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
@@ -2410,17 +2506,17 @@ function ReviewStage({
   const actionBar = boxEdit ? (
     <div className="review-actionbar">
       <span className="count-chip">틀 조정 중</span>
-      <span className="hint">모서리와 변을 끌어 맞춘 뒤 바깥을 클릭해 바로 적용하거나, 주변 여백까지 포함해 다시 인식하세요.</span>
+      <span className="hint">모서리와 변을 끌어 맞춘 뒤 다른 문제를 클릭하면 현재 자르기를 적용하고 다음 틀을 이어 조정합니다.</span>
       <div className="spacer" />
       <button className="btn" type="button" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
       <button
         className="btn"
         type="button"
-        title={retryDisabledReason || '조정한 영역 주변까지 AI로 다시 인식'}
-        onClick={retryBoxEdit}
-        disabled={!aiAvailable || aiBusy || mutating}
+        title="조정한 틀에 주변 여백을 더해 빠르게 다시 자릅니다"
+        onClick={applyExpandedBoxEdit}
+        disabled={mutating}
       >
-        주변 영역 AI 재인식
+        주변 포함 빠른 자르기
       </button>
       <button className="btn primary" type="button" onClick={applyBoxEdit} disabled={mutating}>
         자르기 적용
@@ -2592,11 +2688,11 @@ function ReviewStage({
               <button
                 className="btn primary"
                 type="button"
-                onClick={() => retryPartialAi()}
-                disabled={!aiAvailable || aiBusy || mutating || !selectedCanBoxEdit}
-                title={retryDisabledReason || '선택한 박스 주변 여백까지 AI로 다시 인식'}
+                onClick={() => applyExpandedCrop()}
+                disabled={mutating || !selectedCanBoxEdit}
+                title="선택한 박스 주변 여백까지 포함해 빠르게 다시 자르기"
               >
-                {Icon.wand} 주변 영역 AI 재인식
+                {Icon.crop} 주변 포함 빠른 자르기
               </button>
               <button
                 className="btn"
@@ -2780,28 +2876,38 @@ function ReviewStage({
             {reviewSummary.sourceProblemOverlapGroups.length > 0 && (
               <span
                 className="review-summary-chip warn"
-                title="같은 원본 페이지에서 문항 인식 영역이 크게 겹칩니다."
+                title={[
+                  '문항 영역 겹침: 같은 원본 페이지에서 인식 영역이 크게 겹칩니다.',
+                  reviewSummary.sourceProblemOverlapDetailLabel
+                    ? `세부: ${reviewSummary.sourceProblemOverlapDetailLabel}`
+                    : '',
+                ].filter(Boolean).join(' ')}
               >
-                원본 겹침 {reviewSummary.sourceProblemOverlapLabel}
+                {reviewSummary.sourceProblemOverlapLabel}
               </span>
             )}
             {reviewSummary.passageGroupSourceReuseGroups.length > 0 && (
               <button
                 type="button"
                 className={`review-summary-chip warn risk-filter-chip ${reviewRiskFilter === 'passage_group_source_reuse' ? 'on' : ''}`}
-                title="같은 긴 지문 그룹의 하위 문항 원본 영역이 크게 겹칩니다."
+                title={[
+                  '지문 겹침: 같은 지문 묶음에서 원본 영역이 크게 겹칩니다.',
+                  reviewSummary.passageGroupSourceReuseDetailLabel
+                    ? `세부: ${reviewSummary.passageGroupSourceReuseDetailLabel}`
+                    : '',
+                ].filter(Boolean).join(' ')}
                 aria-pressed={reviewRiskFilter === 'passage_group_source_reuse'}
                 data-risk-flag="passage_group_source_reuse"
                 onClick={() => toggleRiskFilter('passage_group_source_reuse')}
               >
-                지문 원본 중복 {reviewSummary.passageGroupSourceReuseLabel}
+                {reviewSummary.passageGroupSourceReuseLabel}
               </button>
             )}
             {reviewSummary.passageGroupCount > 0 && (
               <button
                 type="button"
                 className={`review-summary-chip risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
-                title={`${reviewSummary.passageProblemCount}개 문항이 긴 지문 그룹에 연결되어 있습니다.${
+                title={`${reviewSummary.passageProblemCount}개 문항이 지문 묶음에 연결되어 있습니다.${
                   reviewSummary.passageContinuationBlockCount > 0
                     ? ` 이어짐 블록 ${reviewSummary.passageContinuationBlockCount}개 포함.`
                     : ''
@@ -2809,7 +2915,7 @@ function ReviewStage({
                 aria-pressed={reviewFilter === 'passage'}
                 onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
               >
-                긴 지문 그룹 {reviewSummary.passageGroupCount}
+                지문 묶음 {reviewSummary.passageGroupCount}
                 {reviewSummary.passageContinuationBlockCount > 0 ? ` · 이어짐 ${reviewSummary.passageContinuationBlockCount}` : ''}
               </button>
             )}
@@ -2818,7 +2924,7 @@ function ReviewStage({
                 type="button"
                 className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
                 title={[
-                  '긴 지문 검수 큐',
+                  '지문 확인 항목',
                   reviewSummary.passageReviewLabel,
                   reviewSummary.passageReviewReasonLabel,
                   reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
@@ -3005,12 +3111,17 @@ function ReviewStage({
                     const passageGroupId = passageGroupIdFor(prob);
                     const isPassage = Boolean(passageGroupId);
                     const order = orderMap.get(prob.id);
+                    const isPassageFragment = isPassageFragmentProblem(prob);
+                    const passageRangeLabel = passageRangeLabelFor(prob);
+                    const bboxPrimaryLabel = isPassageFragment
+                      ? (passageRangeLabel ? `지문 ${passageRangeLabel}` : '지문')
+                      : String(order || '?').padStart(2, '0');
                     const tooltipParts = [prob.title || ''];
                     const problemRiskFlags = riskFlagsFor(prob);
                     const hasPageChrome = hasPageChromeArtifactFlag(prob);
                     if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
                     if (hasPageChrome) tooltipParts.push('페이지 선/번호 감지');
-                    if (isPassage) tooltipParts.push(`긴 지문 ${passageGroupId}`);
+                    if (isPassage) tooltipParts.push(`지문 ${passageGroupId}`);
                     const classes = [
                       'review-bbox',
                       isPassage ? 'review-bbox-passage' : '',
@@ -3044,8 +3155,8 @@ function ReviewStage({
                         title={tooltipParts.filter(Boolean).join(' · ')}
                       >
                         <div className="review-bbox-label">
-                          {String(order || '?').padStart(2, '0')}
-                          {isPassage && <span className="review-bbox-passage-tag">지문</span>}
+                          {bboxPrimaryLabel}
+                          {isPassage && !isPassageFragment && <span className="review-bbox-passage-tag">지문</span>}
                           {hasPageChrome
                             ? <span className="review-bbox-risk">페이지 장식</span>
                             : isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
@@ -3433,6 +3544,7 @@ function ItemsRail({
               {pendingFiles.map((file, index) => {
                 const key = fileQueueKey(file);
                 const selected = selectedPendingFileKey === key;
+                const fastImage = !isDocumentLikeFile(file);
                 return (
                 <div
                   className={`source-queue-row ${selected ? 'is-selected' : ''}`}
@@ -3473,8 +3585,8 @@ function ItemsRail({
                   </button>
                   <button
                     className="icon-btn queue-row-action"
-                    title="이 파일만 문항 AI 인식"
-                    aria-label="이 파일 문항 AI 인식"
+                    title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
+                    aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
                     onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
                     disabled={queueBusy}
                   >
@@ -3508,14 +3620,14 @@ function ItemsRail({
               <button
                 className="btn primary queue-action-card queue-action-ai"
                 type="button"
-                title="대기열 전체를 문제별로 문항 AI 인식"
+                title={isImageOnlyFileBatch(pendingFiles) ? '이미지는 AI 보정 없이 빠르게 문항을 나눕니다' : '대기열 전체를 문제별로 문항 AI 인식'}
                 onClick={() => processQueuedFiles('recognize')}
                 disabled={queueBusy}
               >
                 <span className="queue-action-icon">{Icon.aiBatch}</span>
                 <span className="queue-action-copy">
-                  <strong>문항 AI 인식</strong>
-                  <small>문제별 자동 분리</small>
+                  <strong>{isImageOnlyFileBatch(pendingFiles) ? '빠른 문항 인식' : '문항 AI 인식'}</strong>
+                  <small>{isImageOnlyFileBatch(pendingFiles) ? '이미지 빠른 분할' : '문제별 자동 분리'}</small>
                 </span>
               </button>
               <button
@@ -3851,6 +3963,21 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
   useEffect(() => () => stopBoardAutoScroll(), []);
 
+  const removePositionDragWindowListeners = (drag = positionDragRef.current) => {
+    if (!drag) return;
+    if (drag.windowPointerMove) {
+      window.removeEventListener('pointermove', drag.windowPointerMove);
+      drag.windowPointerMove = null;
+    }
+    if (drag.windowPointerEnd) {
+      window.removeEventListener('pointerup', drag.windowPointerEnd);
+      window.removeEventListener('pointercancel', drag.windowPointerEnd);
+      drag.windowPointerEnd = null;
+    }
+  };
+
+  useEffect(() => () => removePositionDragWindowListeners(), []);
+
   const beginPositionDrag = (evt, item, placement) => {
     if (evt.button !== 0 || !contentRef.current) return;
     const contentRect = contentRef.current.getBoundingClientRect();
@@ -3859,9 +3986,16 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
     const startXRatio = normalizePlacementXRatio(placement.xRatio);
     const startYRatio = normalizePlacementYRatio(placement.yRatio);
-    positionDragRef.current = {
+    const startMagnet = nearestBoardColumnMagnet(
+      startXRatio,
+      placement.columnCount || columnCount,
+      contentRect.width,
+      tileRect.width
+    );
+    const drag = {
       id: item.id,
       pointerId: evt.pointerId,
+      captureTarget: evt.currentTarget,
       startX: evt.clientX,
       startY: evt.clientY,
       startLeft: startXRatio * maxLeft,
@@ -3870,15 +4004,22 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       maxTopOffset,
       tileWidth: tileRect.width,
       columnCount: placement.columnCount || columnCount,
+      startMagnetColumnIndex: startMagnet.snapped ? startMagnet.index : null,
       lastXRatio: startXRatio,
       lastYRatio: startYRatio,
       moved: false,
     };
+    drag.windowPointerMove = event => movePositionDrag(event);
+    drag.windowPointerEnd = event => endPositionDrag(event);
+    positionDragRef.current = drag;
     setPositioningId(item.id);
     setCurrentBoardDropTarget(null);
     syncLock.current = Date.now();
     setActive(item.id);
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
+    window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
+    window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerEnd, { passive: false });
   };
 
   const movePositionDrag = (evt) => {
@@ -3894,7 +4035,8 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
     const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
     const rawXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
-    const magnet = nearestBoardColumnMagnet(rawXRatio, drag.columnCount, contentW, drag.tileWidth);
+    drag.currentDxPx = dx;
+    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
     const nextXRatio = magnet.ratio;
     const nextYRatio = drag.maxTopOffset > 0 ? nextTopOffset / drag.maxTopOffset : DEFAULT_PLACEMENT_Y_RATIO;
     setDragMagnet(magnet.snapped ? {
@@ -3933,7 +4075,9 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
         reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
       }
     }
-    evt.currentTarget.releasePointerCapture?.(evt.pointerId);
+    removePositionDragWindowListeners(drag);
+    const captureTarget = drag.captureTarget || evt.currentTarget;
+    captureTarget?.releasePointerCapture?.(evt.pointerId);
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
@@ -4015,10 +4159,20 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                   const p = layout.positions[i];
                   if (!p) return null;
                   const tileWidth = contentW > 0
-                    ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
+                    ? isContinuousPlacementItem(it)
+                      ? Math.max(120, contentW / PLACEMENT_FIT_WIDTH_SCALE_RATIO)
+                      : Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
                     : null;
                   const maxScale = tileWidth
-                    ? Math.max(
+                    ? isContinuousPlacementItem(it)
+                      ? Math.max(
+                        PLACEMENT_SCALE_MIN,
+                        Math.min(
+                          PLACEMENT_FIT_WIDTH_SCALE_RATIO,
+                          contentW / Math.max(tileWidth, 1)
+                        )
+                      )
+                      : Math.max(
                         PLACEMENT_SCALE_MIN,
                         Math.min(
                           PLACEMENT_SCALE_MAX,
@@ -4026,7 +4180,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                           ((p.snappedNext * pageH) - p.top) / Math.max(p.height, 1)
                         )
                       )
-                    : PLACEMENT_SCALE_MAX;
+                    : placementScaleLimitForItem(it);
                   const scaleRatio = normalizePlacementScaleRatio(it.placementScaleRatio, maxScale);
                   const scaledWidth = tileWidth ? tileWidth * scaleRatio : null;
                   const scaledHeight = p.height * scaleRatio;
@@ -4225,11 +4379,15 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
             {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
             {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
             {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
-            {summary.passageGroupLabel && <span title="긴 지문/공통 지문 그룹">{summary.passageGroupLabel}</span>}
-            {summary.passageReviewLabel && <span title="긴 지문 검수 큐">{summary.passageReviewLabel}</span>}
-            {summary.passageReviewReasonLabel && <span title="긴 지문 검수 사유">{summary.passageReviewReasonLabel}</span>}
-            {summary.sourceProblemOverlapLabel && <span title="원본 문제 영역 겹침">{summary.sourceProblemOverlapLabel}</span>}
-            {summary.passageGroupSourceReuseLabel && <span title="지문 원본 중복">{summary.passageGroupSourceReuseLabel}</span>}
+            {summary.passageGroupLabel && <span title="지문 묶음">{summary.passageGroupLabel}</span>}
+            {summary.passageReviewLabel && <span title="지문 확인 항목">{summary.passageReviewLabel}</span>}
+            {summary.passageReviewReasonLabel && <span title="지문 확인 사유">{summary.passageReviewReasonLabel}</span>}
+            {summary.sourceProblemOverlapLabel && <span title="문항 영역 겹침">{summary.sourceProblemOverlapLabel}</span>}
+            {summary.passageGroupSourceReuseLabel && (
+              <span title={summary.passageGroupSourceReuseDetailLabel || '지문 겹침'}>
+                {summary.passageGroupSourceReuseLabel}
+              </span>
+            )}
             {summary.layoutDiagnosticsLabel && <span title="긴 이미지 배치 진단">{summary.layoutDiagnosticsLabel}</span>}
             {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
           </div>
@@ -4499,7 +4657,7 @@ function SidePanel({
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
       xEdited: false,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
-      scaleRatio: PLACEMENT_SCALE_MAX,
+      scaleRatio: PLACEMENT_FIT_WIDTH_SCALE_RATIO,
       fitWidth: true,
     });
   };
@@ -4525,6 +4683,7 @@ function SidePanel({
     if (!item || mutating) return;
     const normalized = normalizeManualCrop(nextCrop);
     setCropDraft(normalized);
+    if (item.step === 's2' || item.step === 's3') setPreviewMode('chalk');
     mutateSession?.('crop', { problemId: item.id, crop: normalized });
   };
   const resetManualCrop = () => {
@@ -4547,10 +4706,10 @@ function SidePanel({
         <button
           className={tab==='board' ? 'on' : ''}
           onClick={() => setTab('board')}
-          title="칠판 설정"
-          data-tooltip="칠판 색상, 한 줄 자료 수, AI 인식 설정"
+          title="설정"
+          data-tooltip="레이아웃, 색상, AI 인식 설정"
         >
-          칠판
+          설정
         </button>
       </div>
 
@@ -5751,6 +5910,10 @@ function isDocumentLikeFile(file){
   return isPdfFile(file) || isHwpFile(file);
 }
 
+function isImageOnlyFileBatch(files){
+  return Array.isArray(files) && files.length > 0 && files.every(file => !isDocumentLikeFile(file));
+}
+
 function sourceFileKindLabel(file){
   if (isPdfFile(file)) return 'PDF';
   if (isHwpFile(file)) return 'HWP';
@@ -5931,6 +6094,29 @@ function materializeSessionForItems(rawSession, items, fileName, boardColumns = 
   return snapshot;
 }
 
+function fitWidthPageAsIsSession(rawSession, options = {}){
+  const snapshot = cloneSession(rawSession);
+  if (!snapshot || !Array.isArray(snapshot.problems) || snapshot.problems.length === 0) return rawSession;
+  const targetIds = Array.isArray(options.targetIds)
+    ? new Set(options.targetIds.map(id => String(id || '').trim()).filter(Boolean))
+    : null;
+  const boardColumns = normalizeBoardColumns(options.boardColumns || BOARD_COLUMN_MIN);
+  const sessionIntent = normalizeInputIntent(snapshot.inputIntent || snapshot.input_intent);
+  const items = snapshot.problems.map((problem, idx) => {
+    const item = mapProblemToItem(problem, idx);
+    const itemIntent = normalizeInputIntent(item.inputIntent || problem.inputIntent || problem.input_intent || sessionIntent);
+    if (itemIntent !== 'page-as-is') return item;
+    if (targetIds && !targetIds.has(String(item.id))) return item;
+    return fitWidthContinuousPageItem({
+      ...item,
+      inputIntent: itemIntent,
+      input_intent: itemIntent,
+    });
+  });
+  const reflowed = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+  return materializeSessionForItems(snapshot, reflowed, options.fileName || snapshot.session_name, boardColumns) || snapshot;
+}
+
 function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BOARD_COLUMN_MIN){
   const base = cloneSession(baseSession);
   const incoming = cloneSession(incomingSession);
@@ -6040,10 +6226,16 @@ function mapProblemToItem(problem, idx){
   const riskFlags = riskFlagsFor(problem);
   const reviewStatus = deriveProblemStatus(problem);
   const statusMeta = reviewStatusMeta(reviewStatus);
-  const initialScale = normalizePlacementScaleRatio(problem.placementScaleRatio ?? problem.placement_scale_ratio);
   const step = normalizeProcessingStep(problem.step || problem.processingStep || problem.processing_step);
   const manualCrop = normalizeManualCrop(problem.manualCrop || problem.manual_crop || problem.cropAdjustments || problem);
   const problemInputIntent = problem.inputIntent || problem.input_intent;
+  const problemPlacementMode = problem.placementMode || problem.placement_mode || null;
+  const problemUsesContinuousFlow = (problemInputIntent && normalizeInputIntent(problemInputIntent) === 'page-as-is')
+    || problemPlacementMode === 'continuous-page-as-is';
+  const initialScale = normalizePlacementScaleRatio(
+    problem.placementScaleRatio ?? problem.placement_scale_ratio,
+    problemUsesContinuousFlow ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX
+  );
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -6068,7 +6260,7 @@ function mapProblemToItem(problem, idx){
     aiStatus: problem.aiStatus || 'unknown',
     inputIntent: problemInputIntent ? normalizeInputIntent(problemInputIntent) : null,
     forceFullPageBounds: Boolean(problem.forceFullPageBounds || problem.force_full_page_bounds),
-    placementMode: problem.placementMode || problem.placement_mode || null,
+    placementMode: problemPlacementMode,
     startYPages: typeof problem.startYPages === 'number' ? problem.startYPages : null,
     snappedNextStartYPages: typeof problem.snappedNextStartYPages === 'number' ? problem.snappedNextStartYPages : null,
     overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
@@ -6213,12 +6405,12 @@ const RISK_FLAG_META = {
   needs_review: '검토 필요',
   no_problem_markers: '문항 번호 부족',
   ocr_disabled: 'OCR 미사용',
-  passage_missing_child_questions: '지문 하위 문항 누락',
-  passage_group_source_reuse: '지문 그룹 원본 중복',
-  passage_cross_page_merge_check: '긴 지문 병합 확인',
+  passage_missing_child_questions: '문항 누락',
+  passage_group_source_reuse: '지문 겹침',
+  passage_cross_page_merge_check: '병합 확인',
   problem_per_block: '블록 단위 분리',
   sparse_segmentation: '성긴 분할',
-  source_problem_bbox_overlap: '원본 영역 겹침',
+  source_problem_bbox_overlap: '문항 영역 겹침',
   step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
   step3_page_chrome_artifact: '3단계 페이지 장식',
 };
@@ -6228,25 +6420,25 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   duplicate_problem_number: '중복 번호',
   low_ink_problem_image: '이미지 내용 부족',
   missing_problem_image: '문항 이미지 없음',
-  passage_missing_child_questions: '지문 하위 문항 누락',
-  passage_review_queue_remaining: '긴 지문 검수 남음',
-  passage_group_source_reuse: '지문 그룹 원본 중복',
+  passage_missing_child_questions: '문항 누락',
+  passage_review_queue_remaining: '지문 확인 필요',
+  passage_group_source_reuse: '지문 겹침',
   review_flags_remaining: '검수 플래그 남음',
   small_problem_image: '문항 이미지 작음',
-  source_problem_bbox_overlap: '원본 영역 겹침',
+  source_problem_bbox_overlap: '문항 영역 겹침',
   step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
   step3_page_chrome_artifact: '3단계 페이지 장식',
   unreadable_problem_image: '문항 이미지 흐림',
 };
 const PASSAGE_REVIEW_REASON_LABELS = {
-  cross_page_passage_group: '페이지 넘김 긴 지문',
+  cross_page_passage_group: '페이지 이어짐',
   hwp_text_fallback_problem: 'HWP 텍스트 fallback',
   marker_document_continuation: '문서 이어짐 표시',
-  passage_cross_page_merge_check: '긴 지문 병합 확인',
-  passage_fragment: '이어짐 자료',
-  passage_group_source_reuse: '지문 그룹 원본 중복',
-  passage_missing_child_questions: '지문 하위 문항 누락',
-  source_problem_bbox_overlap: '원본 영역 겹침',
+  passage_cross_page_merge_check: '병합 확인',
+  passage_fragment: '지문 본문',
+  passage_group_source_reuse: '지문 겹침',
+  passage_missing_child_questions: '문항 누락',
+  source_problem_bbox_overlap: '문항 영역 겹침',
 };
 
 function classinPreflightIssueLabel(type){
@@ -6621,10 +6813,27 @@ function hasRiskFlag(entity, flag){
 function isSupplementalProblem(problem){
   const helper = globalThis.EDB_REVIEW_FILTERS?.isSupplementalProblem;
   if (typeof helper === 'function') return helper(problem);
+  const role = String(problem?.passageRole || problem?.passage_role || problem?.metadata?.passageRole || problem?.metadata?.passage_role || '').trim();
+  if (role === 'passage_fragment') return true;
+  if (problem?.supplementalItem || problem?.supplemental_item || problem?.metadata?.supplementalItem || problem?.metadata?.supplemental_item) return true;
   if (hasRiskFlag(problem, 'marker_document_continuation')) return true;
   if (problem?.metadata?.marker_document_continuation) return true;
   const id = String(problem?.id || problem?.problem_id || '');
   return id.endsWith('-continuation');
+}
+
+function isPassageFragmentProblem(problem){
+  const role = String(problem?.passageRole || problem?.passage_role || problem?.metadata?.passageRole || problem?.metadata?.passage_role || '').trim();
+  return role === 'passage_fragment';
+}
+
+function passageRangeLabelFor(problem){
+  const range = problem?.passageRange || problem?.passage_range || problem?.metadata?.passageRange || problem?.metadata?.passage_range || null;
+  if (!range || typeof range !== 'object') return '';
+  const start = Number(range.start);
+  const end = Number(range.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end < start) return '';
+  return start === end ? String(start) : `${start}~${end}`;
 }
 
 function passageGroupIdFor(problem){
@@ -6998,8 +7207,8 @@ function collectPassageReviewSummary(session, options = {}){
     );
   const passageReviewLabel = passageReviewItemCount > 0
     ? [
-      `긴 지문 검수 ${passageReviewItemCount}`,
-      crossPagePassageReviewItemCount > 0 ? `페이지 넘김 ${crossPagePassageReviewItemCount}` : '',
+      `지문 확인 ${passageReviewItemCount}`,
+      crossPagePassageReviewItemCount > 0 ? `페이지 이어짐 ${crossPagePassageReviewItemCount}` : '',
     ].filter(Boolean).join(' · ')
     : '';
   const passageReviewPreview = unresolvedPassageReviewItems
@@ -7179,7 +7388,7 @@ function sessionReviewSummary(session){
     : Array.isArray(session?.source_problem_overlap_groups)
       ? session.source_problem_overlap_groups
       : [];
-  const sourceProblemOverlapLabel = sourceProblemOverlapGroups
+  const sourceProblemOverlapDetailLabel = sourceProblemOverlapGroups
     .map(group => {
       const pageId = String(group?.sourcePageId || group?.source_page_id || '').trim();
       const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
@@ -7187,7 +7396,10 @@ function sessionReviewSummary(session){
       return [pageId, percent].filter(Boolean).join(' ');
     })
     .filter(Boolean)
-    .join(', ') || `${sourceProblemOverlapGroups.length}`;
+    .join(', ');
+  const sourceProblemOverlapLabel = sourceProblemOverlapGroups.length > 0
+    ? `문항 영역 겹침 ${sourceProblemOverlapGroups.length}건`
+    : '';
   const passageGroupSourceReuseGroups = Array.isArray(session?.passageGroupSourceReuseGroups)
     ? session.passageGroupSourceReuseGroups
     : Array.isArray(session?.passage_group_source_reuse_groups)
@@ -7201,7 +7413,7 @@ function sessionReviewSummary(session){
   const passageGroupSourceReuseGroupCount = Number.isFinite(explicitPassageGroupSourceReuseCount)
     ? Math.max(0, explicitPassageGroupSourceReuseCount)
     : passageGroupSourceReuseGroups.length;
-  const passageGroupSourceReuseLabel = passageGroupSourceReuseGroups
+  const passageGroupSourceReuseDetailLabel = passageGroupSourceReuseGroups
     .map(group => {
       const groupId = String(group?.passageGroupId || group?.passage_group_id || '').trim();
       const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
@@ -7209,7 +7421,10 @@ function sessionReviewSummary(session){
       return [groupId, percent].filter(Boolean).join(' ');
     })
     .filter(Boolean)
-    .join(', ') || `${passageGroupSourceReuseGroupCount}`;
+    .join(', ');
+  const passageGroupSourceReuseLabel = passageGroupSourceReuseGroupCount > 0
+    ? `지문 겹침 ${passageGroupSourceReuseGroupCount}건`
+    : '';
   return {
     counts,
     reviewStatusCounts,
@@ -7243,9 +7458,11 @@ function sessionReviewSummary(session){
     duplicateProblemNumberLabel,
     sourceProblemOverlapGroups,
     sourceProblemOverlapLabel,
+    sourceProblemOverlapDetailLabel,
     passageGroupSourceReuseGroups,
     passageGroupSourceReuseGroupCount,
     passageGroupSourceReuseLabel,
+    passageGroupSourceReuseDetailLabel,
     passageGroups: passageSummary.passageGroups,
     passageGroupCount: passageSummary.passageGroupCount,
     passageProblemCount: passageSummary.passageProblemCount,
@@ -7281,14 +7498,14 @@ function publishReviewWarningMessage(session, publishReviewSummary){
   if (actionableNeedsReviewCount <= 0 && !hasUnresolvedPassageReview) return null;
   const passageReviewLine = hasUnresolvedPassageReview
     ? [
-      publishReviewSummary?.passageReviewLabel || `긴 지문 검수 ${passageReviewItemCount}`,
+      publishReviewSummary?.passageReviewLabel || `지문 확인 ${passageReviewItemCount}`,
       publishReviewSummary?.passageReviewReasonLabel || '',
       publishReviewSummary?.passageReviewPreview ? `대상 ${publishReviewSummary.passageReviewPreview}` : '',
     ].filter(Boolean).join(' · ')
     : '';
   const reviewCountLine = actionableNeedsReviewCount > 0
     ? `검수 화면에 확인 필요 ${actionableNeedsReviewCount}개가 남아 있습니다.`
-    : '검수 화면에 긴 지문 확인 항목이 남아 있습니다.';
+    : '검수 화면에 지문 확인 항목이 남아 있습니다.';
   return {
     message: [
       passageReviewLine,
@@ -7296,7 +7513,7 @@ function publishReviewWarningMessage(session, publishReviewSummary){
       '그래도 EDB를 제작할까요?',
     ].filter(Boolean).join('\n'),
     cancelToast: passageReviewLine
-      ? '제작을 멈췄어요. 긴 지문 검수 큐를 먼저 확인하세요.'
+      ? '제작을 멈췄어요. 지문 확인 항목을 먼저 확인하세요.'
       : '제작을 멈췄어요. 검수 화면에서 확인 필요 항목을 먼저 확인하세요.',
     reviewFilter: passageReviewLine ? 'passage-review' : 'check_needed',
   };
@@ -7509,9 +7726,9 @@ function normalizePublishSummary(raw, session = null){
     || raw.passage_group_label
     || (normalizedPassageGroupCount > 0
       ? [
-        `긴 지문 그룹 ${normalizedPassageGroupCount}`,
+        `지문 묶음 ${normalizedPassageGroupCount}`,
         `${normalizedPassageProblemCount}문항`,
-        normalizedCrossPagePassageGroupCount > 0 ? `페이지 넘김 ${normalizedCrossPagePassageGroupCount}` : '',
+        normalizedCrossPagePassageGroupCount > 0 ? `페이지 이어짐 ${normalizedCrossPagePassageGroupCount}` : '',
       ].filter(Boolean).join(' · ')
       : '')
   ).trim();
@@ -7547,8 +7764,8 @@ function normalizePublishSummary(raw, session = null){
     || raw.passage_review_label
     || (normalizedPassageReviewItemCount > 0
       ? [
-        `긴 지문 검수 ${normalizedPassageReviewItemCount}`,
-        normalizedCrossPagePassageReviewItemCount > 0 ? `페이지 넘김 ${normalizedCrossPagePassageReviewItemCount}` : '',
+        `지문 확인 ${normalizedPassageReviewItemCount}`,
+        normalizedCrossPagePassageReviewItemCount > 0 ? `페이지 이어짐 ${normalizedCrossPagePassageReviewItemCount}` : '',
       ].filter(Boolean).join(' · ')
       : '')
   ).trim();
@@ -7584,14 +7801,18 @@ function normalizePublishSummary(raw, session = null){
     })
     .filter(Boolean)
     .join(', ');
-  const sourceProblemOverlapLabel = String(
-    raw.sourceProblemOverlapLabel
+  const sourceProblemOverlapDetailLabel = String(
+    raw.sourceProblemOverlapDetailLabel
+    || raw.source_problem_overlap_detail_label
+    || sourceProblemOverlapDetails
+    || raw.sourceProblemOverlapLabel
     || raw.source_problem_overlap_label
-    || (normalizedSourceProblemOverlapGroupCount > 0
-      ? [`원본 겹침 ${normalizedSourceProblemOverlapGroupCount}`, sourceProblemOverlapDetails]
-        .filter(Boolean)
-        .join(' · ')
-      : '')
+    || ''
+  ).trim();
+  const sourceProblemOverlapLabel = String(
+    normalizedSourceProblemOverlapGroupCount > 0
+      ? `문항 영역 겹침 ${normalizedSourceProblemOverlapGroupCount}건`
+      : (raw.sourceProblemOverlapLabel || raw.source_problem_overlap_label || '')
   ).trim();
   const passageGroupSourceReuseGroupsRaw = raw.passageGroupSourceReuseGroups
     || raw.passage_group_source_reuse_groups
@@ -7620,14 +7841,18 @@ function normalizePublishSummary(raw, session = null){
     })
     .filter(Boolean)
     .join(', ');
-  const passageGroupSourceReuseLabel = String(
-    raw.passageGroupSourceReuseLabel
+  const passageGroupSourceReuseDetailLabel = String(
+    raw.passageGroupSourceReuseDetailLabel
+    || raw.passage_group_source_reuse_detail_label
+    || passageGroupSourceReuseDetails
+    || raw.passageGroupSourceReuseLabel
     || raw.passage_group_source_reuse_label
-    || (normalizedPassageGroupSourceReuseGroupCount > 0
-      ? [`지문 원본 중복 ${normalizedPassageGroupSourceReuseGroupCount}`, passageGroupSourceReuseDetails]
-        .filter(Boolean)
-        .join(' · ')
-      : '')
+    || ''
+  ).trim();
+  const passageGroupSourceReuseLabel = String(
+    normalizedPassageGroupSourceReuseGroupCount > 0
+      ? `지문 겹침 ${normalizedPassageGroupSourceReuseGroupCount}건`
+      : (raw.passageGroupSourceReuseLabel || raw.passage_group_source_reuse_label || '')
   ).trim();
   const layoutDiagnostics = (
     raw.layoutDiagnostics
@@ -7721,9 +7946,11 @@ function normalizePublishSummary(raw, session = null){
     sourceProblemOverlapGroups,
     sourceProblemOverlapGroupCount: normalizedSourceProblemOverlapGroupCount,
     sourceProblemOverlapLabel,
+    sourceProblemOverlapDetailLabel,
     passageGroupSourceReuseGroups,
     passageGroupSourceReuseGroupCount: normalizedPassageGroupSourceReuseGroupCount,
     passageGroupSourceReuseLabel,
+    passageGroupSourceReuseDetailLabel,
     layoutDiagnostics,
     layoutDiagnosticsLabel,
     edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,
@@ -8076,11 +8303,11 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       sourceMode: 'auto',
       source_mode: 'auto',
       subject: 'unknown',
-      ocr: 'auto',
+      ocr: options.ocr || 'auto',
       edbName,
       exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
       detectPerspective: files.some(f => !isDocumentLikeFile(f)),
-      maxDimension: 2400,
+      maxDimension: options.maxDimension || 2400,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     }),
   });
@@ -8733,10 +8960,10 @@ function App(){
     const job = startBackgroundJob({
       scope: 'session-recognition',
       label: isPartialRetry
-        ? (problemIds.length === 1 ? '주변 영역 AI 재인식 중' : `${problemIds.length}개 주변 영역 AI 재인식 중`)
+        ? (problemIds.length === 1 ? '부분 경계 보정 중' : `${problemIds.length}개 부분 경계 보정 중`)
         : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
       hint: isPartialRetry
-        ? '선택한 박스 주변 여백까지 다시 자릅니다. 완료되면 확인 팝업이 열립니다.'
+        ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 확인 팝업이 열립니다.'
         : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
     });
     try {
@@ -8757,10 +8984,10 @@ function App(){
         kind: 'retry-ai',
         partial: isPartialRetry,
         title: isPartialRetry
-          ? (applied ? `${applied}개 주변 영역을 다시 인식했어요` : '부분 AI 인식 결과를 확인해 주세요')
+          ? (applied ? `${applied}개 부분 경계를 보정했어요` : '부분 경계 보정 결과를 확인해 주세요')
           : (applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요'),
         subtitle: isPartialRetry
-          ? '선택한 박스 주변에서 다시 찾은 문제 경계입니다. 맞으면 기존 자리만 바꿔 반영합니다.'
+          ? '선택한 원본 영역에서 다시 찾은 문제 경계입니다. 맞으면 기존 자리만 바꿔 반영합니다.'
           : '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
         session: next,
         pageIds: targetPageIds,
@@ -9152,16 +9379,22 @@ function App(){
     const isRecognition = mode === 'recognize';
     const isManualSplit = mode === 'manual-split';
     const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
-    const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey
+    const fastImageRecognition = isRecognition && isImageOnlyFileBatch(files);
+    const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
+    const recognitionOcr = fastImageRecognition ? 'none' : 'auto';
     if (isRecognition) {
       const fileKeys = files.map(fileQueueKey);
       const queueGeneration = queueGenerationRef.current;
       const job = startBackgroundJob({
         scope: 'queue-recognition',
-        label: files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`,
-        hint: aiFallback.enabled
+        label: fastImageRecognition
+          ? (files.length === 1 ? '1개 이미지 빠른 문항 분할 중' : `${files.length}개 이미지 빠른 문항 분할 중`)
+          : (files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`),
+        hint: fastImageRecognition
+          ? '이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다.'
+          : aiFallback.enabled
           ? 'Gemini AI 보정으로 문항 경계를 확인합니다.'
           : '기본 문항 인식으로 실행 중입니다.',
       });
@@ -9170,6 +9403,7 @@ function App(){
           signal: job.controller.signal,
           preview: true,
           edbName: fileName,
+          ocr: recognitionOcr,
         });
         if (job.controller.signal.aborted) return;
         if (!queueRequestIsCurrent(queueGeneration, fileKeys)) {
@@ -9229,24 +9463,29 @@ function App(){
           ? (files.length === 1 ? '1개 파일을 수동 쪼개기용으로 여는 중...' : `${files.length}개 파일을 수동 쪼개기용으로 여는 중...`)
           : files.length === 1 ? '1개 파일을 페이지 PNG로 등록 중...' : `${files.length}개 파일을 페이지 PNG로 등록 중...`,
       hint: isRecognition
-        ? (aiFallback.enabled
+        ? (fastImageRecognition
+            ? '이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다.'
+            : aiFallback.enabled
             ? 'Gemini AI 보정으로 문항 경계를 다시 확인합니다.'
             : 'Gemini 키가 없어 기본 문항 인식만 실행합니다.')
         : isManualSplit
           ? '인식 없이 원본 페이지를 열고 검수 화면에서 직접 영역을 그립니다.'
-        : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 하나의 PNG 자료로 등록합니다.',
+          : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 하나의 PNG 자료로 등록합니다.',
       startedAt: Date.now(),
     });
     const previousItemIds = new Set(items.map(item => item.id).filter(Boolean));
     try {
-      const s = await postExport(files, aiFallback, resolvedInputIntent, { edbName: fileName });
-      let sessionToApply = s;
+      const s = await postExport(files, aiFallback, resolvedInputIntent, { edbName: fileName, ocr: recognitionOcr });
+      const registeredSession = isManualSplit ? s : fitWidthPageAsIsSession(s, { fileName, boardColumns });
+      let sessionToApply = registeredSession;
       let baseSnapshotForReviewScope = null;
       if (session && !usingMock) {
         const currentSnapshot = materializeSessionForItems(session, items, fileName, boardColumns);
         baseSnapshotForReviewScope = currentSnapshot;
-        const merged = mergeSessions(currentSnapshot, s, fileName, boardColumns);
+        const merged = mergeSessions(currentSnapshot, registeredSession, fileName, boardColumns);
         sessionToApply = await postRestore(merged);
+      } else if (!isManualSplit && sessionToApply !== s) {
+        sessionToApply = await postRestore(sessionToApply);
       }
       const firstInserted = (sessionToApply?.problems || []).find(problem => problem?.id && !previousItemIds.has(problem.id));
       const applied = applySession(sessionToApply);
@@ -9389,22 +9628,7 @@ function App(){
           }
         }
         if (wantsFitWidth) {
-          const heightPages = Math.max(0.12, next.heightFrac || 0.8);
-          const startPages = Number.isFinite(next.startYPages) ? Math.max(0, next.startYPages) : 0;
-          const targetScale = normalizePlacementScaleRatio(
-            Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') ? patch.scaleRatio : PLACEMENT_SCALE_MAX,
-            PLACEMENT_SCALE_MAX
-          );
-          next.inputIntent = 'page-as-is';
-          next.input_intent = 'page-as-is';
-          next.placementMode = 'continuous-page-as-is';
-          next.placement_mode = 'continuous-page-as-is';
-          next.forceFullPageBounds = true;
-          next.force_full_page_bounds = true;
-          const slotSpanPages = heightPages * targetScale;
-          next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));
-          next.slotSpanCount = Math.max(1, Math.ceil(slotSpanPages / DEFAULT_SLOT_HEIGHT_PAGES));
-          next.placementScaleRatio = targetScale;
+          return fitWidthContinuousPageItem(next, patch);
         } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
           next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
         }
@@ -9567,7 +9791,7 @@ function App(){
       });
       setView('review');
       showToast(
-        `긴 지문 그룹 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+        `지문 묶음 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
       );
       return;
     }
@@ -9585,7 +9809,7 @@ function App(){
       });
       setView('review');
       showToast(
-        `문항 원본 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+        `문항 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
       );
       return;
     }

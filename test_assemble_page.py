@@ -95,27 +95,28 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
         
         grouped = group_problem_units(page)
         
-        # We expect 2 problem units (for 13 and 14)
+        # We expect 1 passage fragment plus 2 child question units.
         problems = grouped.problems
-        self.assertEqual(len(problems), 2)
+        self.assertEqual(len(problems), 3)
         
+        passage = next((p for p in problems if p.metadata.get("passage_role") == "passage_fragment"), None)
         p13 = next((p for p in problems if p.metadata.get("problem_number") == 13), None)
         p14 = next((p for p in problems if p.metadata.get("problem_number") == 14), None)
         
+        self.assertIsNotNone(passage)
         self.assertIsNotNone(p13)
         self.assertIsNotNone(p14)
         
-        # Verify that both p13 and p14 have range-header and shared-passage in their stem_block_ids
-        self.assertIn("range-header", p13.stem_block_ids)
-        self.assertIn("shared-passage", p13.stem_block_ids)
-        self.assertIn("q13-stem", p13.stem_block_ids)
+        self.assertEqual(["range-header", "shared-passage"], passage.stem_block_ids)
+        self.assertEqual("page-range-test-passage-13-14", passage.metadata.get("passage_group_id"))
+        self.assertEqual({"start": 13, "end": 14}, passage.metadata.get("passage_range"))
+        self.assertTrue(passage.metadata.get("supplemental_item"))
         
-        self.assertIn("range-header", p14.stem_block_ids)
-        self.assertIn("shared-passage", p14.stem_block_ids)
-        self.assertIn("q14-stem", p14.stem_block_ids)
+        self.assertEqual(["q13-stem"], p13.stem_block_ids)
+        self.assertEqual(["q14-stem"], p14.stem_block_ids)
         
-        # Also, range-header and shared-passage should not be in q14-stem's normal sequencing
-        self.assertNotIn("q13-stem", p14.stem_block_ids)
+        self.assertEqual("child_question", p13.metadata.get("passage_role"))
+        self.assertEqual("child_question", p14.metadata.get("passage_role"))
 
     def test_set_problem_range_marks_child_question_metadata(self):
         blocks = [
@@ -157,8 +158,14 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
         )
 
         grouped = group_problem_units(page)
+        passage = next(problem for problem in grouped.problems if problem.metadata.get("passage_role") == "passage_fragment")
         p13 = next(problem for problem in grouped.problems if problem.metadata.get("problem_number") == 13)
         p14 = next(problem for problem in grouped.problems if problem.metadata.get("problem_number") == 14)
+
+        self.assertEqual("page-range-metadata-test-passage-13-14", passage.unit_id)
+        self.assertEqual("passage_fragment", passage.metadata.get("passage_role"))
+        self.assertEqual(["range-header", "shared-passage"], passage.stem_block_ids)
+        self.assertTrue(passage.metadata.get("supplemental_item"))
 
         for problem in (p13, p14):
             self.assertEqual("page-range-metadata-test-passage-13-14", problem.metadata.get("passage_group_id"))
@@ -166,6 +173,8 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
             self.assertEqual("child_question", problem.metadata.get("passage_role"))
             self.assertEqual(["range-header", "shared-passage"], problem.metadata.get("shared_passage_block_ids"))
             self.assertEqual([13, 14], problem.metadata.get("passage_child_problem_numbers"))
+        self.assertEqual(["q13-stem"], p13.stem_block_ids)
+        self.assertEqual(["q14-stem"], p14.stem_block_ids)
 
     def test_set_problem_range_parses_korean_number_suffix_header(self):
         blocks = [
@@ -211,13 +220,15 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
         p13 = next(problem for problem in problems if problem.metadata.get("problem_number") == 13)
         p14 = next(problem for problem in problems if problem.metadata.get("problem_number") == 14)
 
-        self.assertEqual(2, len(problems))
+        passage = next(problem for problem in problems if problem.metadata.get("passage_role") == "passage_fragment")
+        self.assertEqual(3, len(problems))
+        self.assertEqual(["range-header", "shared-passage"], passage.stem_block_ids)
         for problem in (p13, p14):
             self.assertEqual("page-korean-suffix-range-test-passage-13-14", problem.metadata.get("passage_group_id"))
             self.assertEqual({"start": 13, "end": 14}, problem.metadata.get("passage_range"))
             self.assertEqual(["range-header", "shared-passage"], problem.metadata.get("shared_passage_block_ids"))
-            self.assertIn("range-header", problem.stem_block_ids)
-            self.assertIn("shared-passage", problem.stem_block_ids)
+        self.assertEqual(["q13-stem"], p13.stem_block_ids)
+        self.assertEqual(["q14-stem"], p14.stem_block_ids)
 
     def test_set_problem_range_parses_bracketed_korean_suffix_header(self):
         blocks = [
@@ -263,13 +274,17 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
         p15 = next(problem for problem in problems if problem.metadata.get("problem_number") == 15)
         p16 = next(problem for problem in problems if problem.metadata.get("problem_number") == 16)
 
-        self.assertEqual(2, len(problems))
+        passage = next(problem for problem in problems if problem.metadata.get("passage_role") == "passage_fragment")
+        self.assertEqual(3, len(problems))
+        self.assertEqual(["range-header", "shared-material"], passage.stem_block_ids)
         for problem in (p15, p16):
             self.assertEqual(
                 "page-bracketed-korean-suffix-range-test-passage-15-16",
                 problem.metadata.get("passage_group_id"),
             )
             self.assertEqual(["range-header", "shared-material"], problem.metadata.get("shared_passage_block_ids"))
+        self.assertEqual(["q15-stem"], p15.stem_block_ids)
+        self.assertEqual(["q16-stem"], p16.stem_block_ids)
 
     def test_document_band_skips_unit_header_and_reads_bare_problem_number(self):
         blocks = [

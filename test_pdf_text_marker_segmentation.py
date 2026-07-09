@@ -13,6 +13,15 @@ from segment import PDF_CHOICE_MARKERS, segment_page
 from structured_schema import Subject
 
 
+def _problem_block_ids(problem):
+    return (
+        list(problem.stem_block_ids)
+        + list(problem.choice_block_ids)
+        + list(problem.explanation_block_ids)
+        + list(problem.figure_block_ids)
+    )
+
+
 class TestPdfTextMarkerSegmentation(unittest.TestCase):
     def test_pdf_problem_markers_drive_problem_count_without_ocr(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -80,10 +89,18 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             by_number = {
                 problem.metadata.get("problem_number"): problem
                 for problem in page_model.problems
+                if problem.metadata.get("problem_number") is not None
             }
             self.assertEqual({1, 2}, set(by_number))
+            passage_fragments = [
+                problem
+                for problem in page_model.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            ]
+            self.assertEqual(1, len(passage_fragments))
             shared_ids = by_number[1].metadata.get("shared_passage_block_ids")
             self.assertTrue(shared_ids)
+            self.assertEqual(shared_ids, _problem_block_ids(passage_fragments[0]))
             self.assertEqual(shared_ids, by_number[2].metadata.get("shared_passage_block_ids"))
 
             shared_block = next(
@@ -126,10 +143,18 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             by_number = {
                 problem.metadata.get("problem_number"): problem
                 for problem in page_model.problems
+                if problem.metadata.get("problem_number") is not None
             }
             self.assertEqual({1, 2}, set(by_number))
+            passage_fragments = [
+                problem
+                for problem in page_model.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            ]
+            self.assertEqual(1, len(passage_fragments))
             shared_ids = by_number[1].metadata.get("shared_passage_block_ids")
             self.assertTrue(shared_ids)
+            self.assertEqual(shared_ids, _problem_block_ids(passage_fragments[0]))
             self.assertEqual(shared_ids, by_number[2].metadata.get("shared_passage_block_ids"))
 
             shared_block = next(
@@ -541,6 +566,157 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
         self.assertTrue(block.metadata.get("choice_visual_tail_attached"))
         self.assertGreater(block.bbox.bottom, 650)
+
+    def test_pdf_marker_choice_trim_keeps_thin_math_graph_below_choices(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        choice_line = "    ".join(PDF_CHOICE_MARKERS)
+        draw.text((60, 80), "9. graph problem stem", fill=(20, 20, 20))
+        draw.text((72, 150), "choose the matching graph", fill=(20, 20, 20))
+        draw.text((72, 230), choice_line, fill=(20, 20, 20))
+        draw.line((155, 346, 445, 346), fill=(20, 20, 20), width=2)
+        draw.line((300, 332, 300, 360), fill=(20, 20, 20), width=2)
+        draw.line((220, 354, 380, 338), fill=(20, 20, 20), width=2)
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 9,
+                            "text": "9. graph problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "9. graph problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        },
+                        {
+                            "text": "choose the matching graph",
+                            "bbox": {"left": 72, "top": 146, "right": 230, "bottom": 164},
+                        },
+                        {
+                            "text": choice_line,
+                            "bbox": {"left": 72, "top": 226, "right": 360, "bottom": 244},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-choice-thin-graph-tail.pdf"
+
+        segmented = segment_page(Source(image), page_id="choice-thin-graph-tail-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
+        self.assertTrue(block.metadata.get("choice_visual_tail_attached"))
+        self.assertGreater(block.bbox.bottom, 375)
+
+    def test_pdf_marker_choice_visual_tail_ignores_column_rule_below_choices(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        choice_line = "    ".join(PDF_CHOICE_MARKERS)
+        draw.text((60, 80), "10. graph problem stem", fill=(20, 20, 20))
+        draw.text((72, 150), "choose the matching graph", fill=(20, 20, 20))
+        draw.text((72, 230), choice_line, fill=(20, 20, 20))
+        draw.line((155, 346, 445, 346), fill=(20, 20, 20), width=2)
+        draw.line((300, 332, 300, 360), fill=(20, 20, 20), width=2)
+        draw.line((220, 354, 380, 338), fill=(20, 20, 20), width=2)
+        draw.line((540, 0, 540, 799), fill=(20, 20, 20), width=2)
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 10,
+                            "text": "10. graph problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "10. graph problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        },
+                        {
+                            "text": "choose the matching graph",
+                            "bbox": {"left": 72, "top": 146, "right": 230, "bottom": 164},
+                        },
+                        {
+                            "text": choice_line,
+                            "bbox": {"left": 72, "top": 226, "right": 360, "bottom": 244},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-choice-column-rule-tail.pdf"
+
+        segmented = segment_page(Source(image), page_id="choice-column-rule-tail-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
+        self.assertTrue(block.metadata.get("choice_visual_tail_attached"))
+        self.assertGreater(block.bbox.bottom, 375)
+        self.assertLess(block.bbox.bottom, 450)
+
+    def test_pdf_marker_choice_visual_tail_ignores_detached_footer(self):
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        choice_line = "    ".join(PDF_CHOICE_MARKERS)
+        draw.text((60, 80), "11. graph problem stem", fill=(20, 20, 20))
+        draw.text((72, 150), "choose the matching graph", fill=(20, 20, 20))
+        draw.text((72, 230), choice_line, fill=(20, 20, 20))
+        draw.line((155, 346, 445, 346), fill=(20, 20, 20), width=2)
+        draw.line((300, 332, 300, 360), fill=(20, 20, 20), width=2)
+        draw.line((220, 354, 380, 338), fill=(20, 20, 20), width=2)
+        draw.text((500, 760), "11 / 20", fill=(20, 20, 20))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {
+                            "number": 11,
+                            "text": "11. graph problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        }
+                    ],
+                    "pdf_text_lines": [
+                        {
+                            "text": "11. graph problem stem",
+                            "bbox": {"left": 60, "top": 76, "right": 220, "bottom": 94},
+                        },
+                        {
+                            "text": "choose the matching graph",
+                            "bbox": {"left": 72, "top": 146, "right": 230, "bottom": 164},
+                        },
+                        {
+                            "text": choice_line,
+                            "bbox": {"left": 72, "top": 226, "right": 360, "bottom": 244},
+                        },
+                    ],
+                }
+                self.source_path = "synthetic-choice-detached-footer-tail.pdf"
+
+        segmented = segment_page(Source(image), page_id="choice-detached-footer-tail-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, len(segmented.blocks))
+        block = segmented.blocks[0]
+        self.assertTrue(block.metadata.get("choice_bottom_trimmed"))
+        self.assertTrue(block.metadata.get("choice_visual_tail_attached"))
+        self.assertGreater(block.bbox.bottom, 375)
+        self.assertLess(block.bbox.bottom, 450)
 
     def test_pdf_text_stem_markers_segment_without_problem_numbers(self):
         image = Image.new("RGB", (600, 800), "white")

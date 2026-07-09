@@ -66,6 +66,7 @@ MIN_HEIGHT_PAGES = 0.72
 MAX_HEIGHT_PAGES = 4.8
 PLACEMENT_SCALE_MIN = 0.6
 PLACEMENT_SCALE_MAX = 1.6
+PLACEMENT_FIT_WIDTH_SCALE_MAX = 3.0
 MIN_PROBLEM_AREA_RATIO = 0.12
 DOCUMENT_BAND_TOP_PADDING_PX = 44.0
 DOCUMENT_BAND_BOTTOM_PADDING_PX = 20.0
@@ -145,26 +146,26 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "duplicate_problem_number": "중복 번호",
     "low_ink_problem_image": "이미지 내용 부족",
     "missing_problem_image": "문항 이미지 없음",
-    "passage_group_source_reuse": "지문 그룹 원본 중복",
-    "passage_missing_child_questions": "지문 하위 문항 누락",
-    "passage_review_queue_remaining": "긴 지문 검수 남음",
+    "passage_group_source_reuse": "지문 겹침",
+    "passage_missing_child_questions": "문항 누락",
+    "passage_review_queue_remaining": "지문 확인 필요",
     "review_flags_remaining": "검수 플래그 남음",
     "small_problem_image": "문항 이미지 작음",
-    "source_problem_bbox_overlap": "원본 영역 겹침",
+    "source_problem_bbox_overlap": "문항 영역 겹침",
     "step2_page_chrome_artifact_rate": "2단계 페이지 장식 허용률 초과",
     "step3_page_chrome_artifact": "3단계 페이지 장식",
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 PASSAGE_REVIEW_REASON_LABELS = {
-    "cross_page_passage_group": "페이지 넘김 긴 지문",
+    "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
     "marker_document_continuation": "문서 이어짐 표시",
-    "passage_cross_page_merge_check": "긴 지문 병합 확인",
-    "passage_fragment": "이어짐 자료",
-    "passage_group_source_reuse": "지문 그룹 원본 중복",
-    "passage_missing_child_questions": "지문 하위 문항 누락",
-    "source_problem_bbox_overlap": "원본 영역 겹침",
+    "passage_cross_page_merge_check": "병합 확인",
+    "passage_fragment": "지문 본문",
+    "passage_group_source_reuse": "지문 겹침",
+    "passage_missing_child_questions": "문항 누락",
+    "source_problem_bbox_overlap": "문항 영역 겹침",
 }
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
@@ -200,10 +201,11 @@ def _clamp_placement_y_ratio(value: float | None) -> float | None:
     return max(0.0, min(1.0, float(value)))
 
 
-def _clamp_placement_scale_ratio(value: float | None) -> float | None:
+def _clamp_placement_scale_ratio(value: float | None, max_ratio: float = PLACEMENT_SCALE_MAX) -> float | None:
     if value is None:
         return None
-    return max(PLACEMENT_SCALE_MIN, min(PLACEMENT_SCALE_MAX, float(value)))
+    resolved_max = max(PLACEMENT_SCALE_MIN, float(max_ratio))
+    return max(PLACEMENT_SCALE_MIN, min(resolved_max, float(value)))
 
 
 def _problem_origin_x_px(entry: "ProblemEntry", rendered_width_px: float) -> float:
@@ -232,12 +234,13 @@ def _problem_scale_ratio(
     *,
     ignore_height_limit: bool = False,
 ) -> float:
-    requested = _clamp_placement_scale_ratio(entry.placement_scale_ratio)
+    allowed_max = PLACEMENT_FIT_WIDTH_SCALE_MAX if ignore_height_limit else PLACEMENT_SCALE_MAX
+    requested = _clamp_placement_scale_ratio(entry.placement_scale_ratio, allowed_max)
     if requested is None:
         return 1.0
     max_width_scale = (CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX) / max(rendered_width_px, 1.0)
     if ignore_height_limit:
-        max_scale = max(PLACEMENT_SCALE_MIN, min(PLACEMENT_SCALE_MAX, max_width_scale))
+        max_scale = max(PLACEMENT_SCALE_MIN, min(PLACEMENT_FIT_WIDTH_SCALE_MAX, max_width_scale))
         return max(PLACEMENT_SCALE_MIN, min(max_scale, requested))
     slot_height_px = max(
         rendered_height_px,
@@ -300,11 +303,12 @@ def _default_placement_scale_for_problem(problem: ProblemUnit) -> float | None:
     )
     if raw_scale is not None:
         try:
-            return _clamp_placement_scale_ratio(float(raw_scale))
+            max_ratio = PLACEMENT_FIT_WIDTH_SCALE_MAX if _is_page_as_is_problem(problem) else PLACEMENT_SCALE_MAX
+            return _clamp_placement_scale_ratio(float(raw_scale), max_ratio)
         except (TypeError, ValueError):
             return None
     if _is_page_as_is_problem(problem):
-        return PLACEMENT_SCALE_MAX
+        return PLACEMENT_FIT_WIDTH_SCALE_MAX
     return None
 
 
@@ -1757,11 +1761,16 @@ def _problem_left_x(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) 
 
 
 def _problem_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock]) -> tuple[object, ...]:
+    if _problem_is_passage_fragment_unit(problem):
+        passage_range = _passage_range_tuple(problem.metadata)
+        if passage_range is not None:
+            return (0, passage_range[0], 0, problem.unit_id)
+
     raw_number = problem.metadata.get("problem_number")
     if isinstance(raw_number, int):
-        return (0, raw_number, problem.unit_id)
+        return (0, raw_number, 1, problem.unit_id)
     if isinstance(raw_number, str) and raw_number.isdigit():
-        return (0, int(raw_number), problem.unit_id)
+        return (0, int(raw_number), 1, problem.unit_id)
 
     column_value = _problem_column_value(problem, block_by_id) or 0
     band_value = _problem_band_value(problem, block_by_id)
@@ -1931,24 +1940,78 @@ def _append_problem_block_ids(target: list[str], values: Sequence[str]) -> None:
             target.append(value)
 
 
-def _merge_pre_question_passage_continuations(
+def _passage_range_label(metadata: dict[str, Any]) -> str:
+    passage_range = _passage_range_tuple(metadata)
+    if passage_range is None:
+        return ""
+    start, end = passage_range
+    return str(start) if start == end else f"{start}~{end}"
+
+
+def _mark_pre_question_passage_continuations(
     target: ProblemUnit,
     continuations: Sequence[ProblemUnit],
 ) -> None:
-    merged_block_ids: list[str] = []
+    passage_range = _passage_range_tuple(target.metadata)
+    target_number = _problem_metadata_number(target)
+    if passage_range is None and target_number is not None:
+        passage_range = (target_number, target_number)
+
+    group_id = str(target.metadata.get("passage_group_id") or "").strip()
+    if not group_id and passage_range is not None:
+        start, end = passage_range
+        group_id = f"pre-question-passage-{start}-{end}"
+
+    child_numbers: list[int] = []
+    if passage_range is not None:
+        start, end = passage_range
+        child_numbers = _passage_child_numbers(target.metadata, start, end)
+
     for continuation in continuations:
-        _append_problem_block_ids(target.stem_block_ids, continuation.stem_block_ids)
-        _append_problem_block_ids(target.choice_block_ids, continuation.choice_block_ids)
-        _append_problem_block_ids(target.explanation_block_ids, continuation.explanation_block_ids)
-        _append_problem_block_ids(target.figure_block_ids, continuation.figure_block_ids)
-        _append_problem_block_ids(merged_block_ids, _iter_problem_block_ids_raw(continuation))
-    if merged_block_ids:
-        target.metadata["passage_pre_question_continuation_block_ids"] = merged_block_ids
+        if group_id:
+            continuation.metadata.setdefault("passage_group_id", group_id)
+        if passage_range is not None:
+            start, end = passage_range
+            continuation.metadata.setdefault("passage_range", {"start": start, "end": end})
+        if child_numbers:
+            continuation.metadata.setdefault("passage_child_problem_numbers", list(child_numbers))
+        for key in (
+            "passage_source_page_ids",
+            "passage_continues_across_pages",
+            "passage_fragment_count",
+        ):
+            if key in target.metadata:
+                continuation.metadata.setdefault(key, target.metadata[key])
+        continuation.metadata["passage_role"] = "passage_fragment"
+        continuation.metadata["supplemental_item"] = True
+        continuation.metadata["passage_fragment_source"] = "pre_question_continuation"
+        continuation.metadata["passage_pre_question_continuation"] = True
+        if not continuation.title or GENERIC_PROBLEM_TITLE_RE.match(str(continuation.title)):
+            range_label = _passage_range_label(continuation.metadata)
+            continuation.title = f"지문 {range_label}".strip() if range_label else "지문"
 
 
 def _problem_has_number(problem: ProblemUnit) -> bool:
     raw = problem.metadata.get("problem_number")
     return (isinstance(raw, int) and raw >= 1) or (isinstance(raw, str) and raw.isdigit())
+
+
+def _problem_is_passage_fragment_unit(problem: ProblemUnit) -> bool:
+    return str(problem.metadata.get("passage_role") or "").strip() == "passage_fragment"
+
+
+def _problem_is_passage_scoped_unit(problem: ProblemUnit) -> bool:
+    role = str(problem.metadata.get("passage_role") or "").strip()
+    return role in {"child_question", "passage_fragment"} or bool(problem.metadata.get("passage_group_id"))
+
+
+def _problem_entry_title(problem: ProblemUnit, problem_number: int | None, entry_index: int) -> str:
+    if _problem_is_passage_fragment_unit(problem):
+        range_label = _passage_range_label(problem.metadata)
+        if range_label:
+            return f"지문 {range_label}"
+        return str(problem.title or "지문")
+    return problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {entry_index}")
 
 
 def _problem_is_spatially_before(
@@ -2001,14 +2064,18 @@ def _drop_pre_first_problem_headers(
             and _problem_is_spatially_before(problem, first_numbered, block_by_id)
         ]
         if continuation_problems:
-            _merge_pre_question_passage_continuations(first_numbered, continuation_problems)
-            continuation_ids = {id(problem) for problem in continuation_problems}
-            return [problem for problem in problems if id(problem) not in continuation_ids]
+            _mark_pre_question_passage_continuations(first_numbered, continuation_problems)
+            return problems
 
     if first_numbered_index == 0:
         return problems
 
-    return problems[first_numbered_index:]
+    preserved_prefix = [
+        problem
+        for problem in problems[:first_numbered_index]
+        if _problem_is_passage_fragment_unit(problem)
+    ]
+    return preserved_prefix + problems[first_numbered_index:]
 
 
 def _problem_metadata_number(problem: ProblemUnit) -> int | None:
@@ -2278,8 +2345,12 @@ def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
     extrapolate backwards from the first known number. Forward-fill
     sequential gaps from the previous known number + 1.
     """
+    fillable_indexes: list[int] = []
     numbers: list[int | None] = []
-    for problem in problems:
+    for index, problem in enumerate(problems):
+        if _problem_is_passage_fragment_unit(problem):
+            continue
+        fillable_indexes.append(index)
         raw = problem.metadata.get("problem_number")
         if isinstance(raw, int):
             numbers.append(raw)
@@ -2303,9 +2374,10 @@ def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
         if numbers[index] is None and numbers[index - 1] is not None:
             numbers[index] = numbers[index - 1] + 1
 
-    for problem, number in zip(problems, numbers):
+    for problem_index, number in zip(fillable_indexes, numbers):
         if number is None:
             continue
+        problem = problems[problem_index]
         existing = problem.metadata.get("problem_number")
         if isinstance(existing, int):
             continue
@@ -3023,7 +3095,11 @@ def build_problem_entries(
                     merged_box,
                     content_bottom=content_bottom,
                 )
-                if not has_document_band_metadata and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO:
+                if (
+                    not has_document_band_metadata
+                    and not _problem_is_passage_scoped_unit(problem)
+                    and merged_box.area < float(page.width_px * page.height_px) * MIN_PROBLEM_AREA_RATIO
+                ):
                     merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
                     blocks = list(page.sorted_blocks())
 
@@ -3032,7 +3108,7 @@ def build_problem_entries(
             crop_path = crop_dir / crop_name
             board_render_path = cutout_dir / crop_name
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}
-            problem_title = problem.title or (f"\ubb38\ud56d {problem_number}" if problem_number is not None else f"\ubb38\ud56d {entry_index}")
+            problem_title = _problem_entry_title(problem, problem_number, entry_index)
             text_fallback_payload = (
                 str(problem.metadata.get("hwp_text_fallback_text") or "").strip()
                 if problem.metadata.get("hwp_text_fallback_problem")
@@ -3532,6 +3608,11 @@ def _hwp_problem_counts_match(
 
 
 def _session_problem_is_supplemental(problem: dict[str, Any]) -> bool:
+    role = str(_session_problem_field(problem, "passageRole", "passage_role") or "").strip()
+    if role == "passage_fragment":
+        return True
+    if bool(_session_problem_field(problem, "supplementalItem", "supplemental_item")):
+        return True
     risk_flags = problem.get("riskFlags") or problem.get("risk_flags") or []
     if isinstance(risk_flags, list) and "marker_document_continuation" in {str(flag) for flag in risk_flags}:
         return True
@@ -3842,7 +3923,7 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
                 "fragmentProblemCount": fragment_problem_count,
                 "continuesAcrossPages": continues_across_pages,
                 "message": (
-                    f"긴 지문 그룹 {message_label}이 {source_page_count}개 원본 페이지와 "
+                    f"지문 묶음 {message_label}이 {source_page_count}개 원본 페이지와 "
                     f"{problem_count_label}에 걸쳐 있습니다."
                 ),
             }
@@ -3931,9 +4012,9 @@ def _session_passage_review_items(
         )
         label = str(group.get("numberLabel") or group.get("number_label") or group_id).strip()
         page_count = len(source_page_ids)
-        message = f"{label} 긴 지문 그룹은 {page_count}개 페이지와 {problem_count}개 하위 문항"
+        message = f"{label} 지문 묶음은 {page_count}개 페이지와 {problem_count}개 하위 문항"
         if fragment_count:
-            message += f", 이어짐 자료 {fragment_count}개"
+            message += f", 지문 본문 {fragment_count}개"
         if missing_child_problem_numbers:
             missing_label = ", ".join(f"{number}번" for number in missing_child_problem_numbers)
             message += f", 누락 문항 {missing_label}"
@@ -4915,7 +4996,7 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
                         "passage_group_source_reuse",
                         severity="warning",
                         message=(
-                            "같은 긴 지문 그룹의 하위 문항 원본 영역이 크게 겹칩니다. "
+                            "같은 지문 묶음의 하위 문항 영역이 크게 겹칩니다. "
                             "공통 지문/문항 crop이 EDB에 반복 등록되지 않도록 지문 병합 상태를 확인해 주세요."
                         ),
                         problem=problem,
@@ -5145,7 +5226,7 @@ def _classin_missing_passage_child_question_issues(problems: Sequence[dict[str, 
                 "passage_missing_child_questions",
                 severity="warning",
                 message=(
-                    f"긴 지문 그룹에서 예상 하위 문항 {missing_label}이 감지되지 않았습니다. "
+                    f"지문 묶음에서 예상 하위 문항 {missing_label}이 감지되지 않았습니다. "
                     "EDB 등록 전 지문 병합/문항 분리 결과를 확인해 주세요."
                 ),
                 problem=issue_problem,
@@ -6080,7 +6161,10 @@ def placement_inputs(
                 },
                 "risk_flags": list(entry.risk_flags),
                 "processing_step": _normalize_processing_step(entry.processing_step),
-                "placement_scale_ratio": _clamp_placement_scale_ratio(entry.placement_scale_ratio) or 1.0,
+                "placement_scale_ratio": _clamp_placement_scale_ratio(
+                    entry.placement_scale_ratio,
+                    PLACEMENT_FIT_WIDTH_SCALE_MAX if _entry_uses_continuous_page_flow(entry) else PLACEMENT_SCALE_MAX,
+                ) or 1.0,
                 "input_intent": entry.input_intent,
                 "force_full_page_bounds": entry.force_full_page_bounds,
             },
@@ -6168,14 +6252,15 @@ def _entries_flow_end_pages(problem_entries: list[ProblemEntry], template: Layou
 
 
 def _placement_summary_end_pages(placement: dict[str, object]) -> float:
+    values: list[float] = []
     for key in ("record_bottom_y_pages", "actual_bottom_y_pages", "snapped_next_start_y_pages"):
         try:
             raw_value = placement.get(key)
             if raw_value is not None:
-                return float(raw_value)
+                values.append(float(raw_value))
         except (TypeError, ValueError):
             continue
-    return 0.0
+    return max(values, default=0.0)
 
 
 def _placement_summaries_flow_end_pages(placements: list[dict[str, object]]) -> float:

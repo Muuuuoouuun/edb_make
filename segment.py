@@ -989,6 +989,29 @@ def _pdf_problem_ink_bottom(
     return trimmed_bottom, True
 
 
+def _pdf_tail_has_thin_math_figure_signal(
+    mask: Image.Image,
+    tail_bbox: tuple[int, int, int, int],
+    *,
+    crop_width: float,
+) -> bool:
+    left, top, right, bottom = tail_bbox
+    tail_width = right - left
+    tail_height = bottom - top
+    if tail_width < max(54, int(float(crop_width) * 0.12)) or tail_height < 8:
+        return False
+
+    tail_mask = mask.crop(tail_bbox)
+    row_projection = _row_dark_projection(tail_mask)
+    column_projection = _column_dark_projection(tail_mask)
+    if not row_projection or not column_projection:
+        return False
+
+    horizontal_signal = max(row_projection) >= max(36, int(float(tail_width) * 0.42))
+    vertical_signal = max(column_projection) >= max(10, int(float(tail_height) * 0.52))
+    return horizontal_signal and vertical_signal
+
+
 def _pdf_choice_visual_tail_bottom(
     image: Image.Image,
     text_lines: list[dict[str, Any]],
@@ -1009,9 +1032,44 @@ def _pdf_choice_visual_tail_bottom(
         return None
 
     mask = _dark_mask(image.crop(crop_box), threshold=220)
+    mask = _mask_without_tall_vertical_rules(mask)
     tail_bbox = mask.getbbox()
     if tail_bbox is None:
         return None
+
+    row_projection = _row_dark_projection(mask)
+    row_threshold = max(2, int(mask.width * 0.003))
+    runs = [
+        run
+        for run in _find_active_runs(row_projection, threshold=row_threshold)
+        if run[1] - run[0] + 1 >= 2
+    ]
+    if runs:
+        cluster_gap = max(80, int(float(image.height) * 0.04))
+        clusters: list[list[int]] = []
+        for run_top, run_bottom in runs:
+            if not clusters or run_top - clusters[-1][1] > cluster_gap:
+                clusters.append([run_top, run_bottom])
+            else:
+                clusters[-1][1] = max(clusters[-1][1], run_bottom)
+        if clusters:
+            selected_end_index = 0
+            detached_gap = max(260.0, float(image.height) * 0.12)
+            for index in range(1, len(clusters)):
+                if float(clusters[index][0] - clusters[index - 1][1]) > detached_gap:
+                    break
+                selected_end_index = index
+            selected_top = clusters[0][0]
+            selected_bottom = clusters[selected_end_index][1]
+            selected_mask = mask.crop((0, selected_top, mask.width, selected_bottom + 1))
+            selected_bbox = selected_mask.getbbox()
+            if selected_bbox is not None:
+                tail_bbox = (
+                    selected_bbox[0],
+                    selected_top + selected_bbox[1],
+                    selected_bbox[2],
+                    selected_top + selected_bbox[3],
+                )
 
     tail_abs_top = float(crop_box[1] + tail_bbox[1])
     tail_abs_bottom = float(crop_box[1] + tail_bbox[3])
@@ -1020,9 +1078,24 @@ def _pdf_choice_visual_tail_bottom(
     if tail_gap > max_tail_gap:
         return None
 
-    tail_width_ratio = float(tail_bbox[2] - tail_bbox[0]) / max(1.0, float(crop_box[2] - crop_box[0]))
+    crop_width = max(1.0, float(crop_box[2] - crop_box[0]))
+    tail_width_ratio = float(tail_bbox[2] - tail_bbox[0]) / crop_width
     tail_height = tail_abs_bottom - tail_abs_top
-    if tail_width_ratio < 0.16 or tail_height < max(42.0, float(image.height) * 0.025):
+    regular_tail_min_height = max(42.0, float(image.height) * 0.025)
+    thin_math_figure_tail = False
+    if tail_width_ratio >= 0.12 and (
+        tail_width_ratio < 0.16 or tail_height < regular_tail_min_height
+    ):
+        thin_math_figure_tail = _pdf_tail_has_thin_math_figure_signal(
+            mask,
+            tail_bbox,
+            crop_width=crop_width,
+        )
+    min_width_ratio = 0.12 if thin_math_figure_tail else 0.16
+    if tail_width_ratio < min_width_ratio or (
+        tail_height < regular_tail_min_height
+        and not thin_math_figure_tail
+    ):
         return None
 
     tail_lines = _pdf_text_lines_in_region(

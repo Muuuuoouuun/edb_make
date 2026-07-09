@@ -21,11 +21,13 @@ class TestUiReviewFilterHelper(unittest.TestCase):
               { id: 'p1-continuation' },
               { id: 'p2', riskFlags: ['marker_document_continuation'] },
               { id: 'p3', metadata: { marker_document_continuation: true } },
+              { id: 'p4', passageRole: 'passage_fragment' },
+              { id: 'p5', metadata: { supplemental_item: true } },
             ];
             if (!cases.every(problem => problemMatchesReviewFilter(problem, 'supplemental'))) {
-              throw new Error('supplemental filter should match continuation variants');
+              throw new Error('supplemental filter should match continuation and passage-fragment variants');
             }
-            if (problemMatchesReviewFilter({ id: 'p4', reviewStatus: 'normal' }, 'supplemental')) {
+            if (problemMatchesReviewFilter({ id: 'p6', reviewStatus: 'normal' }, 'supplemental')) {
               throw new Error('normal core problem should not match supplemental filter');
             }
             """

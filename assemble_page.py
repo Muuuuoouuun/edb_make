@@ -861,6 +861,55 @@ def group_problem_units(page: PageModel) -> PageModel:
     all_shared_ids = {bid for bids in shared_blocks_by_number.values() for bid in bids}
 
     problems: list[ProblemUnit] = []
+    emitted_passage_group_ids: set[str] = set()
+
+    def append_shared_passage_problem(shared_metadata: dict[str, object]) -> None:
+        group_id = str(shared_metadata.get("passage_group_id") or "")
+        if not group_id or group_id in emitted_passage_group_ids:
+            return
+        raw_shared_block_ids = shared_metadata.get("shared_passage_block_ids")
+        if not isinstance(raw_shared_block_ids, list):
+            return
+        shared_block_ids = [str(block_id) for block_id in raw_shared_block_ids if str(block_id)]
+        if not shared_block_ids:
+            return
+
+        passage_range = shared_metadata.get("passage_range")
+        if isinstance(passage_range, dict):
+            start = passage_range.get("start")
+            end = passage_range.get("end")
+            range_label = f"{start}~{end}" if start != end else str(start)
+        else:
+            range_label = group_id
+
+        passage_problem = ProblemUnit(
+            unit_id=group_id,
+            subject=infer_subject(relabeled),
+            title=f"지문 {range_label}",
+            metadata={
+                **dict(shared_metadata),
+                "passage_role": "passage_fragment",
+                "supplemental_item": True,
+                "grouping_mode": diagnostics["grouping_mode"],
+                "grouping_source": "set_problem_range",
+            },
+        )
+        for shared_bid in shared_block_ids:
+            shared_block = next((b for b in classified_blocks if b.block_id == shared_bid), None)
+            if shared_block is None:
+                continue
+            if shared_block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
+                passage_problem.figure_block_ids.append(shared_bid)
+            elif shared_block.block_type == BlockType.EXPLANATION:
+                passage_problem.explanation_block_ids.append(shared_bid)
+            elif shared_block.block_type == BlockType.CHOICE:
+                passage_problem.choice_block_ids.append(shared_bid)
+            else:
+                passage_problem.stem_block_ids.append(shared_bid)
+
+        emitted_passage_group_ids.add(group_id)
+        problems.append(passage_problem)
+
     current: ProblemUnit | None = None
 
     for index, block in enumerate(classified_blocks, start=1):
@@ -881,16 +930,9 @@ def group_problem_units(page: PageModel) -> PageModel:
                 current.metadata["problem_number"] = problem_number
                 current.metadata["problem_number_source"] = number_source
                 if problem_number in shared_blocks_by_number:
-                    current.metadata.update(shared_metadata_by_number.get(problem_number, {}))
-                    for shared_bid in shared_blocks_by_number[problem_number]:
-                        shared_block = next((b for b in classified_blocks if b.block_id == shared_bid), None)
-                        if shared_block:
-                            if shared_block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
-                                current.figure_block_ids.append(shared_bid)
-                            elif shared_block.block_type == BlockType.EXPLANATION:
-                                current.explanation_block_ids.append(shared_bid)
-                            else:
-                                current.stem_block_ids.append(shared_bid)
+                    shared_metadata = shared_metadata_by_number.get(problem_number, {})
+                    append_shared_passage_problem(shared_metadata)
+                    current.metadata.update(shared_metadata)
 
             current.metadata.update(
                 {

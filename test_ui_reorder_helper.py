@@ -216,6 +216,7 @@ class TestUiReorderHelper(unittest.TestCase):
             vm.runInNewContext(
               source.slice(start, end) + '\n'
                 + 'globalThis.nearestBoardColumnMagnet = nearestBoardColumnMagnet;\n'
+                + 'globalThis.resolveBoardDragMagnet = resolveBoardDragMagnet;\n'
                 + 'globalThis.boardColumnRatios = boardColumnRatios;\n',
               sandbox
             );
@@ -231,6 +232,109 @@ class TestUiReorderHelper(unittest.TestCase):
             const free = sandbox.nearestBoardColumnMagnet(0.73, 3, 640, 200);
             if (free.snapped || free.ratio !== 0.73) {
               throw new Error(`expected free placement away from guides, got ${JSON.stringify(free)}`);
+            }
+            const single = sandbox.nearestBoardColumnMagnet(0.42, 1, 640, 200);
+            if (single.snapped || single.ratio !== 0.42) {
+              throw new Error(`single-column drag should stay free, got ${JSON.stringify(single)}`);
+            }
+            const stickyStart = sandbox.resolveBoardDragMagnet(0.04, {
+              columnCount: 3,
+              tileWidth: 200,
+              startMagnetColumnIndex: 0,
+              currentDxPx: 6,
+            }, 640);
+            if (!stickyStart.snapped || stickyStart.ratio !== 0) {
+              throw new Error(`tiny movement should still honor start magnet, got ${JSON.stringify(stickyStart)}`);
+            }
+            const releasedStart = sandbox.resolveBoardDragMagnet(0.04, {
+              columnCount: 3,
+              tileWidth: 200,
+              startMagnetColumnIndex: 0,
+              currentDxPx: 18,
+            }, 640);
+            if (releasedStart.snapped || releasedStart.ratio !== 0.04) {
+              throw new Error(`horizontal drag should unstick from start magnet, got ${JSON.stringify(releasedStart)}`);
+            }
+          """
+        )
+
+    def test_fit_width_page_as_is_uses_full_board_scale(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.fitWidthContinuousPageItem = fitWidthContinuousPageItem;\n',
+              sandbox
+            );
+
+            const fitted = sandbox.fitWidthContinuousPageItem({ id: 'page-1', heightFrac: 0.8 });
+            if (fitted.placementScaleRatio !== 3) {
+              throw new Error(`expected fit-width scale 3, got ${fitted.placementScaleRatio}`);
+            }
+            if (fitted.snappedNextStartYPages !== 2.4) {
+              throw new Error(`expected proportional continuous height 2.4p, got ${fitted.snappedNextStartYPages}`);
+            }
+          """
+        )
+
+    def test_fit_width_page_as_is_preserves_korean_english_step_state(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.fitWidthContinuousPageItem = fitWidthContinuousPageItem;\n',
+              sandbox
+            );
+
+            for (const { step, name, sourceName } of [
+              { step: 's1', name: '국어 지문 1', sourceName: '국어 6월 모의고사' },
+              { step: 's2', name: 'English passage 24', sourceName: 'English Reading Set' },
+              { step: 's3', name: '영어 재구성 테스트', sourceName: 'English reconstruction page' },
+            ]) {
+              const fitted = sandbox.fitWidthContinuousPageItem({
+                id: `${step}-page`,
+                name,
+                source: sourceName,
+                step,
+                heightFrac: 0.72,
+                placementScaleRatio: 1,
+              });
+              if (fitted.name !== name || fitted.source !== sourceName) {
+                throw new Error(`Korean/English labels should survive fit width, got ${fitted.name}/${fitted.source}`);
+              }
+              if (fitted.step !== step) {
+                throw new Error(`step ${step} should survive fit width, got ${fitted.step}`);
+              }
+              if (fitted.inputIntent !== 'page-as-is' || fitted.input_intent !== 'page-as-is') {
+                throw new Error(`input intent should stay page-as-is, got ${fitted.inputIntent}/${fitted.input_intent}`);
+              }
+              if (fitted.placementMode !== 'continuous-page-as-is' || fitted.placement_mode !== 'continuous-page-as-is') {
+                throw new Error(`placement mode should stay continuous, got ${fitted.placementMode}/${fitted.placement_mode}`);
+              }
+              if (!fitted.forceFullPageBounds || !fitted.force_full_page_bounds) {
+                throw new Error('page-as-is should keep full page bounds');
+              }
+              if (fitted.placementScaleRatio !== 3 || fitted.snappedNextStartYPages !== 2.16) {
+                throw new Error(`fit width should force proportional full-board flow, got ${fitted.placementScaleRatio}/${fitted.snappedNextStartYPages}`);
+              }
             }
           """
         )

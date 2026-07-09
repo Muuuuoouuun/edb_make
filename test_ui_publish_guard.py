@@ -33,7 +33,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("passageReviewItemCount", warning_helper)
         self.assertIn("passageReviewLabel", warning_helper)
         self.assertIn("passageReviewPreview", warning_helper)
-        self.assertIn("긴 지문 검수", warning_helper)
+        self.assertIn("지문 확인", warning_helper)
 
     def test_publish_blocks_board_placement_overlap_before_request(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -55,7 +55,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("firstIssue.problemIds || firstIssue.problem_ids", on_publish)
         self.assertIn("problemIds: focusProblemIds", on_publish)
         self.assertIn("source: 'source-overlap-preflight'", on_publish)
-        self.assertIn("문항 원본 영역이 겹칠 수 있어", on_publish)
+        self.assertIn("문항 영역이 겹칠 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
 
     def test_publish_does_not_block_duplicate_problem_number_groups_before_request(self) -> None:
@@ -77,7 +77,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("firstIssue.problemIds || firstIssue.problem_ids", on_publish)
         self.assertIn("problemIds: focusProblemIds", on_publish)
         self.assertIn("source: 'passage-source-reuse-preflight'", on_publish)
-        self.assertIn("긴 지문 그룹 안에서 원본 영역이 반복될 수 있어", on_publish)
+        self.assertIn("지문 묶음 안에서 원본 영역이 반복될 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
 
     def test_publish_surfaces_server_preflight_block_response(self) -> None:

@@ -148,6 +148,167 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertTrue(all(entry.crop_path.exists() for entry in entries))
             self.assertTrue(all(entry.board_render_path.exists() for entry in entries))
 
+    def test_build_problem_entries_treats_shared_passage_as_supplemental_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            image = Image.new("RGB", (900, 1400), "white")
+            draw = ImageDraw.Draw(image)
+            draw.text((72, 52), "[13~14] passage", fill="black")
+            draw.text((72, 112), "shared passage body", fill="black")
+            draw.text((72, 522), "13. child question", fill="black")
+            draw.text((72, 682), "14. child question", fill="black")
+            image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=Image.open(source).convert("RGB"),
+                original_size=(900, 1400),
+            )
+            blocks = [
+                ContentBlock(
+                    block_id="range-header",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 40, 520, 40),
+                    reading_order=0,
+                    text="[13~14] 다음 글을 읽고 물음에 답하시오.",
+                ),
+                ContentBlock(
+                    block_id="shared-passage",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 100, 520, 340),
+                    reading_order=1,
+                    text="shared passage",
+                ),
+                ContentBlock(
+                    block_id="q13",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 500, 420, 80),
+                    reading_order=2,
+                    text="13. child question",
+                ),
+                ContentBlock(
+                    block_id="q14",
+                    block_type=BlockType.STEM,
+                    bbox=Box(60, 660, 420, 80),
+                    reading_order=3,
+                    text="14. child question",
+                ),
+            ]
+            shared_metadata = {
+                "passage_group_id": "page-1-passage-13-14",
+                "passage_range": {"start": 13, "end": 14},
+                "shared_passage_block_ids": ["range-header", "shared-passage"],
+                "passage_child_problem_numbers": [13, 14],
+            }
+            page = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1400,
+                subject=Subject.KOREAN,
+                source_path=str(source),
+                blocks=blocks,
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-passage-13-14",
+                        subject=Subject.KOREAN,
+                        title="지문 13~14",
+                        stem_block_ids=["range-header", "shared-passage"],
+                        metadata={
+                            **shared_metadata,
+                            "passage_role": "passage_fragment",
+                            "supplemental_item": True,
+                        },
+                    ),
+                    ProblemUnit(
+                        unit_id="page-1-problem-13",
+                        subject=Subject.KOREAN,
+                        title="13.",
+                        stem_block_ids=["q13"],
+                        metadata={
+                            **shared_metadata,
+                            "problem_number": 13,
+                            "passage_role": "child_question",
+                        },
+                    ),
+                    ProblemUnit(
+                        unit_id="page-1-problem-14",
+                        subject=Subject.KOREAN,
+                        title="14.",
+                        stem_block_ids=["q14"],
+                        metadata={
+                            **shared_metadata,
+                            "problem_number": 14,
+                            "passage_role": "child_question",
+                        },
+                    ),
+                ],
+            )
+
+            with mock.patch.object(problem_board, "_extract_problem_cutout", side_effect=lambda crop, **_kwargs: crop.convert("RGBA")):
+                entries = build_problem_entries([prepared], [page], root / "out", LayoutTemplate(name="academy-default"))
+
+            self.assertEqual(
+                ["page-1-passage-13-14", "page-1-problem-13", "page-1-problem-14"],
+                [entry.problem_id for entry in entries],
+            )
+            self.assertIsNone(entries[0].problem_number)
+            self.assertEqual("지문 13~14", entries[0].title)
+            self.assertEqual(["range-header", "shared-passage"], [block.block_id for block in entries[0].blocks])
+            self.assertEqual(["q13"], [block.block_id for block in entries[1].blocks])
+            self.assertGreater(entries[1].bounds.top, 440.0)
+
+            placements = [
+                {
+                    "problem_id": entry.problem_id,
+                    "title": entry.title,
+                    "problem_number": entry.problem_number,
+                    "subject": entry.subject.value,
+                    "source_page_id": entry.source_page_id,
+                    "source_path": entry.source_path,
+                    "crop_path": str(entry.crop_path),
+                    "board_render_path": str(entry.board_render_path),
+                    "actual_content_height_pages": entry.actual_height_pages,
+                    "overflow_allowed": entry.overflow_allowed,
+                    "overflow_violation": False,
+                    "overflow_amount_pages": 0.0,
+                    "slot_span_count": 1,
+                    "start_y_pages": index * 1.2,
+                    "snapped_next_start_y_pages": (index + 1) * 1.2,
+                    "placement_x_ratio": 0.0,
+                    "placement_y_ratio": 0.0,
+                    "placement_scale_ratio": 1.0,
+                    "record_mode": "image-only",
+                    "processing_step": entry.processing_step,
+                    "text_record_count": 0,
+                    "image_record_count": 1,
+                    "bbox": {
+                        "left": entry.bounds.left,
+                        "top": entry.bounds.top,
+                        "width": entry.bounds.width,
+                        "height": entry.bounds.height,
+                    },
+                    "risk_flags": entry.risk_flags,
+                }
+                for index, entry in enumerate(entries)
+            ]
+            ui_session = build_problem_ui_session(
+                [prepared],
+                placements,
+                root / "out",
+                None,
+                [source],
+                record_mode="image-only",
+                pages=[page],
+            )
+
+            self.assertEqual(3, ui_session["detected_problem_count"])
+            self.assertEqual(2, ui_session["core_problem_count"])
+            self.assertEqual(1, ui_session["supplemental_item_count"])
+            fragment = next(problem for problem in ui_session["problems"] if problem["id"] == "page-1-passage-13-14")
+            self.assertEqual("passage_fragment", fragment["passageRole"])
+
     def test_page_as_is_problem_entries_default_to_reconstruct_step(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -193,7 +354,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                 entries = build_problem_entries([prepared], [page], root / "out", LayoutTemplate(name="academy-default"))
 
             self.assertEqual(PROCESSING_STEP_RECONSTRUCT, entries[0].processing_step)
-            self.assertEqual(problem_board.PLACEMENT_SCALE_MAX, entries[0].placement_scale_ratio)
+            self.assertEqual(problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX, entries[0].placement_scale_ratio)
             self.assertEqual("page-as-is", entries[0].input_intent)
             self.assertTrue(entries[0].force_full_page_bounds)
             self.assertEqual(Box(left=0.0, top=0.0, width=640.0, height=900.0), entries[0].bounds)
@@ -423,6 +584,46 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertEqual([41, 1], [len(chunk) for chunk in chunks])
+
+    def test_classin_page_limit_uses_largest_available_end_metric(self):
+        placements = [
+            {
+                "record_bottom_y_pages": 49.2,
+                "actual_bottom_y_pages": 49.1,
+                "snapped_next_start_y_pages": 49.0,
+            },
+            {
+                "record_bottom_y_pages": 49.8,
+                "actual_bottom_y_pages": 50.2,
+                "snapped_next_start_y_pages": 49.9,
+            },
+        ]
+
+        self.assertAlmostEqual(50.2, problem_board._placement_summaries_flow_end_pages(placements))
+        self.assertEqual(1, problem_board._first_placement_over_page_limit(placements, 50))
+
+    def test_classin_split_counts_slot_rounding_for_long_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = LayoutTemplate(
+                name="academy-default",
+                board_page_count=80,
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+            entries = []
+            for index in range(40):
+                entry = self._make_problem_entry(root, f"normal-{index:02d}", Box(0, 0, 640, 640))
+                entry.actual_height_pages = 0.72
+                entries.append(entry)
+            long_entry = self._make_problem_entry(root, "long-40", Box(0, 0, 640, 720))
+            long_entry.actual_height_pages = 1.21
+            entries.append(long_entry)
+
+            self.assertAlmostEqual(50.4, problem_board._entries_flow_end_pages(entries, template))
+
+            chunks = split_problem_entries_for_classin_page_limit(entries, template)
+
+            self.assertEqual([40, 1], [len(chunk) for chunk in chunks])
 
     def test_problem_export_writes_real_split_edbs_with_fifty_page_hints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2221,7 +2422,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, result["ui_session"]["passageGroupCount"])
             self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
 
-    def test_problem_entries_preserve_pre_question_cross_page_passage_continuation(self):
+    def test_problem_entries_preserve_pre_question_cross_page_passage_continuation_as_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             page_1_image = root / "page-1.png"
@@ -2322,9 +2523,16 @@ class TestEdbPublishFlow(unittest.TestCase):
                 LayoutTemplate(name="academy-default"),
             )
 
+            passage_fragment = next(entry for entry in entries if entry.problem_id == "page-2-continuation")
             problem_15 = next(entry for entry in entries if entry.problem_id == "page-2-problem-15")
-            self.assertIn("passage-continuation", [block.block_id for block in problem_15.blocks])
-            self.assertLessEqual(problem_15.bounds.top, 40)
+            self.assertEqual("지문 13~16", passage_fragment.title)
+            self.assertIsNone(passage_fragment.problem_number)
+            self.assertEqual(["passage-continuation"], [block.block_id for block in passage_fragment.blocks])
+            self.assertNotIn("passage-continuation", [block.block_id for block in problem_15.blocks])
+            self.assertGreater(problem_15.bounds.top, passage_fragment.bounds.top)
+            self.assertEqual("passage_fragment", page_2.problems[0].metadata.get("passage_role"))
+            self.assertTrue(page_2.problems[0].metadata.get("supplemental_item"))
+            self.assertEqual("page-1-passage-13-16", page_2.problems[0].metadata.get("passage_group_id"))
             self.assertIn("passage_cross_page_merge_check", problem_15.risk_flags)
 
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
@@ -2578,7 +2786,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                         "fragmentProblemCount": 1,
                         "continuesAcrossPages": True,
                         "roles": ["child_question", "passage_fragment"],
-                        "message": "긴 지문 그룹 13-16이 2개 원본 페이지와 3개 하위 문항, 자료 1개에 걸쳐 있습니다.",
+                        "message": "지문 묶음 13-16이 2개 원본 페이지와 3개 하위 문항, 자료 1개에 걸쳐 있습니다.",
                     }
                 ],
                 handoff["passageGroups"],
@@ -2691,7 +2899,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                         "passage_cross_page_merge_check",
                     ],
                     "riskFlags": ["marker_document_continuation", "passage_cross_page_merge_check"],
-                    "message": "31-34 긴 지문 그룹은 2개 페이지와 3개 하위 문항, 이어짐 자료 1개, 누락 문항 33번을 확인해야 합니다.",
+                    "message": "31-34 지문 묶음은 2개 페이지와 3개 하위 문항, 지문 본문 1개, 누락 문항 33번을 확인해야 합니다.",
                 },
                 handoff["passageReviewItems"][0],
             )
@@ -2703,10 +2911,10 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("missing: 33", markdown)
             self.assertIn("cross_page_passage_group", markdown)
             self.assertIn(
-                "reasons: 페이지 넘김 긴 지문 (`cross_page_passage_group`), "
-                "이어짐 자료 (`passage_fragment`), "
-                "지문 하위 문항 누락 (`passage_missing_child_questions`), "
-                "긴 지문 병합 확인 (`passage_cross_page_merge_check`)",
+                "reasons: 페이지 이어짐 (`cross_page_passage_group`), "
+                "지문 본문 (`passage_fragment`), "
+                "문항 누락 (`passage_missing_child_questions`), "
+                "병합 확인 (`passage_cross_page_merge_check`)",
                 markdown,
             )
 
@@ -2777,7 +2985,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([33], missing_issues[0]["missing_child_problem_numbers"])
             self.assertEqual(["p31", "p32", "p34"], missing_issues[0]["problemIds"])
             self.assertIn("passage_missing_child_questions", markdown)
-            self.assertIn("지문 하위 문항 누락", markdown)
+            self.assertIn("문항 누락", markdown)
 
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3727,7 +3935,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                 draw.text((58, 70), entry.title, fill="black")
                 image.save(entry.crop_path)
                 entry.processing_step = PROCESSING_STEP_RECONSTRUCT
-                entry.placement_scale_ratio = problem_board.PLACEMENT_SCALE_MAX
+                entry.placement_scale_ratio = problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX
                 entry.input_intent = "page-as-is"
                 entry.force_full_page_bounds = True
             template = LayoutTemplate(
@@ -3747,12 +3955,15 @@ class TestEdbPublishFlow(unittest.TestCase):
                 crop_format=CROP_FORMAT_V1,
             )
 
-            expected_span = round(placements[0]["actual_content_height_pages"] * problem_board.PLACEMENT_SCALE_MAX, 6)
+            applied_scale = placements[0]["placement_scale_ratio"]
+            self.assertGreater(applied_scale, problem_board.PLACEMENT_SCALE_MAX)
+            self.assertLessEqual(applied_scale, problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX)
+            expected_span = round(placements[0]["actual_content_height_pages"] * applied_scale, 6)
             self.assertEqual(0.0, placements[0]["start_y_pages"])
             self.assertAlmostEqual(expected_span, placements[0]["snapped_next_start_y_pages"], places=5)
             self.assertAlmostEqual(expected_span, placements[1]["start_y_pages"], places=5)
             self.assertEqual(
-                [problem_board.PLACEMENT_SCALE_MAX, problem_board.PLACEMENT_SCALE_MAX],
+                [applied_scale, applied_scale],
                 [item["placement_scale_ratio"] for item in placements],
             )
 

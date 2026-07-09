@@ -21,6 +21,9 @@
 
   function isSupplementalProblem(problem) {
     if (!problem || typeof problem !== "object") return false;
+    const role = String(problem.passageRole || problem.passage_role || problem.metadata?.passageRole || problem.metadata?.passage_role || "").trim();
+    if (role === "passage_fragment") return true;
+    if (problem.supplementalItem || problem.supplemental_item || problem.metadata?.supplementalItem || problem.metadata?.supplemental_item) return true;
     if (hasRiskFlag(problem, "marker_document_continuation")) return true;
     if (problem.metadata?.marker_document_continuation) return true;
     const id = String(problem.id || problem.problem_id || "");

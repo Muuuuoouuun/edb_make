@@ -7,6 +7,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import app_server
@@ -1897,6 +1898,44 @@ class TestSessionCropMutation(unittest.TestCase):
                 self.assertEqual((20, 10), raw_image.size)
             self.assertEqual("s3", manifest["items"][0]["processingStep"])
 
+    def test_session_image_export_zip_renders_s2_edb_images(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            crop = tmpdir / "crop.png"
+            Image.new("RGB", (20, 10), "white").save(crop)
+            session = {
+                "session_name": "수업",
+                "board_theme": "charcoal",
+                "problems": [{
+                    "id": "p1",
+                    "title": "문항 1",
+                    "sourcePageId": "page-1",
+                    "bbox": {"left": 0, "top": 0, "width": 20, "height": 10},
+                    "imagePath": crop.resolve().as_uri(),
+                    "boardRenderPath": crop.resolve().as_uri(),
+                    "step": "s2",
+                    "processingStep": "s2",
+                }],
+            }
+
+            rendered = Image.new("RGBA", (5, 4), (0, 0, 255, 170))
+            with (
+                patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"),
+                patch.object(app_server, "_load_board_export_image", return_value=rendered),
+            ):
+                result = app_server._write_session_image_export_zip(session, "both", problem_ids=["p1"])
+
+            with zipfile.ZipFile(Path(result["zipPath"])) as archive:
+                edb_payload = archive.read("edb_images/001_문항_1.png")
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+            with Image.open(io.BytesIO(edb_payload)) as edb_image:
+                self.assertEqual((5, 4), edb_image.size)
+                self.assertEqual((0, 0, 255, 170), edb_image.convert("RGBA").getpixel((0, 0)))
+            self.assertEqual("s2", manifest["items"][0]["processingStep"])
+
     def test_session_export_images_handler_allows_generated_zip_file(self):
         from PIL import Image
 
@@ -2346,6 +2385,59 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
         handler._read_json_body = lambda: dict(payload or {})
         handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
         return handler, responses
+
+    def test_local_classin_split_writer_caps_part_page_hint_after_render_expands_template(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            entries = [SimpleNamespace(problem_id=f"p{i}") for i in range(29)]
+            template = app_server.LayoutTemplate(name="academy-default", board_page_count=58)
+            captured: dict[str, object] = {}
+
+            def fake_build_records(received_entries, render_template, **kwargs):
+                captured.setdefault("render_page_counts", []).append(render_template.board_page_count)
+                captured["reserve_image_layout_height"] = kwargs.get("reserve_image_layout_height")
+                render_template.board_page_count = 58
+                return (
+                    [b"record"] * len(received_entries),
+                    [
+                        {
+                            "problem_id": entry.problem_id,
+                            "record_bottom_y_pages": 49.0,
+                            "actual_bottom_y_pages": 49.0,
+                            "snapped_next_start_y_pages": 49.0,
+                        }
+                        for entry in received_entries
+                    ],
+                    4,
+                )
+
+            def fake_build_edb(records, **kwargs):
+                captured.setdefault("page_count_hints", []).append(kwargs.get("page_count_hint"))
+                return b"edb"
+
+            with (
+                patch.object(app_server, "split_problem_entries_for_classin_page_limit", return_value=[entries]),
+                patch.object(app_server, "build_records", side_effect=fake_build_records),
+                patch.object(app_server, "build_edb", side_effect=fake_build_edb),
+                patch.object(app_server, "write_edb", side_effect=lambda path, data: Path(path).write_bytes(data)),
+            ):
+                parts = app_server.write_classin_limited_edb_files(
+                    entries,
+                    template,
+                    root,
+                    "math_current_code_check_20260708.edb",
+                    record_mode="image-only",
+                    text_confidence_threshold=0.78,
+                    dark_board=True,
+                    board_theme=app_server.DEFAULT_BOARD_THEME,
+                    crop_format=app_server.CROP_FORMAT_V1,
+                )
+
+            self.assertEqual([50], captured["render_page_counts"])
+            self.assertFalse(captured["reserve_image_layout_height"])
+            self.assertEqual([50], captured["page_count_hints"])
+            self.assertEqual(50, parts[0]["pageCountHint"])
+            self.assertEqual(50, parts[0]["page_count_hint"])
 
     def test_session_publish_uses_requested_name_and_splits_over_fifty_pages(self):
         with TemporaryDirectory() as raw_tmp:
@@ -3048,7 +3140,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                         "continuesAcrossPages": True,
                         "reviewReasonCodes": ["cross_page_passage_group", "passage_fragment"],
                         "riskFlags": ["passage_cross_page_merge_check"],
-                        "message": "31-32 긴 지문 그룹은 2개 페이지와 2개 하위 문항, 이어짐 자료 1개를 확인해야 합니다.",
+                        "message": "31-32 지문 묶음은 2개 페이지와 2개 하위 문항, 지문 본문 1개를 확인해야 합니다.",
                     }
                 ],
                 "passageReviewItemCount": 1,
@@ -3095,7 +3187,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(["passage_cross_page_merge_check"], queue_issue["riskFlags"])
             self.assertEqual(2, queue_issue["problemCount"])
             self.assertEqual(1, queue_issue["fragmentProblemCount"])
-            self.assertIn("이어짐 자료 1개", queue_issue["message"])
+            self.assertIn("지문 본문 1개", queue_issue["message"])
             entries.assert_not_called()
 
     def test_session_publish_excludes_supplemental_passage_fragments_from_edb_entries(self):
@@ -3660,8 +3752,10 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(source_overlap_groups, summary["source_problem_overlap_groups"])
             self.assertEqual(1, summary["sourceProblemOverlapGroupCount"])
             self.assertEqual(1, summary["source_problem_overlap_group_count"])
-            self.assertEqual("원본 겹침 1 · page-004 88%", summary["sourceProblemOverlapLabel"])
-            self.assertEqual("원본 겹침 1 · page-004 88%", summary["source_problem_overlap_label"])
+            self.assertEqual("문항 영역 겹침 1건", summary["sourceProblemOverlapLabel"])
+            self.assertEqual("문항 영역 겹침 1건", summary["source_problem_overlap_label"])
+            self.assertEqual("page-004 88%", summary["sourceProblemOverlapDetailLabel"])
+            self.assertEqual("page-004 88%", summary["source_problem_overlap_detail_label"])
             self.assertEqual(source_overlap_groups, handler.server.remembered_session["publishSummary"]["sourceProblemOverlapGroups"])
 
     def test_session_publish_summary_prefers_resolved_session_passage_review_queue(self):
@@ -3829,8 +3923,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(1, summary["passage_review_item_count"])
             self.assertEqual(1, summary["crossPagePassageReviewItemCount"])
             self.assertEqual(1, summary["cross_page_passage_review_item_count"])
-            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passageReviewReasonLabel"])
-            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passage_review_reason_label"])
+            self.assertEqual("페이지 이어짐, 문항 누락", summary["passageReviewReasonLabel"])
+            self.assertEqual("페이지 이어짐, 문항 누락", summary["passage_review_reason_label"])
 
 
 class TestRuntimeDiagnostics(unittest.TestCase):
@@ -4148,8 +4242,8 @@ class TestSessionHistory(unittest.TestCase):
             public = app_server._public_session_history(history)
 
             summary = public[0]["publishSummary"]
-            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passageReviewReasonLabel"])
-            self.assertEqual("페이지 넘김 긴 지문, 지문 하위 문항 누락", summary["passage_review_reason_label"])
+            self.assertEqual("페이지 이어짐, 문항 누락", summary["passageReviewReasonLabel"])
+            self.assertEqual("페이지 이어짐, 문항 누락", summary["passage_review_reason_label"])
 
     def test_public_session_history_backfills_source_problem_overlap_label(self):
         with TemporaryDirectory() as raw_tmp:
@@ -4162,7 +4256,7 @@ class TestSessionHistory(unittest.TestCase):
                 }
             ]
             session = {
-                "session_name": "원본 겹침 제작본",
+                "session_name": "문항 영역 겹침 제작본",
                 "generated_at": "2026-06-13T12:00:00+09:00",
                 "output_dir": str(root),
                 "problems": [{"id": "p31"}, {"id": "p32"}],
@@ -4186,8 +4280,10 @@ class TestSessionHistory(unittest.TestCase):
             self.assertEqual(source_overlap_groups, summary["source_problem_overlap_groups"])
             self.assertEqual(1, summary["sourceProblemOverlapGroupCount"])
             self.assertEqual(1, summary["source_problem_overlap_group_count"])
-            self.assertEqual("원본 겹침 1 · page-004 88%", summary["sourceProblemOverlapLabel"])
-            self.assertEqual("원본 겹침 1 · page-004 88%", summary["source_problem_overlap_label"])
+            self.assertEqual("문항 영역 겹침 1건", summary["sourceProblemOverlapLabel"])
+            self.assertEqual("문항 영역 겹침 1건", summary["source_problem_overlap_label"])
+            self.assertEqual("page-004 88%", summary["sourceProblemOverlapDetailLabel"])
+            self.assertEqual("page-004 88%", summary["source_problem_overlap_detail_label"])
 
 
 class TestSystemOpenTargets(unittest.TestCase):

@@ -267,7 +267,7 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
               throw new Error('preflight issue labels should be an array');
             }
             const labels = summary.classinPreflightIssueLabels.join(' / ');
-            if (!labels.includes('원본 영역 겹침 2')) {
+            if (!labels.includes('문항 영역 겹침 2')) {
               throw new Error(`missing source overlap count: ${labels}`);
             }
             if (!labels.includes('판서 배치 겹침 1')) {
@@ -276,10 +276,10 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (!labels.includes('검수 플래그 남음 1')) {
               throw new Error(`missing review flag count: ${labels}`);
             }
-            if (!labels.includes('지문 하위 문항 누락 1')) {
+            if (!labels.includes('문항 누락 1')) {
               throw new Error(`missing passage child count: ${labels}`);
             }
-            if (summary.classinPreflightIssueSummaryLabel !== '원본 영역 겹침 2 · 판서 배치 겹침 1 · 검수 플래그 남음 1 · 지문 하위 문항 누락 1') {
+            if (summary.classinPreflightIssueSummaryLabel !== '문항 영역 겹침 2 · 판서 배치 겹침 1 · 검수 플래그 남음 1 · 문항 누락 1') {
               throw new Error(`unexpected issue summary: ${summary.classinPreflightIssueSummaryLabel}`);
             }
             """
@@ -312,13 +312,13 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (block.issueCount !== 4) {
               throw new Error(`issue count not preserved: ${block.issueCount}`);
             }
-            if (block.issueSummaryLabel !== '원본 영역 겹침 2 · 중복 번호 1 · 지문 하위 문항 누락 1') {
+            if (block.issueSummaryLabel !== '문항 영역 겹침 2 · 중복 번호 1 · 문항 누락 1') {
               throw new Error(`unexpected issue summary: ${block.issueSummaryLabel}`);
             }
-            if (!block.toastLabel.includes('원본 영역 겹침 2')) {
+            if (!block.toastLabel.includes('문항 영역 겹침 2')) {
               throw new Error(`toast label missing issue summary: ${block.toastLabel}`);
             }
-            if (!block.toastLabel.includes('지문 하위 문항 누락 1')) {
+            if (!block.toastLabel.includes('문항 누락 1')) {
               throw new Error(`toast label missing passage child summary: ${block.toastLabel}`);
             }
             if (JSON.stringify(block.blockingProblemIds) !== JSON.stringify(['p21', 'p22', 'p7-a'])) {
@@ -347,10 +347,10 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
                 ],
               },
             });
-            if (block.issueSummaryLabel !== '긴 지문 검수 남음 1') {
+            if (block.issueSummaryLabel !== '지문 확인 필요 1') {
               throw new Error(`unexpected passage review queue summary: ${block.issueSummaryLabel}`);
             }
-            if (!block.toastLabel.includes('긴 지문 검수 남음 1')) {
+            if (!block.toastLabel.includes('지문 확인 필요 1')) {
               throw new Error(`toast label missing passage review queue summary: ${block.toastLabel}`);
             }
             if (!block.toastLabel.includes('제작 전 확인')) {
@@ -389,7 +389,7 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (summary.crossPagePassageGroupCount !== 1) {
               throw new Error(`cross-page group count not normalized: ${summary.crossPagePassageGroupCount}`);
             }
-            if (summary.passageGroupLabel !== '긴 지문 그룹 1 · 4문항 · 페이지 넘김 1') {
+            if (summary.passageGroupLabel !== '지문 묶음 1 · 4문항 · 페이지 이어짐 1') {
               throw new Error(`unexpected passage label: ${summary.passageGroupLabel}`);
             }
             """
@@ -424,7 +424,7 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (summary.passageReviewItems[0].groupId !== 'hwp-text-passage-31-34') {
               throw new Error(`passage review items not preserved`);
             }
-            if (summary.passageReviewLabel !== '긴 지문 검수 1 · 페이지 넘김 1') {
+            if (summary.passageReviewLabel !== '지문 확인 1 · 페이지 이어짐 1') {
               throw new Error(`unexpected passage review label: ${summary.passageReviewLabel}`);
             }
             """
@@ -451,10 +451,10 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
                 },
               ],
             });
-            if (summary.passageReviewReasonLabel !== '페이지 넘김 긴 지문, 지문 하위 문항 누락') {
+            if (summary.passageReviewReasonLabel !== '페이지 이어짐, 문항 누락') {
               throw new Error(`unexpected passage reason label: ${summary.passageReviewReasonLabel}`);
             }
-            if (summary.passageReviewLabel !== '긴 지문 검수 1 · 페이지 넘김 1') {
+            if (summary.passageReviewLabel !== '지문 확인 1 · 페이지 이어짐 1') {
               throw new Error(`unexpected passage review label: ${summary.passageReviewLabel}`);
             }
             """
@@ -483,8 +483,11 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (summary.passageGroupSourceReuseGroups[0].passageGroupId !== 'hwp-text-passage-31-34') {
               throw new Error('source reuse groups not preserved');
             }
-            if (summary.passageGroupSourceReuseLabel !== '지문 원본 중복 1 · hwp-text-passage-31-34 92%') {
+            if (summary.passageGroupSourceReuseLabel !== '지문 겹침 1건') {
               throw new Error(`unexpected source reuse label: ${summary.passageGroupSourceReuseLabel}`);
+            }
+            if (summary.passageGroupSourceReuseDetailLabel !== 'hwp-text-passage-31-34 92%') {
+              throw new Error(`unexpected source reuse detail label: ${summary.passageGroupSourceReuseDetailLabel}`);
             }
             """
         )
@@ -511,8 +514,11 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (summary.sourceProblemOverlapGroups[0].sourcePageId !== 'page-004') {
               throw new Error('source overlap groups not preserved');
             }
-            if (summary.sourceProblemOverlapLabel !== '원본 겹침 1 · page-004 88%') {
+            if (summary.sourceProblemOverlapLabel !== '문항 영역 겹침 1건') {
               throw new Error(`unexpected source overlap label: ${summary.sourceProblemOverlapLabel}`);
+            }
+            if (summary.sourceProblemOverlapDetailLabel !== 'page-004 88%') {
+              throw new Error(`unexpected source overlap detail label: ${summary.sourceProblemOverlapDetailLabel}`);
             }
             """
         )
@@ -539,7 +545,7 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             if (summary.passageProblemCount !== 5) {
               throw new Error(`passage child count should ignore fragments: ${summary.passageProblemCount}`);
             }
-            if (summary.passageGroupLabel !== '긴 지문 그룹 1 · 5문항 · 페이지 넘김 1') {
+            if (summary.passageGroupLabel !== '지문 묶음 1 · 5문항 · 페이지 이어짐 1') {
               throw new Error(`unexpected passage label: ${summary.passageGroupLabel}`);
             }
             """

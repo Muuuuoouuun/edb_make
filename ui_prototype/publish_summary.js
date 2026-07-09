@@ -15,23 +15,23 @@
     duplicate_problem_number: "중복 번호",
     low_ink_problem_image: "이미지 내용 부족",
     missing_problem_image: "문항 이미지 없음",
-    passage_missing_child_questions: "지문 하위 문항 누락",
-    passage_group_source_reuse: "지문 그룹 원본 중복",
-    passage_review_queue_remaining: "긴 지문 검수 남음",
+    passage_missing_child_questions: "문항 누락",
+    passage_group_source_reuse: "지문 겹침",
+    passage_review_queue_remaining: "지문 확인 필요",
     review_flags_remaining: "검수 플래그 남음",
     small_problem_image: "문항 이미지 작음",
-    source_problem_bbox_overlap: "원본 영역 겹침",
+    source_problem_bbox_overlap: "문항 영역 겹침",
     unreadable_problem_image: "문항 이미지 흐림",
   };
   const PASSAGE_REVIEW_REASON_LABELS = {
-    cross_page_passage_group: "페이지 넘김 긴 지문",
+    cross_page_passage_group: "페이지 이어짐",
     hwp_text_fallback_problem: "HWP 텍스트 fallback",
     marker_document_continuation: "문서 이어짐 표시",
-    passage_cross_page_merge_check: "긴 지문 병합 확인",
-    passage_fragment: "이어짐 자료",
-    passage_group_source_reuse: "지문 그룹 원본 중복",
-    passage_missing_child_questions: "지문 하위 문항 누락",
-    source_problem_bbox_overlap: "원본 영역 겹침",
+    passage_cross_page_merge_check: "병합 확인",
+    passage_fragment: "지문 본문",
+    passage_group_source_reuse: "지문 겹침",
+    passage_missing_child_questions: "문항 누락",
+    source_problem_bbox_overlap: "문항 영역 겹침",
   };
 
   function classinPreflightIssueLabel(type) {
@@ -209,8 +209,8 @@
 
   function formatPassageReviewLabel({ itemCount, crossPageCount }) {
     if (itemCount <= 0) return "";
-    const parts = [`긴 지문 검수 ${itemCount}`];
-    if (crossPageCount > 0) parts.push(`페이지 넘김 ${crossPageCount}`);
+    const parts = [`지문 확인 ${itemCount}`];
+    if (crossPageCount > 0) parts.push(`페이지 이어짐 ${crossPageCount}`);
     return parts.join(" · ");
   }
 
@@ -227,13 +227,16 @@
 
   function formatSourceProblemOverlapLabel({ groupCount, groups }) {
     if (groupCount <= 0) return "";
-    const details = groups.map(group => {
+    return `문항 영역 겹침 ${groupCount}건`;
+  }
+
+  function formatSourceProblemOverlapDetailLabel(groups) {
+    return groups.map(group => {
       const pageId = String(group?.sourcePageId || group?.source_page_id || "").trim();
       const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
       const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : "";
       return [pageId, percent].filter(Boolean).join(" ");
-    }).filter(Boolean);
-    return [`원본 겹침 ${groupCount}`, details.join(", ")].filter(Boolean).join(" · ");
+    }).filter(Boolean).join(", ");
   }
 
   function normalizePassageGroupSourceReuseGroups(raw, session = null) {
@@ -249,19 +252,22 @@
 
   function formatPassageGroupSourceReuseLabel({ groupCount, groups }) {
     if (groupCount <= 0) return "";
-    const details = groups.map(group => {
+    return `지문 겹침 ${groupCount}건`;
+  }
+
+  function formatPassageGroupSourceReuseDetailLabel(groups) {
+    return groups.map(group => {
       const groupId = String(group?.passageGroupId || group?.passage_group_id || "").trim();
       const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
       const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : "";
       return [groupId, percent].filter(Boolean).join(" ");
-    }).filter(Boolean);
-    return [`지문 원본 중복 ${groupCount}`, details.join(", ")].filter(Boolean).join(" · ");
+    }).filter(Boolean).join(", ");
   }
 
   function formatPassageGroupLabel({ groupCount, problemCount, crossPageCount }) {
     if (groupCount <= 0) return "";
-    const parts = [`긴 지문 그룹 ${groupCount}`, `${problemCount}문항`];
-    if (crossPageCount > 0) parts.push(`페이지 넘김 ${crossPageCount}`);
+    const parts = [`지문 묶음 ${groupCount}`, `${problemCount}문항`];
+    if (crossPageCount > 0) parts.push(`페이지 이어짐 ${crossPageCount}`);
     return parts.join(" · ");
   }
 
@@ -517,13 +523,21 @@
       ?? session?.source_problem_overlap_group_count
       ?? sourceProblemOverlapGroups.length
     );
-    const sourceProblemOverlapLabel = String(
-      raw.sourceProblemOverlapLabel
+    const sourceProblemOverlapDetailLabel = String(
+      raw.sourceProblemOverlapDetailLabel
+      || raw.source_problem_overlap_detail_label
+      || formatSourceProblemOverlapDetailLabel(sourceProblemOverlapGroups)
+      || raw.sourceProblemOverlapLabel
       || raw.source_problem_overlap_label
-      || formatSourceProblemOverlapLabel({
-        groupCount: sourceProblemOverlapGroupCount,
-        groups: sourceProblemOverlapGroups,
-      })
+      || ""
+    ).trim();
+    const sourceProblemOverlapLabel = String(
+      sourceProblemOverlapGroupCount > 0
+        ? formatSourceProblemOverlapLabel({
+          groupCount: sourceProblemOverlapGroupCount,
+          groups: sourceProblemOverlapGroups,
+        })
+        : (raw.sourceProblemOverlapLabel || raw.source_problem_overlap_label || "")
     ).trim();
     const passageGroupSourceReuseGroups = normalizePassageGroupSourceReuseGroups(raw, session);
     const passageGroupSourceReuseGroupCount = positiveNumber(
@@ -533,13 +547,21 @@
       ?? session?.passage_group_source_reuse_group_count
       ?? passageGroupSourceReuseGroups.length
     );
-    const passageGroupSourceReuseLabel = String(
-      raw.passageGroupSourceReuseLabel
+    const passageGroupSourceReuseDetailLabel = String(
+      raw.passageGroupSourceReuseDetailLabel
+      || raw.passage_group_source_reuse_detail_label
+      || formatPassageGroupSourceReuseDetailLabel(passageGroupSourceReuseGroups)
+      || raw.passageGroupSourceReuseLabel
       || raw.passage_group_source_reuse_label
-      || formatPassageGroupSourceReuseLabel({
-        groupCount: passageGroupSourceReuseGroupCount,
-        groups: passageGroupSourceReuseGroups,
-      })
+      || ""
+    ).trim();
+    const passageGroupSourceReuseLabel = String(
+      passageGroupSourceReuseGroupCount > 0
+        ? formatPassageGroupSourceReuseLabel({
+          groupCount: passageGroupSourceReuseGroupCount,
+          groups: passageGroupSourceReuseGroups,
+        })
+        : (raw.passageGroupSourceReuseLabel || raw.passage_group_source_reuse_label || "")
     ).trim();
     const layoutDiagnostics = normalizeLayoutDiagnostics(raw, session);
     const layoutDiagnosticsLabel = String(
@@ -596,9 +618,11 @@
       sourceProblemOverlapGroups,
       sourceProblemOverlapGroupCount,
       sourceProblemOverlapLabel,
+      sourceProblemOverlapDetailLabel,
       passageGroupSourceReuseGroups,
       passageGroupSourceReuseGroupCount,
       passageGroupSourceReuseLabel,
+      passageGroupSourceReuseDetailLabel,
       layoutDiagnostics,
       layoutDiagnosticsLabel,
       edbFileExists: edbFileExists === undefined ? true : edbFileExists !== false,

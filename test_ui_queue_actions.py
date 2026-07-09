@@ -22,6 +22,18 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
         self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
 
+    def test_image_only_recognition_uses_fast_non_ai_path(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+
+        self.assertIn("function isImageOnlyFileBatch(files)", source)
+        self.assertIn("const fastImageRecognition = isRecognition && isImageOnlyFileBatch(files);", queue_source)
+        self.assertIn("!fastImageRecognition", queue_source)
+        self.assertIn("const recognitionOcr = fastImageRecognition ? 'none' : 'auto';", queue_source)
+        self.assertIn("ocr: recognitionOcr", queue_source)
+        self.assertIn("이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다", queue_source)
+
     def test_upload_queue_row_selects_pending_file_preview(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         rail = source.split("function ItemsRail", 1)[1].split("function SidePanel", 1)[0]
@@ -85,7 +97,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_page_png_registration_does_not_auto_open_output_folder(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent, { edbName: fileName });", 1)[1]
+        register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent,", 1)[1]
         register_branch = register_branch.split("} catch (e) {", 1)[0]
 
         self.assertIn("페이지 PNG 등록", register_branch)
@@ -198,20 +210,21 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("review?.kind === 'queue-recognition'", modal_source)
         self.assertIn("맞아요, 검수로 이동", modal_source)
 
-    def test_review_stage_exposes_crop_frame_and_partial_retry(self) -> None:
+    def test_review_stage_exposes_crop_frame_fast_surrounding_crop_and_continuation(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
         self.assertIn("틀 조정/자르기", source)
-        self.assertIn("주변 영역 AI 재인식", source)
-        self.assertIn("partial: true", source)
-        self.assertIn("cropBoxes", source)
+        self.assertIn("주변 포함 빠른 자르기", source)
+        self.assertIn("applyExpandedCrop", source)
+        self.assertIn("pendingBoxEditProblemIdRef", source)
+        self.assertIn("다른 문제를 클릭하면 현재 자르기를 적용하고 다음 틀을 이어 조정합니다", source)
         self.assertIn("MANUAL_CROP_OUTSET_MAX", source)
         self.assertIn("인식 중단", source)
-        self.assertIn("바깥을 클릭해 바로 적용", source)
         self.assertIn("onManualCropOutsideMouseDown", source)
         self.assertIn("window.addEventListener('mousedown', onManualCropOutsideMouseDown, true)", source)
         self.assertIn("target?.closest?.('.review-bbox.editing')", source)
+        self.assertIn("target?.closest?.('.review-bbox')", source)
         self.assertIn("void applyBoxEdit();", source)
         self.assertIn("crop-frame-handle", html)
         self.assertIn("manual-crop-presets", html)
@@ -220,7 +233,7 @@ class TestUiQueueActions(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         box_edit_branch = source.split("const actionBar = boxEdit ? (", 1)[1]
         box_edit_branch = box_edit_branch.split(") : splitTarget ? (", 1)[0]
-        retry_index = box_edit_branch.index("주변 영역 AI 재인식")
+        retry_index = box_edit_branch.index("주변 포함 빠른 자르기")
         apply_index = box_edit_branch.index("자르기 적용")
 
         self.assertLess(retry_index, apply_index)

@@ -131,17 +131,39 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("title=\"너비 맞춤 후 아래로 이어붙이기\"", side_panel)
         fit_width_flow = source.split("if (wantsFitWidth) {", 1)[1]
         fit_width_flow = fit_width_flow.split("} else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio'))", 1)[0]
-        self.assertIn("next.inputIntent = 'page-as-is';", fit_width_flow)
-        self.assertIn("next.placementMode = 'continuous-page-as-is';", fit_width_flow)
-        self.assertIn("heightPages * targetScale", fit_width_flow)
-        self.assertIn("next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));", fit_width_flow)
-        self.assertNotIn("snapUpPages(startPages + slotSpanPages)", fit_width_flow)
+        fit_width_helper = source.split("function fitWidthContinuousPageItem", 1)[1]
+        fit_width_helper = fit_width_helper.split("function isContinuousPlacementItem", 1)[0]
+        self.assertIn("return fitWidthContinuousPageItem(next, patch);", fit_width_flow)
+        self.assertIn("PLACEMENT_FIT_WIDTH_SCALE_RATIO", source)
+        board_stage = source.split("function BoardStage", 1)[1]
+        board_stage = board_stage.split("function downloadPublishSummary", 1)[0]
+        self.assertIn("contentW / PLACEMENT_FIT_WIDTH_SCALE_RATIO", board_stage)
+        self.assertIn("next.inputIntent = 'page-as-is';", fit_width_helper)
+        self.assertIn("next.placementMode = 'continuous-page-as-is';", fit_width_helper)
+        self.assertIn("PLACEMENT_FIT_WIDTH_SCALE_RATIO", fit_width_helper)
+        self.assertIn("heightPages * targetScale", fit_width_helper)
+        self.assertIn("next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));", fit_width_helper)
+        self.assertNotIn("snapUpPages(startPages + slotSpanPages)", fit_width_helper)
         self.assertIn("publish-result-panel ${open ? 'open' : 'is-collapsed'}", publish_panel)
         self.assertIn("제작 결과 펼치기", publish_panel)
         self.assertIn(".position-sliders input.scale-range", html)
         self.assertIn(".quick-scale-control", html)
         self.assertIn(".scale-limit-note.limited", html)
         self.assertIn(".publish-result-panel.is-collapsed", html)
+
+    def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        session_helper = source.split("function fitWidthPageAsIsSession", 1)[1]
+        session_helper = session_helper.split("function mergeSessions", 1)[0]
+
+        self.assertIn("const registeredSession = isManualSplit ? s : fitWidthPageAsIsSession(s, { fileName, boardColumns });", queue_source)
+        self.assertIn("let sessionToApply = registeredSession;", queue_source)
+        self.assertIn("const merged = mergeSessions(currentSnapshot, registeredSession, fileName, boardColumns);", queue_source)
+        self.assertIn("} else if (!isManualSplit && sessionToApply !== s) {", queue_source)
+        self.assertIn("sessionToApply = await postRestore(sessionToApply);", queue_source)
+        self.assertIn("return fitWidthContinuousPageItem", session_helper)
 
     def test_reorder_reflows_saved_board_page_positions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -270,13 +292,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
         risk_meta = risk_meta.split("};", 1)[0]
 
-        self.assertIn("원본 겹침", review_stage)
+        self.assertIn("문항 영역 겹침", review_stage)
         self.assertIn("sourceProblemOverlapGroups", review_stage)
         self.assertIn("sourceProblemOverlapGroups", summary_helper)
         self.assertIn("source_problem_overlap_groups", summary_helper)
         self.assertIn("sourceProblemOverlapLabel", summary_helper)
         self.assertIn("source_problem_bbox_overlap", risk_meta)
-        self.assertIn("원본 영역 겹침", risk_meta)
+        self.assertIn("문항 영역 겹침", risk_meta)
 
     def test_app_labels_passage_missing_child_preflight_issue(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -286,9 +308,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         preflight_meta = preflight_meta.split("};", 1)[0]
 
         self.assertIn("passage_missing_child_questions", risk_meta)
-        self.assertIn("지문 하위 문항 누락", risk_meta)
+        self.assertIn("문항 누락", risk_meta)
         self.assertIn("passage_missing_child_questions", preflight_meta)
-        self.assertIn("지문 하위 문항 누락", preflight_meta)
+        self.assertIn("문항 누락", preflight_meta)
 
     def test_review_summary_surfaces_passage_group_source_reuse_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -297,12 +319,14 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
         summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
 
-        self.assertIn("지문 원본 중복", review_stage)
+        self.assertIn("지문 겹침", review_stage)
         self.assertIn("passageGroupSourceReuseGroups", review_stage)
+        self.assertIn("passageGroupSourceReuseDetailLabel", review_stage)
         self.assertIn("passage_group_source_reuse", review_stage)
         self.assertIn("passageGroupSourceReuseGroups", summary_helper)
         self.assertIn("passage_group_source_reuse_groups", summary_helper)
         self.assertIn("passageGroupSourceReuseLabel", summary_helper)
+        self.assertIn("passageGroupSourceReuseDetailLabel", summary_helper)
 
         run_node(
             r"""
@@ -347,11 +371,14 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (summary.passageGroupSourceReuseGroupCount !== 1) {
               throw new Error(`expected source reuse count 1, got ${summary.passageGroupSourceReuseGroupCount}`);
             }
-            if (!summary.passageGroupSourceReuseLabel.includes('hwp-text-passage-31-34')) {
-              throw new Error(`expected passage group label, got ${summary.passageGroupSourceReuseLabel}`);
+            if (summary.passageGroupSourceReuseLabel !== '지문 겹침 1건') {
+              throw new Error(`expected short passage group label, got ${summary.passageGroupSourceReuseLabel}`);
             }
-            if (!summary.passageGroupSourceReuseLabel.includes('92%')) {
-              throw new Error(`expected overlap percent label, got ${summary.passageGroupSourceReuseLabel}`);
+            if (!summary.passageGroupSourceReuseDetailLabel.includes('hwp-text-passage-31-34')) {
+              throw new Error(`expected passage group detail, got ${summary.passageGroupSourceReuseDetailLabel}`);
+            }
+            if (!summary.passageGroupSourceReuseDetailLabel.includes('92%')) {
+              throw new Error(`expected overlap percent detail, got ${summary.passageGroupSourceReuseDetailLabel}`);
             }
             """
         )
@@ -368,8 +395,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
         summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
 
-        self.assertIn("'passage', '긴 지문'", review_stage)
-        self.assertIn("긴 지문 그룹", review_stage)
+        self.assertIn("'passage', '지문'", review_stage)
+        self.assertIn("지문 묶음", review_stage)
         self.assertIn("이어짐", review_stage)
         self.assertIn("passageGroupCount", review_stage)
         self.assertIn("passageContinuationBlockCount", review_stage)
@@ -390,7 +417,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         risk_meta = source.split("const RISK_FLAG_META = {", 1)[1]
         risk_meta = risk_meta.split("};", 1)[0]
         self.assertIn("passage_cross_page_merge_check", risk_meta)
-        self.assertIn("긴 지문 병합 확인", risk_meta)
+        self.assertIn("병합 확인", risk_meta)
 
     def test_board_uses_prebuilt_bundle_without_browser_babel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -413,7 +440,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
         summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
 
-        self.assertIn("긴 지문 검수", review_stage)
+        self.assertIn("지문 확인", review_stage)
         self.assertIn("passageReviewLabel", review_stage)
         self.assertIn("passageReviewItems", queue_helper)
         self.assertIn("passage_review_items", queue_helper)
@@ -566,10 +593,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (summary.passageReviewProblemIds.join(',') !== 'p31,p32') {
               throw new Error(`expected passage ids p31,p32, got ${summary.passageReviewProblemIds.join(',')}`);
             }
-            if (!summary.passageReviewLabel.includes('긴 지문 검수 1')) {
+            if (!summary.passageReviewLabel.includes('지문 확인 1')) {
               throw new Error(`expected passage review label, got ${summary.passageReviewLabel}`);
             }
-            if (summary.passageReviewReasonLabel !== '페이지 넘김 긴 지문, 지문 하위 문항 누락') {
+            if (summary.passageReviewReasonLabel !== '페이지 이어짐, 문항 누락') {
               throw new Error(`expected passage reason label, got ${summary.passageReviewReasonLabel}`);
             }
             """
@@ -624,10 +651,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             const summary = sandbox.sessionReviewSummary(session);
             const warning = sandbox.publishReviewWarningMessage(session, summary);
             if (!warning) throw new Error('expected unresolved passage review warning');
-            if (!warning.message.includes('긴 지문 검수 1')) {
+            if (!warning.message.includes('지문 확인 1')) {
               throw new Error(`expected passage warning line, got ${warning.message}`);
             }
-            if (!warning.cancelToast.includes('긴 지문 검수 큐')) {
+            if (!warning.cancelToast.includes('지문 확인 항목')) {
               throw new Error(`expected passage cancel toast, got ${warning.cancelToast}`);
             }
             if (warning.reviewFilter !== 'passage-review') {

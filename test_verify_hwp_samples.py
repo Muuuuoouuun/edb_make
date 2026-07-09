@@ -1234,7 +1234,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
 
         self.assertEqual(3, summary["passage_group_source_reuse_count"])
         self.assertIn("passage reuse 3", text)
-        self.assertIn("preflight issues 지문 그룹 원본 중복:2", text)
+        self.assertIn("preflight issues 지문 겹침:2", text)
 
     def test_format_batch_summary_mentions_review_and_top_risk(self):
         summary = {
@@ -1292,7 +1292,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
         self.assertIn("preflight 7/8", text)
         self.assertIn("blocking 2", text)
         self.assertIn("preflight issues 판서 배치 겹침:2", text)
-        self.assertIn("review reasons 이어짐 자료:2, 페이지 넘김 긴 지문:1", text)
+        self.assertIn("review reasons 지문 본문:2, 페이지 이어짐:1", text)
         self.assertIn("top risk problem_per_block:8", text)
         self.assertIn("actionable problem_per_block:8", text)
 
@@ -1354,7 +1354,7 @@ class TestVerifyHwpSamples(unittest.TestCase):
         table = verify_hwp_samples.format_markdown_table(rows)
 
         self.assertIn(
-            "| passage.hwp | OK | 2 | 1 | 0/1 | - | reuse 1 | - | BLOCK 1/3 · passage reuse 1 · 지문 그룹 원본 중복, 지문 하위 문항 누락, 검수 플래그 남음 | OK 2/2 | 0.5 |",
+            "| passage.hwp | OK | 2 | 1 | 0/1 | - | reuse 1 | - | BLOCK 1/3 · passage reuse 1 · 지문 겹침, 문항 누락, 검수 플래그 남음 | OK 2/2 | 0.5 |",
             table,
         )
 

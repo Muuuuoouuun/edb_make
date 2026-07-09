@@ -51,14 +51,14 @@ ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
 PASSAGE_REVIEW_REASON_LABELS = {
-    "cross_page_passage_group": "페이지 넘김 긴 지문",
+    "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
     "marker_document_continuation": "문서 이어짐 표시",
-    "passage_cross_page_merge_check": "긴 지문 병합 확인",
-    "passage_fragment": "이어짐 자료",
-    "passage_group_source_reuse": "지문 그룹 원본 중복",
-    "passage_missing_child_questions": "지문 하위 문항 누락",
-    "source_problem_bbox_overlap": "원본 영역 겹침",
+    "passage_cross_page_merge_check": "병합 확인",
+    "passage_fragment": "지문 본문",
+    "passage_group_source_reuse": "지문 겹침",
+    "passage_missing_child_questions": "문항 누락",
+    "source_problem_bbox_overlap": "문항 영역 겹침",
 }
 
 
@@ -126,6 +126,10 @@ def _classin_source_bbox_overlap_issues(*args: Any, **kwargs: Any) -> Any:
 
 def _build_transparent_reconstruction_image(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_build_transparent_reconstruction_image", *args, **kwargs)
+
+
+def _load_board_export_image(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_load_board_export_image", *args, **kwargs)
 
 
 def _normalize_processing_step(*args: Any, **kwargs: Any) -> Any:
@@ -1033,7 +1037,7 @@ def _coerce_placement_scale_ratio(value: Any) -> float | None:
         return None
     if ratio is None:
         return None
-    return max(0.6, min(1.6, ratio))
+    return max(0.6, min(3.0, ratio))
 
 
 APP_DEFAULT_CROP_FORMAT = CROP_FORMAT_V1
@@ -1480,10 +1484,10 @@ def _write_classin_limited_edb_files_local(
     if not chunks:
         return []
 
-    part_template = _template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
     rendered_chunks: list[dict[str, Any]] = []
 
     def build_rendered_chunk(chunk_entries: list[Any], *, allow_existing: bool = False) -> dict[str, Any]:
+        part_template = _template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
         can_reuse_existing = (
             allow_existing
             and len(chunk_entries) == len(problem_entries)
@@ -1506,6 +1510,7 @@ def _write_classin_limited_edb_files_local(
                 dark_board=dark_board,
                 board_theme=board_theme,
                 crop_format=crop_format,
+                reserve_image_layout_height=False,
             )
         return {
             "entries": list(chunk_entries),
@@ -1513,6 +1518,7 @@ def _write_classin_limited_edb_files_local(
             "placements": part_placements,
             "header_flag": part_header_flag,
             "flow_end_pages": _placement_summaries_flow_end_pages(part_placements),
+            "page_count_hint": CLASSIN_MAX_BOARD_PAGE_COUNT,
         }
 
     def render_chunk(chunk_entries: list[Any], *, allow_existing: bool = False) -> None:
@@ -1561,7 +1567,7 @@ def _write_classin_limited_edb_files_local(
                 part_records,
                 header_flag=part_header_flag,
                 version=version_string_for_crop_format(crop_format),
-                page_count_hint=part_template.board_page_count,
+                page_count_hint=CLASSIN_MAX_BOARD_PAGE_COUNT,
             ),
         )
         problem_ids = [
@@ -1582,8 +1588,8 @@ def _write_classin_limited_edb_files_local(
                 "record_count": len(part_records),
                 "placementCount": len(part_placements),
                 "placement_count": len(part_placements),
-                "pageCountHint": int(part_template.board_page_count),
-                "page_count_hint": int(part_template.board_page_count),
+                "pageCountHint": CLASSIN_MAX_BOARD_PAGE_COUNT,
+                "page_count_hint": CLASSIN_MAX_BOARD_PAGE_COUNT,
                 "flowEndPages": float(rendered_chunk.get("flow_end_pages") or 0.0),
                 "flow_end_pages": float(rendered_chunk.get("flow_end_pages") or 0.0),
                 "problemIds": problem_ids,
@@ -1715,14 +1721,9 @@ def _passage_review_reason_summary(items: list[dict[str, Any]]) -> str:
     )
 
 
-def _source_problem_overlap_label(
+def _source_problem_overlap_detail_label(
     groups: list[dict[str, Any]],
-    *,
-    group_count: int | None = None,
 ) -> str:
-    count = max(0, int(group_count if group_count is not None else len(groups)))
-    if count <= 0:
-        return ""
     details: list[str] = []
     for group in groups:
         page_id = str(group.get("sourcePageId") or group.get("source_page_id") or "").strip()
@@ -1735,10 +1736,18 @@ def _source_problem_overlap_label(
         detail = " ".join(part for part in (page_id, percent) if part)
         if detail:
             details.append(detail)
-    parts = [f"원본 겹침 {count}"]
-    if details:
-        parts.append(", ".join(details))
-    return " · ".join(parts)
+    return ", ".join(details)
+
+
+def _source_problem_overlap_label(
+    groups: list[dict[str, Any]],
+    *,
+    group_count: int | None = None,
+) -> str:
+    count = max(0, int(group_count if group_count is not None else len(groups)))
+    if count <= 0:
+        return ""
+    return f"문항 영역 겹침 {count}건"
 
 
 def _path_exists(value: Any, *, directory: bool = False) -> bool:
@@ -1843,22 +1852,32 @@ def _publish_artifact_state(summary: dict[str, Any] | None) -> dict[str, Any] | 
         source_problem_overlap_group_count = int(raw_source_problem_overlap_group_count)
     else:
         source_problem_overlap_group_count = len(normalized_source_problem_overlap_groups)
-    source_problem_overlap_label = str(
+    source_problem_overlap_detail_label = str(
+        annotated.get("sourceProblemOverlapDetailLabel")
+        or annotated.get("source_problem_overlap_detail_label")
+        or _source_problem_overlap_detail_label(normalized_source_problem_overlap_groups)
+        or ""
+    ).strip()
+    raw_source_problem_overlap_label = str(
         annotated.get("sourceProblemOverlapLabel")
         or annotated.get("source_problem_overlap_label")
         or ""
     ).strip()
-    if not source_problem_overlap_label:
+    if source_problem_overlap_group_count > 0:
         source_problem_overlap_label = _source_problem_overlap_label(
             normalized_source_problem_overlap_groups,
             group_count=source_problem_overlap_group_count,
         )
+    else:
+        source_problem_overlap_label = raw_source_problem_overlap_label
     annotated["sourceProblemOverlapGroups"] = normalized_source_problem_overlap_groups
     annotated["source_problem_overlap_groups"] = normalized_source_problem_overlap_groups
     annotated["sourceProblemOverlapGroupCount"] = max(0, source_problem_overlap_group_count)
     annotated["source_problem_overlap_group_count"] = annotated["sourceProblemOverlapGroupCount"]
     annotated["sourceProblemOverlapLabel"] = source_problem_overlap_label
     annotated["source_problem_overlap_label"] = source_problem_overlap_label
+    annotated["sourceProblemOverlapDetailLabel"] = source_problem_overlap_detail_label
+    annotated["source_problem_overlap_detail_label"] = source_problem_overlap_detail_label
     return annotated
 
 
@@ -1890,12 +1909,12 @@ def _passage_review_queue_issue(item: dict[str, Any]) -> dict[str, Any]:
     source_page_ids = [value for value in source_page_ids if value]
     number_label = str(item.get("numberLabel") or item.get("number_label") or "").strip()
     group_id = str(item.get("groupId") or item.get("group_id") or "").strip()
-    title = number_label or group_id or "긴 지문"
+    title = number_label or group_id or "지문"
     detail_message = str(item.get("message") or item.get("reviewMessage") or item.get("review_message") or "").strip()
     if detail_message:
-        message = f"{detail_message} EDB publish 전에 지문 병합/하위 문제 상태를 확인해 주세요."
+        message = f"{detail_message} EDB 제작 전에 지문 병합/문항 상태를 확인해 주세요."
     else:
-        message = f"{title} 긴 지문 검수 큐가 남아 있습니다. EDB publish 전에 지문 병합/하위 문제 상태를 확인해 주세요."
+        message = f"{title} 지문 확인 항목이 남아 있습니다. EDB 제작 전에 지문 병합/문항 상태를 확인해 주세요."
     problem_count = _coerce_optional_int(item.get("problemCount") or item.get("problem_count"))
     fragment_problem_count = _coerce_optional_int(item.get("fragmentProblemCount") or item.get("fragment_problem_count"))
     return {
@@ -2176,6 +2195,9 @@ def _session_publish_summary(
         normalized_source_problem_overlap_groups,
         group_count=source_problem_overlap_group_count,
     )
+    source_problem_overlap_detail_label = _source_problem_overlap_detail_label(
+        normalized_source_problem_overlap_groups,
+    )
     normalized_layout_diagnostics = (
         dict(layout_diagnostics)
         if isinstance(layout_diagnostics, dict)
@@ -2223,6 +2245,7 @@ def _session_publish_summary(
         "sourceProblemOverlapGroups": normalized_source_problem_overlap_groups,
         "sourceProblemOverlapGroupCount": max(0, int(source_problem_overlap_group_count or 0)),
         "sourceProblemOverlapLabel": source_problem_overlap_label,
+        "sourceProblemOverlapDetailLabel": source_problem_overlap_detail_label,
         "layoutDiagnostics": normalized_layout_diagnostics,
         "layoutDiagnosticsLabel": layout_diagnostics_label,
         "edbFileExists": resolved_edb_path.is_file(),
@@ -2271,6 +2294,7 @@ def _session_publish_summary(
         "source_problem_overlap_groups": summary["sourceProblemOverlapGroups"],
         "source_problem_overlap_group_count": summary["sourceProblemOverlapGroupCount"],
         "source_problem_overlap_label": summary["sourceProblemOverlapLabel"],
+        "source_problem_overlap_detail_label": summary["sourceProblemOverlapDetailLabel"],
         "layout_diagnostics": summary["layoutDiagnostics"],
         "layout_diagnostics_label": summary["layoutDiagnosticsLabel"],
         "edb_file_exists": summary["edbFileExists"],
@@ -4344,6 +4368,32 @@ def _session_problem_s3_board_png_payload(problem: dict[str, Any], *, board_them
     return _encode_png_payload(board_image)
 
 
+def _session_problem_board_png_payload(problem: dict[str, Any], *, board_theme: str) -> bytes | None:
+    step = _session_problem_processing_step(problem)
+    if step == "s3":
+        return _session_problem_s3_board_png_payload(problem, board_theme=board_theme)
+    if step != "s2":
+        return None
+    crop_path = (
+        _existing_session_image_path(problem.get("imagePath"))
+        or _existing_session_image_path(problem.get("boardRenderPath"))
+    )
+    if crop_path is None:
+        return None
+    board_path = _existing_session_image_path(problem.get("boardRenderPath")) or crop_path
+
+    from PIL import Image
+
+    with Image.open(crop_path) as loaded:
+        crop_image = loaded.convert("RGBA" if "A" in loaded.getbands() else "RGB")
+    board_image = _load_board_export_image(
+        board_path,
+        crop_image,
+        board_theme=board_theme or DEFAULT_BOARD_THEME,
+    )
+    return _encode_png_payload(board_image)
+
+
 def _write_zip_png(zip_file: zipfile.ZipFile, source_path: Path, arcname: str) -> None:
     if source_path.suffix.lower() == ".png":
         zip_file.write(source_path, arcname)
@@ -4448,7 +4498,7 @@ def _write_session_image_export_zip(
                 source_path: Path | None = None
                 try:
                     rendered_payload = (
-                        _session_problem_s3_board_png_payload(problem, board_theme=board_theme)
+                        _session_problem_board_png_payload(problem, board_theme=board_theme)
                         if kind == "edb"
                         else None
                     )
@@ -5914,7 +5964,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         normalized_variant = str(variant or "board").strip().lower()
         if normalized_variant == "board":
             try:
-                rendered_payload = _session_problem_s3_board_png_payload(
+                rendered_payload = _session_problem_board_png_payload(
                     problem,
                     board_theme=str(session.get("board_theme") or session.get("boardTheme") or DEFAULT_BOARD_THEME),
                 )
