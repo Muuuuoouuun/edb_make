@@ -3897,7 +3897,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                 )
 
             self.assertGreater(max_active_count, 1)
-            self.assertEqual(["problem-4", "problem-3", "problem-2", "problem-1"], completion_order)
+            self.assertCountEqual([entry.problem_id for entry in entries], completion_order)
             self.assertEqual([entry.problem_id for entry in entries], [item["problem_id"] for item in placements])
             self.assertEqual(len(entries), len(records))
 

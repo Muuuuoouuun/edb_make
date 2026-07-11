@@ -343,8 +343,23 @@ def _is_document_like_page(image_source: Any, image: Image.Image) -> bool:
     if source_path and str(source_path).lower().endswith(".pdf"):
         return True
 
-    stat = ImageStat.Stat(ImageOps.grayscale(image))
-    return stat.mean[0] >= 220.0 and stat.stddev[0] <= 55.0
+    gray = ImageOps.grayscale(image)
+    stat = ImageStat.Stat(gray)
+    mean_intensity = float(stat.mean[0])
+    stddev = float(stat.stddev[0])
+    if mean_intensity >= 220.0 and stddev <= 55.0:
+        return True
+    if mean_intensity < 185.0 or stddev > 72.0:
+        return False
+
+    histogram = gray.histogram()
+    pixel_count = max(1, image.width * image.height)
+    ink_ratio = sum(histogram[:170]) / float(pixel_count)
+    # Phone photos and screenshots of worksheets often have gray paper or
+    # shadows, so their mean brightness drops below the old white-page
+    # threshold. Keep this heuristic narrow: enough dark ink to be a document,
+    # but not enough to look like a filled board or photo scene.
+    return 0.001 <= ink_ratio <= 0.22
 
 
 def _dark_mask(image: Image.Image, threshold: int) -> Image.Image:
@@ -2441,6 +2456,102 @@ def _colored_problem_marker_offsets(image: Image.Image, column_box: Box, box: Bo
     return [min(rows)]
 
 
+def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+    if cv2 is None or np is None:
+        return []
+
+    left = int(max(0.0, column_box.left))
+    top = int(max(0.0, box.top))
+    right = int(min(float(image.width), column_box.left + max(58.0, min(92.0, column_box.width * 0.24))))
+    bottom = int(min(float(image.height), box.bottom))
+    if right <= left or bottom <= top:
+        return []
+
+    gray = np.array(image.crop((left, top, right, bottom)).convert("L"))
+    marker_mask = (gray <= 115).astype(np.uint8)
+    if not marker_mask.any():
+        return []
+
+    component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(marker_mask, 8)
+    components: list[dict[str, int]] = []
+    for component_index in range(1, component_count):
+        x, y, width, height, area = (int(value) for value in stats[component_index])
+        if area <= 0:
+            continue
+        components.append(
+            {
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "area": area,
+                "right": x + width,
+                "bottom": y + height,
+            }
+        )
+
+    digit_like = [
+        component
+        for component in components
+        if component["x"] <= 50
+        and 2 <= component["width"] <= 28
+        and 6 <= component["height"] <= 46
+        and 8 <= component["area"] <= 320
+    ]
+    dot_like = [
+        component
+        for component in components
+        if component["x"] <= 66
+        and 1 <= component["width"] <= 9
+        and 1 <= component["height"] <= 9
+        and 1 <= component["area"] <= 55
+    ]
+    if not digit_like or not dot_like:
+        return []
+
+    offsets: list[int] = []
+    for dot in dot_like:
+        candidate_digits = [
+            digit
+            for digit in digit_like
+            if digit["right"] <= dot["x"] + 2
+            and 1 <= dot["x"] - digit["right"] <= 18
+            and dot["y"] >= digit["y"] + max(2, int(digit["height"] * 0.45))
+            and dot["y"] <= digit["bottom"] + 8
+        ]
+        if not candidate_digits:
+            continue
+        digit = max(candidate_digits, key=lambda item: item["right"])
+        offsets.append(min(digit["y"], dot["y"]))
+
+    if not offsets:
+        return []
+
+    clustered: list[int] = []
+    for offset in sorted(offsets):
+        if not clustered or offset - clustered[-1] > 14:
+            clustered.append(offset)
+        else:
+            clustered[-1] = min(clustered[-1], offset)
+    return clustered
+
+
+def _visual_problem_marker_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+    offsets = [
+        *_colored_problem_marker_offsets(image, column_box, box),
+        *_dark_numeric_problem_marker_component_offsets(image, column_box, box),
+    ]
+    if not offsets:
+        return []
+    clustered: list[int] = []
+    for offset in sorted(offsets):
+        if not clustered or offset - clustered[-1] > 14:
+            clustered.append(offset)
+        else:
+            clustered[-1] = min(clustered[-1], offset)
+    return clustered
+
+
 def _problem_marker_start_limit(box: Box) -> float:
     return max(96.0, min(118.0, box.height * 0.58))
 
@@ -2463,7 +2574,7 @@ def _select_colored_problem_marker_offset(offsets: list[int], box: Box) -> float
 
 def _entry_has_colored_problem_marker(image: Image.Image, column_box: Box, entry: DocumentColumnEntry) -> bool:
     box = entry[0]
-    offsets = _colored_problem_marker_offsets(image, column_box, box)
+    offsets = _visual_problem_marker_offsets(image, column_box, box)
     return _select_colored_problem_marker_offset(offsets, box) is not None
 
 
@@ -2481,7 +2592,7 @@ def _merge_document_continuation_entries(
     columns: list[list[DocumentColumnEntry]],
     column_boxes: list[Box],
 ) -> tuple[list[list[DocumentColumnEntry]], int]:
-    if len(columns) < 2 or len(columns) != len(column_boxes):
+    if not columns or len(columns) != len(column_boxes):
         return columns, 0
 
     adjusted_columns: list[list[DocumentColumnEntry]] = []
@@ -2493,7 +2604,7 @@ def _merge_document_continuation_entries(
         while index < len(sorted_entries):
             entry = sorted_entries[index]
             box, source_band_index, split_index, split_count, grid_balance_split = entry
-            offsets = _colored_problem_marker_offsets(image, column_box, box)
+            offsets = _visual_problem_marker_offsets(image, column_box, box)
             start_marker_limit = _problem_marker_start_limit(box)
             embedded_offsets = [offset for offset in offsets if offset > start_marker_limit]
             marker_offset = min(embedded_offsets) if embedded_offsets else None
@@ -2531,7 +2642,7 @@ def _merge_document_continuation_entries(
         adjusted_columns.append(adjusted_entries)
 
     marker_offsets_by_column = [
-        [_colored_problem_marker_offsets(image, column_box, entry[0]) for entry in entries]
+        [_visual_problem_marker_offsets(image, column_box, entry[0]) for entry in entries]
         for column_box, entries in zip(column_boxes, adjusted_columns)
     ]
     marker_flags_by_column = []
@@ -2756,6 +2867,181 @@ def _reassign_single_column_entries_by_visual_columns(
     left_box = Box.from_points(content_box.left, content_box.top, split_x, content_box.bottom)
     right_box = Box.from_points(split_x, content_box.top, content_box.right, content_box.bottom)
     return [left_entries, right_entries], [left_box, right_box], True
+
+
+def _is_image_upload_document_source(image_source: Any, metadata: dict[str, Any]) -> bool:
+    source_type = str(metadata.get("source_type") or "").strip().lower()
+    if source_type == "image":
+        return True
+    if metadata:
+        return False
+    source_path = getattr(image_source, "source_path", None) or getattr(image_source, "normalized_path", None)
+    if not source_path:
+        return False
+    return str(source_path).lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"))
+
+
+def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> tuple[Image.Image, Box, list[Box]]:
+    marker_mask = _dark_mask(image, min(options.document_dark_threshold, 190))
+    content_box = _find_document_content_box(marker_mask, image.width, image.height)
+    columns = _detect_document_columns(marker_mask, content_box, options)
+    if not columns:
+        columns = [content_box]
+    return marker_mask, content_box, columns
+
+
+def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[float]:
+    offsets = _visual_problem_marker_offsets(image, column_box, column_box)
+    tops: list[float] = []
+    for offset in offsets:
+        top = column_box.top + float(offset)
+        if top < column_box.top - 1.0 or top > column_box.bottom + 1.0:
+            continue
+        if tops and top - tops[-1] <= 22.0:
+            continue
+        tops.append(top)
+    return tops
+
+
+def _fit_visual_problem_box(
+    mask: Image.Image,
+    column_box: Box,
+    *,
+    marker_top: float,
+    boundary_bottom: float,
+    page_width: int,
+    page_height: int,
+) -> Box | None:
+    padding = max(16.0, float(page_height) * 0.015)
+    top = max(0.0, marker_top - padding)
+    bottom_limit = min(float(page_height), max(top + 1.0, boundary_bottom))
+    crop_box = (
+        max(0, int(column_box.left)),
+        max(0, int(top)),
+        min(page_width, int(column_box.right)),
+        min(page_height, int(bottom_limit)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        return None
+
+    crop = mask.crop(crop_box)
+    ink_bbox = crop.getbbox()
+    if ink_bbox is None:
+        return None
+
+    left = max(0.0, float(crop_box[0] + ink_bbox[0]) - padding)
+    right = min(float(page_width), float(crop_box[0] + ink_bbox[2]) + padding)
+    bottom = min(bottom_limit, float(crop_box[1] + ink_bbox[3]) + padding)
+    if right - left < max(80.0, float(column_box.width) * 0.24):
+        left = max(0.0, column_box.left)
+        right = min(float(page_width), column_box.right)
+    if bottom - top < max(52.0, float(page_height) * 0.035):
+        return None
+    return Box.from_points(left, top, right, bottom)
+
+
+def _segment_visual_problem_markers(
+    image: Image.Image,
+    page_id: str,
+    options: SegmentOptions,
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    marker_mask, content_box, columns = _visual_marker_column_boxes(image, options)
+    marker_tops_by_column = [_visual_problem_marker_tops(image, column_box) for column_box in columns]
+    marker_count = sum(len(tops) for tops in marker_tops_by_column)
+    if marker_count < 2:
+        return None
+
+    blocks: list[ContentBlock] = []
+    page_area = _page_area_px(image.width, image.height)
+    boundary_padding = max(18.0, float(image.height) * 0.018)
+    for column_index, (column_box, marker_tops) in enumerate(zip(columns, marker_tops_by_column), start=1):
+        if not marker_tops:
+            continue
+        sorted_tops = sorted(marker_tops)
+
+        valid_tops: list[float] = []
+        for marker_index, marker_top in enumerate(sorted_tops):
+            next_marker_top = sorted_tops[marker_index + 1] if marker_index + 1 < len(sorted_tops) else None
+            probe_boundary_bottom = (
+                next_marker_top - boundary_padding
+                if next_marker_top is not None
+                else column_box.bottom
+            )
+            if _fit_visual_problem_box(
+                marker_mask,
+                column_box,
+                marker_top=marker_top,
+                boundary_bottom=probe_boundary_bottom,
+                page_width=image.width,
+                page_height=image.height,
+            ) is not None:
+                valid_tops.append(marker_top)
+        if not valid_tops:
+            continue
+
+        for marker_index, marker_top in enumerate(valid_tops, start=1):
+            next_marker_top = valid_tops[marker_index] if marker_index < len(valid_tops) else None
+            boundary_bottom = (
+                next_marker_top - boundary_padding
+                if next_marker_top is not None
+                else column_box.bottom
+            )
+            box = _fit_visual_problem_box(
+                marker_mask,
+                column_box,
+                marker_top=marker_top,
+                boundary_bottom=boundary_bottom,
+                page_width=image.width,
+                page_height=image.height,
+            )
+            if box is None:
+                continue
+            metadata = _enrich_block_segmentation_metadata(
+                {
+                    "segmenter": "visual-problem-markers",
+                    "column_index": column_index,
+                    "question_band_index": marker_index,
+                    "source_band_index": marker_index,
+                    "visual_problem_marker": True,
+                    "visual_problem_marker_top": round(marker_top, 2),
+                    "force_problem_start": True,
+                    "force_image_record": True,
+                },
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                block_area=box.area,
+                page_area=page_area,
+                large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+                page_width=image.width,
+                page_height=image.height,
+            )
+            blocks.append(
+                ContentBlock(
+                    block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
+                    block_type=BlockType.IMAGE,
+                    bbox=box,
+                    reading_order=len(blocks),
+                    confidence=1.0,
+                    metadata=metadata,
+                )
+            )
+
+    if len(blocks) < 2:
+        return None
+
+    return blocks, {
+        "segmenter": "visual-problem-markers",
+        "visual_problem_marker_count": marker_count,
+        "document_split_block_count": len(blocks),
+        "document_split_applied": True,
+        "column_count": len(columns),
+        "content_box": {
+            "left": content_box.left,
+            "top": content_box.top,
+            "width": content_box.width,
+            "height": content_box.height,
+        },
+        "content_box_area_ratio": content_box.area / max(1.0, page_area),
+    }
 
 
 def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
@@ -3193,6 +3479,8 @@ def segment_page(
                     raw_markers,
                     text_lines=usable_text_lines if usable_text_lines else None,
                 )
+        if marker_result is None and _is_image_upload_document_source(image_path, source_metadata):
+            marker_result = _segment_visual_problem_markers(image, page_id, resolved_options)
         if marker_result is not None:
             blocks, metadata = marker_result
         else:

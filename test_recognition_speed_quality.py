@@ -134,6 +134,108 @@ def test_marker_like_block_uses_backend_when_page_segmenter_is_not_pdf_markers(m
     assert page.blocks[0].metadata["ocr_backend"] == "fake_marker_guardrail"
 
 
+def test_uploaded_image_visual_problem_markers_skip_backend_ocr(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+
+    import build_structured_page_json as pipeline
+    from page_repair import build_ai_fallback_config
+    from preprocess import PreparedPage
+    from structured_schema import Subject
+
+    backend_factory_calls = []
+    source = tmp_path / "uploaded.png"
+    image = Image.new("RGB", (420, 800), "white")
+    draw = ImageDraw.Draw(image)
+    for top, number in [(60, 1), (430, 2)]:
+        draw.text((32, top), f"{number}.", fill=(20, 20, 20))
+        draw.text((72, top + 4), "problem stem text", fill=(20, 20, 20))
+        for y in (top + 38, top + 62, top + 86):
+            draw.rectangle((72, y, 350, y + 4), fill=(20, 20, 20))
+        draw.text((52, top + 220), "① a        ② b", fill=(20, 20, 20))
+        draw.text((52, top + 244), "③ c        ④ d", fill=(20, 20, 20))
+    image.save(source)
+    prepared = PreparedPage(
+        page_id="uploaded-page-001",
+        source_path=str(source),
+        page_number=1,
+        image=image,
+        original_size=image.size,
+        metadata={"source_type": "image", "original_source_path": str(source)},
+    )
+
+    def fail_if_backend_is_created(mode):
+        backend_factory_calls.append(mode)
+        raise AssertionError("visual image marker fast path should not create OCR backend")
+
+    monkeypatch.setattr(pipeline, "create_ocr_backend", fail_if_backend_is_created)
+
+    page = pipeline.build_page_model(
+        prepared,
+        subject=Subject.MATH,
+        ocr_mode="gemini",
+        ai_config=build_ai_fallback_config(mode="off"),
+    )
+
+    assert backend_factory_calls == []
+    assert page.metadata["segmenter"] == "visual-problem-markers"
+    assert page.metadata["ai_stages"]["ocr"]["status"] == "skipped"
+    assert page.metadata["ocr_eligible_block_count"] == 0
+    assert page.metadata["ocr_skipped_block_count"] == 2
+    assert len(page.problems) == 2
+
+
+def test_two_column_uploaded_image_visual_problem_markers_skip_backend_ocr(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+
+    import build_structured_page_json as pipeline
+    from page_repair import build_ai_fallback_config
+    from preprocess import PreparedPage
+    from structured_schema import Subject
+
+    backend_factory_calls = []
+    source = tmp_path / "two-column-uploaded.png"
+    image = Image.new("RGB", (800, 520), "white")
+    draw = ImageDraw.Draw(image)
+    for left, number in [(32, 1), (432, 2)]:
+        top = 60
+        draw.text((left, top), f"{number}.", fill=(20, 20, 20))
+        draw.text((left + 40, top + 4), "problem stem text", fill=(20, 20, 20))
+        for y in (top + 38, top + 62, top + 86):
+            draw.rectangle((left + 40, y, left + 330, y + 4), fill=(20, 20, 20))
+        draw.text((left + 20, top + 220), "① a        ② b", fill=(20, 20, 20))
+        draw.text((left + 20, top + 244), "③ c        ④ d", fill=(20, 20, 20))
+    image.save(source)
+    prepared = PreparedPage(
+        page_id="two-column-uploaded-page-001",
+        source_path=str(source),
+        page_number=1,
+        image=image,
+        original_size=image.size,
+        metadata={"source_type": "image", "original_source_path": str(source)},
+    )
+
+    def fail_if_backend_is_created(mode):
+        backend_factory_calls.append(mode)
+        raise AssertionError("two-column visual marker fast path should not create OCR backend")
+
+    monkeypatch.setattr(pipeline, "create_ocr_backend", fail_if_backend_is_created)
+
+    page = pipeline.build_page_model(
+        prepared,
+        subject=Subject.MATH,
+        ocr_mode="gemini",
+        ai_config=build_ai_fallback_config(mode="off"),
+    )
+
+    assert backend_factory_calls == []
+    assert page.metadata["segmenter"] == "visual-problem-markers"
+    assert page.metadata["column_count"] == 2
+    assert page.metadata["ai_stages"]["ocr"]["status"] == "skipped"
+    assert page.metadata["ocr_eligible_block_count"] == 0
+    assert page.metadata["ocr_skipped_block_count"] == 2
+    assert len(page.problems) == 2
+
+
 def test_ocr_cache_uses_stable_index_and_can_fallback_to_legacy_image_hash(tmp_path):
     from PIL import Image
 
@@ -386,6 +488,95 @@ def test_build_page_model_passes_stable_cache_identity_to_primary_and_escalated_
     assert page.metadata["ai_stages"]["ocr"]["api_call_block_count"] == 1
     assert page.metadata["ai_stages"]["ocr_escalation"]["attempted_block_count"] == 1
     assert page.metadata["ai_stages"]["ocr_escalation"]["applied_block_count"] == 1
+
+
+def test_explicit_backend_cache_hit_defers_backend_creation(monkeypatch, tmp_path):
+    from PIL import Image
+
+    import build_structured_page_json as pipeline
+    from ocr_backend import OCRResult
+    from page_repair import build_ai_fallback_config
+    from preprocess import PreparedPage
+    from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
+
+    class HitCache:
+        def __init__(self):
+            self.root_dir = tmp_path / "cache"
+            self.load_calls = []
+            self.save_calls = []
+
+        def load_ocr_result(self, image, *, backend_name, cache_identity=None):
+            self.load_calls.append((backend_name, cache_identity))
+            return OCRResult(
+                text="cached text",
+                confidence=0.96,
+                backend_name="paddleocr",
+                metadata={
+                    "empty_text": False,
+                    "line_count": 0,
+                    "text_length": len("cached text"),
+                },
+            )
+
+        def save_ocr_result(self, image, result, *, backend_name, cache_identity=None):
+            self.save_calls.append((backend_name, cache_identity))
+            raise AssertionError("cache hit should not write OCR result")
+
+    source = tmp_path / "page.png"
+    image = Image.new("RGB", (240, 160), "white")
+    image.save(source)
+    prepared = PreparedPage(
+        page_id="cache-hit-page-001",
+        source_path=str(source),
+        page_number=1,
+        image=image,
+        original_size=image.size,
+        metadata={"original_source_path": str(source)},
+    )
+    block = ContentBlock(
+        block_id="cache-hit-page-001-block-001",
+        block_type=BlockType.STEM,
+        bbox=Box.from_points(20, 20, 180, 100),
+        reading_order=0,
+    )
+    segmented_page = PageModel(
+        page_id=prepared.page_id,
+        width_px=image.width,
+        height_px=image.height,
+        subject=Subject.MATH,
+        source_path=str(source),
+        blocks=[block],
+        metadata={"segmenter": "document"},
+    )
+    backend_factory_calls = []
+
+    def fail_if_backend_is_created(mode):
+        backend_factory_calls.append(mode)
+        raise AssertionError("explicit OCR cache hit should avoid backend initialization")
+
+    monkeypatch.setattr(pipeline, "create_ocr_backend", fail_if_backend_is_created)
+    monkeypatch.setattr(
+        pipeline,
+        "segment_page",
+        lambda prepared_page, page_id, subject: segmented_page,
+    )
+
+    cache = HitCache()
+    page = pipeline.build_page_model(
+        prepared,
+        subject=Subject.MATH,
+        ocr_mode="paddleocr",
+        ai_config=build_ai_fallback_config(mode="off"),
+        cache=cache,
+    )
+
+    assert backend_factory_calls == []
+    assert [call[0] for call in cache.load_calls] == ["paddleocr"]
+    assert cache.save_calls == []
+    assert page.blocks[0].text == "cached text"
+    assert page.metadata["ocr_cache_hit_count"] == 1
+    assert page.metadata["ocr_cache_miss_count"] == 0
+    assert page.metadata["ai_stages"]["ocr"]["api_call_block_count"] == 0
 
 
 def test_page_worker_count_defaults_scale_for_basic_recognition(monkeypatch):

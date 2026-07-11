@@ -137,6 +137,87 @@ class TestDocumentGridSegmentation(unittest.TestCase):
         self.assertEqual(2, len(page.blocks))
         self.assertLess(page.blocks[-1].bbox.bottom, 710)
 
+    def test_photo_like_image_with_gray_background_uses_visual_problem_markers(self):
+        image = Image.new("RGB", (500, 760), (205, 205, 196))
+        draw = ImageDraw.Draw(image)
+
+        for top, number in [(54, 1), (360, 2)]:
+            draw.rectangle((28, top - 12, 460, top + 250), fill=(238, 238, 230))
+            draw.text((42, top), f"{number}.", fill=(20, 20, 20))
+            draw.text((82, top + 4), "problem stem text", fill=(30, 30, 30))
+            for y in (top + 38, top + 62, top + 86):
+                draw.rectangle((82, y, 430, y + 4), fill=(30, 30, 30))
+            draw.text((62, top + 188), "① a        ② b", fill=(30, 30, 30))
+            draw.text((62, top + 212), "③ c        ④ d", fill=(30, 30, 30))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {"source_type": "image"}
+                self.source_path = "photo-like-upload.png"
+
+        page = segment_page(Source(image), page_id="photo-upload", subject=Subject.MATH)
+
+        self.assertEqual("visual-problem-markers", page.metadata.get("segmenter"))
+        self.assertEqual(2, len(page.blocks))
+        self.assertGreater(page.blocks[0].bbox.bottom, 285)
+        self.assertLess(page.blocks[0].bbox.bottom, 350)
+        self.assertGreater(page.blocks[1].bbox.bottom, 590)
+
+    def test_visual_problem_markers_keep_distant_choices_before_next_number(self):
+        image = Image.new("RGB", (420, 800), "white")
+        draw = ImageDraw.Draw(image)
+
+        for top, number in [(60, 1), (430, 2)]:
+            draw.text((32, top), f"{number}.", fill=(20, 20, 20))
+            draw.text((72, top + 4), "problem stem text", fill=(20, 20, 20))
+            for y in (top + 38, top + 62, top + 86):
+                draw.rectangle((72, y, 350, y + 4), fill=(20, 20, 20))
+            draw.text((52, top + 220), "① a        ② b", fill=(20, 20, 20))
+            draw.text((52, top + 244), "③ c        ④ d", fill=(20, 20, 20))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {"document_like": True, "source_type": "image"}
+                self.source_path = "black-number-upload.png"
+
+        page = segment_page(Source(image), page_id="black-number-upload", subject=Subject.MATH)
+
+        self.assertEqual("visual-problem-markers", page.metadata.get("segmenter"))
+        self.assertEqual(2, len(page.blocks))
+        self.assertGreater(page.blocks[0].bbox.bottom, 315)
+        self.assertLess(page.blocks[0].bbox.bottom, 415)
+        self.assertGreater(page.blocks[1].bbox.bottom, 685)
+
+    def test_two_column_image_upload_single_marker_per_column_uses_visual_problem_markers(self):
+        image = Image.new("RGB", (800, 520), "white")
+        draw = ImageDraw.Draw(image)
+
+        for left, number in [(32, 1), (432, 2)]:
+            top = 60
+            draw.text((left, top), f"{number}.", fill=(20, 20, 20))
+            draw.text((left + 40, top + 4), "problem stem text", fill=(20, 20, 20))
+            for y in (top + 38, top + 62, top + 86):
+                draw.rectangle((left + 40, y, left + 330, y + 4), fill=(20, 20, 20))
+            draw.text((left + 20, top + 220), "① a        ② b", fill=(20, 20, 20))
+            draw.text((left + 20, top + 244), "③ c        ④ d", fill=(20, 20, 20))
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {"source_type": "image"}
+                self.source_path = "two-column-single-marker-upload.png"
+
+        page = segment_page(Source(image), page_id="two-column-upload", subject=Subject.MATH)
+
+        self.assertEqual("visual-problem-markers", page.metadata.get("segmenter"))
+        self.assertEqual(2, page.metadata.get("column_count"))
+        self.assertEqual(2, len(page.blocks))
+        self.assertEqual([1, 2], [block.metadata.get("column_index") for block in page.blocks])
+        self.assertGreater(page.blocks[0].bbox.bottom, 315)
+        self.assertGreater(page.blocks[1].bbox.bottom, 315)
+
     def test_single_column_entries_with_visual_two_column_top_inversion_are_reassigned(self):
         content_box = Box.from_points(18, 15, 848, 642)
         entries = [

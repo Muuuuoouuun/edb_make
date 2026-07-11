@@ -5,11 +5,12 @@ import argparse
 import concurrent.futures
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from ocr_backend import GeminiOCRBackend, NoOcrBackend, create_ocr_backend
+from ocr_backend import GeminiOCRBackend, create_ocr_backend
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from pipeline_cache import PipelineCache
 from preprocess import PreparedPage, prepare_source_pages
@@ -255,6 +256,31 @@ def _is_ai_backend(backend_name: str | None) -> bool:
     }
 
 
+def _lazy_cache_backend_name(ocr_mode: str | None) -> str | None:
+    normalized = (ocr_mode or "").strip().lower()
+    if normalized in {"paddle", "paddleocr"}:
+        return "paddleocr"
+    if normalized == "tesseract":
+        return "tesseract"
+    if normalized in {"gemini", "google", "claude", "anthropic"}:
+        return "gemini"
+    if normalized.startswith("gemini-"):
+        return "gemini"
+    return None
+
+
+def _gemini_escalation_may_be_available(
+    *,
+    ai_config: AIFallbackConfig | None,
+    primary_backend_name: str | None,
+) -> bool:
+    if ai_config is None or not ai_config.enabled:
+        return False
+    if (primary_backend_name or "").strip().lower() == "gemini":
+        return False
+    return bool(os.environ.get("GEMINI_API_KEY", "").strip())
+
+
 def resolve_block_ocr_worker_count(
     item_count: int,
     *,
@@ -397,8 +423,12 @@ def build_page_model(
         and not _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter)
     )
     ocr_skipped_block_count = len(blocks) - ocr_eligible_block_count
-    backend = create_ocr_backend(ocr_mode) if ocr_eligible_block_count > 0 else None
-    backend_name = backend.engine_name if backend is not None else "none"
+    lazy_backend_name = _lazy_cache_backend_name(ocr_mode) if ocr_eligible_block_count > 0 else None
+    backend = None if lazy_backend_name else (
+        create_ocr_backend(ocr_mode) if ocr_eligible_block_count > 0 else None
+    )
+    backend_name = lazy_backend_name or (backend.engine_name if backend is not None else "none")
+    backend_lock = threading.Lock()
     escalation_backend = (
         _maybe_build_gemini_escalation(
             ai_config=ai_config,
@@ -407,11 +437,41 @@ def build_page_model(
         if backend is not None
         else None
     )
+    escalation_backend_checked = backend is not None
+    escalation_backend_lock = threading.Lock()
     block_worker_count = resolve_block_ocr_worker_count(
         ocr_eligible_block_count,
         ocr_mode=ocr_mode,
         backend_name=backend_name,
     )
+
+    def _get_backend():
+        nonlocal backend, backend_name, escalation_backend, escalation_backend_checked
+        if backend is not None:
+            return backend
+        with backend_lock:
+            if backend is None:
+                backend = create_ocr_backend(ocr_mode)
+                backend_name = backend.engine_name
+                escalation_backend = _maybe_build_gemini_escalation(
+                    ai_config=ai_config,
+                    primary_backend_name=backend_name,
+                )
+                escalation_backend_checked = True
+        return backend
+
+    def _get_escalation_backend(primary_backend_name: str | None):
+        nonlocal escalation_backend, escalation_backend_checked
+        if escalation_backend_checked:
+            return escalation_backend
+        with escalation_backend_lock:
+            if not escalation_backend_checked:
+                escalation_backend = _maybe_build_gemini_escalation(
+                    ai_config=ai_config,
+                    primary_backend_name=primary_backend_name or backend_name,
+                )
+                escalation_backend_checked = True
+        return escalation_backend
 
     def _process_block(block):
         if _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter):
@@ -425,41 +485,42 @@ def build_page_model(
 
         if block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}:
             return
-        if backend is None:
-            return
 
         crop = crop_block_image(prepared_page, block)
         cache_identity = _build_ocr_cache_identity(prepared_page, block)
         cached_ocr = pipeline_cache.load_ocr_result(
             crop,
-            backend_name=backend.engine_name,
+            backend_name=backend_name,
             cache_identity=cache_identity,
         )
         block.metadata["ocr_stage"] = "primary_ocr"
-        block.metadata["ocr_primary_backend"] = backend.engine_name
+        block.metadata["ocr_primary_backend"] = backend_name
         if cached_ocr is not None:
             ocr_result = cached_ocr
             block.metadata["ocr_cache_hit"] = True
             block.metadata["ocr_cache_miss"] = False
         else:
+            active_backend = _get_backend()
             started_at = time.perf_counter()
-            ocr_result = backend.recognize(crop)
+            ocr_result = active_backend.recognize(crop)
             elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
             ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
             pipeline_cache.save_ocr_result(
                 crop,
                 ocr_result,
-                backend_name=backend.engine_name,
+                backend_name=active_backend.engine_name,
                 cache_identity=cache_identity,
             )
+            block.metadata["ocr_primary_backend"] = active_backend.engine_name
             block.metadata["ocr_cache_hit"] = False
             block.metadata["ocr_cache_miss"] = True
 
-        if escalation_backend is not None and _ocr_needs_escalation(
+        active_escalation_backend = _get_escalation_backend(ocr_result.backend_name)
+        if active_escalation_backend is not None and _ocr_needs_escalation(
             ocr_result, threshold=escalation_threshold
         ):
             block.metadata["ocr_escalation_attempted"] = True
-            block.metadata["ocr_escalation_backend"] = escalation_backend.engine_name
+            block.metadata["ocr_escalation_backend"] = active_escalation_backend.engine_name
             escalated_cached = pipeline_cache.load_ocr_result(
                 crop,
                 backend_name="gemini_escalated",
@@ -470,7 +531,7 @@ def build_page_model(
                 block.metadata["ocr_escalation_cache_hit"] = True
             else:
                 escalation_started = time.perf_counter()
-                escalated_result = escalation_backend.recognize(crop)
+                escalated_result = active_escalation_backend.recognize(crop)
                 escalation_elapsed_ms = int(
                     round((time.perf_counter() - escalation_started) * 1000.0)
                 )
@@ -541,9 +602,9 @@ def build_page_model(
         elif block_type_hint == "figure":
             block.block_type = BlockType.IMAGE
             block.metadata["fallback_reason"] = "vision_figure_hint"
-        elif isinstance(backend, (NoOcrBackend, GeminiOCRBackend)) and block.block_type == BlockType.STEM:
+        elif ocr_result.backend_name in {"none", "gemini"} and block.block_type == BlockType.STEM:
             block.block_type = BlockType.IMAGE
-            block.metadata["fallback_reason"] = "noop_ocr" if isinstance(backend, NoOcrBackend) else "gemini_no_text"
+            block.metadata["fallback_reason"] = "noop_ocr" if ocr_result.backend_name == "none" else "gemini_no_text"
 
     block_ocr_started_at = time.perf_counter()
     if block_worker_count <= 1:
@@ -586,7 +647,11 @@ def build_page_model(
             "status": "used" if ocr_escalation_attempted_block_count > 0 else "skipped",
             "provider": "gemini",
             "ai_powered": True,
-            "enabled": escalation_backend is not None,
+            "enabled": bool(escalation_backend)
+            or _gemini_escalation_may_be_available(
+                ai_config=ai_config,
+                primary_backend_name=backend_name,
+            ),
             "attempted_block_count": ocr_escalation_attempted_block_count,
             "applied_block_count": ocr_escalated_block_count,
             "cache_hit_count": ocr_escalation_cache_hit_count,
