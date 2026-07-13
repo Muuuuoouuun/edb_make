@@ -830,6 +830,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn('"/DAppVersion=$EffectiveInstallerVersion"', source)
         self.assertNotIn('"/DAppVersion=$Version"', source)
 
+    def test_windows_installer_finds_per_user_inno_setup(self) -> None:
+        source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('$env:LOCALAPPDATA', source)
+        self.assertIn('"Programs\\Inno Setup 6\\ISCC.exe"', source)
+
     def test_windows_installer_verifies_existing_app_before_installer_build(self) -> None:
         source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
         verifier_index = source.index("scripts\\verify_packaged_app.py")
