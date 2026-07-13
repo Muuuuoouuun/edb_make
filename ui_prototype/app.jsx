@@ -1121,7 +1121,7 @@ function TooltipLayer(){
       const target = tooltipTarget(event.target);
       if (target && target !== activeRef.current) {
         showTooltipFor(target);
-      } else if (!target && activeRef.current) {
+      } else if (!target && activeRef.current && !activeRef.current.contains?.(event.target)) {
         hideTooltip();
       }
     };
@@ -1760,10 +1760,12 @@ function ReviewStage({
   }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
+    if (!manualSplit) return;
     if (!evt.ctrlKey && !evt.metaKey) return;
+    if (!evt.target?.closest?.('.review-canvas-scroll')) return;
     evt.preventDefault();
     adjustReviewZoom(evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
-  }, [adjustReviewZoom]);
+  }, [adjustReviewZoom, manualSplit]);
 
   const cancelManualPageSplit = () => {
     manualSplitDragRef.current = null;
@@ -3613,8 +3615,8 @@ function ItemsRail({
               >
                 <span className="queue-action-icon">{Icon.pagePng}</span>
                 <span className="queue-action-copy">
-                  <strong>페이지 PNG</strong>
-                  <small>문제 파싱 없음</small>
+                  <strong>페이지 전체 넣기</strong>
+                  <small>한 페이지를 그대로 칠판에 배치</small>
                 </span>
               </button>
               <button
@@ -3640,7 +3642,7 @@ function ItemsRail({
                 <span className="queue-action-icon">{Icon.pen}</span>
                 <span className="queue-action-copy">
                   <strong>수동 쪼개기</strong>
-                  <small>인식 없이 직접 분할</small>
+                  <small>가운데 미리보기에서 Ctrl+휠 확대</small>
                 </span>
               </button>
               {!aiAvailable && (

@@ -166,6 +166,42 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             self.assertEqual("pdf-passage-range", shared_block.metadata.get("segmenter"))
             self.assertGreater(shared_block.bbox.top, first_problem_block.bbox.top)
 
+
+    def test_pdf_passage_range_block_stops_before_cross_column_child_questions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "passage_range_cross_column_children.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 92), "[1~2] 다음 글을 읽고 물음에 답하시오.", fontsize=14)
+            page.insert_text((48, 138), "shared passage first line", fontsize=12)
+            page.insert_text((48, 170), "shared passage second line", fontsize=12)
+            page.insert_text((330, 220), "1. first question in right column", fontsize=14)
+            page.insert_text((330, 360), "2. second question in right column", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.ENGLISH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            shared_block = next(
+                block for block in page_model.blocks if block.metadata.get("segmenter") == "pdf-passage-range"
+            )
+            first_problem_block = next(
+                block for block in page_model.blocks if block.metadata.get("problem_number") == 1
+            )
+            self.assertLess(shared_block.bbox.bottom, first_problem_block.bbox.top)
+
     def test_pdf_workbook_example_markers_ignore_section_headings_and_footer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "math_workbook_examples.pdf"

@@ -1618,8 +1618,18 @@ def _build_pdf_passage_range_blocks(
             continue
 
         top = max(0.0, header_box.top - max(8.0, float(image.height) * 0.004))
+        child_boxes_after_header_any_column = [
+            box for box in child_boxes_any_column if box.top > header_box.top
+        ]
         if child_boxes_in_column_after_header:
             first_child_top = min(box.top for box in child_boxes_in_column_after_header)
+            bottom = min(float(image.height), first_child_top - max(14.0, float(image.height) * 0.007))
+        elif child_boxes_after_header_any_column:
+            # A shared English/Korean passage header often spans the page width
+            # while the first child question starts in a different visual column.
+            # Stop at that earliest child marker so the passage crop stays
+            # passage-only instead of swallowing the question body.
+            first_child_top = min(box.top for box in child_boxes_after_header_any_column)
             bottom = min(float(image.height), first_child_top - max(14.0, float(image.height) * 0.007))
         elif marker_boxes_in_column_after_header:
             first_marker_top = min(box.top for box in marker_boxes_in_column_after_header)
