@@ -1,6 +1,8 @@
 param(
     [string]$AppName = "ClassInEDBMVP",
     [string]$AppId = "",
+    [string]$AppDisplayName = "ClassIn EDB",
+    [string]$AppPublisher = "ClassIn EDB",
     [string]$OutputDir = "dist",
     [string]$Version = "",
     [string]$UpdateFeedUrl = "",
@@ -28,6 +30,12 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 . (Join-Path $ProjectRoot "scripts\Sign-WindowsArtifact.ps1")
 $ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
+if ([string]::IsNullOrWhiteSpace($AppDisplayName)) {
+    $AppDisplayName = $AppName
+}
+if ([string]::IsNullOrWhiteSpace($AppPublisher)) {
+    $AppPublisher = $AppDisplayName
+}
 
 if (-not $PythonExe) {
     $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -101,6 +109,22 @@ function Assert-EDBNativeCommandSucceeded {
     if ($LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE."
     }
+}
+
+function Write-EDBArtifactSummary {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$Label
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    $Item = Get-Item -LiteralPath $Path
+    $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    Write-Host "$Label: $Path"
+    Write-Host "$Label size: $($Item.Length) bytes"
+    Write-Host "$Label sha256: $Hash"
 }
 
 function Read-PackagedUpdateConfig {
@@ -234,6 +258,8 @@ if (-not $Iscc) {
 $InstallerScript = Join-Path $ProjectRoot "installer\windows\ClassInEDBMVP.iss"
 $IsccArgs = @(
     "/DAppName=$AppName",
+    "/DAppDisplayName=$AppDisplayName",
+    "/DAppPublisher=$AppPublisher",
     "/DSourceDir=$PackageRoot",
     "/DOutputDir=$ResolvedOutputDir",
     "/DAppVersion=$EffectiveInstallerVersion"
@@ -254,5 +280,6 @@ if ($Sign) {
         -TimestampUrl $SignTimestampUrl `
         -Description "$AppName Setup"
 }
+Write-EDBArtifactSummary -Path $InstallerPath -Label "Windows installer"
 Write-Host "Installer complete."
 Write-Host "Installer: $InstallerPath"

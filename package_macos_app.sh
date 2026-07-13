@@ -70,6 +70,29 @@ require_nonempty_file() {
   fi
 }
 
+file_size_bytes() {
+  local file_path="$1"
+  local size
+  if size="$(stat -f "%z" "$file_path" 2>/dev/null)"; then
+    echo "$size"
+  else
+    wc -c < "$file_path" | tr -d '[:space:]'
+  fi
+}
+
+print_file_artifact_summary() {
+  local file_path="$1"
+  local label="$2"
+  local sha
+  if [[ ! -f "$file_path" ]]; then
+    return
+  fi
+  sha="$(shasum -a 256 "$file_path" | awk '{ print $1 }')"
+  echo "$label: $file_path"
+  echo "$label size: $(file_size_bytes "$file_path") bytes"
+  echo "$label sha256: $sha"
+}
+
 require_zip_entry() {
   local zip_path="$1"
   local entry="$2"
@@ -527,6 +550,7 @@ if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$(basename "$ZIP_PATH")")
   require_nonempty_file "$ZIP_PATH" "Zip archive"
   require_zip_entry "$ZIP_PATH" "$APP_NAME.app/Contents/Info.plist"
+  print_file_artifact_summary "$ZIP_PATH" "Zip archive"
 fi
 
 if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
@@ -554,6 +578,7 @@ if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
     hdiutil verify "$DMG_PATH"
     verify_dmg_contains_app "$DMG_PATH" "$APP_NAME"
   fi
+  print_file_artifact_summary "$DMG_PATH" "DMG installer"
 fi
 
 echo "Packaging complete."

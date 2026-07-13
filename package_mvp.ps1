@@ -78,6 +78,22 @@ function Assert-EDBNonEmptyFile {
     }
 }
 
+function Write-EDBArtifactSummary {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$Label
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    $Item = Get-Item -LiteralPath $Path
+    $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    Write-Host "$Label: $Path"
+    Write-Host "$Label size: $($Item.Length) bytes"
+    Write-Host "$Label sha256: $Hash"
+}
+
 function Assert-EDBZipContainsEntry {
     param(
         [Parameter(Mandatory = $true)] [string]$ZipPath,
@@ -363,6 +379,7 @@ if ($Zip) {
         } elseif (-not $BuiltWithPyInstaller) {
             Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "source-package/app_update_config.json"
         }
+        Write-EDBArtifactSummary -Path $ZipPath -Label "Zip archive"
         Write-Host "Zip archive: $ZipPath"
     }
 } elseif ($Sign) {
@@ -378,5 +395,13 @@ if ($Zip) {
         -Description $AppName
 }
 
+if ($BuiltWithPyInstaller -and $OneFile) {
+    Write-EDBArtifactSummary -Path $PackageRoot -Label "PyInstaller one-file executable"
+}
+
 Write-Host "Packaging complete."
-Write-Host "Output folder: $PackageRoot"
+if (Test-Path -LiteralPath $PackageRoot -PathType Leaf) {
+    Write-Host "Output file: $PackageRoot"
+} else {
+    Write-Host "Output folder: $PackageRoot"
+}

@@ -628,6 +628,56 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     source,
                 )
 
+    def test_packaging_scripts_print_final_artifact_hashes(self) -> None:
+        shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn("print_file_artifact_summary()", shell_source)
+        self.assertIn("shasum -a 256", shell_source)
+        self.assertIn('print_file_artifact_summary "$ZIP_PATH" "Zip archive"', shell_source)
+        self.assertIn('print_file_artifact_summary "$DMG_PATH" "DMG installer"', shell_source)
+
+        ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Write-EDBArtifactSummary", ps_source)
+        self.assertIn("Get-FileHash -Algorithm SHA256", ps_source)
+        self.assertIn('Write-EDBArtifactSummary -Path $ZipPath -Label "Zip archive"', ps_source)
+        self.assertIn('Write-EDBArtifactSummary -Path $PackageRoot -Label "PyInstaller one-file executable"', ps_source)
+
+        installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Write-EDBArtifactSummary", installer_source)
+        self.assertIn("Get-FileHash -Algorithm SHA256", installer_source)
+        self.assertIn('Write-EDBArtifactSummary -Path $InstallerPath -Label "Windows installer"', installer_source)
+
+    def test_windows_installer_metadata_is_parameterized(self) -> None:
+        script_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('[string]$AppDisplayName = "ClassIn EDB"', script_source)
+        self.assertIn('[string]$AppPublisher = "ClassIn EDB"', script_source)
+        self.assertIn('"/DAppDisplayName=$AppDisplayName"', script_source)
+        self.assertIn('"/DAppPublisher=$AppPublisher"', script_source)
+
+        installer_source = (PROJECT_ROOT / "installer" / "windows" / "ClassInEDBMVP.iss").read_text(encoding="utf-8")
+        self.assertIn("#define AppPublisher", installer_source)
+        self.assertIn("AppPublisher={#AppPublisher}", installer_source)
+        self.assertIn("UninstallDisplayName={#AppDisplayName}", installer_source)
+
+    def test_windows_installer_optimizes_compression_and_cleans_upgrade_artifacts(self) -> None:
+        source = (PROJECT_ROOT / "installer" / "windows" / "ClassInEDBMVP.iss").read_text(encoding="utf-8")
+        self.assertIn("Compression=lzma2/ultra64", source)
+        self.assertIn("SolidCompression=yes", source)
+        self.assertIn("CloseApplications=yes", source)
+        self.assertIn("RestartApplications=no", source)
+        self.assertIn("[InstallDelete]", source)
+        for stale_path in (
+            r"{app}\.app_runtime",
+            r"{app}\ui_prototype\app.js",
+            r"{app}\scripts\vendor",
+            r"{app}\assets\app_icon.svg",
+            r"{app}\_internal\.app_runtime",
+            r"{app}\_internal\ui_prototype\app.js",
+            r"{app}\_internal\scripts\vendor",
+            r"{app}\_internal\assets\app_icon.svg",
+        ):
+            with self.subTest(stale_path=stale_path):
+                self.assertIn(stale_path, source)
+
     def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         for rel_path in (*REQUIRED_SOURCE_PACKAGE_FILES, "scripts\\render_hwp_with_rhwp_core.mjs"):

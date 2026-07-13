@@ -98,6 +98,14 @@ If the certificate is already installed in the Windows certificate store, you ca
 ```
 
 The script locates `signtool.exe` from `PATH` or the Windows SDK. It signs `.exe`, `.dll`, and `.pyd` files in the packaged app folder before building the installer, then signs and verifies `dist\ClassInEDBMVP-Setup.exe`.
+The installer build prints the final setup file size and SHA-256 hash. The Inno Setup definition uses high-compression LZMA2 and removes stale legacy runtime/build artifacts from the install directory during upgrades; user settings and API keys remain in the separate runtime folder under Documents.
+
+Installer display metadata can be overridden without changing the packaged executable name:
+```powershell
+.\package_windows_installer.ps1 -Clean -InstallPyInstaller `
+  -AppDisplayName "ClassIn EDB" `
+  -AppPublisher "ClassIn EDB"
+```
 
 If you only want the raw packaged app folder, install PyInstaller if needed:
 ```powershell
@@ -168,6 +176,7 @@ dist/ClassInEDBMVP-macOS.zip
 
 The macOS wrapper removes stale same-name app folders, `.app` bundles, zip archives, DMGs, notary-upload zips, and previous PyInstaller work files before each build. After verifying the `.app`, it removes PyInstaller's sibling collect folder and temporary work directory so the output directory does not expose an extra runnable-looking copy.
 The app bundle is re-verified after signing/stapling before archive creation. Generated zip archives and DMGs are checked for non-empty output; zip archives are inspected for the expected app entry, and DMGs are verified with `hdiutil verify` plus a mounted app-bundle contents check.
+The wrapper prints the final zip/DMG file size and SHA-256 hash after all signing/notarization steps that can mutate the artifact.
 
 The default macOS build is windowed and ad-hoc signed when `codesign` is available. Logs are written under:
 ```text
