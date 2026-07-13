@@ -1041,18 +1041,7 @@ function ManualSplitEditor({
 function BrandMark(){
   return (
     <span className="logo" aria-hidden="true">
-      <svg viewBox="0 0 192 128" focusable="false">
-        <text x="78" y="83" textAnchor="middle" fontFamily="Arial Black, Arial, Helvetica, sans-serif" fontSize="63" fontWeight="900" letterSpacing="1.5" fill="#101923">EDB</text>
-        <g fill="none" strokeLinecap="round">
-          <path d="M124 95 164 55" stroke="#101923" strokeWidth="9" />
-          <path d="M160 59 171 48" stroke="#22c9bd" strokeWidth="9" />
-        </g>
-        <g fill="#22c9bd">
-          <path d="M174 34 177 42 185 45 177 48 174 56 171 48 163 45 171 42z" />
-          <path d="M184 58 186 63 191 65 186 67 184 72 182 67 177 65 182 63z" />
-          <path d="M177 77 180 84 187 87 180 90 177 97 174 90 167 87 174 84z" />
-        </g>
-      </svg>
+      <img src="./favicon.png" alt="" draggable="false" />
     </span>
   );
 }

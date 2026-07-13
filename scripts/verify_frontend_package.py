@@ -11,6 +11,7 @@ from pathlib import Path
 REQUIRED_UI_FILES = (
     "ui_prototype/index.html",
     "ui_prototype/board.html",
+    "ui_prototype/favicon.png",
     "ui_prototype/reorder.js",
     "ui_prototype/review_filters.js",
     "ui_prototype/publish_summary.js",

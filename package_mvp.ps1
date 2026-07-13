@@ -89,7 +89,7 @@ function Write-EDBArtifactSummary {
     }
     $Item = Get-Item -LiteralPath $Path
     $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-    Write-Host "$Label: $Path"
+    Write-Host "${Label}: $Path"
     Write-Host "$Label size: $($Item.Length) bytes"
     Write-Host "$Label sha256: $Hash"
 }
@@ -247,6 +247,7 @@ if ($HasPyInstaller) {
     $DataItems = @(
         @("ui_prototype\index.html", "ui_prototype"),
         @("ui_prototype\board.html", "ui_prototype"),
+        @("ui_prototype\favicon.png", "ui_prototype"),
         @("ui_prototype\reorder.js", "ui_prototype"),
         @("ui_prototype\review_filters.js", "ui_prototype"),
         @("ui_prototype\publish_summary.js", "ui_prototype"),
@@ -329,6 +330,7 @@ if ($HasPyInstaller) {
         "PACKAGING_MVP.md",
         "ui_prototype\index.html",
         "ui_prototype\board.html",
+        "ui_prototype\favicon.png",
         "ui_prototype\reorder.js",
         "ui_prototype\review_filters.js",
         "ui_prototype\publish_summary.js",

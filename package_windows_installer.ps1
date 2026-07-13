@@ -122,7 +122,7 @@ function Write-EDBArtifactSummary {
     }
     $Item = Get-Item -LiteralPath $Path
     $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-    Write-Host "$Label: $Path"
+    Write-Host "${Label}: $Path"
     Write-Host "$Label size: $($Item.Length) bytes"
     Write-Host "$Label sha256: $Hash"
 }
