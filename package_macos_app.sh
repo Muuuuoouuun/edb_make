@@ -442,6 +442,7 @@ HIDDEN_IMPORT_ARGS=(
   --hidden-import edb_builder
   --hidden-import page_repair
   --hidden-import image_reconstruction_backend
+  --hidden-import upscayl_backend
 )
 add_data() {
   local src="$1"
@@ -462,6 +463,7 @@ add_data "ui_prototype/vendor/react.production.min.js" "ui_prototype/vendor"
 add_data "ui_prototype/vendor/react-dom.production.min.js" "ui_prototype/vendor"
 add_data "scripts/render_hwp_with_rhwp_core.mjs" "scripts"
 add_data "assets/app_icon.png" "assets"
+add_data "resources/upscayl" "resources/upscayl"
 
 "$PYTHON_EXE" -m PyInstaller \
   --noconfirm \

@@ -1123,6 +1123,15 @@ def _build_transparent_reconstruction_image(
     board_theme: str = DEFAULT_BOARD_THEME,
 ) -> Image.Image:
     crop_image = _trim_source_page_chrome(crop_image)
+    # Stage 3 transparently attempts the local Lite model only for undersized
+    # crops. The backend is fail-open, and this extra guard ensures packaging
+    # or runtime surprises can never block the existing stage-3 path.
+    try:
+        from upscayl_backend import auto_upscale_image
+
+        crop_image = auto_upscale_image(crop_image).image
+    except Exception:  # noqa: BLE001 - stage 3 must always retain its legacy fallback
+        pass
     enhanced_crop = _enhance_problem_crop(
         crop_image,
         target_min_width_px=RECONSTRUCT_TARGET_MIN_WIDTH_PX,

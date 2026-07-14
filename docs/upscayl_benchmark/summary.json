@@ -1,0 +1,99 @@
+{
+  "as_of": "2026-07-14",
+  "device": "Apple M4 (10-core GPU), macOS arm64",
+  "target_width": 1600,
+  "methodology": {
+    "synthetic_cases": 8,
+    "real_samples": 6,
+    "technical_fidelity_formula": "40% tolerant edge F1 + 35% ink IoU + 25% alpha similarity",
+    "real_sample_caveat": "No high-resolution ground truth; score measures structural retention to the input, not subjective quality.",
+    "cloud_api_calls": 0
+  },
+  "synthetic_summary": [
+    {
+      "method": "stage2",
+      "samples": 8,
+      "median_seconds": 0.032,
+      "mean_seconds": 0.0321,
+      "mean_technical_fidelity_score": 76.62,
+      "mean_edge_f1": 0.7605,
+      "mean_ink_iou": 0.6251
+    },
+    {
+      "method": "stage3",
+      "samples": 8,
+      "median_seconds": 0.0796,
+      "mean_seconds": 0.0824,
+      "mean_technical_fidelity_score": 64.06,
+      "mean_edge_f1": 0.6162,
+      "mean_ink_iou": 0.4426
+    },
+    {
+      "method": "upscayl-standard-4x",
+      "samples": 8,
+      "median_seconds": 5.029,
+      "mean_seconds": 5.1175,
+      "mean_technical_fidelity_score": 92.36,
+      "mean_edge_f1": 0.993,
+      "mean_ink_iou": 0.798
+    }
+  ],
+  "real_summary": [
+    {
+      "method": "stage2",
+      "samples": 6,
+      "median_seconds": 0.0673,
+      "mean_seconds": 0.0597,
+      "mean_technical_fidelity_score": 93.63,
+      "mean_edge_f1": 0.9999,
+      "mean_ink_iou": 0.8291
+    },
+    {
+      "method": "stage3",
+      "samples": 6,
+      "median_seconds": 0.1494,
+      "mean_seconds": 0.1594,
+      "mean_technical_fidelity_score": 72.33,
+      "mean_edge_f1": 0.7962,
+      "mean_ink_iou": 0.4785
+    },
+    {
+      "method": "upscayl-standard-4x",
+      "samples": 6,
+      "median_seconds": 11.0899,
+      "mean_seconds": 11.22,
+      "mean_technical_fidelity_score": 89.8,
+      "mean_edge_f1": 0.9982,
+      "mean_ink_iou": 0.7262
+    }
+  ],
+  "model_summary": [
+    {
+      "method": "ultrasharp-4x",
+      "samples": 3,
+      "median_seconds": 11.384,
+      "mean_seconds": 11.4467,
+      "mean_technical_fidelity_score": 91.27,
+      "mean_edge_f1": 0.9974,
+      "mean_ink_iou": 0.7672
+    },
+    {
+      "method": "upscayl-lite-4x",
+      "samples": 3,
+      "median_seconds": 1.0016,
+      "mean_seconds": 0.9715,
+      "mean_technical_fidelity_score": 90.99,
+      "mean_edge_f1": 0.9973,
+      "mean_ink_iou": 0.7595
+    },
+    {
+      "method": "upscayl-standard-4x",
+      "samples": 3,
+      "median_seconds": 11.3217,
+      "mean_seconds": 11.4109,
+      "mean_technical_fidelity_score": 89.98,
+      "mean_edge_f1": 0.9973,
+      "mean_ink_iou": 0.7319
+    }
+  ]
+}

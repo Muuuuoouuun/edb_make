@@ -255,7 +255,8 @@ if ($HasPyInstaller) {
         @("ui_prototype\vendor\react.production.min.js", "ui_prototype\vendor"),
         @("ui_prototype\vendor\react-dom.production.min.js", "ui_prototype\vendor"),
         @("scripts\render_hwp_with_rhwp_core.mjs", "scripts"),
-        @("assets\app_icon.png", "assets")
+        @("assets\app_icon.png", "assets"),
+        @("resources\upscayl", "resources\upscayl")
     )
     $DataArgs = @()
     $DataArgs += @("--add-data", ($BuildUpdateConfig + ";."))
@@ -272,7 +273,8 @@ if ($HasPyInstaller) {
         "--hidden-import", "build_structured_page_json",
         "--hidden-import", "edb_builder",
         "--hidden-import", "page_repair",
-        "--hidden-import", "image_reconstruction_backend"
+        "--hidden-import", "image_reconstruction_backend",
+        "--hidden-import", "upscayl_backend"
     )
 
     $PyInstallerArgs = @(
@@ -309,6 +311,7 @@ if ($HasPyInstaller) {
         "build_problem_board_edb.py",
         "build_structured_page_json.py",
         "image_reconstruction_backend.py",
+        "upscayl_backend.py",
         "page_repair.py",
         "pipeline_cache.py",
         "pipeline_router.py",
@@ -326,6 +329,7 @@ if ($HasPyInstaller) {
         "run_local_app.ps1",
         "scripts\render_hwp_with_rhwp_core.mjs",
         "assets\app_icon.png",
+        "resources\upscayl",
         "PACKAGING_MVP.md",
         "ui_prototype\index.html",
         "ui_prototype\board.html",

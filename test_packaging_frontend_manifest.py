@@ -628,6 +628,15 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     source,
                 )
 
+    def test_packaging_manifests_include_optional_upscayl_runtime(self) -> None:
+        expected_resource = "resources/upscayl"
+        for rel_path in ("ClassInEDBMVP.spec", "package_macos_app.sh", "package_mvp.ps1"):
+            with self.subTest(rel_path=rel_path):
+                source = (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
+                normalized = source.replace("\\", "/")
+                self.assertIn("upscayl_backend", source)
+                self.assertIn(expected_resource, normalized)
+
     def test_packaging_scripts_print_final_artifact_hashes(self) -> None:
         shell_source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn("print_file_artifact_summary()", shell_source)

@@ -73,6 +73,10 @@ SCRIPT_DATAS = [
     ("scripts/render_hwp_with_rhwp_core.mjs", "scripts"),
 ]
 
+OPTIONAL_UPSCAYL_DATAS = [
+    ("resources/upscayl", "resources/upscayl"),
+]
+
 HIDDEN_IMPORTS = [
     "preprocess",
     "build_mvp_export",
@@ -81,6 +85,7 @@ HIDDEN_IMPORTS = [
     "edb_builder",
     "page_repair",
     "image_reconstruction_backend",
+    "upscayl_backend",
 ]
 
 a = Analysis(
@@ -89,7 +94,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(project_path(source)), destination)
-        for source, destination in UI_DATAS + ASSET_DATAS + SCRIPT_DATAS
+        for source, destination in UI_DATAS + ASSET_DATAS + SCRIPT_DATAS + OPTIONAL_UPSCAYL_DATAS
         if project_path(source).exists()
     ] + APP_CONFIG_DATAS,
     hiddenimports=HIDDEN_IMPORTS,
