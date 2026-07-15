@@ -226,6 +226,7 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertEqual("local", problem["aiImageReconstruction"]["provider"])
             self.assertEqual("preserve", problem["aiImageReconstruction"]["resolvedMode"])
             self.assertEqual("content_safe_primary", problem["aiImageReconstruction"]["deliveryMode"])
+            self.assertEqual("content_safe_no_generation", problem["aiImageReconstruction"]["promptProfile"])
             self.assertEqual("normal", problem["reviewStatus"])
 
     def test_auto_mode_infers_korean_from_input_filename_when_subject_is_unknown(self):
@@ -248,7 +249,7 @@ class TestImageReconstructionMutation(unittest.TestCase):
             session = self._build_session(root)
             session["problems"][0]["subject"] = "korean"
 
-            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct):
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as reconstruct:
                 updated = app_server._mutate_enhance_image(
                     session,
                     {"problemIds": ["problem-1"], "mode": "ai"},
@@ -260,6 +261,32 @@ class TestImageReconstructionMutation(unittest.TestCase):
             semantic_gate = problem["aiImageReconstruction"]["semanticTextPreservation"]
             self.assertEqual("unverified", semantic_gate["status"])
             self.assertTrue(semantic_gate["review_required"])
+            self.assertEqual("text_exact_copy", problem["aiImageReconstruction"]["promptProfile"])
+            sent_prompt = reconstruct.call_args.kwargs["prompt"]
+            self.assertIn("document restoration, not OCR retyping", sent_prompt)
+            self.assertIn("Never invent a cleaner replacement", sent_prompt)
+
+    def test_custom_ai_prompt_overrides_text_exact_copy_profile(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            session["problems"][0]["subject"] = "english"
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as reconstruct:
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {
+                        "problemIds": ["problem-1"],
+                        "mode": "ai",
+                        "prompt": "custom exact restoration prompt",
+                    },
+                )
+
+            self.assertEqual("custom exact restoration prompt", reconstruct.call_args.kwargs["prompt"])
+            self.assertEqual(
+                "custom",
+                updated["problems"][0]["aiImageReconstruction"]["promptProfile"],
+            )
 
     def test_page_as_is_old_session_recovers_normalized_page_source(self):
         with TemporaryDirectory() as raw_tmp:
@@ -490,6 +517,30 @@ class TestImageReconstructionMutation(unittest.TestCase):
 
             self.assertEqual("pass", stats["status"])
             self.assertFalse(stats["review_required"])
+
+    def test_content_preservation_catches_changed_glyph_structure(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "output.png"
+            source = Image.new("RGB", (320, 180), "white")
+            output = Image.new("RGB", source.size, "white")
+            source_pixels = source.load()
+            output_pixels = output.load()
+            for center_y in (40, 90, 140):
+                for center_x in range(40, 300, 40):
+                    for offset in range(-8, 9):
+                        source_pixels[center_x, center_y + offset] = (0, 0, 0)
+                        source_pixels[center_x + offset, center_y] = (0, 0, 0)
+                        output_pixels[center_x + offset, center_y + offset] = (0, 0, 0)
+                        output_pixels[center_x + offset, center_y - offset] = (0, 0, 0)
+            source.save(source_path)
+            output.resize((640, 360), Image.Resampling.NEAREST).save(output_path)
+
+            stats = analyze_reconstruction_content_preservation(source_path, output_path)
+
+            self.assertEqual("review_required", stats["status"])
+            self.assertIn("glyph_structure_changed", stats["reasons"])
 
     def test_content_preservation_catches_blank_reconstruction(self):
         with TemporaryDirectory() as raw_tmp:

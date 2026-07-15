@@ -212,6 +212,10 @@ def _default_reconstruction_prompt() -> str:
     return str(_lazy_attr("image_reconstruction_backend", "DEFAULT_RECONSTRUCTION_PROMPT"))
 
 
+def _text_priority_reconstruction_prompt() -> str:
+    return str(_lazy_attr("image_reconstruction_backend", "TEXT_PRIORITY_RECONSTRUCTION_PROMPT"))
+
+
 def default_image_model(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("image_reconstruction_backend", "default_image_model", *args, **kwargs)
 
@@ -5049,7 +5053,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         raise ValueError(f"{provider_label} API 키가 필요합니다. 칠판 설정에서 {env_key}를 저장한 뒤 다시 시도해 주세요.")
 
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
-    prompt = str(payload.get("prompt") or payload.get("imagePrompt") or _default_reconstruction_prompt())
+    custom_prompt = str(payload.get("prompt") or payload.get("imagePrompt") or "").strip()
     quality = str(payload.get("quality") or "high")
     size = str(payload.get("size") or "auto")
     timeout_ms = int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)
@@ -5071,6 +5075,18 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     for problem_id in problem_ids:
         _index, problem = _find_problem(session, problem_id)
         subject, resolved_mode = enhance_plan[problem_id]
+        if resolved_mode == "preserve":
+            problem_prompt = _default_reconstruction_prompt()
+            prompt_profile = "content_safe_no_generation"
+        elif custom_prompt:
+            problem_prompt = custom_prompt
+            prompt_profile = "custom"
+        elif subject in _TEXT_PRESERVATION_SUBJECTS:
+            problem_prompt = _text_priority_reconstruction_prompt()
+            prompt_profile = "text_exact_copy"
+        else:
+            problem_prompt = _default_reconstruction_prompt()
+            prompt_profile = "general_reconstruction"
         preserve_row = preserve_results.get(problem_id)
         source_path = preserve_row.get("source_path") if preserve_row else _original_problem_image_path(problem, session)
         if source_path is None or not source_path.exists():
@@ -5122,7 +5138,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                     api_key=api_key,
                     provider=provider,
                     model=model,
-                    prompt=prompt,
+                    prompt=problem_prompt,
                     quality=quality,
                     size=size,
                     timeout_ms=timeout_ms,
@@ -5143,7 +5159,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
 
         if resolved_mode == "ai" and result is not None and not _result_passes_content_gate(result):
             retry_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}_retry.png"
-            retry_prompt = _content_recovery_prompt(prompt, _result_content_preservation(result))
+            retry_prompt = _content_recovery_prompt(problem_prompt, _result_content_preservation(result))
             try:
                 retry_result = reconstruct_problem_image(
                     source_path,
@@ -5209,6 +5225,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 "requestedMode": requested_mode,
                 "resolvedMode": resolved_mode,
                 "subject": subject,
+                "promptProfile": prompt_profile,
                 "error": str(exc),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "attempts": attempts,
@@ -5221,6 +5238,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 "requestedMode": requested_mode,
                 "resolvedMode": resolved_mode,
                 "subject": subject,
+                "promptProfile": prompt_profile,
                 "error": str(exc),
                 "attempts": attempts,
             })
@@ -5281,6 +5299,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "requestedMode": requested_mode,
             "resolvedMode": resolved_mode,
             "subject": subject,
+            "promptProfile": prompt_profile,
             "transparent_background": transparent_background,
             "sharpen": sharpen,
             "contentPreservation": content_preservation,
@@ -5297,6 +5316,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "requestedMode": requested_mode,
             "resolvedMode": resolved_mode,
             "subject": subject,
+            "promptProfile": prompt_profile,
             "outputPath": uri,
             "latencyMs": result.latency_ms,
             "postprocess": postprocess,

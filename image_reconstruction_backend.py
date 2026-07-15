@@ -50,6 +50,24 @@ Improve only visual quality:
 """
 
 
+TEXT_PRIORITY_RECONSTRUCTION_PROMPT = """Restore the supplied Korean or English exam page as an exact-copy image edit.
+
+This is document restoration, not OCR retyping, redesign, or content generation:
+- Treat the source pixels, line breaks, columns, spacing, punctuation, and glyph count as immutable evidence.
+- Copy every visible Korean syllable block, jamo, English letter, number, circled option, symbol, and punctuation mark exactly in its original position.
+- Do not paraphrase, autocorrect, translate, complete a word, replace a similar-looking character, or guess an unreadable character.
+- If a character is blurry or uncertain, preserve its source shape unchanged. Never invent a cleaner replacement from context.
+- Do not reflow paragraphs, change line wrapping, normalize spacing, or move text between columns.
+- Preserve diagrams, tables, borders, page geometry, and the original aspect ratio exactly.
+
+Improve only non-semantic pixel quality:
+- Increase resolution and reduce compression noise or jagged edges without changing character topology.
+- Keep thin strokes separate; do not merge adjacent Korean strokes, counters, punctuation, or small option labels.
+- Output chalk-white source content on a fully transparent background, with no added headers, badges, marks, shadows, or decorations.
+- Before returning, compare source and result line by line. The result must contain the same number of text lines and the same visible glyph sequence as the source.
+"""
+
+
 @dataclass(slots=True)
 class ImageReconstructionResult:
     output_path: Path
@@ -235,7 +253,23 @@ def build_content_safe_upscale(
         source_size=source_size,
         upscale_factor=upscale_factor,
     )
-    postprocess["content_preservation"] = analyze_reconstruction_content_preservation(source, output)
+    preservation = analyze_reconstruction_content_preservation(source, output)
+    # The local pipeline never regenerates text. Its transparency cleanup can
+    # thicken very thin synthetic strokes enough to trip the generative-only
+    # topology heuristic, so do not treat that signal as semantic mutation.
+    preservation_reasons = [
+        str(reason)
+        for reason in (preservation.get("reasons") or [])
+        if str(reason) != "glyph_structure_changed"
+    ]
+    if preservation_reasons != list(preservation.get("reasons") or []):
+        preservation["glyph_structure_check"] = "not_applicable_deterministic_pipeline"
+        preservation["reasons"] = preservation_reasons
+        if not preservation_reasons:
+            preservation["status"] = "pass"
+            preservation["review_required"] = False
+            preservation["severity"] = "none"
+    postprocess["content_preservation"] = preservation
     return ImageReconstructionResult(
         output_path=output,
         provider="local",
@@ -572,6 +606,16 @@ def analyze_reconstruction_content_preservation(
         reasons.append("formula_row_loss")
     if source_coverage < 0.28 and ink_ratio < 0.72:
         reasons.append("low_source_coverage")
+    # A generative edit can keep every row occupied while replacing glyphs or
+    # heavily thickening their strokes. The coarse coverage check above then
+    # looks perfect, but the aligned Dice overlap and ink growth expose the
+    # topology change. Keep this conservative so ordinary antialiasing and a
+    # small translation still pass.
+    if (
+        overlap_score < 0.68
+        and (ink_ratio < 0.8 or ink_ratio > 1.2)
+    ) or (overlap_score < 0.82 and ink_ratio > 1.55):
+        reasons.append("glyph_structure_changed")
     if ink_ratio > 2.6:
         reasons.append("unexpected_added_content")
     if aspect_ratio_delta > 0.09:
