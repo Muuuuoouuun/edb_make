@@ -2467,7 +2467,7 @@ function ReviewStage({
   const filterOptions = [
     ['all', '전체', statusCounts.all],
     ['normal', '정상', statusCounts.normal],
-    ['check_needed', '확인 필요', actionableStatusCount],
+    ['check_needed', '확인 필요', statusCounts.check_needed],
     ['failed', '실패', statusCounts.failed],
   ];
   if (sessionCounts.supplemental > 0) {
@@ -6383,6 +6383,8 @@ const PAGE_CHROME_PREFLIGHT_ISSUE_TYPES = new Set([
 ]);
 
 const RISK_FLAG_META = {
+  ai_image_content_mismatch_suspected: 'AI 보정 내용 변화 의심',
+  ai_image_formula_loss_suspected: '수식·기호 누락 의심',
   ai_image_missing_source: '이미지 원본 없음',
   ai_image_reconstructed_check_text: 'AI 보정 확인',
   ai_image_reconstruction_failed: 'AI 보정 실패',
@@ -8297,7 +8299,11 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       ocr: options.ocr || 'auto',
       edbName,
       exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
-      detectPerspective: files.some(f => !isDocumentLikeFile(f)),
+      detectPerspective: Object.prototype.hasOwnProperty.call(options, 'detectPerspective')
+        ? !!options.detectPerspective
+        : files.some(f => !isDocumentLikeFile(f)),
+      skipDeskew: !!options.skipDeskew,
+      skipCrop: !!options.skipCrop,
       maxDimension: options.maxDimension || 2400,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     }),
@@ -9395,6 +9401,8 @@ function App(){
           preview: true,
           edbName: fileName,
           ocr: recognitionOcr,
+          detectPerspective: !fastImageRecognition,
+          skipDeskew: fastImageRecognition,
         });
         if (job.controller.signal.aborted) return;
         if (!queueRequestIsCurrent(queueGeneration, fileKeys)) {
@@ -9466,7 +9474,12 @@ function App(){
     });
     const previousItemIds = new Set(items.map(item => item.id).filter(Boolean));
     try {
-      const s = await postExport(files, aiFallback, resolvedInputIntent, { edbName: fileName, ocr: recognitionOcr });
+      const s = await postExport(files, aiFallback, resolvedInputIntent, {
+        edbName: fileName,
+        ocr: recognitionOcr,
+        preview: true,
+        exportEdb: false,
+      });
       const registeredSession = isManualSplit ? s : fitWidthPageAsIsSession(s, { fileName, boardColumns });
       let sessionToApply = registeredSession;
       let baseSnapshotForReviewScope = null;

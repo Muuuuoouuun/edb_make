@@ -36,6 +36,7 @@ REQUIRED_SOURCE_PACKAGE_FILES = (
     "build_problem_board_edb.py",
     "build_structured_page_json.py",
     "image_reconstruction_backend.py",
+    "upscayl_backend.py",
     "page_repair.py",
     "pipeline_cache.py",
     "pipeline_router.py",

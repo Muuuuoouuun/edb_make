@@ -1,0 +1,704 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Upscayl Adoption Decision",
+    "description": "EDB 이미지 업스케일링 품질·시간·비용 비교와 단계적 적용안",
+    "generatedAt": "2026-07-14T12:00:00+09:00",
+    "sources": [
+      {
+        "id": "local-benchmark",
+        "label": "EDB Upscayl local benchmark",
+        "path": "docs/upscayl_benchmark/summary.json",
+        "query": {
+          "engine": "DuckDB over Python 3.14 benchmark outputs",
+          "query": "python scripts/benchmark_upscayl_quality.py --output-dir docs/upscayl_benchmark",
+          "sql": "SELECT 'synthetic' AS dataset, case_id AS item_id, kind AS content_type, input_width, NULL::INTEGER AS input_height, NULL::VARCHAR AS model, method, seconds, edge_f1, ink_iou, alpha_similarity, sharpness, technical_fidelity_score, foreground_ratio FROM read_csv_auto('docs/upscayl_benchmark/synthetic_results.csv') UNION ALL SELECT 'real' AS dataset, sample_id AS item_id, subject AS content_type, input_width, input_height, NULL::VARCHAR AS model, method, seconds, edge_f1, ink_iou, alpha_similarity, sharpness, technical_fidelity_score, foreground_ratio FROM read_csv_auto('docs/upscayl_benchmark/real_results.csv') UNION ALL SELECT 'model_pilot' AS dataset, sample_id AS item_id, subject AS content_type, NULL::INTEGER AS input_width, NULL::INTEGER AS input_height, model, method, seconds, edge_f1, ink_iou, alpha_similarity, sharpness, technical_fidelity_score, foreground_ratio FROM read_csv_auto('docs/upscayl_benchmark/model_pilot_results.csv')",
+          "description": "Synthetic ground-truth and anonymized real-crop benchmark aggregated from reviewed CSV outputs.",
+          "executed_at": "2026-07-14T12:00:00+09:00",
+          "language": "python",
+          "filters": [
+            "Target width 1600 px",
+            "Synthetic: 8 cases (4 content types × 2 source widths)",
+            "Real crops: 6 cases; model pilot: 3 cases",
+            "Local image-transform runtime only; recognition and publishing excluded"
+          ],
+          "metric_definitions": [
+            "Technical fidelity = 40% tolerant edge F1 + 35% ink IoU + 25% alpha similarity.",
+            "Real-crop score measures structural retention against the input crop, not subjective quality or semantic correctness.",
+            "Sequential minutes = measured median seconds × image count ÷ 60."
+          ],
+          "tables_used": [
+            "docs/upscayl_benchmark/synthetic_results.csv",
+            "docs/upscayl_benchmark/real_results.csv",
+            "docs/upscayl_benchmark/model_pilot_results.csv"
+          ]
+        }
+      },
+      {
+        "id": "cost-analysis",
+        "label": "Local and API cost scenario",
+        "query": {
+          "engine": "DuckDB",
+          "sql": "SELECT * FROM (VALUES ('Upscayl Lite (local)', 1000, 0.0, 1.67, '30 W and KRW 200/kWh; hardware and labor excluded'), ('Upscayl Standard (local)', 1000, 0.0, 18.48, '30 W and KRW 200/kWh; hardware and labor excluded'), ('Gemini 3.1 Flash Image 1K', 1000, 67.0, 93800.0, 'output only; KRW 1,400/USD'), ('Gemini 3.1 Flash Image 2K', 1000, 101.0, 141400.0, 'output only; KRW 1,400/USD'), ('GPT Image 2 high landscape', 1000, 165.0, 231000.0, 'output only; input cost excluded'), ('GPT Image 2 high square', 1000, 211.0, 295400.0, 'output only; input cost excluded')) AS costs(option, images, usd_output_cost, krw_output_cost, basis)",
+          "description": "Scenario calculation combining measured local runtime assumptions with official output price tables.",
+          "executed_at": "2026-07-14T12:00:00+09:00",
+          "filters": [
+            "1,000 images",
+            "Standard API pricing",
+            "Output costs only",
+            "Planning exchange rate KRW 1,400/USD"
+          ],
+          "metric_definitions": [
+            "Local electricity KRW = 30 W × measured median seconds × 1,000 ÷ 3,600,000 × KRW 200/kWh.",
+            "API KRW = official USD output price per image × 1,000 × KRW 1,400/USD."
+          ],
+          "tables_used": [
+            "docs/upscayl_benchmark/summary.json",
+            "Google Gemini API pricing",
+            "OpenAI image generation guide"
+          ]
+        }
+      },
+      {
+        "id": "google-pricing",
+        "label": "Google Gemini API pricing",
+        "href": "https://ai.google.dev/gemini-api/docs/pricing",
+        "query": {
+          "engine": "Official documentation",
+          "description": "Gemini 3.1 Flash Image standard output pricing reviewed July 14, 2026.",
+          "executed_at": "2026-07-14T12:00:00+09:00",
+          "filters": [
+            "Standard tier",
+            "Image output only"
+          ],
+          "metric_definitions": [
+            "1,000-image cost = official per-image output price × 1,000."
+          ]
+        }
+      },
+      {
+        "id": "openai-pricing",
+        "label": "OpenAI API pricing",
+        "href": "https://developers.openai.com/api/docs/pricing",
+        "query": {
+          "engine": "Official documentation",
+          "description": "GPT Image 2 token pricing reviewed July 14, 2026.",
+          "executed_at": "2026-07-14T12:00:00+09:00",
+          "filters": [
+            "Standard tier"
+          ]
+        }
+      },
+      {
+        "id": "openai-image-guide",
+        "label": "OpenAI image generation guide",
+        "href": "https://developers.openai.com/api/docs/guides/image-generation",
+        "query": {
+          "engine": "Official documentation",
+          "description": "GPT Image 2 output cost table and model limitations reviewed July 14, 2026.",
+          "executed_at": "2026-07-14T12:00:00+09:00",
+          "filters": [
+            "High-quality output",
+            "1024 px square or landscape"
+          ],
+          "metric_definitions": [
+            "1,000-image cost uses the guide's output cost and excludes input charges."
+          ]
+        }
+      },
+      {
+        "id": "upscayl-upstream",
+        "label": "Upscayl upstream repository",
+        "href": "https://github.com/upscayl/upscayl",
+        "query": {
+          "engine": "GitHub repository",
+          "description": "Upstream project, CLI/model assets, and AGPL-3.0 licensing context.",
+          "executed_at": "2026-07-14T12:00:00+09:00"
+        }
+      }
+    ],
+    "cards": [
+      {
+        "id": "lite-latency",
+        "description": "Apple M4 모델 파일럿 3건의 로컬 변환 중앙값",
+        "dataset": "headline",
+        "sourceId": "local-benchmark",
+        "metrics": [
+          {
+            "label": "Lite 중앙값",
+            "field": "lite_median_seconds",
+            "format": "number"
+          },
+          {
+            "label": "Standard 대비 속도",
+            "field": "lite_speedup_vs_standard",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "synthetic-fidelity",
+        "description": "정답 원본이 있는 합성 열화 8건의 기술 충실도",
+        "dataset": "headline",
+        "sourceId": "local-benchmark",
+        "metrics": [
+          {
+            "label": "Standard 충실도",
+            "field": "standard_synthetic_fidelity",
+            "format": "number"
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "quality-comparison",
+        "title": "합성 정답 세트 기술 충실도",
+        "subtitle": "8건 평균, 100점 만점. 원본 구조·획·투명도 보존 지표",
+        "type": "bar",
+        "dataset": "quality",
+        "sourceId": "local-benchmark",
+        "encodings": {
+          "x": {
+            "field": "method",
+            "type": "nominal",
+            "label": "처리 방식"
+          },
+          "y": {
+            "field": "technical_fidelity",
+            "type": "quantitative",
+            "label": "기술 충실도",
+            "format": "number",
+            "unit": "점"
+          },
+          "tooltip": [
+            {
+              "field": "edge_f1",
+              "type": "quantitative",
+              "label": "Edge F1"
+            },
+            {
+              "field": "ink_iou",
+              "type": "quantitative",
+              "label": "Ink IoU"
+            },
+            {
+              "field": "median_seconds",
+              "type": "quantitative",
+              "label": "중앙값(초)"
+            },
+            {
+              "field": "samples",
+              "type": "quantitative",
+              "label": "표본"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "점",
+        "maxRows": 3,
+        "surface": {
+          "showLegend": false,
+          "showValues": true
+        }
+      },
+      {
+        "id": "latency-comparison",
+        "title": "실측 로컬 처리 시간",
+        "subtitle": "Apple M4, 폭 1600px. 이미지 변환 커널/로컬 런타임 중앙값",
+        "type": "bar",
+        "dataset": "latency",
+        "sourceId": "local-benchmark",
+        "encodings": {
+          "x": {
+            "field": "method",
+            "type": "nominal",
+            "label": "처리 방식"
+          },
+          "y": {
+            "field": "median_seconds",
+            "type": "quantitative",
+            "label": "문항당 시간",
+            "format": "number",
+            "unit": "초"
+          },
+          "tooltip": [
+            {
+              "field": "minutes_per_1000",
+              "type": "quantitative",
+              "label": "1,000장 순차 처리(분)"
+            },
+            {
+              "field": "hours_per_10000",
+              "type": "quantitative",
+              "label": "10,000장 순차 처리(시간)"
+            },
+            {
+              "field": "sample_scope",
+              "type": "text",
+              "label": "표본"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "초",
+        "maxRows": 5,
+        "surface": {
+          "showLegend": false,
+          "showValues": true
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "resource-table",
+        "title": "운영 리소스 비교",
+        "subtitle": "순차 처리 추정이며 동시 실행과 전체 제품 파이프라인 오버헤드는 제외",
+        "dataset": "resources",
+        "sourceId": "local-benchmark",
+        "defaultSort": {
+          "field": "median_seconds",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "columns": [
+          {
+            "field": "method",
+            "label": "방식",
+            "type": "text"
+          },
+          {
+            "field": "median_seconds",
+            "label": "중앙값(초)",
+            "format": "number"
+          },
+          {
+            "field": "minutes_per_1000",
+            "label": "1,000장(분)",
+            "format": "number"
+          },
+          {
+            "field": "memory",
+            "label": "실측 메모리",
+            "type": "text"
+          },
+          {
+            "field": "asset_size",
+            "label": "추가 자산",
+            "type": "text"
+          },
+          {
+            "field": "recommended_role",
+            "label": "권장 역할",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "cost-table",
+        "title": "1,000장 처리 직접비 비교",
+        "subtitle": "로컬은 전력만, API는 출력만 비교. 계획 환율 1 USD = ₩1,400",
+        "dataset": "costs",
+        "sourceId": "cost-analysis",
+        "defaultSort": {
+          "field": "krw_output_cost",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "columns": [
+          {
+            "field": "option",
+            "label": "옵션",
+            "type": "text"
+          },
+          {
+            "field": "images",
+            "label": "장수",
+            "format": "number"
+          },
+          {
+            "field": "usd_output_cost",
+            "label": "USD",
+            "format": "currency"
+          },
+          {
+            "field": "krw_output_cost",
+            "label": "KRW",
+            "format": "number"
+          },
+          {
+            "field": "basis",
+            "label": "비용 범위",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# Upscayl Adoption Decision"
+      },
+      {
+        "id": "executive-summary",
+        "type": "markdown",
+        "body": "## Executive Summary\n\n- **채택 가치는 충분하다.** 정답 원본이 있는 저해상도 합성 세트에서 Upscayl Standard는 기술 충실도 92.36점으로 2단계 76.62점보다 높았다.\n- **기본 모델은 Lite가 적절하다.** 동일한 실제 crop 3건에서 Lite 중앙값은 1.00초로 Standard 11.32초보다 약 11.3배 빨랐고, 구조 보존 점수도 동등 이상이었다.\n- **제품 기본값은 3단계를 유지한다.** Upscayl Lite는 저해상도·흐림·사진/도식에만 자동 적용하고, Standard/Ultrasharp와 클라우드 API는 수동 또는 최후 fallback으로 둔다.\n- **비용보다 운영 대기시간과 라이선스가 핵심이다.** 로컬 전력비는 사실상 미미하지만 Standard는 1,000장 순차 처리 약 185분이며, AGPL 배포 방식 검토가 필요하다."
+      },
+      {
+        "id": "metric-strip",
+        "type": "metric-strip",
+        "cardIds": [
+          "lite-latency",
+          "synthetic-fidelity"
+        ]
+      },
+      {
+        "id": "comparison-method",
+        "type": "markdown",
+        "body": "## 비교 기준\n\n**점수는 사람의 미감이 아니라 변환 충실도를 측정한다.** 합성 8건은 고해상도 정답 원본이 있어 edge F1 40%, ink IoU 35%, alpha 유사도 25%로 기술 충실도를 계산했다. 실제 crop 6건은 정답 원본이 없으므로 입력 대비 구조 보존만 측정했다. 3단계는 페이지 장식 제거와 획 강화를 의도하므로 낮은 충실도 점수를 곧바로 낮은 가독성으로 해석하면 안 된다.",
+        "sourceId": "local-benchmark"
+      },
+      {
+        "id": "quality-finding",
+        "type": "markdown",
+        "body": "## 저해상도 복원은 분명하지만 전면 적용은 불필요하다\n\n**Upscayl은 손실된 선과 경계를 가장 잘 복원했다.** Standard는 합성 정답 세트에서 92.36점으로 가장 높았고 edge F1은 0.993이었다. 다만 이미 선명한 입력에는 2단계 또는 3단계가 훨씬 빠르므로, 저해상도 판정 뒤 선택 적용하는 편이 합리적이다.",
+        "sourceId": "local-benchmark"
+      },
+      {
+        "id": "quality-chart",
+        "type": "chart",
+        "chartId": "quality-comparison"
+      },
+      {
+        "id": "latency-finding",
+        "type": "markdown",
+        "body": "## Lite는 운영 가능한 속도, Standard는 예외 처리 속도다\n\n**1,000장 순차 처리 시 Lite는 약 17분, Standard는 약 185분이다.** Lite 파일럿은 3건뿐이지만 Standard와 비슷한 구조 보존을 보였고, 단일 실제 crop에서 최대 RSS도 약 141 MiB로 Standard 약 443 MiB보다 낮았다. PoC 자동 경로는 Lite, 수동 재처리는 Standard/Ultrasharp가 적절하다.",
+        "sourceId": "local-benchmark"
+      },
+      {
+        "id": "latency-chart",
+        "type": "chart",
+        "chartId": "latency-comparison"
+      },
+      {
+        "id": "resource-table-block",
+        "type": "table",
+        "tableId": "resource-table"
+      },
+      {
+        "id": "cost-finding",
+        "type": "markdown",
+        "body": "## 직접비는 로컬이 압도적으로 낮고 API는 의미 복원이 필요할 때만 유리하다\n\n**1,000장 기준 Gemini 2K 출력은 약 $101(계획 환율 약 ₩141,400), GPT Image 2 high는 출력만 약 $165~$211이다.** 입력 비용과 실제 API 지연은 별도다. 로컬 Lite의 추정 전력비는 같은 수량에 약 ₩1.67로 작아, 경제성의 핵심은 전력보다 개발·검수·배포 시간이다. [Google 가격표](https://ai.google.dev/gemini-api/docs/pricing)와 [OpenAI 가격표](https://developers.openai.com/api/docs/pricing), [이미지 생성 가이드](https://developers.openai.com/api/docs/guides/image-generation)를 기준으로 했다."
+      },
+      {
+        "id": "cost-table-block",
+        "type": "table",
+        "tableId": "cost-table"
+      },
+      {
+        "id": "recommended-next-steps",
+        "type": "markdown",
+        "body": "## Recommended next steps\n\n1. **3~5 개발일:** `upscayl_backend.py`에 CLI 배열 실행, capability probe, 30초 timeout, 1개 동시 실행, 원본 보존을 구현한다. 기본 모델은 `upscayl-lite-4x`, 목표 폭은 1600px로 둔다.\n2. **3~5 개발일:** 폭 900px 미만, 흐림, 사진/도식 신호에만 Lite를 호출하는 smart routing과 전후 비교 UI를 추가한다. 이미 선명하면 2단계/3단계로 우회한다.\n3. **4~8 개발일:** Windows/Vulkan·저사양 Mac 회귀 테스트, 모델 다운로드/업데이트, timeout·픽셀 상한, 장애 fallback, 라이선스 고지를 마무리한다.\n4. **출시 게이트:** 100~300개 블라인드 표본에서 문자/수식 OCR 정확도, 사람 가독성, 전체 파이프라인 시간과 실패율을 비교한 뒤 자동 적용 임계값을 확정한다.\n\n**총 예상은 1인 기준 약 2~3주**이며 법률 검토와 광범위한 Windows GPU 매트릭스는 제외한 추정이다. 초기에는 외부 설치형 엔진을 탐지해 사용하고, AGPL-3.0 의무를 검토한 뒤 번들 여부를 결정한다."
+      },
+      {
+        "id": "further-questions",
+        "type": "markdown",
+        "body": "## Further questions\n\n- 저해상도 자동 판정의 최적 임계값은 폭 900px인가, 콘텐츠별로 달라야 하는가?\n- Lite가 한글 작은 글자, 분수선, 회로도 기호에서 실제 OCR 정확도를 얼마나 높이는가?\n- Windows 사용자 GPU 분포에서 Vulkan 호환성과 처리시간 하위 10%는 어느 수준인가?\n- 외부 설치형, 앱 내 다운로드형, 완전 번들 중 어떤 AGPL 배포 방식이 제품 정책에 맞는가?"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "body": "## Caveats and assumptions\n\n- **공유 판단:** Share with caveats. PoC 착수 결정에는 충분하지만 전면 출시 판단에는 추가 표본이 필요하다.\n- 합성 표본 8건, 실제 crop 6건, 모델 파일럿 3건으로 표본이 작다.\n- 실제 crop에는 고해상도 정답 원본과 OCR/수식 의미 정답이 없어 구조 보존만 측정했다.\n- 시간·메모리는 Apple M4 한 대에서 측정했으며 Windows/NVIDIA/AMD 결과로 일반화할 수 없다.\n- API는 실제 호출하지 않았다. 가격은 2026년 7월 14일 공식 표를 사용했으며 지연·품질 비교는 미측정이다.\n- 전력비는 30 W, ₩200/kWh, 환율은 1 USD = ₩1,400의 계획 가정이다. 인건비·장비 감가·검수 비용은 제외했다.\n- Upscayl은 AGPL-3.0 프로젝트이므로 앱 번들·배포 방식은 별도 라이선스 검토가 필요하다."
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-14T12:00:00+09:00",
+    "status": "ready",
+    "datasets": {
+      "headline": [
+        {
+          "lite_median_seconds": 1.0016,
+          "lite_speedup_vs_standard": 11.3,
+          "standard_synthetic_fidelity": 92.36
+        }
+      ],
+      "quality": [
+        {
+          "method": "2단계",
+          "technical_fidelity": 76.62,
+          "edge_f1": 0.7605,
+          "ink_iou": 0.6251,
+          "median_seconds": 0.032,
+          "samples": 8,
+          "interpretation": "원형 보존 중심의 빠른 변환"
+        },
+        {
+          "method": "3단계",
+          "technical_fidelity": 64.06,
+          "edge_f1": 0.6162,
+          "ink_iou": 0.4426,
+          "median_seconds": 0.0796,
+          "samples": 8,
+          "interpretation": "장식 제거와 획 강화로 원본 대비 변화가 큼"
+        },
+        {
+          "method": "Upscayl Standard",
+          "technical_fidelity": 92.36,
+          "edge_f1": 0.993,
+          "ink_iou": 0.798,
+          "median_seconds": 5.029,
+          "samples": 8,
+          "interpretation": "저해상도 복원 충실도가 가장 높음"
+        }
+      ],
+      "latency": [
+        {
+          "method": "2단계",
+          "median_seconds": 0.0673,
+          "minutes_per_1000": 1.12,
+          "hours_per_10000": 0.19,
+          "sample_scope": "실제 crop 6건"
+        },
+        {
+          "method": "3단계",
+          "median_seconds": 0.1494,
+          "minutes_per_1000": 2.49,
+          "hours_per_10000": 0.42,
+          "sample_scope": "실제 crop 6건"
+        },
+        {
+          "method": "Upscayl Lite",
+          "median_seconds": 1.0016,
+          "minutes_per_1000": 16.69,
+          "hours_per_10000": 2.78,
+          "sample_scope": "모델 파일럿 3건"
+        },
+        {
+          "method": "Upscayl Standard",
+          "median_seconds": 11.0899,
+          "minutes_per_1000": 184.83,
+          "hours_per_10000": 30.81,
+          "sample_scope": "실제 crop 6건"
+        },
+        {
+          "method": "Upscayl Ultrasharp",
+          "median_seconds": 11.384,
+          "minutes_per_1000": 189.73,
+          "hours_per_10000": 31.62,
+          "sample_scope": "모델 파일럿 3건"
+        }
+      ],
+      "resources": [
+        {
+          "method": "2단계",
+          "median_seconds": 0.0673,
+          "minutes_per_1000": 1.12,
+          "memory": "미측정",
+          "asset_size": "추가 없음",
+          "recommended_role": "선명한 입력 / 가장 빠른 경로"
+        },
+        {
+          "method": "3단계",
+          "median_seconds": 0.1494,
+          "minutes_per_1000": 2.49,
+          "memory": "미측정",
+          "asset_size": "추가 없음",
+          "recommended_role": "현재 기본값 / 장식 제거·획 강화"
+        },
+        {
+          "method": "Upscayl Lite",
+          "median_seconds": 1.0016,
+          "minutes_per_1000": 16.69,
+          "memory": "약 141 MiB RSS",
+          "asset_size": "모델 약 2.3 MB",
+          "recommended_role": "저해상도 자동 보정 기본"
+        },
+        {
+          "method": "Upscayl Standard",
+          "median_seconds": 11.0899,
+          "minutes_per_1000": 184.83,
+          "memory": "약 443 MiB RSS",
+          "asset_size": "전체 모델 세트 약 171 MB",
+          "recommended_role": "수동 고품질 재처리"
+        },
+        {
+          "method": "Upscayl Ultrasharp",
+          "median_seconds": 11.384,
+          "minutes_per_1000": 189.73,
+          "memory": "미측정",
+          "asset_size": "전체 모델 세트에 포함",
+          "recommended_role": "선화·수식 예외 비교"
+        }
+      ],
+      "costs": [
+        {
+          "option": "Upscayl Lite (local)",
+          "images": 1000,
+          "usd_output_cost": 0.0,
+          "krw_output_cost": 1.67,
+          "basis": "30 W·₩200/kWh 전력만; 장비·인건비 제외",
+          "source_id": "local-benchmark"
+        },
+        {
+          "option": "Upscayl Standard (local)",
+          "images": 1000,
+          "usd_output_cost": 0.0,
+          "krw_output_cost": 18.48,
+          "basis": "30 W·₩200/kWh 전력만; 장비·인건비 제외",
+          "source_id": "local-benchmark"
+        },
+        {
+          "option": "Gemini 3.1 Flash Image 1K",
+          "images": 1000,
+          "usd_output_cost": 67.0,
+          "krw_output_cost": 93800,
+          "basis": "출력 비용; 계획 환율 ₩1,400/USD",
+          "source_id": "google-pricing"
+        },
+        {
+          "option": "Gemini 3.1 Flash Image 2K",
+          "images": 1000,
+          "usd_output_cost": 101.0,
+          "krw_output_cost": 141400,
+          "basis": "출력 비용; 계획 환율 ₩1,400/USD",
+          "source_id": "google-pricing"
+        },
+        {
+          "option": "GPT Image 2 high landscape",
+          "images": 1000,
+          "usd_output_cost": 165.0,
+          "krw_output_cost": 231000,
+          "basis": "출력만; 입력 비용 별도",
+          "source_id": "openai-image-guide"
+        },
+        {
+          "option": "GPT Image 2 high square",
+          "images": 1000,
+          "usd_output_cost": 211.0,
+          "krw_output_cost": 295400,
+          "basis": "출력만; 입력 비용 별도",
+          "source_id": "openai-image-guide"
+        }
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "local-benchmark",
+      "label": "EDB Upscayl local benchmark",
+      "path": "docs/upscayl_benchmark/summary.json",
+      "query": {
+        "engine": "DuckDB over Python 3.14 benchmark outputs",
+        "query": "python scripts/benchmark_upscayl_quality.py --output-dir docs/upscayl_benchmark",
+        "sql": "SELECT 'synthetic' AS dataset, case_id AS item_id, kind AS content_type, input_width, NULL::INTEGER AS input_height, NULL::VARCHAR AS model, method, seconds, edge_f1, ink_iou, alpha_similarity, sharpness, technical_fidelity_score, foreground_ratio FROM read_csv_auto('docs/upscayl_benchmark/synthetic_results.csv') UNION ALL SELECT 'real' AS dataset, sample_id AS item_id, subject AS content_type, input_width, input_height, NULL::VARCHAR AS model, method, seconds, edge_f1, ink_iou, alpha_similarity, sharpness, technical_fidelity_score, foreground_ratio FROM read_csv_auto('docs/upscayl_benchmark/real_results.csv') UNION ALL SELECT 'model_pilot' AS dataset, sample_id AS item_id, subject AS content_type, NULL::INTEGER AS input_width, NULL::INTEGER AS input_height, model, method, seconds, edge_f1, ink_iou, alpha_similarity, sharpness, technical_fidelity_score, foreground_ratio FROM read_csv_auto('docs/upscayl_benchmark/model_pilot_results.csv')",
+        "description": "Synthetic ground-truth and anonymized real-crop benchmark aggregated from reviewed CSV outputs.",
+        "executed_at": "2026-07-14T12:00:00+09:00",
+        "language": "python",
+        "filters": [
+          "Target width 1600 px",
+          "Synthetic: 8 cases (4 content types × 2 source widths)",
+          "Real crops: 6 cases; model pilot: 3 cases",
+          "Local image-transform runtime only; recognition and publishing excluded"
+        ],
+        "metric_definitions": [
+          "Technical fidelity = 40% tolerant edge F1 + 35% ink IoU + 25% alpha similarity.",
+          "Real-crop score measures structural retention against the input crop, not subjective quality or semantic correctness.",
+          "Sequential minutes = measured median seconds × image count ÷ 60."
+        ],
+        "tables_used": [
+          "docs/upscayl_benchmark/synthetic_results.csv",
+          "docs/upscayl_benchmark/real_results.csv",
+          "docs/upscayl_benchmark/model_pilot_results.csv"
+        ]
+      }
+    },
+    {
+      "id": "cost-analysis",
+      "label": "Local and API cost scenario",
+      "query": {
+        "engine": "DuckDB",
+        "sql": "SELECT * FROM (VALUES ('Upscayl Lite (local)', 1000, 0.0, 1.67, '30 W and KRW 200/kWh; hardware and labor excluded'), ('Upscayl Standard (local)', 1000, 0.0, 18.48, '30 W and KRW 200/kWh; hardware and labor excluded'), ('Gemini 3.1 Flash Image 1K', 1000, 67.0, 93800.0, 'output only; KRW 1,400/USD'), ('Gemini 3.1 Flash Image 2K', 1000, 101.0, 141400.0, 'output only; KRW 1,400/USD'), ('GPT Image 2 high landscape', 1000, 165.0, 231000.0, 'output only; input cost excluded'), ('GPT Image 2 high square', 1000, 211.0, 295400.0, 'output only; input cost excluded')) AS costs(option, images, usd_output_cost, krw_output_cost, basis)",
+        "description": "Scenario calculation combining measured local runtime assumptions with official output price tables.",
+        "executed_at": "2026-07-14T12:00:00+09:00",
+        "filters": [
+          "1,000 images",
+          "Standard API pricing",
+          "Output costs only",
+          "Planning exchange rate KRW 1,400/USD"
+        ],
+        "metric_definitions": [
+          "Local electricity KRW = 30 W × measured median seconds × 1,000 ÷ 3,600,000 × KRW 200/kWh.",
+          "API KRW = official USD output price per image × 1,000 × KRW 1,400/USD."
+        ],
+        "tables_used": [
+          "docs/upscayl_benchmark/summary.json",
+          "Google Gemini API pricing",
+          "OpenAI image generation guide"
+        ]
+      }
+    },
+    {
+      "id": "google-pricing",
+      "label": "Google Gemini API pricing",
+      "href": "https://ai.google.dev/gemini-api/docs/pricing",
+      "query": {
+        "engine": "Official documentation",
+        "description": "Gemini 3.1 Flash Image standard output pricing reviewed July 14, 2026.",
+        "executed_at": "2026-07-14T12:00:00+09:00",
+        "filters": [
+          "Standard tier",
+          "Image output only"
+        ],
+        "metric_definitions": [
+          "1,000-image cost = official per-image output price × 1,000."
+        ]
+      }
+    },
+    {
+      "id": "openai-pricing",
+      "label": "OpenAI API pricing",
+      "href": "https://developers.openai.com/api/docs/pricing",
+      "query": {
+        "engine": "Official documentation",
+        "description": "GPT Image 2 token pricing reviewed July 14, 2026.",
+        "executed_at": "2026-07-14T12:00:00+09:00",
+        "filters": [
+          "Standard tier"
+        ]
+      }
+    },
+    {
+      "id": "openai-image-guide",
+      "label": "OpenAI image generation guide",
+      "href": "https://developers.openai.com/api/docs/guides/image-generation",
+      "query": {
+        "engine": "Official documentation",
+        "description": "GPT Image 2 output cost table and model limitations reviewed July 14, 2026.",
+        "executed_at": "2026-07-14T12:00:00+09:00",
+        "filters": [
+          "High-quality output",
+          "1024 px square or landscape"
+        ],
+        "metric_definitions": [
+          "1,000-image cost uses the guide's output cost and excludes input charges."
+        ]
+      }
+    },
+    {
+      "id": "upscayl-upstream",
+      "label": "Upscayl upstream repository",
+      "href": "https://github.com/upscayl/upscayl",
+      "query": {
+        "engine": "GitHub repository",
+        "description": "Upstream project, CLI/model assets, and AGPL-3.0 licensing context.",
+        "executed_at": "2026-07-14T12:00:00+09:00"
+      }
+    }
+  ]
+}

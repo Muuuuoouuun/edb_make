@@ -2396,6 +2396,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             def fake_build_records(received_entries, render_template, **kwargs):
                 captured.setdefault("render_page_counts", []).append(render_template.board_page_count)
                 captured["reserve_image_layout_height"] = kwargs.get("reserve_image_layout_height")
+                captured["expand_board_capacity"] = kwargs.get("expand_board_capacity")
                 render_template.board_page_count = 58
                 return (
                     [b"record"] * len(received_entries),
@@ -2435,9 +2436,45 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
 
             self.assertEqual([50], captured["render_page_counts"])
             self.assertFalse(captured["reserve_image_layout_height"])
+            self.assertFalse(captured["expand_board_capacity"])
             self.assertEqual([50], captured["page_count_hints"])
             self.assertEqual(50, parts[0]["pageCountHint"])
             self.assertEqual(50, parts[0]["page_count_hint"])
+
+    def test_local_classin_split_writer_rejects_mismatched_record_page_scale(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            entries = [SimpleNamespace(problem_id="p0")]
+            template = app_server.LayoutTemplate(name="academy-default", board_page_count=63)
+
+            with (
+                patch.object(app_server, "split_problem_entries_for_classin_page_limit", return_value=[entries]),
+                patch.object(
+                    app_server,
+                    "build_records",
+                    return_value=(
+                        [b"record"],
+                        [{
+                            "problem_id": "p0",
+                            "record_bottom_y_pages": 2.0,
+                            "record_page_count_hint": 63,
+                        }],
+                        4,
+                    ),
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "different page scale"):
+                    app_server.write_classin_limited_edb_files(
+                        entries,
+                        template,
+                        root,
+                        "bad-scale.edb",
+                        record_mode="image-only",
+                        text_confidence_threshold=0.78,
+                        dark_board=True,
+                        board_theme=app_server.DEFAULT_BOARD_THEME,
+                        crop_format=app_server.CROP_FORMAT_V1,
+                    )
 
     def test_session_publish_uses_requested_name_and_splits_over_fifty_pages(self):
         with TemporaryDirectory() as raw_tmp:

@@ -148,6 +148,10 @@ def split_problem_entries_for_classin_page_limit(*args: Any, **kwargs: Any) -> A
     return _lazy_call("build_problem_board_edb", "split_problem_entries_for_classin_page_limit", *args, **kwargs)
 
 
+def _validate_record_page_count_hints(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_validate_record_page_count_hints", *args, **kwargs)
+
+
 def write_classin_limited_edb_files(*args: Any, **kwargs: Any) -> Any:
     return _write_classin_limited_edb_files_local(*args, **kwargs)
 
@@ -218,6 +222,10 @@ def normalize_image_provider(*args: Any, **kwargs: Any) -> Any:
 
 def reconstruct_problem_image(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("image_reconstruction_backend", "reconstruct_problem_image", *args, **kwargs)
+
+
+def build_content_safe_upscale(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("image_reconstruction_backend", "build_content_safe_upscale", *args, **kwargs)
 
 
 def load_env_local() -> None:
@@ -1511,7 +1519,12 @@ def _write_classin_limited_edb_files_local(
                 board_theme=board_theme,
                 crop_format=crop_format,
                 reserve_image_layout_height=False,
+                expand_board_capacity=False,
             )
+        _validate_record_page_count_hints(
+            part_placements,
+            expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
+        )
         return {
             "entries": list(chunk_entries),
             "records": part_records,
@@ -1999,7 +2012,18 @@ def _session_publish_blocking_preflight(
     actionable_flags = set(review_summary.get("actionableRiskFlagCounts") or {})
     duplicate_groups: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
-    issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
+    session_payload = session or {}
+    template_payload = session_payload.get("template") if isinstance(session_payload.get("template"), dict) else {}
+    template_metadata = (
+        template_payload.get("metadata") if isinstance(template_payload.get("metadata"), dict) else {}
+    )
+    page_as_is = (
+        str(session_payload.get("input_intent") or session_payload.get("inputIntent") or "").strip().lower()
+        == "page-as-is"
+        or str(template_metadata.get("placement_mode") or "").strip().lower() == "continuous-page-as-is"
+    )
+    if not page_as_is:
+        issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
     issues.extend(
@@ -4734,6 +4758,55 @@ def _payload_bool(payload: dict[str, Any], camel_key: str, snake_key: str, defau
     return bool(raw)
 
 
+_AI_IMAGE_REVIEW_FLAGS = {
+    "ai_image_reconstructed_check_text",
+    "ai_image_formula_loss_suspected",
+    "ai_image_content_mismatch_suspected",
+    "ai_image_reconstruction_failed",
+}
+
+
+def _result_content_preservation(result: Any) -> dict[str, Any]:
+    postprocess = result.postprocess if isinstance(getattr(result, "postprocess", None), dict) else {}
+    preservation = postprocess.get("content_preservation")
+    return preservation if isinstance(preservation, dict) else {}
+
+
+def _result_passes_content_gate(result: Any) -> bool:
+    preservation = _result_content_preservation(result)
+    if (
+        str(getattr(result, "provider", "") or "") == "local"
+        and str(getattr(result, "model", "") or "") == "content-safe-lanczos"
+    ):
+        return not preservation.get("review_required")
+    return preservation.get("status") == "pass" and not preservation.get("review_required")
+
+
+def _content_recovery_prompt(prompt: str, preservation: dict[str, Any]) -> str:
+    reasons = ", ".join(str(value) for value in (preservation.get("reasons") or []) if value)
+    return (
+        f"{prompt.strip()}\n\n"
+        "INTERNAL QUALITY RETRY: The prior candidate failed source-content preservation checks"
+        f"{f' ({reasons})' if reasons else ''}. Rebuild only from the supplied original source. "
+        "Copy every equation row and every glyph one by one before improving visual quality. "
+        "Do not omit, reinterpret, simplify, reflow, or replace any formula, fraction, exponent, "
+        "subscript, operator, option label, unit, graph label, or Korean character."
+    )
+
+
+def _image_attempt_summary(result: Any, *, attempt: int, mode: str) -> dict[str, Any]:
+    preservation = _result_content_preservation(result)
+    return {
+        "attempt": attempt,
+        "mode": mode,
+        "status": "pass" if _result_passes_content_gate(result) else "rejected",
+        "provider": str(getattr(result, "provider", "") or ""),
+        "model": str(getattr(result, "model", "") or ""),
+        "latencyMs": int(getattr(result, "latency_ms", 0) or 0),
+        "contentPreservation": preservation,
+    }
+
+
 def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     provider = normalize_image_provider(
         payload.get("provider")
@@ -4785,6 +4858,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         safe_problem = sanitize_output_dir_name(problem_id) or "problem"
         safe_model = sanitize_output_dir_name(model) or provider
         output_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}.png"
+        attempts: list[dict[str, Any]] = []
+        result: Any | None = None
+        delivery_mode = "ai_primary"
+        auto_recovered = False
+        final_error: Exception | None = None
         try:
             result = reconstruct_problem_image(
                 source_path,
@@ -4799,7 +4877,75 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 transparent_background=transparent_background,
                 sharpen=sharpen,
             )
-        except Exception as exc:  # noqa: BLE001 - surface the provider message to the UI
+            attempts.append(_image_attempt_summary(result, attempt=1, mode="ai_primary"))
+        except Exception as exc:  # noqa: BLE001 - automatically fall back below
+            final_error = exc
+            attempts.append({
+                "attempt": 1,
+                "mode": "ai_primary",
+                "status": "failed",
+                "provider": provider,
+                "model": model,
+                "error": str(exc),
+            })
+
+        if result is not None and not _result_passes_content_gate(result):
+            retry_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}_retry.png"
+            retry_prompt = _content_recovery_prompt(prompt, _result_content_preservation(result))
+            try:
+                retry_result = reconstruct_problem_image(
+                    source_path,
+                    retry_path,
+                    api_key=api_key,
+                    provider=provider,
+                    model=model,
+                    prompt=retry_prompt,
+                    quality=quality,
+                    size=size,
+                    timeout_ms=timeout_ms,
+                    transparent_background=transparent_background,
+                    sharpen=sharpen,
+                )
+                attempts.append(_image_attempt_summary(retry_result, attempt=2, mode="ai_content_retry"))
+                if _result_passes_content_gate(retry_result):
+                    result = retry_result
+                    delivery_mode = "ai_content_retry"
+                    auto_recovered = True
+            except Exception as exc:  # noqa: BLE001 - deterministic fallback remains available
+                final_error = exc
+                attempts.append({
+                    "attempt": 2,
+                    "mode": "ai_content_retry",
+                    "status": "failed",
+                    "provider": provider,
+                    "model": model,
+                    "error": str(exc),
+                })
+
+        if result is None or not _result_passes_content_gate(result):
+            fallback_path = output_dir / f"{safe_problem}_{stamp}_content_safe.png"
+            try:
+                fallback_result = build_content_safe_upscale(
+                    source_path,
+                    fallback_path,
+                    transparent_background=transparent_background,
+                    sharpen=sharpen,
+                )
+                attempts.append(
+                    _image_attempt_summary(
+                        fallback_result,
+                        attempt=len(attempts) + 1,
+                        mode="content_safe_fallback",
+                    )
+                )
+                result = fallback_result
+                delivery_mode = "content_safe_fallback"
+                auto_recovered = True
+            except Exception as exc:  # noqa: BLE001 - report only after all automatic recovery failed
+                final_error = exc
+
+        if result is None:
+            exc = final_error or RuntimeError("image reconstruction failed without a result")
             flags = list(problem.get("riskFlags") or [])
             flags.append("ai_image_reconstruction_failed")
             problem["riskFlags"] = list(dict.fromkeys(str(flag) for flag in flags if flag))
@@ -4810,6 +4956,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 "model": model,
                 "error": str(exc),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "attempts": attempts,
             }
             summaries.append({
                 "problemId": problem_id,
@@ -4817,6 +4964,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 "provider": provider,
                 "model": model,
                 "error": str(exc),
+                "attempts": attempts,
             })
             continue
 
@@ -4828,10 +4976,39 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         problem["step"] = "s3"
         problem["processingStep"] = "s3"
         problem["processing_step"] = "s3"
-        flags = [str(flag) for flag in (problem.get("riskFlags") or []) if flag]
-        flags.append("ai_image_reconstructed_check_text")
+        flags = [
+            str(flag)
+            for flag in (problem.get("riskFlags") or [])
+            if flag and str(flag) not in _AI_IMAGE_REVIEW_FLAGS
+        ]
+        postprocess = result.postprocess or {}
+        content_preservation = postprocess.get("content_preservation")
+        if not isinstance(content_preservation, dict):
+            content_preservation = {}
+        preservation_reasons = {
+            str(reason or "").strip()
+            for reason in (content_preservation.get("reasons") or [])
+            if str(reason or "").strip()
+        }
+        loss_reasons = {
+            "output_nearly_empty",
+            "source_ink_missing",
+            "localized_ink_loss",
+            "formula_row_loss",
+            "low_source_coverage",
+        }
+        subject = str(problem.get("subject") or "").strip().lower()
+        formula_loss_suspected = "formula_row_loss" in preservation_reasons or (
+            subject in {"math", "science"} and bool(preservation_reasons.intersection(loss_reasons))
+        )
+        if content_preservation.get("review_required") and formula_loss_suspected:
+            flags.append("ai_image_formula_loss_suspected")
+        elif content_preservation.get("review_required"):
+            flags.append("ai_image_content_mismatch_suspected")
+        elif not _result_passes_content_gate(result) and delivery_mode != "content_safe_fallback":
+            flags.append("ai_image_reconstructed_check_text")
         problem["riskFlags"] = list(dict.fromkeys(flags))
-        problem["reviewStatus"] = "check_needed"
+        problem["reviewStatus"] = "check_needed" if problem["riskFlags"] else "normal"
         problem["aiImageReconstruction"] = {
             **result.to_metadata(),
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -4839,6 +5016,10 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "size": size,
             "transparent_background": transparent_background,
             "sharpen": sharpen,
+            "contentPreservation": content_preservation,
+            "deliveryMode": delivery_mode,
+            "autoRecovered": auto_recovered,
+            "attempts": attempts,
         }
         summaries.append({
             "problemId": problem_id,
@@ -4847,7 +5028,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "model": result.model,
             "outputPath": uri,
             "latencyMs": result.latency_ms,
-            "postprocess": result.postprocess or {},
+            "postprocess": postprocess,
+            "contentPreservation": content_preservation,
+            "deliveryMode": delivery_mode,
+            "autoRecovered": auto_recovered,
+            "attempts": attempts,
         })
 
     session["ai_image_reconstruction_summary"] = summaries

@@ -1,0 +1,10 @@
+sample_id,subject,model,method,seconds,edge_f1,ink_iou,alpha_similarity,sharpness,technical_fidelity_score,foreground_ratio
+K2,korean,upscayl-lite-4x,upscayl-lite-4x,1.0016,0.99675,0.7281,0.98042,1664.585,89.86,0.068581
+K2,korean,upscayl-standard-4x,upscayl-standard-4x,11.3217,0.99677,0.69943,0.97852,1676.927,88.81,0.065838
+K2,korean,ultrasharp-4x,ultrasharp-4x,11.384,0.9968,0.74014,0.98078,1600.413,90.3,0.06979
+M2,math,upscayl-lite-4x,upscayl-lite-4x,0.7697,0.99535,0.80704,0.98734,1412.231,92.74,0.046488
+M2,math,upscayl-standard-4x,upscayl-standard-4x,9.2232,0.99531,0.77988,0.98633,1422.475,91.77,0.044942
+M2,math,ultrasharp-4x,ultrasharp-4x,9.2206,0.99537,0.81192,0.9876,1330.159,92.92,0.046929
+S2,science,upscayl-lite-4x,upscayl-lite-4x,1.1431,0.99991,0.7434,0.97371,2219.47,90.36,0.087901
+S2,science,upscayl-standard-4x,upscayl-standard-4x,13.6878,0.99989,0.71638,0.9717,2213.719,89.36,0.084674
+S2,science,ultrasharp-4x,ultrasharp-4x,13.7356,0.9999,0.74965,0.97367,2120.776,90.58,0.088739
