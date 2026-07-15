@@ -1,3 +1,6 @@
+import base64
+import io
+import json
 import os
 import unittest
 from pathlib import Path
@@ -8,10 +11,13 @@ from PIL import Image
 
 import app_server
 import build_problem_board_edb
+import image_reconstruction_backend as image_backend
 from image_reconstruction_backend import (
     DEFAULT_GEMINI_IMAGE_MODEL,
     DEFAULT_OPENAI_IMAGE_MODEL,
     ImageReconstructionResult,
+    analyze_reconstruction_content_preservation,
+    build_content_safe_upscale,
     clean_problem_image_transparency,
     postprocess_reconstructed_problem_image,
 )
@@ -63,10 +69,19 @@ class TestImageReconstructionMutation(unittest.TestCase):
             prompt=kwargs.get("prompt") or "",
             source_path=Path(source_path),
             latency_ms=12,
-            postprocess={"status": "applied", "transparent_ratio": 1.0},
+            postprocess={
+                "status": "applied",
+                "transparent_ratio": 1.0,
+                "content_preservation": {
+                    "status": "pass",
+                    "review_required": False,
+                    "severity": "none",
+                    "reasons": [],
+                },
+            },
         )
 
-    def test_enhance_image_defaults_to_gemini_and_marks_for_review(self):
+    def test_enhance_image_defaults_to_gemini_without_user_visible_review(self):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             session = self._build_session(root)
@@ -78,8 +93,10 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertNotEqual(problem["imagePath"], problem["originalImagePath"])
             self.assertEqual(problem["boardRenderPath"], problem["imagePath"])
             self.assertEqual(problem["processingStep"], "s3")
-            self.assertEqual(problem["reviewStatus"], "check_needed")
-            self.assertIn("ai_image_reconstructed_check_text", problem["riskFlags"])
+            self.assertEqual(problem["reviewStatus"], "normal")
+            self.assertNotIn("ai_image_reconstructed_check_text", problem["riskFlags"])
+            self.assertEqual(problem["aiImageReconstruction"]["deliveryMode"], "ai_primary")
+            self.assertFalse(problem["aiImageReconstruction"]["autoRecovered"])
             self.assertEqual(problem["aiImageReconstruction"]["provider"], "gemini")
             self.assertEqual(problem["aiImageReconstruction"]["model"], DEFAULT_GEMINI_IMAGE_MODEL)
             self.assertTrue(problem["aiImageReconstruction"]["transparent_background"])
@@ -95,6 +112,93 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertEqual(summary[0]["status"], "applied")
             self.assertEqual(summary[0]["provider"], "gemini")
             self.assertEqual(summary[0]["problemId"], "problem-1")
+
+    def test_gemini_nano_banana_2k_request_sets_native_image_size(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "output.png"
+            Image.new("RGB", (48, 72), "white").save(source_path)
+            generated = io.BytesIO()
+            Image.new("RGBA", (96, 144), (255, 255, 255, 255)).save(generated, format="PNG")
+            response_payload = {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "inlineData": {
+                                "mimeType": "image/png",
+                                "data": base64.b64encode(generated.getvalue()).decode("ascii"),
+                            }
+                        }]
+                    }
+                }]
+            }
+            captured = {}
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+                def read(self):
+                    return json.dumps(response_payload).encode("utf-8")
+
+            def fake_urlopen(req, **_kwargs):
+                captured["url"] = req.full_url
+                captured["payload"] = json.loads(req.data.decode("utf-8"))
+                return FakeResponse()
+
+            with patch.object(image_backend.request, "urlopen", side_effect=fake_urlopen):
+                result = image_backend.reconstruct_problem_image(
+                    source_path,
+                    output_path,
+                    api_key="test-key",
+                    provider="nano-banana-2",
+                    model="nano-banana-2",
+                    size="2k",
+                    transparent_background=False,
+                    sharpen=False,
+                )
+
+            self.assertEqual("gemini-3.1-flash-image", result.model)
+            self.assertIn("/v1beta/models/gemini-3.1-flash-image:generateContent", captured["url"])
+            self.assertEqual(
+                "IMAGE_SIZE_TWO_K",
+                captured["payload"]["generationConfig"]["responseFormat"]["image"]["imageSize"],
+            )
+            self.assertEqual("2K", result.postprocess["requested_image_size"])
+
+    def test_enhance_image_retries_content_loss_and_silently_recovers(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            calls = 0
+
+            def reconstruct_then_recover(source_path, output_path, **kwargs):
+                nonlocal calls
+                calls += 1
+                result = self._fake_reconstruct(source_path, output_path, **kwargs)
+                if calls == 1:
+                    result.postprocess["content_preservation"] = {
+                        "status": "review_required",
+                        "review_required": True,
+                        "severity": "medium",
+                        "reasons": ["formula_row_loss"],
+                    }
+                return result
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=reconstruct_then_recover) as mock_reconstruct:
+                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+
+            problem = updated["problems"][0]
+            self.assertEqual(2, mock_reconstruct.call_count)
+            self.assertEqual("normal", problem["reviewStatus"])
+            self.assertEqual([], problem["riskFlags"])
+            self.assertEqual("ai_content_retry", problem["aiImageReconstruction"]["deliveryMode"])
+            self.assertTrue(problem["aiImageReconstruction"]["autoRecovered"])
+            self.assertEqual(2, len(problem["aiImageReconstruction"]["attempts"]))
 
     def test_missing_gemini_key_rejects_before_mutation(self):
         os.environ.pop("GEMINI_API_KEY", None)
@@ -125,6 +229,198 @@ class TestImageReconstructionMutation(unittest.TestCase):
             called_kwargs = mock_reconstruct.call_args.kwargs
             self.assertEqual(called_kwargs["provider"], "openai")
             self.assertEqual(called_kwargs["model"], DEFAULT_OPENAI_IMAGE_MODEL)
+
+    def test_enhance_image_adds_specific_formula_loss_review_flag(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+
+            def reconstruct_with_loss(source_path, output_path, **kwargs):
+                Image.new("RGBA", (640, 360), (0, 0, 0, 0)).save(output_path)
+                return ImageReconstructionResult(
+                    output_path=Path(output_path),
+                    provider="gemini",
+                    model=DEFAULT_GEMINI_IMAGE_MODEL,
+                    prompt=kwargs.get("prompt") or "",
+                    source_path=Path(source_path),
+                    latency_ms=12,
+                    postprocess={
+                        "status": "applied",
+                        "content_preservation": {
+                            "status": "review_required",
+                            "review_required": True,
+                            "severity": "high",
+                            "reasons": ["formula_row_loss", "localized_ink_loss"],
+                        },
+                    },
+                )
+
+            with (
+                patch.object(app_server, "reconstruct_problem_image", side_effect=reconstruct_with_loss),
+                patch.object(app_server, "build_content_safe_upscale", side_effect=reconstruct_with_loss),
+            ):
+                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+
+            problem = updated["problems"][0]
+            self.assertIn("ai_image_formula_loss_suspected", problem["riskFlags"])
+            self.assertEqual(
+                "review_required",
+                problem["aiImageReconstruction"]["contentPreservation"]["status"],
+            )
+            self.assertEqual(
+                "high",
+                updated["ai_image_reconstruction_summary"][0]["contentPreservation"]["severity"],
+            )
+            self.assertEqual("content_safe_fallback", problem["aiImageReconstruction"]["deliveryMode"])
+
+    def test_enhance_image_uses_content_safe_fallback_after_two_rejected_generations(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+
+            def rejected_reconstruct(source_path, output_path, **kwargs):
+                result = self._fake_reconstruct(source_path, output_path, **kwargs)
+                result.postprocess["content_preservation"] = {
+                    "status": "review_required",
+                    "review_required": True,
+                    "severity": "medium",
+                    "reasons": ["localized_ink_loss"],
+                }
+                return result
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=rejected_reconstruct) as reconstruct:
+                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+
+            problem = updated["problems"][0]
+            self.assertEqual(2, reconstruct.call_count)
+            self.assertEqual("normal", problem["reviewStatus"])
+            self.assertEqual([], problem["riskFlags"])
+            self.assertEqual("content_safe_fallback", problem["aiImageReconstruction"]["deliveryMode"])
+            self.assertEqual("local", problem["aiImageReconstruction"]["provider"])
+            self.assertTrue(problem["aiImageReconstruction"]["autoRecovered"])
+
+    def test_enhance_image_hides_provider_failure_with_content_safe_fallback(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=RuntimeError("provider timeout")):
+                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+
+            problem = updated["problems"][0]
+            self.assertEqual("normal", problem["reviewStatus"])
+            self.assertEqual([], problem["riskFlags"])
+            self.assertEqual("content_safe_fallback", problem["aiImageReconstruction"]["deliveryMode"])
+            self.assertEqual("local", problem["aiImageReconstruction"]["provider"])
+            self.assertEqual("failed", problem["aiImageReconstruction"]["attempts"][0]["status"])
+
+    def test_content_safe_fallback_preserves_formula_ink(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "safe.png"
+            source = Image.new("RGB", (240, 120), "white")
+            pixels = source.load()
+            for y in (35, 70, 95):
+                for x in range(25, 215):
+                    pixels[x, y] = (0, 0, 0)
+            source.save(source_path)
+
+            result = build_content_safe_upscale(source_path, output_path)
+
+            self.assertEqual("local", result.provider)
+            self.assertEqual("content-safe-lanczos", result.model)
+            with Image.open(output_path) as output:
+                self.assertEqual((480, 240), output.size)
+            self.assertEqual("pass", result.postprocess["content_preservation"]["status"])
+
+    def test_content_preservation_passes_scaled_equivalent_formula(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "output.png"
+            source = Image.new("RGB", (320, 180), "white")
+            pixels = source.load()
+            for x in range(35, 285):
+                pixels[x, 55] = (0, 0, 0)
+                pixels[x, 120] = (0, 0, 0)
+            for y in range(38, 140):
+                pixels[90, y] = (0, 0, 0)
+                pixels[230, y] = (0, 0, 0)
+            source.save(source_path)
+            source.resize((640, 360), Image.Resampling.NEAREST).save(output_path)
+
+            stats = analyze_reconstruction_content_preservation(source_path, output_path)
+
+            self.assertEqual("pass", stats["status"])
+            self.assertFalse(stats["review_required"])
+
+    def test_content_preservation_catches_missing_formula_row(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "output.png"
+            source = Image.new("RGB", (320, 180), "white")
+            pixels = source.load()
+            for row_y in (35, 85, 135):
+                for x in range(30, 290):
+                    pixels[x, row_y] = (0, 0, 0)
+                    if x % 20 < 9:
+                        pixels[x, row_y + 1] = (0, 0, 0)
+            source.save(source_path)
+            output = source.copy()
+            output_pixels = output.load()
+            for y in range(128, 143):
+                for x in range(20, 300):
+                    output_pixels[x, y] = (255, 255, 255)
+            output.resize((640, 360), Image.Resampling.NEAREST).save(output_path)
+
+            stats = analyze_reconstruction_content_preservation(source_path, output_path)
+
+            self.assertEqual("review_required", stats["status"])
+            self.assertTrue(stats["review_required"])
+            self.assertTrue(
+                {"formula_row_loss", "localized_ink_loss", "source_ink_missing"}.intersection(stats["reasons"])
+            )
+
+    def test_content_preservation_tolerates_small_layout_shift(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "output.png"
+            source = Image.new("RGB", (320, 180), "white")
+            pixels = source.load()
+            for row_y in (45, 90, 135):
+                for x in range(35, 285):
+                    pixels[x, row_y] = (0, 0, 0)
+            source.save(source_path)
+            scaled = source.resize((640, 360), Image.Resampling.NEAREST)
+            shifted = Image.new("RGB", scaled.size, "white")
+            shifted.paste(scaled.crop((0, 0, 632, 354)), (8, 6))
+            shifted.save(output_path)
+
+            stats = analyze_reconstruction_content_preservation(source_path, output_path)
+
+            self.assertEqual("pass", stats["status"])
+            self.assertFalse(stats["review_required"])
+
+    def test_content_preservation_catches_blank_reconstruction(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source_path = root / "source.png"
+            output_path = root / "output.png"
+            source = Image.new("RGB", (200, 100), "white")
+            pixels = source.load()
+            for x in range(20, 180):
+                pixels[x, 50] = (0, 0, 0)
+            source.save(source_path)
+            Image.new("RGBA", (400, 200), (0, 0, 0, 0)).save(output_path)
+
+            stats = analyze_reconstruction_content_preservation(source_path, output_path)
+
+            self.assertEqual("review_required", stats["status"])
+            self.assertEqual("high", stats["severity"])
+            self.assertIn("output_nearly_empty", stats["reasons"])
 
     def test_postprocess_removes_white_background_without_erasing_dark_text(self):
         with TemporaryDirectory() as raw_tmp:

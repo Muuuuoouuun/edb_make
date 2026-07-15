@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 
 
 OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits"
-GEMINI_IMAGE_API_BASE = "https://generativelanguage.googleapis.com/v1/models"
+GEMINI_IMAGE_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
 DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
@@ -28,6 +28,7 @@ DEFAULT_IMAGE_SIZE = "auto"
 DEFAULT_RECONSTRUCTION_UPSCALE_FACTOR = 2.0
 DEFAULT_RECONSTRUCTION_MAX_PIXELS = 16_000_000
 DEFAULT_TRANSPARENT_INK_RGB = (248, 248, 246)
+CONTENT_PRESERVATION_CANVAS_SIZE = 192
 
 
 DEFAULT_RECONSTRUCTION_PROMPT = """Edit the provided exam-problem crop into a clean high-resolution transparent PNG.
@@ -45,6 +46,7 @@ Improve only visual quality:
 - Remove blur, scanner noise, paper texture, compression artifacts, and low-resolution jagged edges.
 - Output chalk-white ink/lines on a fully transparent alpha background. The background must be transparent, not black, white, gray, or checkerboard.
 - Keep diagrams and tables faithful to the original geometry.
+- Before returning the image, compare it against the source once more and make sure no equation row, fraction, exponent, subscript, operator, option, or diagram label is missing.
 """
 
 
@@ -128,6 +130,38 @@ def normalize_image_model(provider: str | None, model: str | None) -> str:
     return value
 
 
+def normalize_gemini_image_size(size: str | None) -> str | None:
+    value = str(size or "auto").strip().upper()
+    aliases = {
+        "AUTO": None,
+        "DEFAULT": None,
+        "512": "512",
+        "512PX": "512",
+        "0.5K": "512",
+        "1K": "1K",
+        "1024": "1K",
+        "1024PX": "1K",
+        "2K": "2K",
+        "2048": "2K",
+        "2048PX": "2K",
+        "4K": "4K",
+        "4096": "4K",
+        "4096PX": "4K",
+    }
+    if value not in aliases:
+        raise ValueError("Gemini image size must be one of auto, 512, 1K, 2K, or 4K")
+    return aliases[value]
+
+
+def _gemini_v1beta_image_size(image_size: str) -> str:
+    return {
+        "512": "IMAGE_SIZE_FIVE_TWELVE",
+        "1K": "IMAGE_SIZE_ONE_K",
+        "2K": "IMAGE_SIZE_TWO_K",
+        "4K": "IMAGE_SIZE_FOUR_K",
+    }[image_size]
+
+
 def reconstruct_problem_image(
     source_path: str | Path,
     output_path: str | Path,
@@ -151,6 +185,7 @@ def reconstruct_problem_image(
             api_key=api_key,
             model=normalized_model,
             prompt=prompt,
+            size=size,
             timeout_ms=timeout_ms,
             transparent_background=transparent_background,
             sharpen=sharpen,
@@ -169,6 +204,50 @@ def reconstruct_problem_image(
     )
 
 
+def build_content_safe_upscale(
+    source_path: str | Path,
+    output_path: str | Path,
+    *,
+    upscale_factor: float = DEFAULT_RECONSTRUCTION_UPSCALE_FACTOR,
+    transparent_background: bool = True,
+    sharpen: bool = True,
+) -> ImageReconstructionResult:
+    """Build a deterministic upscale that cannot invent or omit glyphs."""
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - Pillow is a runtime dependency
+        raise RuntimeError("Pillow is required for content-safe upscaling") from exc
+
+    source = Path(source_path)
+    output = Path(output_path)
+    if not source.exists():
+        raise FileNotFoundError(f"source image not found: {source}")
+    started_at = time.perf_counter()
+    with Image.open(source) as loaded:
+        source_size = loaded.size
+        safe_image = loaded.convert("RGBA")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    safe_image.save(output, format="PNG")
+    postprocess = postprocess_reconstructed_problem_image(
+        output,
+        transparent_background=transparent_background,
+        sharpen=sharpen,
+        source_size=source_size,
+        upscale_factor=upscale_factor,
+    )
+    postprocess["content_preservation"] = analyze_reconstruction_content_preservation(source, output)
+    return ImageReconstructionResult(
+        output_path=output,
+        provider="local",
+        model="content-safe-lanczos",
+        prompt="deterministic content-preserving upscale",
+        source_path=source,
+        latency_ms=int(round((time.perf_counter() - started_at) * 1000.0)),
+        mime_type="image/png",
+        postprocess=postprocess,
+    )
+
+
 def _reconstruct_with_gemini(
     source_path: str | Path,
     output_path: str | Path,
@@ -176,6 +255,7 @@ def _reconstruct_with_gemini(
     api_key: str,
     model: str,
     prompt: str,
+    size: str,
     timeout_ms: int,
     transparent_background: bool,
     sharpen: bool,
@@ -190,6 +270,16 @@ def _reconstruct_with_gemini(
 
     content_type = mimetypes.guess_type(str(source))[0] or "image/png"
     image_data = base64.b64encode(source.read_bytes()).decode("ascii")
+    image_size = normalize_gemini_image_size(size)
+    generation_config: dict[str, Any] = {
+        "responseModalities": ["TEXT", "IMAGE"],
+    }
+    if image_size:
+        generation_config["responseFormat"] = {
+            "image": {
+                "imageSize": _gemini_v1beta_image_size(image_size),
+            }
+        }
     payload = {
         "contents": [
             {
@@ -205,9 +295,7 @@ def _reconstruct_with_gemini(
                 ],
             }
         ],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-        },
+        "generationConfig": generation_config,
     }
     req = request.Request(
         f"{GEMINI_IMAGE_API_BASE}/{model}:generateContent",
@@ -242,6 +330,8 @@ def _reconstruct_with_gemini(
         sharpen=sharpen,
         source_size=_read_image_size(source),
     )
+    postprocess["content_preservation"] = analyze_reconstruction_content_preservation(source, output)
+    postprocess["requested_image_size"] = image_size or "auto"
     latency_ms = int(round((time.perf_counter() - started_at) * 1000.0))
     return ImageReconstructionResult(
         output_path=output,
@@ -333,6 +423,7 @@ def _reconstruct_with_openai(
         sharpen=sharpen,
         source_size=_read_image_size(source),
     )
+    postprocess["content_preservation"] = analyze_reconstruction_content_preservation(source, output)
     latency_ms = int(round((time.perf_counter() - started_at) * 1000.0))
     return ImageReconstructionResult(
         output_path=output,
@@ -406,6 +497,240 @@ def postprocess_reconstructed_problem_image(
         **resize_stats,
         **clarity_stats,
         **transparency_stats,
+    }
+
+
+def analyze_reconstruction_content_preservation(
+    source_path: str | Path,
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Compare source/result ink layouts and flag likely lost formula content.
+
+    This deliberately does not try to OCR the formula again.  OCR is often the
+    weakest signal for the exact failure we are trying to catch.  Instead we
+    compare normalized ink masks, tolerate small translations and stroke-width
+    changes, and look for whole local regions that disappeared.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return {"status": "unavailable", "reason": "pillow_unavailable", "review_required": False}
+    if np is None:
+        return {"status": "unavailable", "reason": "numpy_unavailable", "review_required": False}
+
+    try:
+        with Image.open(source_path) as loaded_source:
+            source_image = loaded_source.convert("RGBA")
+        with Image.open(output_path) as loaded_output:
+            output_image = loaded_output.convert("RGBA")
+    except (OSError, ValueError) as exc:
+        return {
+            "status": "unavailable",
+            "reason": f"image_read_error:{type(exc).__name__}",
+            "review_required": False,
+        }
+
+    source_mask = _normalized_content_ink_mask(source_image)
+    output_mask = _normalized_content_ink_mask(output_image)
+    source_ink = int(np.count_nonzero(source_mask))
+    output_ink = int(np.count_nonzero(output_mask))
+    if source_ink < 12:
+        return {
+            "status": "unavailable",
+            "reason": "source_has_too_little_ink",
+            "review_required": False,
+            "source_ink_pixels": source_ink,
+            "output_ink_pixels": output_ink,
+        }
+
+    aligned_output, shift_x, shift_y, overlap_score = _align_content_mask(source_mask, output_mask)
+    dilated_output = _dilate_content_mask(aligned_output, radius=2)
+    covered_source = int(np.count_nonzero(source_mask & dilated_output))
+    source_coverage = covered_source / max(1, source_ink)
+    ink_ratio = output_ink / max(1, source_ink)
+
+    tile_stats = _content_tile_loss_stats(source_mask, dilated_output, rows=12, columns=16)
+    band_stats = _content_band_loss_stats(source_mask, dilated_output, bands=24)
+
+    source_ratio = source_image.width / max(1, source_image.height)
+    output_ratio = output_image.width / max(1, output_image.height)
+    aspect_ratio_delta = abs(output_ratio - source_ratio) / max(0.01, source_ratio)
+
+    reasons: list[str] = []
+    severe = False
+    if output_ink < max(12, int(round(source_ink * 0.24))) or ink_ratio < 0.24:
+        reasons.append("output_nearly_empty")
+        severe = True
+    elif ink_ratio < 0.52:
+        reasons.append("source_ink_missing")
+    if (
+        tile_stats["missing_source_ink_share"] >= 0.2
+        and tile_stats["missing_tile_count"] >= 2
+    ) or tile_stats["missing_source_ink_share"] >= 0.34:
+        reasons.append("localized_ink_loss")
+    if band_stats["worst_band_retention"] < 0.22 and band_stats["worst_band_source_share"] >= 0.025:
+        reasons.append("formula_row_loss")
+    if source_coverage < 0.28 and ink_ratio < 0.72:
+        reasons.append("low_source_coverage")
+    if ink_ratio > 2.6:
+        reasons.append("unexpected_added_content")
+    if aspect_ratio_delta > 0.09:
+        reasons.append("aspect_ratio_changed")
+
+    reasons = list(dict.fromkeys(reasons))
+    review_required = bool(reasons)
+    return {
+        "status": "review_required" if review_required else "pass",
+        "review_required": review_required,
+        "severity": "high" if severe else ("medium" if review_required else "none"),
+        "reasons": reasons,
+        "source_ink_pixels": source_ink,
+        "output_ink_pixels": output_ink,
+        "ink_ratio": round(float(ink_ratio), 4),
+        "source_coverage": round(float(source_coverage), 4),
+        "alignment_shift": [int(shift_x), int(shift_y)],
+        "alignment_overlap": round(float(overlap_score), 4),
+        "aspect_ratio_delta": round(float(aspect_ratio_delta), 4),
+        **tile_stats,
+        **band_stats,
+    }
+
+
+def _normalized_content_ink_mask(image: Any) -> Any:
+    from PIL import Image
+
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    alpha = rgba[..., 3]
+    transparent_ratio = float(np.count_nonzero(alpha < 245)) / max(1, alpha.size)
+    if transparent_ratio >= 0.01:
+        mask = alpha >= 24
+    else:
+        rgb = rgba[..., :3].astype(np.float32)
+        border_width = max(2, min(20, int(round(min(image.size) * 0.035))))
+        border_parts = [
+            rgb[:border_width, :, :].reshape(-1, 3),
+            rgb[-border_width:, :, :].reshape(-1, 3),
+            rgb[:, :border_width, :].reshape(-1, 3),
+            rgb[:, -border_width:, :].reshape(-1, 3),
+        ]
+        border = np.concatenate(border_parts, axis=0)
+        background = np.median(border, axis=0)
+        distance = np.sqrt(np.sum((rgb - background) ** 2, axis=2))
+        luminance = (0.299 * rgb[..., 0]) + (0.587 * rgb[..., 1]) + (0.114 * rgb[..., 2])
+        background_luminance = _luminance(tuple(int(value) for value in background))
+        contrast = (background_luminance - luminance) if background_luminance > 128 else (luminance - background_luminance)
+        mask = (distance >= 24.0) | (contrast >= 20.0)
+
+    mask_image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+    resampling = getattr(Image, "Resampling", Image)
+    normalized = mask_image.resize(
+        (CONTENT_PRESERVATION_CANVAS_SIZE, CONTENT_PRESERVATION_CANVAS_SIZE),
+        resampling.BOX,
+    )
+    return np.asarray(normalized, dtype=np.uint8) >= 38
+
+
+def _shift_content_mask(mask: Any, dx: int, dy: int) -> Any:
+    shifted = np.zeros_like(mask, dtype=bool)
+    height, width = mask.shape
+    source_left = max(0, -dx)
+    source_right = min(width, width - dx)
+    source_top = max(0, -dy)
+    source_bottom = min(height, height - dy)
+    if source_left >= source_right or source_top >= source_bottom:
+        return shifted
+    target_left = source_left + dx
+    target_right = source_right + dx
+    target_top = source_top + dy
+    target_bottom = source_bottom + dy
+    shifted[target_top:target_bottom, target_left:target_right] = mask[
+        source_top:source_bottom,
+        source_left:source_right,
+    ]
+    return shifted
+
+
+def _dilate_content_mask(mask: Any, *, radius: int) -> Any:
+    if radius <= 0:
+        return mask.copy()
+    dilated = mask.copy()
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            if dx == 0 and dy == 0:
+                continue
+            dilated |= _shift_content_mask(mask, dx, dy)
+    return dilated
+
+
+def _align_content_mask(source: Any, output: Any) -> tuple[Any, int, int, float]:
+    source_for_alignment = _dilate_content_mask(source, radius=1)
+    output_for_alignment = _dilate_content_mask(output, radius=1)
+    best_mask = output
+    best_dx = 0
+    best_dy = 0
+    best_score = -1.0
+    for dy in range(-8, 9, 2):
+        for dx in range(-8, 9, 2):
+            shifted = _shift_content_mask(output_for_alignment, dx, dy)
+            intersection = int(np.count_nonzero(source_for_alignment & shifted))
+            denominator = int(np.count_nonzero(source_for_alignment)) + int(np.count_nonzero(shifted))
+            score = (2.0 * intersection / denominator) if denominator else 0.0
+            if score > best_score:
+                best_score = score
+                best_dx = dx
+                best_dy = dy
+                best_mask = _shift_content_mask(output, dx, dy)
+    return best_mask, best_dx, best_dy, best_score
+
+
+def _content_tile_loss_stats(source: Any, output: Any, *, rows: int, columns: int) -> dict[str, Any]:
+    height, width = source.shape
+    missing_tile_count = 0
+    active_tile_count = 0
+    missing_source_ink = 0
+    for row in range(rows):
+        top = int(round(row * height / rows))
+        bottom = int(round((row + 1) * height / rows))
+        for column in range(columns):
+            left = int(round(column * width / columns))
+            right = int(round((column + 1) * width / columns))
+            source_count = int(np.count_nonzero(source[top:bottom, left:right]))
+            if source_count < 3:
+                continue
+            active_tile_count += 1
+            output_count = int(np.count_nonzero(output[top:bottom, left:right]))
+            if output_count < max(2, int(round(source_count * 0.24))):
+                missing_tile_count += 1
+                missing_source_ink += source_count
+    total_source_ink = max(1, int(np.count_nonzero(source)))
+    return {
+        "active_tile_count": active_tile_count,
+        "missing_tile_count": missing_tile_count,
+        "missing_tile_ratio": round(missing_tile_count / max(1, active_tile_count), 4),
+        "missing_source_ink_share": round(missing_source_ink / total_source_ink, 4),
+    }
+
+
+def _content_band_loss_stats(source: Any, output: Any, *, bands: int) -> dict[str, Any]:
+    height = source.shape[0]
+    total_source_ink = max(1, int(np.count_nonzero(source)))
+    worst_retention = 1.0
+    worst_source_share = 0.0
+    for band in range(bands):
+        top = int(round(band * height / bands))
+        bottom = int(round((band + 1) * height / bands))
+        source_count = int(np.count_nonzero(source[top:bottom, :]))
+        source_share = source_count / total_source_ink
+        if source_count < 4 or source_share < 0.012:
+            continue
+        output_count = int(np.count_nonzero(output[top:bottom, :]))
+        retention = output_count / max(1, source_count)
+        if retention < worst_retention:
+            worst_retention = retention
+            worst_source_share = source_share
+    return {
+        "worst_band_retention": round(float(worst_retention), 4),
+        "worst_band_source_share": round(float(worst_source_share), 4),
     }
 
 

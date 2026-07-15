@@ -12,6 +12,7 @@ from urllib.request import url2pathname
 from PIL import Image, ImageDraw
 
 import build_problem_board_edb as problem_board
+from inspect_edb import parse_edb
 from app_server import (
     _problems_to_entries,
     _session_publish_history,
@@ -585,6 +586,27 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             self.assertEqual([41, 1], [len(chunk) for chunk in chunks])
 
+    def test_classin_split_does_not_rebuild_each_candidate_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = []
+            for index in range(42):
+                entry = self._make_problem_entry(root, f"p{index:02d}", Box(0, 0, 640, 640))
+                entry.actual_height_pages = 1.2
+                entries.append(entry)
+
+            with mock.patch.object(
+                problem_board,
+                "_entries_flow_end_pages",
+                side_effect=AssertionError("split should use incremental placement"),
+            ):
+                chunks = split_problem_entries_for_classin_page_limit(
+                    entries,
+                    LayoutTemplate(name="academy-default", board_page_count=84),
+                )
+
+            self.assertEqual([41, 1], [len(chunk) for chunk in chunks])
+
     def test_classin_page_limit_uses_largest_available_end_metric(self):
         placements = [
             {
@@ -740,6 +762,35 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertGreaterEqual(timing["records"], 0)
             self.assertGreaterEqual(timing["ui_session"], 0)
             self.assertEqual(timing, result["ui_session"]["timing_ms"])
+
+    def test_image_only_preview_skips_edb_record_encoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            self._make_source_image(source)
+
+            with mock.patch.object(
+                problem_board,
+                "_encode_image_bytes",
+                side_effect=AssertionError("preview should not encode EDB image records"),
+            ):
+                result = run_problem_export(
+                    source,
+                    output_dir=root / "out",
+                    input_intent="multi-problem",
+                    ocr="none",
+                    record_mode="image-only",
+                    export_edb=False,
+                    detect_perspective=False,
+                    skip_deskew=True,
+                )
+
+            self.assertGreaterEqual(len(result["ui_session"]["problems"]), 1)
+            self.assertEqual(
+                len(result["ui_session"]["problems"]),
+                len(result["summary"]["placements"]),
+            )
+            self.assertEqual(0, result["summary"]["record_count"])
 
     def test_problem_export_writes_classin_handoff_manifest_for_manual_review(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1008,6 +1059,39 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([], duplicate_groups)
             self.assertEqual(["step3_page_chrome_artifact"], [issue["type"] for issue in preflight["issues"]])
             self.assertEqual(["edge_vertical_guide"], preflight["issues"][0]["artifactTypes"])
+
+    def test_publish_preflight_allows_page_chrome_for_page_as_is_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "full-page.png"
+            image = Image.new("RGB", (320, 240), "white")
+            draw = ImageDraw.Draw(image)
+            draw.text((64, 48), "full page", fill="black")
+            draw.line((0, 0, 0, 239), fill="black", width=3)
+            image.save(artifact)
+            problem = {
+                "id": "page-1",
+                "title": "페이지 1",
+                "imagePath": artifact.resolve().as_uri(),
+                "processingStep": "s3",
+                "recordMode": "image-only",
+                "riskFlags": [],
+            }
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                [problem],
+                session={
+                    "problems": [problem],
+                    "pages": [],
+                    "input_intent": "page-as-is",
+                    "template": {"metadata": {"placement_mode": "continuous-page-as-is"}},
+                },
+            )
+
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual([], duplicate_groups)
+            self.assertEqual([], preflight["issues"])
 
     def test_publish_preflight_allows_one_s2_page_chrome_artifact_per_ten(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3967,6 +4051,50 @@ class TestEdbPublishFlow(unittest.TestCase):
                 [item["placement_scale_ratio"] for item in placements],
             )
 
+    def test_classin_part_keeps_image_hints_on_header_page_scale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            entry.processing_step = PROCESSING_STEP_RECONSTRUCT
+            entry.placement_scale_ratio = problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX
+            entry.input_intent = "page-as-is"
+            entry.force_full_page_bounds = True
+            template = LayoutTemplate(
+                name="academy-default",
+                board_page_count=63,
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+                metadata={"placement_mode": "continuous-page-as-is"},
+            )
+
+            parts = problem_board.write_classin_limited_edb_files(
+                [entry],
+                template,
+                root,
+                "korean-page.edb",
+                record_mode="image-only",
+                text_confidence_threshold=0.78,
+                dark_board=True,
+                board_theme=problem_board.DEFAULT_BOARD_THEME,
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            parsed = parse_edb(Path(parts[0]["edbPath"]))
+            record = parsed.records[0]
+            image = record.embedded_images[0]
+            rendered_width = float(record.width_hint) * parsed.canvas_height
+            rendered_height = float(record.height_hint) * parsed.canvas_width * parsed.page_count_hint
+
+            self.assertEqual(problem_board.CLASSIN_MAX_BOARD_PAGE_COUNT, parsed.page_count_hint)
+            self.assertEqual(
+                {problem_board.CLASSIN_MAX_BOARD_PAGE_COUNT},
+                {item["record_page_count_hint"] for item in parts[0]["placements"]},
+            )
+            self.assertAlmostEqual(
+                image.height / image.width,
+                rendered_height / rendered_width,
+                places=5,
+            )
+
     def test_v1_single_problem_full_page_bounds_stays_slot_based(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -6166,6 +6294,8 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             crop = Image.open(entries[0].crop_path).convert("RGB")
+            self.assertEqual(source.resolve(), entries[0].crop_path.resolve())
+            self.assertEqual(source.resolve(), entries[0].board_render_path.resolve())
             self.assertEqual(image.size, crop.size)
             self.assertEqual((0, 0, 0), crop.getpixel((179, 70)))
 
@@ -6182,6 +6312,10 @@ class TestEdbPublishFlow(unittest.TestCase):
                 problem_board,
                 "build_page_models_for_prepared_pages",
                 side_effect=AssertionError("page-as-is should not build OCR page models"),
+            ), mock.patch.object(
+                problem_board,
+                "_encode_image_bytes",
+                side_effect=AssertionError("page-as-is preview should not encode EDB records"),
             ):
                 result = run_problem_export(
                     source,

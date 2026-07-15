@@ -32,6 +32,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("!fastImageRecognition", queue_source)
         self.assertIn("const recognitionOcr = fastImageRecognition ? 'none' : 'auto';", queue_source)
         self.assertIn("ocr: recognitionOcr", queue_source)
+        self.assertIn("detectPerspective: !fastImageRecognition", queue_source)
+        self.assertIn("skipDeskew: fastImageRecognition", queue_source)
         self.assertIn("이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다", queue_source)
 
     def test_upload_queue_row_selects_pending_file_preview(self) -> None:
@@ -104,6 +106,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const nextReviewFocus = reviewFocusForNewSession", register_branch)
         self.assertIn("isManualSplit ? 'queue-manual-split' : 'queue-register'", register_branch)
         self.assertIn("setReviewFocus(nextReviewFocus);", register_branch)
+        self.assertIn("preview: true,", register_branch)
+        self.assertIn("exportEdb: false,", register_branch)
         self.assertNotIn("openOutputFolder(", register_branch)
 
     def test_review_scope_limits_all_tab_to_recently_added_batch(self) -> None:
@@ -118,6 +122,13 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn(".filter(problemInReviewScope)", review_stage)
         self.assertIn("최근 추가 묶음", review_stage)
         self.assertIn("전체 세션 보기", review_stage)
+
+    def test_review_filter_counts_match_the_problems_the_filter_will_show(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        filter_source = source.split("const filterOptions = [", 1)[1].split("];", 1)[0]
+
+        self.assertIn("['check_needed', '확인 필요', statusCounts.check_needed]", filter_source)
+        self.assertNotIn("['check_needed', '확인 필요', actionableStatusCount]", filter_source)
 
     def test_topbar_exposes_reset_icon_outside_more_menu(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -1226,7 +1226,7 @@ class _ProblemEntryDraft:
     placement_scale_ratio: float | None
     input_intent: str | None
     force_full_page_bounds: bool
-    asset_task: _ProblemAssetTask
+    asset_task: _ProblemAssetTask | None
 
 
 @dataclass(slots=True)
@@ -3114,8 +3114,14 @@ def build_problem_entries(
 
             entry_index = len(drafts) + 1
             crop_name = f"problem_{entry_index:03d}_{hashlib.sha1(problem.unit_id.encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
-            crop_path = crop_dir / crop_name
-            board_render_path = cutout_dir / crop_name
+            source_asset_path = Path(prepared_page.source_path).resolve()
+            reuse_full_page_asset = (
+                preserve_page_as_is
+                and source_asset_path.is_file()
+                and prepared_page.image.size == prepared_page.original_size
+            )
+            crop_path = source_asset_path if reuse_full_page_asset else crop_dir / crop_name
+            board_render_path = crop_path if reuse_full_page_asset else cutout_dir / crop_name
             reading_heavy = problem.subject in {Subject.KOREAN, Subject.ENGLISH, Subject.SOCIAL, Subject.SCIENCE}
             problem_title = _problem_entry_title(problem, problem_number, entry_index)
             text_fallback_payload = (
@@ -3148,7 +3154,9 @@ def build_problem_entries(
                     placement_scale_ratio=_default_placement_scale_for_problem(problem),
                     input_intent=problem_input_intent or None,
                     force_full_page_bounds=bool(problem.metadata.get("force_full_page_bounds")),
-                    asset_task=_ProblemAssetTask(
+                    asset_task=None
+                    if reuse_full_page_asset
+                    else _ProblemAssetTask(
                         source_image=prepared_page.image,
                         bounds=merged_box,
                         crop_path=crop_path,
@@ -3162,7 +3170,13 @@ def build_problem_entries(
                 )
             )
 
-    crop_sizes = _render_problem_assets([draft.asset_task for draft in drafts])
+    rendered_crop_sizes = iter(
+        _render_problem_assets([draft.asset_task for draft in drafts if draft.asset_task is not None])
+    )
+    crop_sizes = [
+        draft.prepared_page.image.size if draft.asset_task is None else next(rendered_crop_sizes)
+        for draft in drafts
+    ]
     entries: list[ProblemEntry] = []
     for draft, crop_size in zip(drafts, crop_sizes):
         actual_height_pages = (
@@ -6276,6 +6290,30 @@ def _placement_summaries_flow_end_pages(placements: list[dict[str, object]]) -> 
     return max((_placement_summary_end_pages(placement) for placement in placements), default=0.0)
 
 
+def _validate_record_page_count_hints(
+    placements: Sequence[Mapping[str, object]],
+    *,
+    expected_page_count: int,
+) -> None:
+    expected = max(1, int(expected_page_count))
+    mismatches: list[str] = []
+    for placement in placements:
+        raw_hint = placement.get("record_page_count_hint") or placement.get("recordPageCountHint")
+        if raw_hint is None:
+            continue
+        try:
+            actual = int(raw_hint)
+        except (TypeError, ValueError):
+            actual = 0
+        if actual != expected:
+            mismatches.append(str(placement.get("problem_id") or placement.get("problemId") or "unknown"))
+    if mismatches:
+        preview = ", ".join(mismatches[:3])
+        raise ValueError(
+            f"EDB image records use a different page scale than the {expected}-page header: {preview}"
+        )
+
+
 def _first_placement_over_page_limit(placements: list[dict[str, object]], max_pages: int) -> int | None:
     for index, placement in enumerate(placements):
         if _placement_summary_end_pages(placement) > max_pages + 1e-6:
@@ -6295,14 +6333,23 @@ def split_problem_entries_for_classin_page_limit(
     limited_template = template_with_board_page_count(template, max_pages)
     chunks: list[list[ProblemEntry]] = []
     current: list[ProblemEntry] = []
+    cursor_pages = 0.0
 
-    for entry in problem_entries:
-        candidate = [*current, entry]
-        if not current or _entries_flow_end_pages(candidate, limited_template) <= max_pages + 1e-6:
-            current = candidate
-            continue
-        chunks.append(current)
-        current = [entry]
+    # Placement is cursor-based, so each entry can be evaluated once instead
+    # of rebuilding every growing candidate prefix (quadratic for long sets).
+    for entry, layout_input in zip(problem_entries, placement_inputs(problem_entries)):
+        placement = place_problems(
+            [layout_input],
+            template=limited_template,
+            start_y_pages=cursor_pages,
+        )[0]
+        end_pages = max(placement.actual_bottom_y_pages, placement.snapped_next_start_y_pages)
+        if current and end_pages > max_pages + 1e-6:
+            chunks.append(current)
+            current = []
+            placement = place_problems([layout_input], template=limited_template)[0]
+        current.append(entry)
+        cursor_pages = placement.snapped_next_start_y_pages
 
     if current:
         chunks.append(current)
@@ -6365,6 +6412,7 @@ def _build_image_only_record_image(
     crop_format: str,
     target_image_width_px: float,
     continuous_flow: bool,
+    generate_record: bool = True,
 ) -> _ImageOnlyRecordImage:
     processing_step = _normalize_processing_step(
         entry.processing_step or placement.metadata.get("processing_step")
@@ -6372,6 +6420,30 @@ def _build_image_only_record_image(
     crop_path = Path(str(placement.metadata["crop_path"]))
     board_render_path = Path(str(placement.metadata["board_render_path"]))
     with Image.open(crop_path) as loaded_crop:
+        if not generate_record:
+            source_width, source_height = loaded_crop.size
+            target_width = int(target_image_width_px) if target_image_width_px > 0 else source_width
+            target_height = max(1, int(round(target_width * source_height / max(source_width, 1))))
+            scale_ratio: float | None = None
+            if crop_format == CROP_FORMAT_V2:
+                scale_ratio = _problem_scale_ratio(
+                    entry,
+                    placement,
+                    float(target_width),
+                    float(target_height),
+                    ignore_height_limit=continuous_flow,
+                )
+                target_width = max(1, int(round(target_width * scale_ratio)))
+                target_height = max(1, int(round(target_height * scale_ratio)))
+            return _ImageOnlyRecordImage(
+                crop_path=crop_path,
+                board_render_path=board_render_path,
+                image_bytes=b"",
+                secondary_bytes=b"",
+                width_px=target_width,
+                height_px=target_height,
+                scale_ratio=scale_ratio,
+            )
         crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
     if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
         board_image = _build_transparent_reconstruction_image(
@@ -6434,6 +6506,7 @@ def _build_image_only_record_images(
     board_theme: str,
     crop_format: str,
     target_image_width_px: float,
+    generate_records: bool = True,
 ) -> list[_ImageOnlyRecordImage]:
     def _build(placement: Any) -> _ImageOnlyRecordImage:
         entry = entries_by_problem_id[placement.problem_id]
@@ -6446,6 +6519,7 @@ def _build_image_only_record_images(
             crop_format=crop_format,
             target_image_width_px=target_image_width_px,
             continuous_flow=continuous_flow,
+            generate_record=generate_records,
         )
 
     worker_count = _resolve_image_record_worker_count(len(placements))
@@ -6463,6 +6537,8 @@ def build_image_only_records(
     board_theme: str = DEFAULT_BOARD_THEME,
     crop_format: str = DEFAULT_CROP_FORMAT,
     reserve_rendered_layout_height: bool = True,
+    generate_records: bool = True,
+    expand_board_capacity: bool = True,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     layout_heights = (
         _image_only_layout_heights_by_problem_id(
@@ -6477,7 +6553,12 @@ def build_image_only_records(
         placement_inputs(problem_entries, actual_height_pages_by_problem_id=layout_heights),
         template=template,
     )
-    _ensure_template_board_capacity(template, placements)
+    # Standalone/preview builds may grow the logical board to fit all content.
+    # ClassIn-limited part builds must keep this disabled: their EDB header is
+    # fixed to CLASSIN_MAX_BOARD_PAGE_COUNT, and image y/height hints must be
+    # normalized with that exact same page count or ClassIn distorts images.
+    if expand_board_capacity:
+        _ensure_template_board_capacity(template, placements)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
     if crop_format == CROP_FORMAT_V2:
         # v2 displays every problem at a fixed pixel width on the board, so
@@ -6507,6 +6588,7 @@ def build_image_only_records(
         board_theme=board_theme,
         crop_format=crop_format,
         target_image_width_px=target_image_width_px,
+        generate_records=generate_records,
     )
     continuous_cursor_pages: float | None = None
 
@@ -6580,19 +6662,20 @@ def build_image_only_records(
             continuous_cursor_pages = None
 
         parent_record_id = next_record_id
-        records.append(
-            build_image_record(
-                ImageRecordSpec(
-                    record_id=parent_record_id,
-                    image_primary=image_payload.image_bytes,
-                    image_secondary=image_payload.secondary_bytes,
-                    x=normalize_x_px(x_px),
-                    y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
-                    width_hint=width_hint,
-                    height_hint=height_hint,
+        if generate_records:
+            records.append(
+                build_image_record(
+                    ImageRecordSpec(
+                        record_id=parent_record_id,
+                        image_primary=image_payload.image_bytes,
+                        image_secondary=image_payload.secondary_bytes,
+                        x=normalize_x_px(x_px),
+                        y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
+                        width_hint=width_hint,
+                        height_hint=height_hint,
+                    )
                 )
             )
-        )
         next_record_id += 1
         image_record_count = 1
 
@@ -6630,6 +6713,8 @@ def build_image_only_records(
                 "image_pixel_height": int(image_payload.height_px),
                 "rendered_width_px": float(rendered_width_px),
                 "rendered_height_px": float(rendered_height_px),
+                "recordPageCountHint": int(template.board_page_count),
+                "record_page_count_hint": int(template.board_page_count),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
                 "placement_scale_ratio": float(scale_ratio),
@@ -6826,6 +6911,8 @@ def build_records(
     board_theme: str = DEFAULT_BOARD_THEME,
     crop_format: str = DEFAULT_CROP_FORMAT,
     reserve_image_layout_height: bool = True,
+    generate_records: bool = True,
+    expand_board_capacity: bool = True,
 ) -> tuple[list[bytes], list[dict[str, object]], int]:
     if record_mode == "image-only":
         records, placement_summaries = build_image_only_records(
@@ -6835,6 +6922,8 @@ def build_records(
             board_theme=board_theme,
             crop_format=crop_format,
             reserve_rendered_layout_height=reserve_image_layout_height,
+            generate_records=generate_records,
+            expand_board_capacity=expand_board_capacity,
         )
         return records, placement_summaries, header_flag_for_crop_format(crop_format, mode="image")
 
@@ -6903,7 +6992,12 @@ def write_classin_limited_edb_files(
                 board_theme=board_theme,
                 crop_format=crop_format,
                 reserve_image_layout_height=False,
+                expand_board_capacity=False,
             )
+        _validate_record_page_count_hints(
+            part_placements,
+            expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
+        )
         return {
             "entries": list(chunk_entries),
             "records": part_records,
@@ -7250,6 +7344,7 @@ def run_problem_export(
         dark_board=dark_board,
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
+        generate_records=export_edb,
     )
     timing_ms["records"] = _elapsed_ms(records_started_at)
     timing_ms.update(_summarize_page_timing_ms(pages))
