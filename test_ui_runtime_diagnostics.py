@@ -184,9 +184,20 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", reorder_flow)
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
+        self.assertIn("setHistoryStack(prev => [...prev, snapshotBefore])", reorder_flow)
+        self.assertIn("setActiveId(fromId)", reorder_flow)
         self.assertIn("if (session)", remove_flow)
         self.assertIn("void mutateSession('exclude', { problemId: id });", remove_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
+
+    def test_undo_keeps_the_current_workspace_and_active_problem(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        undo_flow = source.split("const undoMutation = useCallback(async () => {", 1)[1]
+        undo_flow = undo_flow.split("// Ctrl/Cmd+Z", 1)[0]
+        self.assertIn("const viewBeforeUndo = view;", undo_flow)
+        self.assertIn("const activeBeforeUndo = activeId;", undo_flow)
+        self.assertIn("setView(viewBeforeUndo);", undo_flow)
+        self.assertIn("setActiveId(activeBeforeUndo);", undo_flow)
 
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

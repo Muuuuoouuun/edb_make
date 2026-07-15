@@ -128,6 +128,10 @@ def _build_transparent_reconstruction_image(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_build_transparent_reconstruction_image", *args, **kwargs)
 
 
+def _problem_prefers_text_preservation(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_problem_prefers_text_preservation", *args, **kwargs)
+
+
 def _load_board_export_image(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_load_board_export_image", *args, **kwargs)
 
@@ -2973,7 +2977,11 @@ def _crop_refreshes_board_render(problem: dict[str, Any]) -> bool:
     return step in {"s2", "s3"}
 
 
-def _render_board_crop_from_raw(raw_crop_path: Path, board_crop_path: Path) -> None:
+def _render_board_crop_from_raw(
+    raw_crop_path: Path,
+    board_crop_path: Path,
+    problem: dict[str, Any] | None = None,
+) -> None:
     from PIL import Image
 
     board_crop_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2981,6 +2989,11 @@ def _render_board_crop_from_raw(raw_crop_path: Path, board_crop_path: Path) -> N
         board_image = _build_transparent_reconstruction_image(
             image,
             board_theme=DEFAULT_BOARD_THEME,
+            text_priority=_problem_prefers_text_preservation(
+                (problem or {}).get("subject"),
+                (problem or {}).get("sourceFileName"),
+                (problem or {}).get("title"),
+            ),
         )
         board_image.save(board_crop_path)
 
@@ -4125,7 +4138,7 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
         and _crop_refreshes_board_render(problem)
     ):
         board_crop_path = crop_dir / _make_crop_filename(problem_id, "manual_crop_board")
-        _render_board_crop_from_raw(raw_crop_path_for_board, board_crop_path)
+        _render_board_crop_from_raw(raw_crop_path_for_board, board_crop_path, problem)
         board_uri = board_crop_path.resolve().as_uri()
 
     problem["imagePath"] = raw_uri
@@ -4388,6 +4401,11 @@ def _session_problem_s3_board_png_payload(problem: dict[str, Any], *, board_them
     board_image = _build_transparent_reconstruction_image(
         crop_image,
         board_theme=board_theme or DEFAULT_BOARD_THEME,
+        text_priority=_problem_prefers_text_preservation(
+            problem.get("subject"),
+            problem.get("sourceFileName"),
+            problem.get("title"),
+        ),
     )
     return _encode_png_payload(board_image)
 
@@ -4765,6 +4783,134 @@ _AI_IMAGE_REVIEW_FLAGS = {
     "ai_image_reconstruction_failed",
 }
 
+_IMAGE_ENHANCE_MODES = {"auto", "preserve", "ai"}
+_TEXT_PRESERVATION_SUBJECTS = {"korean", "english"}
+
+
+def _normalize_image_enhance_mode(value: Any) -> str:
+    normalized = str(value or "auto").strip().lower().replace("-", "_")
+    aliases = {
+        "safe": "preserve",
+        "local": "preserve",
+        "text": "preserve",
+        "text_safe": "preserve",
+        "content_safe": "preserve",
+        "reconstruct": "ai",
+        "generative": "ai",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in _IMAGE_ENHANCE_MODES:
+        raise ValueError("image enhance mode must be auto, preserve, or ai")
+    return normalized
+
+
+def _subject_hint_from_text(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if "국어" in text or "korean" in text:
+        return "korean"
+    if "영어" in text or "english" in text:
+        return "english"
+    if "수학" in text or "math" in text:
+        return "math"
+    if "과학" in text or "science" in text:
+        return "science"
+    return None
+
+
+def _problem_image_subject(session: dict[str, Any], problem: dict[str, Any]) -> str:
+    explicit = str(problem.get("subject") or "").strip().lower()
+    if explicit and explicit not in {"unknown", "none", "auto"}:
+        return explicit
+    candidates = [
+        problem.get("sourceFileName"),
+        problem.get("source_file_name"),
+        problem.get("title"),
+        session.get("session_name"),
+        session.get("input_notes"),
+        *(session.get("input_files") or []),
+    ]
+    for candidate in candidates:
+        hint = _subject_hint_from_text(candidate)
+        if hint:
+            return hint
+    return explicit or "unknown"
+
+
+def _resolved_image_enhance_mode(requested_mode: str, subject: str) -> str:
+    if requested_mode != "auto":
+        return requested_mode
+    return "preserve" if subject in _TEXT_PRESERVATION_SUBJECTS else "ai"
+
+
+def _original_problem_image_path(
+    problem: dict[str, Any],
+    session: dict[str, Any] | None = None,
+) -> Path | None:
+    # Always restart from the first-generation crop. Repeatedly upscaling an
+    # already enhanced PNG compounds halos and deformed glyph strokes.
+    for key in ("originalImagePath", "original_image_path"):
+        path = _resolve_session_path(problem.get(key))
+        if path is not None and path.exists():
+            return path
+
+    # Sessions created before originalImagePath was persisted can still recover
+    # a full-page source losslessly. Do this only for page-as-is records: a
+    # segmented problem must never be replaced with its whole source page.
+    input_intent = str(problem.get("inputIntent") or problem.get("input_intent") or "").strip().lower()
+    force_full_page = bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds"))
+    if session is not None and (input_intent == "page-as-is" or force_full_page):
+        source_page_id = str(problem.get("sourcePageId") or problem.get("source_page_id") or "")
+        for page in session.get("pages") or []:
+            if not isinstance(page, dict):
+                continue
+            page_id = str(page.get("id") or page.get("pageId") or page.get("page_id") or "")
+            if source_page_id and page_id != source_page_id:
+                continue
+            page_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+            if page_path is not None and page_path.exists():
+                return page_path
+
+    for key in ("imagePath", "boardRenderPath"):
+        path = _resolve_session_path(problem.get(key))
+        if path is not None and path.exists():
+            return path
+    return None
+
+
+def _semantic_text_preservation_gate(
+    *,
+    subject: str,
+    resolved_mode: str,
+    delivery_mode: str,
+) -> dict[str, Any]:
+    """Describe whether character identity was actually verified.
+
+    The topology mask catches missing rows and large layout changes, but it
+    cannot prove that a generative model kept every Korean/English glyph. Until
+    source/output OCR or PDF text-layer comparison is available, generated
+    text-priority pages must remain reviewable instead of becoming a false pass.
+    """
+    if subject not in _TEXT_PRESERVATION_SUBJECTS:
+        return {
+            "status": "not_applicable",
+            "review_required": False,
+            "method": "subject_not_text_priority",
+        }
+    if resolved_mode != "ai" or delivery_mode in {"content_safe_primary", "content_safe_fallback"}:
+        return {
+            "status": "pass",
+            "review_required": False,
+            "method": "pixel_preserving_resize",
+        }
+    return {
+        "status": "unverified",
+        "review_required": True,
+        "method": "semantic_ocr_comparison_unavailable",
+        "reason": "generated_text_character_identity_not_verified",
+    }
+
 
 def _result_content_preservation(result: Any) -> dict[str, Any]:
     postprocess = result.postprocess if isinstance(getattr(result, "postprocess", None), dict) else {}
@@ -4807,7 +4953,79 @@ def _image_attempt_summary(result: Any, *, attempt: int, mode: str) -> dict[str,
     }
 
 
+def _content_safe_primary_batch(
+    session: dict[str, Any],
+    problem_ids: list[str],
+    enhance_plan: dict[str, tuple[str, str]],
+    *,
+    output_dir: Path,
+    stamp: str,
+    transparent_background: bool,
+    sharpen: bool,
+) -> dict[str, dict[str, Any]]:
+    jobs: list[tuple[str, Path, Path]] = []
+    for problem_id in problem_ids:
+        _subject, resolved_mode = enhance_plan[problem_id]
+        if resolved_mode != "preserve":
+            continue
+        _index, problem = _find_problem(session, problem_id)
+        source_path = _original_problem_image_path(problem, session)
+        if source_path is None or not source_path.exists():
+            continue
+        safe_problem = sanitize_output_dir_name(problem_id) or "problem"
+        output_path = output_dir / f"{safe_problem}_{stamp}_text-preserve-2x.png"
+        jobs.append((problem_id, source_path, output_path))
+
+    if not jobs:
+        return {}
+    raw_workers = os.environ.get("EDB_IMAGE_ENHANCE_WORKERS", "").strip()
+    try:
+        requested_workers = int(raw_workers) if raw_workers else 2
+    except ValueError:
+        requested_workers = 2
+    worker_count = max(1, min(len(jobs), 4, requested_workers))
+
+    def run(job: tuple[str, Path, Path]) -> tuple[str, dict[str, Any]]:
+        problem_id, source_path, output_path = job
+        try:
+            result = build_content_safe_upscale(
+                source_path,
+                output_path,
+                transparent_background=transparent_background,
+                sharpen=sharpen,
+            )
+            return problem_id, {
+                "source_path": source_path,
+                "output_path": output_path,
+                "result": result,
+                "error": None,
+            }
+        except Exception as exc:  # noqa: BLE001 - returned to the main mutation loop
+            return problem_id, {
+                "source_path": source_path,
+                "output_path": output_path,
+                "result": None,
+                "error": exc,
+            }
+
+    results: dict[str, dict[str, Any]] = {}
+    if worker_count == 1:
+        for job in jobs:
+            problem_id, row = run(job)
+            results[problem_id] = row
+        return results
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(run, job) for job in jobs]
+        for future in concurrent.futures.as_completed(futures):
+            problem_id, row = future.result()
+            results[problem_id] = row
+    return results
+
+
 def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    requested_mode = _normalize_image_enhance_mode(
+        payload.get("mode") or payload.get("enhanceMode") or payload.get("enhance_mode") or "auto"
+    )
     provider = normalize_image_provider(
         payload.get("provider")
         or payload.get("imageProvider")
@@ -4817,12 +5035,18 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     env_key = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
     provider_label = "Gemini" if provider == "gemini" else "OpenAI"
     api_key = os.environ.get(env_key, "").strip()
-    if not api_key:
-        raise ValueError(f"{provider_label} API 키가 필요합니다. 칠판 설정에서 {env_key}를 저장한 뒤 다시 시도해 주세요.")
 
     problem_ids = _enhance_target_problem_ids(session, payload)
     if not problem_ids:
         raise ValueError("AI 업스케일할 문항이 없습니다.")
+
+    enhance_plan: dict[str, tuple[str, str]] = {}
+    for problem_id in problem_ids:
+        _index, problem = _find_problem(session, problem_id)
+        subject = _problem_image_subject(session, problem)
+        enhance_plan[problem_id] = (subject, _resolved_image_enhance_mode(requested_mode, subject))
+    if any(mode == "ai" for _subject, mode in enhance_plan.values()) and not api_key:
+        raise ValueError(f"{provider_label} API 키가 필요합니다. 칠판 설정에서 {env_key}를 저장한 뒤 다시 시도해 주세요.")
 
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
     prompt = str(payload.get("prompt") or payload.get("imagePrompt") or _default_reconstruction_prompt())
@@ -4834,10 +5058,21 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     output_dir = _image_reconstruction_dir(session)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     summaries: list[dict[str, Any]] = []
+    preserve_results = _content_safe_primary_batch(
+        session,
+        problem_ids,
+        enhance_plan,
+        output_dir=output_dir,
+        stamp=stamp,
+        transparent_background=transparent_background,
+        sharpen=sharpen,
+    )
 
     for problem_id in problem_ids:
         _index, problem = _find_problem(session, problem_id)
-        source_path = _resolve_session_path(problem.get("imagePath") or problem.get("boardRenderPath"))
+        subject, resolved_mode = enhance_plan[problem_id]
+        preserve_row = preserve_results.get(problem_id)
+        source_path = preserve_row.get("source_path") if preserve_row else _original_problem_image_path(problem, session)
         if source_path is None or not source_path.exists():
             flags = list(problem.get("riskFlags") or [])
             flags.append("ai_image_missing_source")
@@ -4856,40 +5091,57 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             continue
 
         safe_problem = sanitize_output_dir_name(problem_id) or "problem"
-        safe_model = sanitize_output_dir_name(model) or provider
-        output_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}.png"
+        output_model = "text-preserve-2x" if resolved_mode == "preserve" else model
+        safe_model = sanitize_output_dir_name(output_model) or resolved_mode
+        output_path = preserve_row.get("output_path") if preserve_row else output_dir / f"{safe_problem}_{stamp}_{safe_model}.png"
         attempts: list[dict[str, Any]] = []
         result: Any | None = None
-        delivery_mode = "ai_primary"
+        delivery_mode = "content_safe_primary" if resolved_mode == "preserve" else "ai_primary"
         auto_recovered = False
         final_error: Exception | None = None
-        try:
-            result = reconstruct_problem_image(
-                source_path,
-                output_path,
-                api_key=api_key,
-                provider=provider,
-                model=model,
-                prompt=prompt,
-                quality=quality,
-                size=size,
-                timeout_ms=timeout_ms,
-                transparent_background=transparent_background,
-                sharpen=sharpen,
-            )
-            attempts.append(_image_attempt_summary(result, attempt=1, mode="ai_primary"))
-        except Exception as exc:  # noqa: BLE001 - automatically fall back below
-            final_error = exc
-            attempts.append({
-                "attempt": 1,
-                "mode": "ai_primary",
-                "status": "failed",
-                "provider": provider,
-                "model": model,
-                "error": str(exc),
-            })
+        if resolved_mode == "preserve":
+            if preserve_row is not None and preserve_row.get("result") is not None:
+                result = preserve_row["result"]
+                attempts.append(_image_attempt_summary(result, attempt=1, mode="content_safe_primary"))
+            else:
+                exc = preserve_row.get("error") if preserve_row else RuntimeError("content-safe batch did not return a result")
+                final_error = exc
+                attempts.append({
+                    "attempt": 1,
+                    "mode": "content_safe_primary",
+                    "status": "failed",
+                    "provider": "local",
+                    "model": "content-safe-lanczos",
+                    "error": str(exc),
+                })
+        else:
+            try:
+                result = reconstruct_problem_image(
+                    source_path,
+                    output_path,
+                    api_key=api_key,
+                    provider=provider,
+                    model=model,
+                    prompt=prompt,
+                    quality=quality,
+                    size=size,
+                    timeout_ms=timeout_ms,
+                    transparent_background=transparent_background,
+                    sharpen=sharpen,
+                )
+                attempts.append(_image_attempt_summary(result, attempt=1, mode="ai_primary"))
+            except Exception as exc:  # noqa: BLE001 - automatically fall back below
+                final_error = exc
+                attempts.append({
+                    "attempt": 1,
+                    "mode": "ai_primary",
+                    "status": "failed",
+                    "provider": provider,
+                    "model": model,
+                    "error": str(exc),
+                })
 
-        if result is not None and not _result_passes_content_gate(result):
+        if resolved_mode == "ai" and result is not None and not _result_passes_content_gate(result):
             retry_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}_retry.png"
             retry_prompt = _content_recovery_prompt(prompt, _result_content_preservation(result))
             try:
@@ -4922,7 +5174,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                     "error": str(exc),
                 })
 
-        if result is None or not _result_passes_content_gate(result):
+        if resolved_mode == "ai" and (result is None or not _result_passes_content_gate(result)):
             fallback_path = output_dir / f"{safe_problem}_{stamp}_content_safe.png"
             try:
                 fallback_result = build_content_safe_upscale(
@@ -4952,8 +5204,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             problem["reviewStatus"] = "check_needed"
             problem["aiImageReconstruction"] = {
                 "status": "failed",
-                "provider": provider,
-                "model": model,
+                "provider": "local" if resolved_mode == "preserve" else provider,
+                "model": "content-safe-lanczos" if resolved_mode == "preserve" else model,
+                "requestedMode": requested_mode,
+                "resolvedMode": resolved_mode,
+                "subject": subject,
                 "error": str(exc),
                 "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "attempts": attempts,
@@ -4961,15 +5216,18 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             summaries.append({
                 "problemId": problem_id,
                 "status": "failed",
-                "provider": provider,
-                "model": model,
+                "provider": "local" if resolved_mode == "preserve" else provider,
+                "model": "content-safe-lanczos" if resolved_mode == "preserve" else model,
+                "requestedMode": requested_mode,
+                "resolvedMode": resolved_mode,
+                "subject": subject,
                 "error": str(exc),
                 "attempts": attempts,
             })
             continue
 
         if not problem.get("originalImagePath"):
-            problem["originalImagePath"] = problem.get("imagePath")
+            problem["originalImagePath"] = source_path.resolve().as_uri()
         uri = result.output_path.resolve().as_uri()
         problem["imagePath"] = uri
         problem["boardRenderPath"] = uri
@@ -4997,7 +5255,6 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "formula_row_loss",
             "low_source_coverage",
         }
-        subject = str(problem.get("subject") or "").strip().lower()
         formula_loss_suspected = "formula_row_loss" in preservation_reasons or (
             subject in {"math", "science"} and bool(preservation_reasons.intersection(loss_reasons))
         )
@@ -5007,6 +5264,13 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             flags.append("ai_image_content_mismatch_suspected")
         elif not _result_passes_content_gate(result) and delivery_mode != "content_safe_fallback":
             flags.append("ai_image_reconstructed_check_text")
+        semantic_text_preservation = _semantic_text_preservation_gate(
+            subject=subject,
+            resolved_mode=resolved_mode,
+            delivery_mode=delivery_mode,
+        )
+        if semantic_text_preservation.get("review_required"):
+            flags.append("ai_image_reconstructed_check_text")
         problem["riskFlags"] = list(dict.fromkeys(flags))
         problem["reviewStatus"] = "check_needed" if problem["riskFlags"] else "normal"
         problem["aiImageReconstruction"] = {
@@ -5014,9 +5278,13 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "quality": quality,
             "size": size,
+            "requestedMode": requested_mode,
+            "resolvedMode": resolved_mode,
+            "subject": subject,
             "transparent_background": transparent_background,
             "sharpen": sharpen,
             "contentPreservation": content_preservation,
+            "semanticTextPreservation": semantic_text_preservation,
             "deliveryMode": delivery_mode,
             "autoRecovered": auto_recovered,
             "attempts": attempts,
@@ -5026,10 +5294,14 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "status": "applied",
             "provider": result.provider,
             "model": result.model,
+            "requestedMode": requested_mode,
+            "resolvedMode": resolved_mode,
+            "subject": subject,
             "outputPath": uri,
             "latencyMs": result.latency_ms,
             "postprocess": postprocess,
             "contentPreservation": content_preservation,
+            "semanticTextPreservation": semantic_text_preservation,
             "deliveryMode": delivery_mode,
             "autoRecovered": auto_recovered,
             "attempts": attempts,
@@ -5784,6 +6056,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 continue
             _copy_publish_problem_metadata(problem, prior)
             _copy_publish_problem_layout_metadata(problem, prior)
+            # build_ui_session points originalImagePath at the image used for
+            # this publish. Replace that value with the true first-generation
+            # source from the prior session (or the recovered page-as-is source)
+            # so later enhancement never upscales an already enhanced image.
+            prior_original_path = _original_problem_image_path(prior, session)
+            if prior_original_path is not None and prior_original_path.exists():
+                prior_original_uri = prior_original_path.resolve().as_uri()
+                problem["originalImagePath"] = prior_original_uri
+                problem["original_image_path"] = prior_original_uri
             if "bbox" not in problem or not problem["bbox"]:
                 problem["bbox"] = prior.get("bbox") or {}
             problem["riskFlags"] = [

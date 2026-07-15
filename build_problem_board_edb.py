@@ -157,6 +157,7 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
+PASSAGE_FRAGMENT_STITCH_GAP_PX = 20
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
@@ -169,6 +170,11 @@ PASSAGE_REVIEW_REASON_LABELS = {
 }
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
+TEXT_PRIORITY_SUBJECTS = {"korean", "english"}
+V2_ENCODED_IMAGE_MIN_WIDTH_PX = 1024
+V2_ENCODED_IMAGE_MAX_WIDTH_PX = 2048
+V2_ENCODED_IMAGE_OVERSAMPLE = 2.5
+V2_ENCODED_IMAGE_MAX_PIXELS = 8_000_000
 # Brightness above this value (0-255) is treated as a light background that
 # should be removed from the exported problem image.
 DARK_BOARD_BRIGHTNESS_THRESHOLD = 160
@@ -1121,23 +1127,38 @@ def _build_transparent_reconstruction_image(
     crop_image: Image.Image,
     *,
     board_theme: str = DEFAULT_BOARD_THEME,
+    text_priority: bool = False,
 ) -> Image.Image:
     crop_image = _trim_source_page_chrome(crop_image)
     # Stage 3 transparently attempts the local Lite model only for undersized
     # crops. The backend is fail-open, and this extra guard ensures packaging
     # or runtime surprises can never block the existing stage-3 path.
-    try:
-        from upscayl_backend import auto_upscale_image
+    if not text_priority:
+        try:
+            from upscayl_backend import auto_upscale_image
 
-        crop_image = auto_upscale_image(crop_image).image
-    except Exception:  # noqa: BLE001 - stage 3 must always retain its legacy fallback
-        pass
+            crop_image = auto_upscale_image(crop_image).image
+        except Exception:  # noqa: BLE001 - stage 3 must always retain its legacy fallback
+            pass
     enhanced_crop = _enhance_problem_crop(
         crop_image,
         target_min_width_px=RECONSTRUCT_TARGET_MIN_WIDTH_PX,
         max_upscale=RECONSTRUCT_MAX_UPSCALE,
     )
     return _extract_problem_cutout(enhanced_crop, chalk_color=_resolve_chalk_color(board_theme))
+
+
+def _problem_prefers_text_preservation(
+    subject: Any,
+    *source_hints: Any,
+) -> bool:
+    normalized_subject = str(subject or "").strip().lower()
+    if normalized_subject in TEXT_PRIORITY_SUBJECTS:
+        return True
+    if normalized_subject not in {"", "unknown", "none", "auto"}:
+        return False
+    hint = " ".join(str(value or "") for value in source_hints).lower()
+    return "국어" in hint or "영어" in hint or "korean" in hint or "english" in hint
 
 
 def _encode_image_bytes(image: Image.Image, quality: int = 92) -> tuple[bytes, str]:
@@ -1238,6 +1259,8 @@ class _ImageOnlyRecordImage:
     width_px: int
     height_px: int
     scale_ratio: float | None = None
+    display_width_px: float | None = None
+    display_height_px: float | None = None
 
 
 def _resolve_problem_asset_worker_count(task_count: int) -> int:
@@ -2894,7 +2917,10 @@ def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
 
 def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
     flags: list[str] = []
-    if _problem_passage_continues_across_pages(problem.metadata):
+    if (
+        _problem_passage_continues_across_pages(problem.metadata)
+        and not bool(problem.metadata.get("passage_fragments_merged"))
+    ):
         flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
     if problem.metadata.get("fallback_grouping"):
         flags.append("fallback_grouping")
@@ -2926,6 +2952,140 @@ def _problem_passage_continues_across_pages(metadata: dict[str, Any] | None) -> 
     if not isinstance(source_page_ids, list):
         return False
     return len({str(page_id) for page_id in source_page_ids if str(page_id)}) > 1
+
+
+def _flatten_passage_segment_on_white(image: Image.Image) -> Image.Image:
+    if "A" not in image.getbands():
+        return image.convert("RGB")
+    rgba = image.convert("RGBA")
+    flattened = Image.new("RGB", rgba.size, "white")
+    flattened.paste(rgba.convert("RGB"), (0, 0), rgba.getchannel("A"))
+    return flattened
+
+
+def _stitch_passage_image_files(
+    paths: Sequence[Path],
+    output_path: Path,
+    *,
+    transparent: bool,
+) -> tuple[int, int]:
+    images: list[Image.Image] = []
+    for path in paths:
+        with Image.open(path) as loaded:
+            images.append(
+                loaded.convert("RGBA").copy()
+                if transparent
+                else _flatten_passage_segment_on_white(loaded).copy()
+            )
+    if not images:
+        raise ValueError("At least one passage image is required for stitching")
+
+    max_width = max(image.width for image in images)
+    gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(images) > 1 else 0
+    total_height = sum(image.height for image in images) + gap * max(0, len(images) - 1)
+    mode = "RGBA" if transparent else "RGB"
+    fill = (255, 255, 255, 0) if transparent else (255, 255, 255)
+    stitched = Image.new(mode, (max_width, total_height), fill)
+    cursor_y = 0
+    for image in images:
+        if transparent:
+            stitched.alpha_composite(image.convert("RGBA"), (0, cursor_y))
+        else:
+            stitched.paste(image.convert("RGB"), (0, cursor_y))
+        cursor_y += image.height + gap
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    stitched.save(output_path)
+    return stitched.size
+
+
+def _coalesce_cross_page_passage_drafts(
+    drafts: list[_ProblemEntryDraft],
+    crop_sizes: list[tuple[int, int]],
+    pages: Sequence[PageModel],
+) -> tuple[list[_ProblemEntryDraft], list[tuple[int, int]]]:
+    problem_units_by_id = {
+        problem.unit_id: problem
+        for page in pages
+        for problem in page.problems
+    }
+    fragment_indices_by_group: dict[str, list[int]] = {}
+    for index, draft in enumerate(drafts):
+        problem = problem_units_by_id.get(draft.problem_id)
+        if problem is None or not _problem_is_passage_fragment_unit(problem):
+            continue
+        group_id = str(problem.metadata.get("passage_group_id") or "").strip()
+        if group_id:
+            fragment_indices_by_group.setdefault(group_id, []).append(index)
+
+    removed_indices: set[int] = set()
+    updated_crop_sizes = list(crop_sizes)
+    for group_id, fragment_indices in fragment_indices_by_group.items():
+        ordered_indices = sorted(fragment_indices)
+        source_page_ids = list(
+            dict.fromkeys(drafts[index].source_page_id for index in ordered_indices)
+        )
+        if len(ordered_indices) < 2 or len(source_page_ids) < 2:
+            continue
+
+        primary_index = ordered_indices[0]
+        primary = drafts[primary_index]
+        fragment_ids = [drafts[index].problem_id for index in ordered_indices]
+        primary_crop_paths = [drafts[index].crop_path for index in ordered_indices]
+        primary_render_paths = [drafts[index].board_render_path for index in ordered_indices]
+        updated_crop_sizes[primary_index] = _stitch_passage_image_files(
+            primary_crop_paths,
+            primary.crop_path,
+            transparent=False,
+        )
+        _stitch_passage_image_files(
+            primary_render_paths,
+            primary.board_render_path,
+            transparent=True,
+        )
+
+        # A stitched passage is a single rendered image. Keeping blocks from
+        # later pages would make mixed-mode export crop those bboxes from the
+        # first page again, so deliberately fall back to the composite image.
+        primary.blocks = []
+        merged_risk_flags: list[str] = []
+        for index in ordered_indices:
+            for flag in drafts[index].risk_flags:
+                if flag != PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG and flag not in merged_risk_flags:
+                    merged_risk_flags.append(flag)
+        primary.risk_flags = merged_risk_flags
+        removed_indices.update(ordered_indices[1:])
+
+        for problem in problem_units_by_id.values():
+            metadata = problem.metadata
+            if str(metadata.get("passage_group_id") or "").strip() != group_id:
+                continue
+            metadata["passage_fragments_merged"] = True
+            metadata["passage_merged_fragment_ids"] = list(fragment_ids)
+            metadata["passage_merged_source_page_ids"] = list(source_page_ids)
+            metadata["passage_merged_fragment_count"] = len(fragment_ids)
+            if _problem_is_passage_fragment_unit(problem) and problem.unit_id != primary.problem_id:
+                metadata["passage_merged_into_problem_id"] = primary.problem_id
+
+        for draft in drafts:
+            problem = problem_units_by_id.get(draft.problem_id)
+            if problem is None:
+                continue
+            if str(problem.metadata.get("passage_group_id") or "").strip() != group_id:
+                continue
+            draft.risk_flags = [
+                flag
+                for flag in draft.risk_flags
+                if flag != PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG
+            ]
+
+    if not removed_indices:
+        return drafts, crop_sizes
+    kept_indices = [index for index in range(len(drafts)) if index not in removed_indices]
+    return (
+        [drafts[index] for index in kept_indices],
+        [updated_crop_sizes[index] for index in kept_indices],
+    )
 
 
 def build_problem_entries(
@@ -3177,6 +3337,7 @@ def build_problem_entries(
         draft.prepared_page.image.size if draft.asset_task is None else next(rendered_crop_sizes)
         for draft in drafts
     ]
+    drafts, crop_sizes = _coalesce_cross_page_passage_drafts(drafts, crop_sizes, pages)
     entries: list[ProblemEntry] = []
     for draft, crop_size in zip(drafts, crop_sizes):
         actual_height_pages = (
@@ -3712,6 +3873,35 @@ def _problem_passage_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if fragment_count is not None and fragment_count > 0:
         payload["passageFragmentCount"] = fragment_count
         payload["passage_fragment_count"] = fragment_count
+
+    if "passage_fragments_merged" in metadata:
+        fragments_merged = bool(metadata.get("passage_fragments_merged"))
+        payload["passageFragmentsMerged"] = fragments_merged
+        payload["passage_fragments_merged"] = fragments_merged
+
+    merged_fragment_ids = metadata.get("passage_merged_fragment_ids")
+    if isinstance(merged_fragment_ids, list):
+        normalized_fragment_ids = [str(problem_id) for problem_id in merged_fragment_ids if str(problem_id)]
+        if normalized_fragment_ids:
+            payload["passageMergedFragmentIds"] = normalized_fragment_ids
+            payload["passage_merged_fragment_ids"] = normalized_fragment_ids
+
+    merged_source_page_ids = metadata.get("passage_merged_source_page_ids")
+    if isinstance(merged_source_page_ids, list):
+        normalized_merged_page_ids = [str(page_id) for page_id in merged_source_page_ids if str(page_id)]
+        if normalized_merged_page_ids:
+            payload["passageMergedSourcePageIds"] = normalized_merged_page_ids
+            payload["passage_merged_source_page_ids"] = normalized_merged_page_ids
+
+    merged_fragment_count = _coerce_int(metadata.get("passage_merged_fragment_count"))
+    if merged_fragment_count is not None and merged_fragment_count > 0:
+        payload["passageMergedFragmentCount"] = merged_fragment_count
+        payload["passage_merged_fragment_count"] = merged_fragment_count
+
+    merged_into_problem_id = str(metadata.get("passage_merged_into_problem_id") or "").strip()
+    if merged_into_problem_id:
+        payload["passageMergedIntoProblemId"] = merged_into_problem_id
+        payload["passage_merged_into_problem_id"] = merged_into_problem_id
 
     continuation_block_ids = metadata.get("passage_pre_question_continuation_block_ids")
     if isinstance(continuation_block_ids, list):
@@ -5599,7 +5789,10 @@ def build_ui_session(
         problem_input_intent = _normalize_input_intent(
             str(problem_metadata.get("input_intent") or problem_metadata.get("inputIntent") or resolved_input_intent)
         )
-        if _problem_passage_continues_across_pages(problem_metadata):
+        if (
+            _problem_passage_continues_across_pages(problem_metadata)
+            and not bool(problem_metadata.get("passage_fragments_merged"))
+        ):
             problem_flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
         problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
         passage_payload = _problem_passage_payload(problem_metadata)
@@ -5624,6 +5817,10 @@ def build_ui_session(
                 "problemNumber": int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
                 "subject": str(placement["subject"]),
                 "imagePath": _to_file_uri(crop_path),
+                # Keep an immutable pointer to the first-generation crop. Image
+                # enhancement must always restart here; using the latest
+                # imagePath would compound ringing and generative glyph edits.
+                "originalImagePath": _to_file_uri(crop_path),
                 "sourceImagePath": _to_file_uri(source_path),
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
@@ -6374,6 +6571,34 @@ def _resize_to_target_width(image: Image.Image, target_width_px: int) -> Image.I
     return image.resize((target_width_px, new_height), Image.Resampling.LANCZOS)
 
 
+def _v2_encoded_image_size(
+    source_size: tuple[int, int],
+    display_size: tuple[float, float],
+) -> tuple[int, int]:
+    """Choose bitmap pixels independently from ClassIn's logical display hints.
+
+    ClassIn v2 samples use a ~301px logical base width, but encoding the source
+    bitmap at that width destroys small Korean/English glyph detail. Keep the
+    display geometry unchanged while storing an oversampled bitmap.
+    """
+    source_width, source_height = source_size
+    display_width, _display_height = display_size
+    if source_width <= 0 or source_height <= 0:
+        return 1, 1
+    target_width = int(round(max(
+        V2_ENCODED_IMAGE_MIN_WIDTH_PX,
+        min(V2_ENCODED_IMAGE_MAX_WIDTH_PX, display_width * V2_ENCODED_IMAGE_OVERSAMPLE),
+    )))
+    aspect = source_height / max(source_width, 1)
+    target_height = max(1, int(round(target_width * aspect)))
+    pixel_count = target_width * target_height
+    if pixel_count > V2_ENCODED_IMAGE_MAX_PIXELS:
+        scale = math.sqrt(V2_ENCODED_IMAGE_MAX_PIXELS / float(pixel_count))
+        target_width = max(1, int(math.floor(target_width * scale)))
+        target_height = max(1, int(math.floor(target_height * scale)))
+    return target_width, target_height
+
+
 def _v1_source_layout_transform(problem_entries: list[ProblemEntry]) -> tuple[float, float, float] | None:
     if len(problem_entries) <= 1:
         return None
@@ -6422,33 +6647,48 @@ def _build_image_only_record_image(
     with Image.open(crop_path) as loaded_crop:
         if not generate_record:
             source_width, source_height = loaded_crop.size
-            target_width = int(target_image_width_px) if target_image_width_px > 0 else source_width
-            target_height = max(1, int(round(target_width * source_height / max(source_width, 1))))
             scale_ratio: float | None = None
+            display_width = float(source_width)
+            display_height = float(source_height)
+            encoded_width = source_width
+            encoded_height = source_height
             if crop_format == CROP_FORMAT_V2:
+                base_display_width = float(target_image_width_px or V2_TARGET_IMAGE_WIDTH_PX)
+                base_display_height = base_display_width * source_height / max(source_width, 1)
                 scale_ratio = _problem_scale_ratio(
                     entry,
                     placement,
-                    float(target_width),
-                    float(target_height),
+                    base_display_width,
+                    base_display_height,
                     ignore_height_limit=continuous_flow,
                 )
-                target_width = max(1, int(round(target_width * scale_ratio)))
-                target_height = max(1, int(round(target_height * scale_ratio)))
+                display_width = base_display_width * scale_ratio
+                display_height = base_display_height * scale_ratio
+                encoded_width, encoded_height = _v2_encoded_image_size(
+                    (source_width, source_height),
+                    (display_width, display_height),
+                )
             return _ImageOnlyRecordImage(
                 crop_path=crop_path,
                 board_render_path=board_render_path,
                 image_bytes=b"",
                 secondary_bytes=b"",
-                width_px=target_width,
-                height_px=target_height,
+                width_px=encoded_width,
+                height_px=encoded_height,
                 scale_ratio=scale_ratio,
+                display_width_px=display_width,
+                display_height_px=display_height,
             )
         crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
     if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
         board_image = _build_transparent_reconstruction_image(
             crop_image,
             board_theme=board_theme,
+            text_priority=_problem_prefers_text_preservation(
+                entry.subject,
+                entry.source_path,
+                entry.title,
+            ),
         )
     elif dark_board:
         board_image = _load_board_export_image(
@@ -6460,22 +6700,28 @@ def _build_image_only_record_image(
     else:
         board_image = crop_image
 
-    if target_image_width_px > 0:
-        board_image = _resize_to_target_width(board_image, int(target_image_width_px))
-
     scale_ratio: float | None = None
+    display_width = float(board_image.width)
+    display_height = float(board_image.height)
     if crop_format == CROP_FORMAT_V2:
+        base_display_width = float(target_image_width_px or V2_TARGET_IMAGE_WIDTH_PX)
+        base_display_height = base_display_width * board_image.height / max(board_image.width, 1)
         scale_ratio = _problem_scale_ratio(
             entry,
             placement,
-            float(board_image.width),
-            float(board_image.height),
+            base_display_width,
+            base_display_height,
             ignore_height_limit=continuous_flow,
         )
-        if abs(scale_ratio - 1.0) > 0.001:
-            scaled_width = max(1, int(round(board_image.width * scale_ratio)))
-            scaled_height = max(1, int(round(board_image.height * scale_ratio)))
-            board_image = board_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+        display_width = base_display_width * scale_ratio
+        display_height = base_display_height * scale_ratio
+        encoded_size = _v2_encoded_image_size(board_image.size, (display_width, display_height))
+        if board_image.size != encoded_size:
+            board_image = board_image.resize(encoded_size, Image.Resampling.LANCZOS)
+    elif target_image_width_px > 0:
+        board_image = _resize_to_target_width(board_image, int(target_image_width_px))
+        display_width = float(board_image.width)
+        display_height = float(board_image.height)
 
     image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
     if crop_format == CROP_FORMAT_V2:
@@ -6494,6 +6740,8 @@ def _build_image_only_record_image(
         width_px=int(board_image.width),
         height_px=int(board_image.height),
         scale_ratio=scale_ratio,
+        display_width_px=display_width,
+        display_height_px=display_height,
     )
 
 
@@ -6561,10 +6809,9 @@ def build_image_only_records(
         _ensure_template_board_capacity(template, placements)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
     if crop_format == CROP_FORMAT_V2:
-        # v2 displays every problem at a fixed pixel width on the board, so
-        # the image is resized to V2_TARGET_IMAGE_WIDTH_PX before encoding
-        # and the width_hint is computed from that exact value rather than
-        # from the template's fixed_left_zone_ratio.
+        # V2_TARGET_IMAGE_WIDTH_PX is a logical ClassIn layout width. The
+        # encoded bitmap stays oversampled so small glyph strokes survive;
+        # width/height hints remain based on the logical display size.
         target_image_width_px = float(V2_TARGET_IMAGE_WIDTH_PX)
         available_width_px = target_image_width_px
     else:
@@ -6610,12 +6857,14 @@ def build_image_only_records(
             height_hint = normalize_height_px(rendered_height_px, page_count_hint=template.board_page_count)
         elif crop_format == CROP_FORMAT_V2:
             scale_ratio = float(image_payload.scale_ratio if image_payload.scale_ratio is not None else 1.0)
-            width_hint = normalize_width_px(float(image_payload.width_px))
+            display_width_px = float(image_payload.display_width_px or image_payload.width_px)
+            display_height_px = float(image_payload.display_height_px or image_payload.height_px)
+            width_hint = normalize_width_px(display_width_px)
             height_hint = normalize_height_px(
-                float(image_payload.height_px), page_count_hint=template.board_page_count
+                display_height_px, page_count_hint=template.board_page_count
             )
-            rendered_width_px = float(image_payload.width_px)
-            rendered_height_px = float(image_payload.height_px)
+            rendered_width_px = display_width_px
+            rendered_height_px = display_height_px
             x_px = _problem_origin_x_px(entry, rendered_width_px)
             y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
         else:

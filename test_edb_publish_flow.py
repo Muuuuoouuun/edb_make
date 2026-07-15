@@ -309,6 +309,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, ui_session["supplemental_item_count"])
             fragment = next(problem for problem in ui_session["problems"] if problem["id"] == "page-1-passage-13-14")
             self.assertEqual("passage_fragment", fragment["passageRole"])
+            self.assertEqual(fragment["imagePath"], fragment["originalImagePath"])
 
     def test_page_as_is_problem_entries_default_to_reconstruct_step(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2619,6 +2620,203 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual("page-1-passage-13-16", page_2.problems[0].metadata.get("passage_group_id"))
             self.assertIn("passage_cross_page_merge_check", problem_15.risk_flags)
 
+    def test_problem_entries_stitch_cross_page_passage_fragments_into_one_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            first_image = Image.new("RGB", (900, 1200), "white")
+            second_image = Image.new("RGB", (900, 1200), "white")
+            ImageDraw.Draw(first_image).rectangle((80, 100, 520, 260), fill=(220, 20, 20))
+            ImageDraw.Draw(second_image).rectangle((80, 80, 520, 240), fill=(20, 40, 220))
+            first_image.save(page_1_image)
+            second_image.save(page_2_image)
+
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=first_image,
+                    original_size=first_image.size,
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=second_image,
+                    original_size=second_image.size,
+                ),
+            ]
+            passage_metadata = {
+                "passage_group_id": "page-1-passage-13-14",
+                "passage_range": {"start": 13, "end": 14},
+                "passage_child_problem_numbers": [13, 14],
+            }
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_1_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="passage-part-1",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=60, top=80, width=500, height=220),
+                        reading_order=0,
+                        text="첫 페이지 지문",
+                    ),
+                    ContentBlock(
+                        block_id="q13",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=60, top=360, width=500, height=180),
+                        reading_order=1,
+                        text="13. 첫 번째 문항",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-passage-fragment",
+                        subject=Subject.KOREAN,
+                        title="지문 13~14",
+                        stem_block_ids=["passage-part-1"],
+                        metadata={
+                            **passage_metadata,
+                            "passage_role": "passage_fragment",
+                            "supplemental_item": True,
+                        },
+                    ),
+                    ProblemUnit(
+                        unit_id="page-1-problem-13",
+                        subject=Subject.KOREAN,
+                        title="13.",
+                        stem_block_ids=["q13"],
+                        metadata={
+                            **passage_metadata,
+                            "problem_number": 13,
+                            "passage_role": "child_question",
+                        },
+                    ),
+                ],
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_2_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="passage-part-2",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=60, top=60, width=500, height=220),
+                        reading_order=0,
+                        text="둘째 페이지에서 이어지는 지문",
+                    ),
+                    ContentBlock(
+                        block_id="q14",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=60, top=340, width=500, height=180),
+                        reading_order=1,
+                        text="14. 두 번째 문항",
+                    ),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-2-passage-fragment",
+                        subject=Subject.KOREAN,
+                        title="지문 이어짐",
+                        stem_block_ids=["passage-part-2"],
+                        metadata={
+                            **passage_metadata,
+                            "passage_role": "passage_fragment",
+                            "supplemental_item": True,
+                        },
+                    ),
+                    ProblemUnit(
+                        unit_id="page-2-problem-14",
+                        subject=Subject.KOREAN,
+                        title="14.",
+                        stem_block_ids=["q14"],
+                        metadata={
+                            **passage_metadata,
+                            "problem_number": 14,
+                            "passage_role": "child_question",
+                        },
+                    ),
+                ],
+            )
+
+            entries = build_problem_entries(
+                prepared_pages,
+                [page_1, page_2],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            passage_entries = [entry for entry in entries if entry.problem_number is None]
+            self.assertEqual(["page-1-passage-fragment"], [entry.problem_id for entry in passage_entries])
+            self.assertEqual(3, len(entries))
+            passage_entry = passage_entries[0]
+            with Image.open(passage_entry.crop_path).convert("RGB") as stitched:
+                pixels = list(stitched.get_flattened_data())
+            self.assertGreater(sum(1 for red, green, blue in pixels if red > 180 and green < 80 and blue < 80), 1000)
+            self.assertGreater(sum(1 for red, green, blue in pixels if blue > 180 and red < 80 and green < 100), 1000)
+            self.assertEqual([], passage_entry.blocks)
+
+            by_id = {entry.problem_id: entry for entry in entries}
+            self.assertEqual(["q13"], [block.block_id for block in by_id["page-1-problem-13"].blocks])
+            self.assertEqual(["q14"], [block.block_id for block in by_id["page-2-problem-14"].blocks])
+            for entry in entries:
+                self.assertNotIn("passage_cross_page_merge_check", entry.risk_flags)
+
+            records, placements, _header_flag = problem_board.build_records(
+                entries,
+                LayoutTemplate(name="academy-default"),
+                record_mode="mixed",
+                output_dir=root / "out",
+                text_confidence_threshold=0.78,
+                dark_board=False,
+            )
+            self.assertEqual(3, len(records))
+            self.assertEqual(3, len(placements))
+            self.assertEqual("page-1-passage-fragment", placements[0]["problem_id"])
+            self.assertEqual(1, placements[0]["image_record_count"])
+            self.assertEqual(0, placements[0]["text_record_count"])
+
+            ui_session = build_problem_ui_session(
+                prepared_pages,
+                placements,
+                root / "out",
+                None,
+                [page_1_image, page_2_image],
+                record_mode="mixed",
+                pages=[page_1, page_2],
+                template=LayoutTemplate(name="academy-default"),
+            )
+            session_by_id = {problem["id"]: problem for problem in ui_session["problems"]}
+            self.assertNotIn("page-2-passage-fragment", session_by_id)
+            stitched_payload = session_by_id["page-1-passage-fragment"]
+            self.assertTrue(stitched_payload["passageFragmentsMerged"])
+            self.assertEqual(
+                ["page-1", "page-2"],
+                stitched_payload["passageMergedSourcePageIds"],
+            )
+            self.assertNotIn("passage_cross_page_merge_check", stitched_payload["riskFlags"])
+            self.assertEqual(1, ui_session["crossPagePassageGroupCount"])
+
+            primary_metadata = page_1.problems[0].metadata
+            self.assertTrue(primary_metadata.get("passage_fragments_merged"))
+            self.assertEqual(
+                ["page-1-passage-fragment", "page-2-passage-fragment"],
+                primary_metadata.get("passage_merged_fragment_ids"),
+            )
+            self.assertEqual(
+                "page-1-passage-fragment",
+                page_2.problems[0].metadata.get("passage_merged_into_problem_id"),
+            )
+
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3985,7 +4183,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([entry.problem_id for entry in entries], [item["problem_id"] for item in placements])
             self.assertEqual(len(entries), len(records))
 
-    def test_v2_image_only_record_encoding_keeps_target_width(self):
+    def test_v2_image_only_record_keeps_logical_width_and_oversamples_bitmap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             entry = self._make_problem_entry(root, "problem-1", Box(0, 40, 380, 300))
@@ -4002,8 +4200,44 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             self.assertEqual(1, len(records))
             self.assertEqual(problem_board.CROP_FORMAT_V2, placements[0]["crop_format"])
-            self.assertEqual(problem_board.V2_TARGET_IMAGE_WIDTH_PX, placements[0]["image_pixel_width"])
+            self.assertGreaterEqual(
+                placements[0]["image_pixel_width"],
+                problem_board.V2_ENCODED_IMAGE_MIN_WIDTH_PX,
+            )
+            self.assertEqual(
+                float(problem_board.V2_TARGET_IMAGE_WIDTH_PX),
+                placements[0]["rendered_width_px"],
+            )
             self.assertEqual(1.0, placements[0]["placement_scale_ratio"])
+
+    def test_v2_fit_width_page_keeps_high_res_pixels_without_changing_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            full_page = Image.new("RGB", (1697, 2400), "white")
+            ImageDraw.Draw(full_page).text((120, 180), "국어 통이미지 글자 보존", fill="black")
+            full_page.save(entry.crop_path)
+            full_page.save(entry.board_render_path)
+            entry.input_intent = "page-as-is"
+            entry.placement_scale_ratio = 2.1148148148
+
+            _records, placements = build_image_only_records(
+                [entry],
+                LayoutTemplate(name="academy-default"),
+                crop_format=problem_board.CROP_FORMAT_V2,
+                dark_board=False,
+            )
+
+            placement = placements[0]
+            expected_display_width = problem_board.V2_TARGET_IMAGE_WIDTH_PX * entry.placement_scale_ratio
+            self.assertAlmostEqual(expected_display_width, placement["rendered_width_px"], places=3)
+            self.assertGreaterEqual(placement["image_pixel_width"], 1500)
+            self.assertGreater(placement["image_pixel_width"], placement["rendered_width_px"] * 2.4)
+            self.assertAlmostEqual(
+                2400 / 1697,
+                placement["image_pixel_height"] / placement["image_pixel_width"],
+                places=3,
+            )
 
     def test_v1_page_as_is_export_uses_fit_width_continuous_flow(self):
         with tempfile.TemporaryDirectory() as tmp:

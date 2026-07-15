@@ -211,6 +211,93 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertNotIn("ai_image_reconstruction_summary", session)
             self.assertNotIn("aiImageReconstruction", session["problems"][0])
 
+    def test_korean_auto_mode_uses_fast_content_safe_path_without_api_key(self):
+        os.environ.pop("GEMINI_API_KEY", None)
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            session["problems"][0]["subject"] = "korean"
+
+            with patch.object(app_server, "reconstruct_problem_image") as reconstruct:
+                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+
+            reconstruct.assert_not_called()
+            problem = updated["problems"][0]
+            self.assertEqual("local", problem["aiImageReconstruction"]["provider"])
+            self.assertEqual("preserve", problem["aiImageReconstruction"]["resolvedMode"])
+            self.assertEqual("content_safe_primary", problem["aiImageReconstruction"]["deliveryMode"])
+            self.assertEqual("normal", problem["reviewStatus"])
+
+    def test_auto_mode_infers_korean_from_input_filename_when_subject_is_unknown(self):
+        os.environ.pop("GEMINI_API_KEY", None)
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            session["problems"][0]["subject"] = "unknown"
+            session["input_files"] = [str(root / "2026년_고2_국어_문제.pdf")]
+
+            updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+
+            metadata = updated["problems"][0]["aiImageReconstruction"]
+            self.assertEqual("korean", metadata["subject"])
+            self.assertEqual("preserve", metadata["resolvedMode"])
+
+    def test_explicit_ai_for_korean_requires_semantic_text_review(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            session["problems"][0]["subject"] = "korean"
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct):
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
+
+            problem = updated["problems"][0]
+            self.assertEqual("check_needed", problem["reviewStatus"])
+            self.assertIn("ai_image_reconstructed_check_text", problem["riskFlags"])
+            semantic_gate = problem["aiImageReconstruction"]["semanticTextPreservation"]
+            self.assertEqual("unverified", semantic_gate["status"])
+            self.assertTrue(semantic_gate["review_required"])
+
+    def test_page_as_is_old_session_recovers_normalized_page_source(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            normalized_page = root / "normalized-page.png"
+            enhanced_page = root / "already-enhanced.png"
+            Image.new("RGB", (800, 1200), "white").save(normalized_page)
+            Image.new("RGB", (1600, 2400), "white").save(enhanced_page)
+            problem = session["problems"][0]
+            problem["imagePath"] = enhanced_page.resolve().as_uri()
+            problem["inputIntent"] = "page-as-is"
+            session["pages"] = [{
+                "id": "page-1",
+                "problemIds": ["problem-1"],
+                "sourceImagePath": str(normalized_page.resolve()),
+            }]
+
+            recovered = app_server._original_problem_image_path(problem, session)
+
+            self.assertEqual(normalized_page.resolve(), recovered)
+
+    def test_enhance_restarts_from_original_image_instead_of_upscaling_prior_result(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+            original_path = root / "original.png"
+            Image.new("RGB", (200, 100), "white").save(original_path)
+            session["problems"][0]["originalImagePath"] = original_path.resolve().as_uri()
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as reconstruct:
+                app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
+
+            self.assertEqual(original_path.resolve(), Path(reconstruct.call_args.args[0]).resolve())
+
     def test_openai_provider_still_supported_as_fallback(self):
         os.environ["OPENAI_API_KEY"] = "test-openai-key"
         with TemporaryDirectory() as raw_tmp:
@@ -580,6 +667,22 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertEqual(loaded.mode, "RGBA")
             self.assertEqual(loaded.getpixel((0, 0))[3], 0)
             self.assertEqual(loaded.getpixel((4, 3))[3], 255)
+
+    def test_stage_three_text_priority_skips_neural_upscaler(self):
+        source = Image.new("RGB", (320, 180), "white")
+        pixels = source.load()
+        for x in range(20, 300):
+            pixels[x, 80] = (0, 0, 0)
+
+        with patch("upscayl_backend.auto_upscale_image") as neural_upscale:
+            output = build_problem_board_edb._build_transparent_reconstruction_image(
+                source,
+                text_priority=True,
+            )
+
+        neural_upscale.assert_not_called()
+        self.assertEqual("RGBA", output.mode)
+        self.assertGreaterEqual(output.width, 1024)
 
 
 if __name__ == "__main__":

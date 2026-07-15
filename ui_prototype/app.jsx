@@ -73,7 +73,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "dark": false,
   "boardColor": "#1d3a2c",
   "accent": "#2f6fed",
-  "boardColumns": 2
+  "boardColumns": 1
 }/*EDITMODE-END*/;
 
 const BOARD_COLORS = ['#1d3a2c', '#101418', '#264653', '#3a2f24'];
@@ -112,6 +112,15 @@ const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, from
 const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
   clientY > rect.top + rect.height / 2 ? 'after' : 'before'
 ));
+const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clientY, edgePx = 64, maxPx = 22) => {
+  const topStrength = clientY < rect.top + edgePx ? 1 - Math.max(0, clientY - rect.top) / edgePx : 0;
+  const bottomStrength = clientY > rect.bottom - edgePx ? 1 - Math.max(0, rect.bottom - clientY) / edgePx : 0;
+  if (topStrength > 0) return -Math.max(1, Math.ceil((topStrength ** 2) * maxPx));
+  if (bottomStrength > 0) return Math.max(1, Math.ceil((bottomStrength ** 2) * maxPx));
+  return 0;
+});
+const problemDisplayName = REORDER_HELPERS.problemDisplayName || ((item, index) => item?.name || `문제 ${index + 1}`);
+const problemSourceLabel = REORDER_HELPERS.problemSourceLabel || (item => item?.source || '업로드 원본');
 
 // 자료별 자연 높이 (1.0 = 한 페이지)
 const HEIGHT_BY_KIND = {
@@ -142,6 +151,8 @@ const ADJACENT_RETRY_MIN_PADDING_PX = 28;
 const BOARD_DRAG_REORDER_THRESHOLD_PX = 28;
 const BOARD_DRAG_AUTOSCROLL_EDGE_PX = 58;
 const BOARD_DRAG_AUTOSCROLL_MAX_PX = 22;
+const RAIL_DRAG_AUTOSCROLL_EDGE_PX = 72;
+const RAIL_DRAG_AUTOSCROLL_MAX_PX = 18;
 const MANUAL_CROP_EDGE_MAX = 0.45;
 const MANUAL_CROP_OUTSET_MAX = 0.60;
 const MANUAL_CROP_EDGE_STEP = 0.01;
@@ -606,6 +617,7 @@ const freshInitialItems = () => INITIAL_ITEMS.map(item => ({ ...item }));
 // smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
 function smoothScrollTo(el, top, duration = 380){
   if (!el) return;
+  if (duration <= 0){ el.scrollTop = top; return; }
   const start = el.scrollTop;
   const delta = top - start;
   if (Math.abs(delta) < 4){ el.scrollTop = top; return; }
@@ -664,8 +676,8 @@ function normalizeProcessingStep(step){
 const stepLabel = s => {
   const step = normalizeProcessingStep(s);
   if (step === 's1') return '1단계';
-  if (step === 's2') return '2단계 · AI';
-  if (step === 's3') return '3단계 · 재구성';
+  if (step === 's2') return '2단계 · 원문 보존';
+  if (step === 's3') return '3단계 · 고화질';
   return '대기';
 };
 
@@ -2492,9 +2504,7 @@ function ReviewStage({
       : mutating
         ? '처리 중입니다'
       : '';
-  const imageEnhanceDisabledReason = !aiAvailable
-    ? 'Gemini API 키를 먼저 저장해 주세요'
-    : imageEnhanceBusy
+  const imageEnhanceDisabledReason = imageEnhanceBusy
       ? 'AI 재구성 중입니다'
       : mutating
         ? '처리 중입니다'
@@ -2651,7 +2661,7 @@ function ReviewStage({
         <span className="count-chip">{selectedList.length}개 선택됨</span>
         <span className="hint">
           {selectedHasPageChromeArtifact
-            ? '페이지 선/번호가 감지된 문제입니다. 3단계 재구성으로 다시 뽑거나 원본 틀을 조정하세요.'
+            ? '페이지 선/번호가 감지된 문제입니다. 3단계 원문 보존으로 다시 뽑거나 원본 틀을 조정하세요.'
             : selectedList.length === 1
             ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
             : sameSourcePage
@@ -2665,11 +2675,11 @@ function ReviewStage({
             <button
               className="btn danger"
               type="button"
-              title={imageEnhanceDisabledReason || `${selectedPageChromeProblemIds.length}개 문항을 3단계 재구성으로 다시 생성`}
-              onClick={() => onEnhanceImage?.(selectedPageChromeProblemIds)}
-              disabled={!aiAvailable || imageEnhanceBusy || mutating || !onEnhanceImage}
+              title={imageEnhanceDisabledReason || `${selectedPageChromeProblemIds.length}개 문항을 글자 보존 고화질로 다시 생성`}
+              onClick={() => onEnhanceImage?.(selectedPageChromeProblemIds, { mode: 'preserve' })}
+              disabled={imageEnhanceBusy || mutating || !onEnhanceImage}
             >
-              {Icon.wand} 3단계 재구성 {selectedPageChromeProblemIds.length}
+              {Icon.wand} 3단계 원문 보존 {selectedPageChromeProblemIds.length}
             </button>
           )}
           {selectedList.length >= 2 && (
@@ -3219,6 +3229,7 @@ function ItemsRail({
   const pointerDragRef = useRef(null);
   const suppressClickRef = useRef(false);
   const dropTargetRef = useRef(null);
+  const railAutoScrollRef = useRef({ raf: null, clientX: null, clientY: null });
   const [recentSessionsCollapsed, setRecentSessionsCollapsed] = useState(() => {
     try {
       const stored = window.localStorage?.getItem(RECENT_SESSIONS_COLLAPSED_KEY);
@@ -3313,6 +3324,52 @@ function ItemsRail({
     return id && id !== sourceId ? { id, position: 'after' } : null;
   };
 
+  const stopRailAutoScroll = () => {
+    if (railAutoScrollRef.current.raf) {
+      cancelAnimationFrame(railAutoScrollRef.current.raf);
+    }
+    railAutoScrollRef.current = { raf: null, clientX: null, clientY: null };
+  };
+
+  const stepRailAutoScroll = () => {
+    const rail = railRef.current;
+    const sourceId = dragId.current;
+    const { clientX, clientY } = railAutoScrollRef.current;
+    if (!rail || !sourceId || clientY == null) {
+      stopRailAutoScroll();
+      return;
+    }
+    const delta = edgeAutoScrollDelta(
+      rail.getBoundingClientRect(),
+      clientY,
+      RAIL_DRAG_AUTOSCROLL_EDGE_PX,
+      RAIL_DRAG_AUTOSCROLL_MAX_PX
+    );
+    if (!delta) {
+      railAutoScrollRef.current.raf = null;
+      return;
+    }
+    const previousTop = rail.scrollTop;
+    rail.scrollTop = Math.max(0, Math.min(rail.scrollHeight - rail.clientHeight, previousTop + delta));
+    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceId);
+    setCurrentDropTarget(target);
+    if (rail.scrollTop === previousTop) {
+      railAutoScrollRef.current.raf = null;
+      return;
+    }
+    railAutoScrollRef.current.raf = requestAnimationFrame(stepRailAutoScroll);
+  };
+
+  const applyRailAutoScroll = (clientX, clientY) => {
+    railAutoScrollRef.current.clientX = clientX;
+    railAutoScrollRef.current.clientY = clientY;
+    if (!railAutoScrollRef.current.raf) {
+      railAutoScrollRef.current.raf = requestAnimationFrame(stepRailAutoScroll);
+    }
+  };
+
+  useEffect(() => () => stopRailAutoScroll(), []);
+
   const startPointerDrag = (event, itemId) => {
     if (event.button !== 0 || event.target.closest?.('button')) return;
     pointerDragRef.current = {
@@ -3335,6 +3392,7 @@ function ItemsRail({
     drag.moved = true;
     event.preventDefault();
     setDraggingId(drag.id);
+    applyRailAutoScroll(event.clientX, event.clientY);
     const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
     setCurrentDropTarget(target);
   };
@@ -3349,10 +3407,14 @@ function ItemsRail({
       event.preventDefault();
       suppressClickRef.current = true;
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
-      if (target) reorder(drag.id, target.id, target.position, { resetPlacement: true });
+      if (target) {
+        setActive(drag.id);
+        reorder(drag.id, target.id, target.position, { resetPlacement: true });
+      }
     }
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     pointerDragRef.current = null;
+    stopRailAutoScroll();
     clearDragState();
   };
 
@@ -3390,7 +3452,7 @@ function ItemsRail({
         <h2>자료</h2>
         <span className="count">{items.length}</span>
         <div className="spacer" />
-        <button className="icon-btn" title="전체를 2단계 AI 변환" data-tooltip="모든 자료를 2단계 AI 변환으로 지정" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
+        <button className="icon-btn" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
         <button
           className="icon-btn"
           title={canAddDummy ? '더미 추가' : '실제 세션 또는 대기열이 있을 때는 더미를 추가하지 않습니다'}
@@ -3401,7 +3463,15 @@ function ItemsRail({
         <button className="icon-btn" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" onClick={addSample}>{Icon.upload}</button>
       </div>
 
-      <div className="items" ref={railRef}>
+      <div
+        className="items"
+        ref={railRef}
+        onDragOver={e => {
+          if (!dragId.current || e.dataTransfer?.types?.includes('Files')) return;
+          e.preventDefault();
+          applyRailAutoScroll(e.clientX, e.clientY);
+        }}
+      >
         <div
           className={`drop-zone ${hasSessionItems ? 'is-compact' : ''} ${dropZoneActive ? 'is-active' : ''}`}
           onClick={addSample}
@@ -3687,7 +3757,10 @@ function ItemsRail({
               e.dataTransfer.setData('text/plain', it.id);
             }}
             onDragEnter={e => updateDropTarget(e, it.id)}
-            onDragOver={e => updateDropTarget(e, it.id)}
+            onDragOver={e => {
+              applyRailAutoScroll(e.clientX, e.clientY);
+              updateDropTarget(e, it.id);
+            }}
             onDragLeave={e => {
               if (e.currentTarget.contains(e.relatedTarget)) return;
               if (dropTargetRef.current?.id === it.id) setCurrentDropTarget(null);
@@ -3696,10 +3769,17 @@ function ItemsRail({
               e.preventDefault();
               const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
               const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && sourceId !== it.id) reorder(sourceId, it.id, position, { resetPlacement: true });
+              if (sourceId && sourceId !== it.id) {
+                setActive(sourceId);
+                reorder(sourceId, it.id, position, { resetPlacement: true });
+              }
+              stopRailAutoScroll();
               clearDragState();
             }}
-            onDragEnd={clearDragState}
+            onDragEnd={() => {
+              stopRailAutoScroll();
+              clearDragState();
+            }}
           >
             <div className="grip" title="끌어 옮기기">
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
@@ -3713,15 +3793,15 @@ function ItemsRail({
                   className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
                   title={it.statusReason || it.statusLabel}
                 />
-                {it.name}
+                {problemDisplayName(it, i)}
               </div>
               <div className="sub">
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
-                {it.step === 's2' && <span className="tag s2">AI</span>}
-                {it.step === 's3' && <span className="tag s3">재구성</span>}
+                {it.step === 's2' && <span className="tag s2">보존</span>}
+                {it.step === 's3' && <span className="tag s3">고화질</span>}
                 {it.step === 'raw' && <span className="tag">대기</span>}
                 {hasPageChrome && <span className="tag page-chrome-tag">페이지 장식</span>}
-                <span className="source-label">{it.source}</span>
+                <span className="source-label" title={problemSourceLabel(it)}>{problemSourceLabel(it)}</span>
               </div>
             </div>
             <div className="actions">
@@ -3730,7 +3810,7 @@ function ItemsRail({
                 type="button"
                 title={downloadTitle}
                 data-tooltip={downloadTitle}
-                aria-label={`${it.name} PNG 다운로드`}
+                aria-label={`${problemDisplayName(it, i)} PNG 다운로드`}
                 disabled={!canDownloadItem || isDownloading}
                 onClick={e => {
                   e.stopPropagation();
@@ -3756,6 +3836,8 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
+  const previousTileRects = useRef(new Map());
+  const previousBoardOrder = useRef('');
   const syncLock = useRef(0);
   const positionDragRef = useRef(null);
   const suppressClickRef = useRef(null);
@@ -3838,6 +3920,44 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
   const [scrollTop, setScrollTop] = useState(0);
   const currentPage = Math.min(layout.totalPages, Math.floor(scrollTop / pageH) + 1);
+
+  useLayoutEffect(() => {
+    const nextOrder = items.map(item => String(item.id)).join('|');
+    const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== nextOrder);
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const nextRects = new Map();
+    items.forEach(item => {
+      const el = tileRefs.current[item.id];
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const previous = previousTileRects.current.get(item.id);
+      if (orderChanged && previous && !reduceMotion) {
+        const dx = previous.left - rect.left;
+        const dy = previous.top - rect.top;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          el.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.72 },
+              { transform: 'translate(0, 0)', opacity: 1 },
+            ],
+            { duration: 360, easing: 'cubic-bezier(.2,.82,.2,1)' }
+          );
+        }
+      }
+      nextRects.set(item.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
+    });
+    previousTileRects.current = nextRects;
+    previousBoardOrder.current = nextOrder;
+
+    if (!orderChanged || !activeId) return;
+    const activeIndex = items.findIndex(item => item.id === activeId);
+    const container = scrollRef.current;
+    const activePlacement = layout.positions[activeIndex];
+    if (!container || !activePlacement) return;
+    window.requestAnimationFrame(() => {
+      smoothScrollTo(container, Math.max(0, activePlacement.top - 12), reduceMotion ? 0 : 420);
+    });
+  }, [items, layout, activeId]);
 
   // when activeId changes externally, scroll the board to it
   useEffect(() => {
@@ -3936,14 +4056,12 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       return;
     }
     const rect = scroll.getBoundingClientRect();
-    let delta = 0;
-    if (clientY < rect.top + BOARD_DRAG_AUTOSCROLL_EDGE_PX) {
-      const strength = 1 - Math.max(0, clientY - rect.top) / BOARD_DRAG_AUTOSCROLL_EDGE_PX;
-      delta = -Math.ceil(strength * BOARD_DRAG_AUTOSCROLL_MAX_PX);
-    } else if (clientY > rect.bottom - BOARD_DRAG_AUTOSCROLL_EDGE_PX) {
-      const strength = 1 - Math.max(0, rect.bottom - clientY) / BOARD_DRAG_AUTOSCROLL_EDGE_PX;
-      delta = Math.ceil(strength * BOARD_DRAG_AUTOSCROLL_MAX_PX);
-    }
+    const delta = edgeAutoScrollDelta(
+      rect,
+      clientY,
+      BOARD_DRAG_AUTOSCROLL_EDGE_PX,
+      BOARD_DRAG_AUTOSCROLL_MAX_PX
+    );
     if (delta) {
       scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta));
       setScrollTop(scroll.scrollTop);
@@ -4201,7 +4319,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                       ref={el => { tileRefs.current[it.id] = el; }}
                       className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
                       onClick={() => onTileClick(it.id)}
-                      title={it.name}
+                      title={problemDisplayName(it, i)}
                       style={tileStyle}
                       onPointerDown={e => beginPositionDrag(e, it, p)}
                       onPointerMove={movePositionDrag}
@@ -4210,7 +4328,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     >
                       <div className="tile-hd">
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
-                        <span className="nm">{it.name}</span>
+                        <span className="nm">{problemDisplayName(it, i)}</span>
                         {p.spans > 1 && (
                           <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
                         )}
@@ -4224,7 +4342,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                           <span className="page-chrome-mark">페이지 장식</span>
                         )}
                         <span className={`step-mark ${it.step}`}>
-                          {it.step === 's1' ? '1' : it.step === 's2' ? 'AI' : it.step === 's3' ? 'HQ' : '··'}
+                          {it.step === 's1' ? '1' : it.step === 's2' ? '2' : it.step === 's3' ? 'HQ' : '··'}
                         </span>
                       </div>
                       <div className="tile-art">
@@ -4275,11 +4393,11 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
           </span>
           <span className="chip">
             <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
-            AI {aiCount}
+            원문 보존 {aiCount}
           </span>
           <span className="chip">
             <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
-            재구성 {reconstructCount}
+            고화질 {reconstructCount}
           </span>
           {rawCount > 0 && (
             <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
@@ -4593,7 +4711,7 @@ function SidePanel({
   const showFitWidth = !!item && itemInputIntent === 'page-as-is';
   const canZoomOut = item && placementScale > PLACEMENT_SCALE_MIN + 0.001;
   const canZoomIn = item && placementScale < maxScale - 0.001;
-  const canEnhanceCurrent = !!item && !!userSettings?.hasGeminiApiKey && !imageEnhanceBusy;
+  const canEnhanceCurrent = !!item && !imageEnhanceBusy;
   const updateStatus = updateInfo?.channelStatus || 'unknown';
   const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || '';
   const updateStatusLabel = updateBusy
@@ -4729,14 +4847,14 @@ function SidePanel({
               <>
                 <div className="item-meta">
                   <div className="nm">
-                    <div className="t">{item.name}</div>
+                    <div className="t">{problemDisplayName(item, activeIndex)}</div>
                     <div className="s">
                       <span className={`status-badge ${reviewStatusClass(item.reviewStatus)}`}>{item.statusLabel}</span>
                       <span className={`intent-badge intent-${itemInputIntent}`} title={itemIntentMeta.description}>
                         {Icon[itemIntentMeta.icon] || Icon.scan}
                         {itemIntentMeta.badgeLabel || itemIntentMeta.label}
                       </span>
-                      {item.source} · {item.type.toUpperCase()}
+                      {problemSourceLabel(item)} · {item.type.toUpperCase()}
                     </div>
                   </div>
                   <div className="pos-tag">{itemPosLabel}</div>
@@ -4791,27 +4909,27 @@ function SidePanel({
                   </button>
                   <button
                     className={`step-row ${item.step === 's2' ? 'on' : ''}`}
-                    data-tooltip="AI로 배경을 정리하고 칠판 색상에 맞게 변환"
+                    data-tooltip="원문 글자를 유지하면서 배경과 선명도를 빠르게 정리"
                     onClick={() => setStep(item.id, 's2')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">2단계 · AI 변환 <span className="ai-badge">AI</span></div>
-                      <div className="d">배경 제거 · 칠판 색상 자동 배치</div>
+                      <div className="t">2단계 · 원문 보존 <span className="ai-badge">FAST</span></div>
+                      <div className="d">글자 유지 · 배경 제거 · 빠른 선명화</div>
                     </div>
-                    <div className="meta-r">자동<strong>~ 4s</strong></div>
+                    <div className="meta-r">로컬<strong>1~4s</strong></div>
                   </button>
                   <button
                     className={`step-row ${item.step === 's3' ? 'on' : ''}`}
-                    data-tooltip="업스케일 후 투명 PNG로 고화질 재구성"
+                    data-tooltip="원문 보존 2K 또는 선택적 AI 재구성으로 고화질 제작"
                     onClick={() => setStep(item.id, 's3')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">3단계 · 고화질 <span className="ai-badge">HQ</span></div>
-                      <div className="d">업스케일 · 투명 PNG 재구성</div>
+                      <div className="t">3단계 · 고화질 <span className="ai-badge">2K</span></div>
+                      <div className="d">보존형 2K · 선택적 AI 재구성</div>
                     </div>
-                    <div className="meta-r">제작시<strong>~ 8s</strong></div>
+                    <div className="meta-r">선택<strong>1~8s</strong></div>
                   </button>
                 </div>
 
@@ -5104,15 +5222,26 @@ function SidePanel({
                         className="btn primary"
                         type="button"
                         style={{width: '100%', justifyContent: 'space-between'}}
-                        onClick={() => onEnhanceImage?.([item.id])}
+                        onClick={() => onEnhanceImage?.([item.id], { mode: 'preserve' })}
                         disabled={!canEnhanceCurrent}
-                        title={userSettings?.hasGeminiApiKey ? 'Nano Banana 2로 선택 문항을 투명 PNG로 재구성합니다' : 'Gemini API 키를 저장하면 사용할 수 있습니다'}
+                        title="글자를 새로 만들지 않고 원본 픽셀을 보존해 2K 투명 PNG로 개선합니다"
                       >
-                        <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} AI 업스케일 재구성</span>
-                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 2</span>
+                        <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 글자 보존 고화질</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>LOCAL 2K</span>
+                      </button>
+                      <button
+                        className="btn"
+                        type="button"
+                        style={{width: '100%', justifyContent: 'space-between', marginTop: 7}}
+                        onClick={() => onEnhanceImage?.([item.id], { mode: 'ai' })}
+                        disabled={!canEnhanceCurrent || !userSettings?.hasGeminiApiKey}
+                        title={userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
+                      >
+                        <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 선택적 AI 재구성</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 2K</span>
                       </button>
                       <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
-                        원문은 유지하고 문자·숫자 선명도와 투명 배경을 개선합니다. 적용 후 텍스트 검토 표시가 남습니다.
+                        국어·영어는 글자 보존형을 권장합니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
                       </div>
                     </div>
                   )}
@@ -5222,7 +5351,7 @@ function SidePanel({
             <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
 
             <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 AI 변환</span>
+              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
               <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
             </button>
             <button
@@ -8481,7 +8610,7 @@ async function postEnhanceImage(args, options = {}){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(args || {}),
   });
-  const json = await expectOkJson(resp, 'AI 업스케일 실패');
+  const json = await expectOkJson(resp, '고화질 처리 실패');
   return json;
 }
 
@@ -9095,21 +9224,29 @@ function App(){
   const undoMutation = useCallback(async () => {
     if (historyStack.length === 0) return;
     const snapshot = historyStack[historyStack.length - 1];
+    const viewBeforeUndo = view;
+    const activeBeforeUndo = activeId;
+    mutatingRef.current = true;
     setMutating(true);
     setLoading({ label: '되돌리는 중…', startedAt: Date.now() });
     try {
       const restored = await postRestore(snapshot);
       setHistoryStack(prev => prev.slice(0, -1));
       applySession(restored);
+      setView(viewBeforeUndo);
+      if ((restored?.problems || []).some(problem => problem?.id === activeBeforeUndo)) {
+        setActiveId(activeBeforeUndo);
+      }
       refreshSessionHistory();
       showToast('이전 상태로 되돌렸어요');
     } catch (e) {
       showSimpleErrorToast(e, '되돌리기 실패');
     } finally {
+      mutatingRef.current = false;
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, applySession, refreshSessionHistory, showSimpleErrorToast]);
+  }, [historyStack, view, activeId, applySession, refreshSessionHistory, showSimpleErrorToast]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -9197,12 +9334,13 @@ function App(){
     }
   }, [showSimpleErrorToast, showToast]);
 
-  const enhanceImageSession = useCallback(async (problemIds) => {
+  const enhanceImageSession = useCallback(async (problemIds, options = {}) => {
     if (!session) {
       showToast('변경할 세션이 없습니다');
       return;
     }
-    if (!userSettings?.hasGeminiApiKey) {
+    const mode = ['auto', 'preserve', 'ai'].includes(options?.mode) ? options.mode : 'auto';
+    if (mode === 'ai' && !userSettings?.hasGeminiApiKey) {
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
     }
@@ -9212,39 +9350,48 @@ function App(){
       return;
     }
     const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session);
+    const isPreserve = mode === 'preserve';
     const job = startBackgroundJob({
       scope: 'image-enhance',
-      label: ids.length === 1 ? 'AI 업스케일 재구성 중' : `${ids.length}개 문항 AI 업스케일 중`,
-      hint: 'Nano Banana 2로 투명 배경과 문자·숫자 선명도를 개선합니다.',
+      label: isPreserve
+        ? (ids.length === 1 ? '글자 보존 고화질 처리 중' : `${ids.length}개 문항 글자 보존 처리 중`)
+        : (ids.length === 1 ? '고화질 재구성 중' : `${ids.length}개 문항 고화질 처리 중`),
+      hint: isPreserve
+        ? '원본 글자 형태를 유지하며 로컬 2K 확대와 투명 배경 처리를 적용합니다.'
+        : '과목에 맞는 보존형 또는 Nano Banana 2K 경로를 선택합니다.',
     });
     try {
-      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini' }, { signal: job.controller.signal });
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode, size: '2K' }, { signal: job.controller.signal });
       if (job.controller.signal.aborted) return;
       const next = result.session;
-      const applied = (result.enhance || []).filter(row => row.status === 'applied').length;
+      const appliedRows = (result.enhance || []).filter(row => row.status === 'applied');
+      const applied = appliedRows.length;
+      const preserved = appliedRows.filter(row => row.resolvedMode === 'preserve').length;
+      const generated = appliedRows.filter(row => row.resolvedMode === 'ai').length;
+      const resultHint = [preserved ? `글자 보존 ${preserved}` : '', generated ? `AI ${generated}` : ''].filter(Boolean).join(' · ');
       setHistoryStack(prev => [...prev, snapshotBefore]);
       adoptMutatedSession(next, snapshotBefore);
       settleBackgroundJob(job.id, {
         status: 'done',
-        label: 'AI 업스케일 완료',
-        hint: applied ? `${applied}개 문항을 재구성했습니다.` : '적용된 문항이 없습니다. 결과를 확인해 주세요.',
+        label: '고화질 처리 완료',
+        hint: applied ? `${resultHint || `${applied}개 적용`} 완료` : '적용된 문항이 없습니다. 결과를 확인해 주세요.',
       });
-      showToast(applied ? `AI 업스케일 적용 · ${applied}개 문항` : 'AI 업스케일 결과를 확인해 주세요');
+      showToast(applied ? `고화질 적용 · ${resultHint || `${applied}개 문항`}` : '고화질 처리 결과를 확인해 주세요');
     } catch (e) {
       if (e?.name === 'AbortError') {
         settleBackgroundJob(job.id, {
           status: 'canceled',
-          label: 'AI 업스케일 취소됨',
+          label: '고화질 처리 취소됨',
           hint: '결과를 적용하지 않았습니다.',
         });
         return;
       }
       settleBackgroundJob(job.id, {
         status: 'failed',
-        label: 'AI 업스케일 실패',
+        label: '고화질 처리 실패',
         hint: e.message,
       }, 5000);
-      showSimpleErrorToast(e, 'AI 업스케일 실패');
+      showSimpleErrorToast(e, '고화질 처리 실패');
     }
   }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast]);
 
@@ -9659,17 +9806,35 @@ function App(){
     setPublished(false);
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
+    if (mutatingRef.current) {
+      showToast('이전 변경을 적용하는 중입니다');
+      return;
+    }
     const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
     if (reordered === items) return;
+    const snapshotBefore = session
+      ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
+      : null;
     const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
     const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
+    setActiveId(fromId);
     if (session) {
       const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns) || session;
+      if (snapshotBefore) setHistoryStack(prev => [...prev, snapshotBefore]);
       setSession(nextSession);
-      postRestore(nextSession).catch(e => console.warn('[board] reorder persist failed:', e.message));
+      mutatingRef.current = true;
+      setMutating(true);
+      postRestore(nextSession)
+        .then(() => refreshSessionHistory())
+        .catch(e => showSimpleErrorToast(e, '순서 저장 실패'))
+        .finally(() => {
+          mutatingRef.current = false;
+          setMutating(false);
+        });
     }
     setPublished(false);
+    showToast('문제 순서를 변경했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요');
   };
   const removeItem = (id) => {
     if (session) {

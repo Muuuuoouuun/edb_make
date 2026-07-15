@@ -123,9 +123,9 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("hasPageChromeArtifactFlag", source)
         self.assertIn("selectedPageChromeProblemIds", review_stage)
-        self.assertIn("onEnhanceImage?.(selectedPageChromeProblemIds)", review_stage)
+        self.assertIn("onEnhanceImage?.(selectedPageChromeProblemIds, { mode: 'preserve' })", review_stage)
         self.assertIn("imageEnhanceBusy", review_stage)
-        self.assertIn("3단계 재구성", review_stage)
+        self.assertIn("3단계 원문 보존", review_stage)
         self.assertIn("page-chrome-artifact", review_stage)
         self.assertIn("onEnhanceImage={enhanceImageSession}", review_usage)
         self.assertIn("imageEnhanceBusy={hasRunningImageEnhance}", review_usage)

@@ -216,7 +216,14 @@ class TestPassageGroupQualityScore(unittest.TestCase):
                 for problem in page_2.problems
                 if problem.metadata.get("passage_role") == "passage_fragment"
             ]
+            primary_fragments = [
+                problem
+                for problem in page_1.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            ]
             if len(fragments) != 1:
+                return False
+            if len(primary_fragments) != 1:
                 return False
             if fragments[0].metadata.get("passage_group_id") != "korean-cross-001-passage-18-21":
                 return False
@@ -226,7 +233,16 @@ class TestPassageGroupQualityScore(unittest.TestCase):
                 return False
             if "shared-passage-b" in entry_blocks.get(q20.unit_id, []):
                 return False
-            if "shared-passage-b" not in entry_blocks.get(fragments[0].unit_id, []):
+            primary_fragment = primary_fragments[0]
+            if primary_fragment.unit_id not in entry_blocks:
+                return False
+            if fragments[0].unit_id in entry_blocks:
+                return False
+            if entry_blocks.get(primary_fragment.unit_id) != []:
+                return False
+            if not primary_fragment.metadata.get("passage_fragments_merged"):
+                return False
+            if fragments[0].metadata.get("passage_merged_into_problem_id") != primary_fragment.unit_id:
                 return False
             return True
 

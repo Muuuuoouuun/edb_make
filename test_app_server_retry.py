@@ -10,6 +10,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from PIL import Image
+
 import app_server
 from structured_schema import Box
 
@@ -2994,6 +2996,10 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
     def test_session_publish_preserves_page_as_is_layout_metadata(self):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
+            original_page = root / "page-1-original.png"
+            published_page = root / "p-page.png"
+            Image.new("RGB", (1000, 1400), "white").save(original_page)
+            Image.new("RGB", (1600, 2240), "white").save(published_page)
             session = {
                 "session_name": "page-as-is-publish",
                 "inputIntent": "page-as-is",
@@ -3004,6 +3010,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                     {
                         "id": "p-page",
                         "title": "페이지 1",
+                        "originalImagePath": original_page.resolve().as_uri(),
                         "sourcePageId": "page-1",
                         "bbox": {"left": 0, "top": 0, "width": 1000, "height": 1400},
                         "riskFlags": [],
@@ -3078,6 +3085,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                             "title": "페이지 1",
                             "sourcePageId": "page-1",
                             "imagePath": (root / "p-page.png").resolve().as_uri(),
+                            "originalImagePath": published_page.resolve().as_uri(),
                             "bbox": {},
                             "riskFlags": [],
                             "inputIntent": "auto",
@@ -3153,6 +3161,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual("page-as-is", remembered_problem["input_intent"])
             self.assertEqual("continuous-page-as-is", remembered_problem["placementMode"])
             self.assertEqual("continuous-page-as-is", remembered_problem["placement_mode"])
+            self.assertEqual(original_page.resolve().as_uri(), remembered_problem["originalImagePath"])
+            self.assertEqual(original_page.resolve().as_uri(), remembered_problem["original_image_path"])
             self.assertTrue(remembered_problem["forceFullPageBounds"])
             self.assertTrue(remembered_problem["force_full_page_bounds"])
 

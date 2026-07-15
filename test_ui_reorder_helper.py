@@ -82,6 +82,65 @@ class TestUiReorderHelper(unittest.TestCase):
             """
         )
 
+    def test_edge_auto_scroll_accelerates_toward_the_edge(self) -> None:
+        run_node(
+            """
+            const { edgeAutoScrollDelta } = require('./ui_prototype/reorder.js');
+            const rect = { top: 100, bottom: 500, height: 400 };
+            const upperInner = edgeAutoScrollDelta(rect, 150, 64, 24);
+            const upperEdge = edgeAutoScrollDelta(rect, 102, 64, 24);
+            const lowerInner = edgeAutoScrollDelta(rect, 450, 64, 24);
+            const lowerEdge = edgeAutoScrollDelta(rect, 498, 64, 24);
+            if (!(upperEdge < upperInner && upperInner < 0)) {
+              throw new Error(`upper edge should accelerate, got ${upperInner}/${upperEdge}`);
+            }
+            if (!(lowerEdge > lowerInner && lowerInner > 0)) {
+              throw new Error(`lower edge should accelerate, got ${lowerInner}/${lowerEdge}`);
+            }
+            if (edgeAutoScrollDelta(rect, 300, 64, 24) !== 0) {
+              throw new Error('middle of the viewport should not auto-scroll');
+            }
+            """
+        )
+
+    def test_problem_display_name_hides_noisy_split_file_names(self) -> None:
+        run_node(
+            r"""
+            const { problemDisplayName } = require('./ui_prototype/reorder.js');
+            const noisy = { name: '2026_07_15_very_long_uploaded_exam_scan_final.png (위)' };
+            const clean = { name: '이차함수 12번' };
+            const generated = { name: 'page-003 problem 7 (아래)' };
+            if (problemDisplayName(noisy, 2) !== '문제 3 · 위쪽') {
+              throw new Error(`noisy upper split label was not compacted: ${problemDisplayName(noisy, 2)}`);
+            }
+            if (problemDisplayName(generated, 4) !== '문제 5 · 아래쪽') {
+              throw new Error(`generated lower split label was not compacted: ${problemDisplayName(generated, 4)}`);
+            }
+            if (problemDisplayName(clean, 8) !== clean.name) {
+              throw new Error('meaningful problem titles should be preserved');
+            }
+            """
+        )
+
+    def test_problem_source_label_hides_hashes_and_file_paths(self) -> None:
+        run_node(
+            r"""
+            const { problemSourceLabel } = require('./ui_prototype/reorder.js');
+            const generated = { source: '096f22823794d518af25f05a6267a8fad8cb2035_exam-page-012' };
+            const path = { source: '/tmp/uploads/very_long_exam_scan.png' };
+            const clean = { source: '모의고사 · 6월' };
+            if (problemSourceLabel(generated) !== '원본 12쪽') {
+              throw new Error(`generated page source was not compacted: ${problemSourceLabel(generated)}`);
+            }
+            if (problemSourceLabel(path) !== '업로드 원본') {
+              throw new Error(`file path source was not hidden: ${problemSourceLabel(path)}`);
+            }
+            if (problemSourceLabel(clean) !== clean.source) {
+              throw new Error('meaningful source labels should be preserved');
+            }
+            """
+        )
+
     def test_board_reflow_reserves_scaled_long_image_height(self) -> None:
         run_node(
             r"""
