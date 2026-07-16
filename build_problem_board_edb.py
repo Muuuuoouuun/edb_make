@@ -1221,6 +1221,7 @@ class _ProblemAssetTask:
     crop_path: Path
     board_render_path: Path
     chalk_color: tuple[int, int, int]
+    segment_bounds: tuple[Box, ...] | None = None
     text_payload: str | None = None
     text_title: str | None = None
     trim_edge_guides: bool = True
@@ -1391,17 +1392,37 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         _write_render_image(cutout_image, task.board_render_path)
         return crop.size
 
-    crop = task.source_image.crop(
-        _integer_crop_rect_for_box(
-            task.bounds,
-            image_width=task.source_image.width,
-            image_height=task.source_image.height,
+    def crop_segment(bounds: Box) -> Image.Image:
+        segment = task.source_image.crop(
+            _integer_crop_rect_for_box(
+                bounds,
+                image_width=task.source_image.width,
+                image_height=task.source_image.height,
+            )
         )
-    )
-    if task.trim_edge_guides:
-        crop = _trim_source_page_chrome(crop)
-    if task.pad_edges:
-        crop = _pad_problem_crop_edges(crop)
+        if task.trim_edge_guides:
+            segment = _trim_source_page_chrome(segment)
+        if task.pad_edges:
+            segment = _pad_problem_crop_edges(segment)
+        return _flatten_passage_segment_on_white(segment)
+
+    if task.segment_bounds:
+        segments = [crop_segment(bounds) for bounds in task.segment_bounds]
+        gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(segments) > 1 else 0
+        crop = Image.new(
+            "RGB",
+            (
+                max(segment.width for segment in segments),
+                sum(segment.height for segment in segments) + gap * (len(segments) - 1),
+            ),
+            "white",
+        )
+        cursor_y = 0
+        for segment in segments:
+            crop.paste(segment, (0, cursor_y))
+            cursor_y += segment.height + gap
+    else:
+        crop = crop_segment(task.bounds)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(task.crop_path)
     enhanced_crop = _enhance_problem_crop(crop)
@@ -3165,6 +3186,25 @@ def build_problem_entries(
                 page, problem, next_problem, block_by_id, other_problem_block_ids
             )
             blocks = gap_filled if gap_filled else own_blocks
+            passage_segment_blocks = sorted(
+                (
+                    block
+                    for block in own_blocks
+                    if block.metadata.get("segmenter") == "pdf-passage-range"
+                ),
+                key=lambda block: (
+                    int(block.metadata.get("passage_fragment_index") or 0),
+                    block.reading_order,
+                ),
+            )
+            stitched_segment_bounds = (
+                tuple(block.bbox for block in passage_segment_blocks)
+                if str(problem.metadata.get("passage_role") or "") == "passage_fragment"
+                and len(passage_segment_blocks) > 1
+                else None
+            )
+            if stitched_segment_bounds:
+                blocks = passage_segment_blocks
             blocks = _filter_page_chrome_blocks(page, blocks)
             raw_problem_number = problem.metadata.get("problem_number")
             if isinstance(raw_problem_number, int):
@@ -3319,6 +3359,7 @@ def build_problem_entries(
                     else _ProblemAssetTask(
                         source_image=prepared_page.image,
                         bounds=merged_box,
+                        segment_bounds=stitched_segment_bounds,
                         crop_path=crop_path,
                         board_render_path=board_render_path,
                         chalk_color=chalk_color,

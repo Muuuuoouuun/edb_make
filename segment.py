@@ -109,7 +109,10 @@ PDF_PASSAGE_RANGE_CUES = (
     "chart",
     "graph",
 )
-PDF_EXAMPLE_MARKER_RE = re.compile(r"^\s*(?:ex|example|예제)\s*[\)\.]?", re.IGNORECASE)
+PDF_EXAMPLE_MARKER_RE = re.compile(
+    r"^\s*(?:(?:ex|example)\b|예제)\s*[\)\.]?",
+    re.IGNORECASE,
+)
 PDF_WORKBOOK_HASH_SECTION_RE = re.compile(r"^\s*#\s*[0-9０-９]{1,3}\s*[\.\)]?")
 PDF_WORKBOOK_NUMBER_SECTION_RE = re.compile(
     r"^\s*[0-9０-９]{1,2}\.\s*[가-힣A-Za-z][가-힣A-Za-z0-9\s·ㆍ\-()]{0,32}$"
@@ -815,7 +818,6 @@ def _assign_pdf_marker_columns(
                 (visual_columns[index].left, visual_columns[index].right),
             )
             for index, column_markers in enumerate(grouped)
-            if column_markers
         ]
         if entries:
             return entries, len(visual_columns), True
@@ -1290,6 +1292,73 @@ def _pdf_same_column_text_bottom_after_header(
     return min(float(image_height), max(bottoms) + max(18.0, float(image_height) * 0.012))
 
 
+def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int) -> bool:
+    if box.top > float(image_height) * 0.12:
+        return False
+    compact = unicodedata.normalize("NFKC", str(text or ""))
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if not compact:
+        return True
+    if compact in {"고 1", "고 2", "고 3", "국어 영역", "영어 영역"}:
+        return True
+    if re.fullmatch(r"[━─—\-_=·•\s]+", compact):
+        return True
+    if re.fullmatch(r"\d{1,2}\s+\d{1,2}", compact):
+        return True
+    return False
+
+
+def _pdf_passage_column_text_top(
+    text_lines: list[dict[str, Any]],
+    *,
+    left_bound: float,
+    right_bound: float,
+    bottom: float,
+    image_height: int,
+) -> float | None:
+    tops: list[float] = []
+    for line in text_lines:
+        line_box = _marker_bbox(line)
+        if line_box is None or line_box.top >= bottom:
+            continue
+        line_center_x = (line_box.left + line_box.right) / 2.0
+        if not left_bound - 8.0 <= line_center_x <= right_bound + 8.0:
+            continue
+        if _looks_like_pdf_page_header_text_line(line.get("text"), line_box, image_height):
+            continue
+        if _looks_like_pdf_footer_text_line(line.get("text"), line_box, image_height):
+            continue
+        tops.append(line_box.top)
+    if not tops:
+        return None
+    return max(0.0, min(tops) - max(8.0, float(image_height) * 0.004))
+
+
+def _pdf_passage_column_text_bottom(
+    text_lines: list[dict[str, Any]],
+    *,
+    left_bound: float,
+    right_bound: float,
+    top: float,
+    bottom: float,
+    image_height: int,
+) -> float | None:
+    bottoms: list[float] = []
+    for line in text_lines:
+        line_box = _marker_bbox(line)
+        if line_box is None or line_box.bottom <= top or line_box.top >= bottom:
+            continue
+        line_center_x = (line_box.left + line_box.right) / 2.0
+        if not left_bound - 8.0 <= line_center_x <= right_bound + 8.0:
+            continue
+        if _looks_like_pdf_footer_text_line(line.get("text"), line_box, image_height):
+            continue
+        bottoms.append(line_box.bottom)
+    if not bottoms:
+        return None
+    return min(bottom, max(bottoms) + max(18.0, float(image_height) * 0.012))
+
+
 def _trim_pdf_passage_column_bottom_to_ink(
     image: Image.Image,
     *,
@@ -1415,6 +1484,12 @@ def _should_use_pdf_example_marker_segmentation(
     markers: list[dict[str, Any]],
     text_lines: list[dict[str, Any]],
 ) -> bool:
+    # A set-problem range is stronger evidence of an exam page than an
+    # incidental line beginning with "ex".  Prefer numbered-problem/range
+    # segmentation so strings such as "EXW" cannot consume the whole page as
+    # a workbook example.
+    if any(_extract_pdf_passage_range(line.get("text")) for line in text_lines):
+        return False
     example_count = sum(1 for line in text_lines if _is_pdf_example_marker_text(line.get("text")))
     if example_count <= 0:
         return False
@@ -1591,94 +1666,160 @@ def _build_pdf_passage_range_blocks(
             header_center_x,
             image,
         )
-        child_boxes_in_column_after_header: list[Box] = []
-        child_boxes_any_column: list[Box] = []
-        marker_boxes_in_column_after_header: list[Box] = []
-        for _entry_column_index, markers, (entry_left, entry_right) in column_entries:
-            for marker in markers:
-                number = marker.get("number")
-                if not isinstance(number, int):
-                    continue
+        ordered_columns = sorted(column_entries, key=lambda entry: entry[0])
+        header_column_position = next(
+            (
+                position
+                for position, (entry_column_index, _markers, _bounds) in enumerate(ordered_columns)
+                if entry_column_index == column_index
+            ),
+            0,
+        )
+        range_blocks_start = len(blocks)
+        stopped_at_problem = False
+        for fragment_index, (
+            fragment_column_index,
+            column_markers,
+            (fragment_left, fragment_right),
+        ) in enumerate(ordered_columns[header_column_position:], start=1):
+            marker_boundaries: list[Box] = []
+            for marker in column_markers:
                 marker_box = _marker_bbox(marker)
                 if marker_box is None:
                     continue
-                marker_center_x = (marker_box.left + marker_box.right) / 2.0
-                in_header_column = left_bound - 8.0 <= marker_center_x <= right_bound + 8.0
-                if marker_box.top > header_box.top and in_header_column:
-                    marker_boxes_in_column_after_header.append(marker_box)
-                if not start <= number <= end:
+                if fragment_column_index == column_index and marker_box.top <= header_box.top:
                     continue
-                child_boxes_any_column.append(marker_box)
-                if (
-                    marker_box.top > header_box.top
-                    and in_header_column
-                ):
-                    child_boxes_in_column_after_header.append(marker_box)
-        if not child_boxes_any_column:
-            continue
+                marker_boundaries.append(marker_box)
 
-        top = max(0.0, header_box.top - max(8.0, float(image.height) * 0.004))
-        if child_boxes_in_column_after_header:
-            first_child_top = min(box.top for box in child_boxes_in_column_after_header)
-            bottom = min(float(image.height), first_child_top - max(14.0, float(image.height) * 0.007))
-        elif marker_boxes_in_column_after_header:
-            first_marker_top = min(box.top for box in marker_boxes_in_column_after_header)
-            bottom = min(float(image.height), first_marker_top - max(14.0, float(image.height) * 0.007))
-        else:
-            text_bottom = _pdf_same_column_text_bottom_after_header(
-                sorted_lines,
-                header_box,
-                left_bound=left_bound,
-                right_bound=right_bound,
-                image_height=image.height,
-            )
-            ink_bottom = _trim_pdf_passage_column_bottom_to_ink(
-                image,
-                left=left_bound,
-                right=right_bound,
-                top=top,
-                bottom=float(image.height),
-            )
-            bottom = max(text_bottom, ink_bottom) if text_bottom is not None else ink_bottom
-        if bottom - top < max(40.0, float(image.height) * 0.02):
-            continue
+            first_marker_top = min((box.top for box in marker_boundaries), default=float(image.height))
+            if fragment_column_index == column_index:
+                fragment_top = max(0.0, header_box.top - max(8.0, float(image.height) * 0.004))
+            else:
+                detected_top = _pdf_passage_column_text_top(
+                    sorted_lines,
+                    left_bound=fragment_left,
+                    right_bound=fragment_right,
+                    bottom=first_marker_top,
+                    image_height=image.height,
+                )
+                if detected_top is None:
+                    if marker_boundaries:
+                        stopped_at_problem = True
+                        break
+                    continue
+                fragment_top = detected_top
 
-        box = Box.from_points(left_bound, top, right_bound, bottom)
-        metadata = _enrich_block_segmentation_metadata(
-            {
-                "segmenter": "pdf-passage-range",
-                "column_index": column_index,
-                "question_band_index": 0,
-                "source_band_index": 0,
-                "marker_kind": "passage_range",
-                "passage_range_start": start,
-                "passage_range_end": end,
-                "passage_range": {"start": start, "end": end},
-                "display_title": text[:120],
-                "force_image_record": True,
-                "shared_passage": True,
-            },
-            segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
-            block_area=box.area,
-            page_area=page_area,
-            large_block_threshold=LARGE_BLOCK_AREA_RATIO,
-            page_width=image.width,
-            page_height=image.height,
-        )
-        blocks.append(
-            ContentBlock(
-                block_id=f"{page_id}-block-{start_index + len(blocks):03d}",
-                block_type=BlockType.IMAGE,
-                bbox=box,
-                reading_order=0,
-                text=text[:180],
-                confidence=1.0,
-                metadata=metadata,
+            if marker_boundaries:
+                fragment_bottom = min(
+                    float(image.height),
+                    first_marker_top - max(14.0, float(image.height) * 0.007),
+                )
+                stopped_at_problem = True
+            else:
+                text_bottom = _pdf_passage_column_text_bottom(
+                    sorted_lines,
+                    left_bound=fragment_left,
+                    right_bound=fragment_right,
+                    top=fragment_top,
+                    bottom=float(image.height),
+                    image_height=image.height,
+                )
+                ink_bottom = _trim_pdf_passage_column_bottom_to_ink(
+                    image,
+                    left=fragment_left,
+                    right=fragment_right,
+                    top=fragment_top,
+                    bottom=float(image.height),
+                )
+                fragment_bottom = max(text_bottom, ink_bottom) if text_bottom is not None else ink_bottom
+
+            if fragment_bottom - fragment_top < max(40.0, float(image.height) * 0.02):
+                if stopped_at_problem:
+                    break
+                continue
+
+            box = Box.from_points(fragment_left, fragment_top, fragment_right, fragment_bottom)
+            metadata = _enrich_block_segmentation_metadata(
+                {
+                    "segmenter": "pdf-passage-range",
+                    "column_index": fragment_column_index,
+                    "question_band_index": 0,
+                    "source_band_index": 0,
+                    "marker_kind": "passage_range" if fragment_index == 1 else "passage_continuation",
+                    "passage_range_start": start,
+                    "passage_range_end": end,
+                    "passage_range": {"start": start, "end": end},
+                    "passage_fragment_index": fragment_index,
+                    "display_title": text[:120],
+                    "force_image_record": True,
+                    "shared_passage": True,
+                },
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                block_area=box.area,
+                page_area=page_area,
+                large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+                page_width=image.width,
+                page_height=image.height,
             )
-        )
+            blocks.append(
+                ContentBlock(
+                    block_id=f"{page_id}-block-{start_index + len(blocks):03d}",
+                    block_type=BlockType.IMAGE,
+                    bbox=box,
+                    reading_order=0,
+                    text=text[:180] if fragment_index == 1 else None,
+                    confidence=1.0,
+                    metadata=metadata,
+                )
+            )
+            if stopped_at_problem:
+                break
+
+        range_fragment_count = len(blocks) - range_blocks_start
+        for block in blocks[range_blocks_start:]:
+            block.metadata["passage_fragment_count"] = range_fragment_count
         seen_ranges.add(seen_key)
 
     return blocks
+
+
+def _segment_pdf_passage_ranges_only(
+    image: Image.Image,
+    page_id: str,
+    text_lines: list[dict[str, Any]],
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    if not any(_extract_pdf_passage_range(line.get("text")) for line in text_lines):
+        return None
+    visual_columns = _detect_pdf_visual_column_boxes(image)
+    if len(visual_columns) == 2:
+        column_entries = [
+            (index + 1, [], (column.left, column.right))
+            for index, column in enumerate(visual_columns)
+        ]
+    else:
+        column_entries = [(1, [], (0.0, float(image.width)))]
+    page_area = _page_area_px(image.width, image.height)
+    blocks = _build_pdf_passage_range_blocks(
+        image,
+        page_id,
+        text_lines,
+        column_entries,
+        page_area=page_area,
+        start_index=1,
+    )
+    if not blocks:
+        return None
+    for index, block in enumerate(blocks):
+        block.reading_order = index
+    return blocks, {
+        "segmenter": "pdf-passage-ranges",
+        "column_count": len(column_entries),
+        "visual_column_bounds_used": len(visual_columns) == 2,
+        "pdf_passage_range_block_count": len(blocks),
+        "document_split_block_count": len(blocks),
+        "document_split_applied": True,
+        "content_box_area_ratio": 1.0,
+    }
 
 
 def _segment_pdf_problem_markers(
@@ -1716,6 +1857,34 @@ def _segment_pdf_problem_markers(
     )
     if not column_entries:
         return None
+
+    # A passage may contain a short numbered procedure (1., 2.) inside a
+    # higher-numbered question. If the exam sequence resumes later on the
+    # same page, treat that low-number reset as nested content.
+    ordered_numbered_markers = [
+        marker
+        for _column_index, column_markers, _bounds in sorted(column_entries, key=lambda entry: entry[0])
+        for marker in sorted(
+            column_markers,
+            key=lambda item: (_marker_bbox(item).top if _marker_bbox(item) else 0.0),
+        )
+        if isinstance(marker.get("number"), int)
+    ]
+    nested_enumeration_marker_ids: set[int] = set()
+    highest_number = 0
+    for marker_index, marker in enumerate(ordered_numbered_markers):
+        number = int(marker["number"])
+        if highest_number >= 4 and number <= 3:
+            later_numbers = [
+                int(candidate["number"])
+                for candidate in ordered_numbered_markers[marker_index + 1 :]
+                if isinstance(candidate.get("number"), int)
+            ]
+            if any(candidate > highest_number for candidate in later_numbers):
+                nested_enumeration_marker_ids.add(id(marker))
+                continue
+        highest_number = max(highest_number, number)
+
     page_area = _page_area_px(image.width, image.height)
     usable_text_lines = text_lines if isinstance(text_lines, list) else []
     blocks: list[ContentBlock] = []
@@ -1728,6 +1897,7 @@ def _segment_pdf_problem_markers(
             marker
             for marker in column_markers
             if id(marker) not in ignored_tiny_marker_ids
+            and id(marker) not in nested_enumeration_marker_ids
         ]
         if not usable_column_markers:
             continue
@@ -1865,6 +2035,7 @@ def _segment_pdf_problem_markers(
         "pdf_choice_bottom_trim_count": choice_bottom_trim_count,
         "pdf_content_bottom_trim_count": content_bottom_trim_count,
         "pdf_choice_visual_tail_count": choice_visual_tail_count,
+        "pdf_nested_enumeration_marker_count": len(nested_enumeration_marker_ids),
         "pdf_passage_range_block_count": len(passage_range_blocks),
         "document_split_block_count": len(blocks),
         "document_split_applied": True,
@@ -3462,10 +3633,10 @@ def segment_page(
     if _is_document_like_page(image_path, image):
         source_metadata = _source_metadata(image_path)
         marker_result = None
+        raw_text_lines = source_metadata.get("pdf_text_lines")
+        usable_text_lines = raw_text_lines if isinstance(raw_text_lines, list) else []
         raw_markers = source_metadata.get("pdf_problem_markers")
         if isinstance(raw_markers, list):
-            raw_text_lines = source_metadata.get("pdf_text_lines")
-            usable_text_lines = raw_text_lines if isinstance(raw_text_lines, list) else []
             if _should_use_pdf_example_marker_segmentation(raw_markers, usable_text_lines):
                 marker_result = _segment_pdf_example_markers(
                     image,
@@ -3479,6 +3650,12 @@ def segment_page(
                     raw_markers,
                     text_lines=usable_text_lines if usable_text_lines else None,
                 )
+        if marker_result is None and usable_text_lines:
+            marker_result = _segment_pdf_passage_ranges_only(
+                image,
+                page_id,
+                usable_text_lines,
+            )
         if marker_result is None and _is_image_upload_document_source(image_path, source_metadata):
             marker_result = _segment_visual_problem_markers(image, page_id, resolved_options)
         if marker_result is not None:

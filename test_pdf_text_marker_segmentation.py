@@ -5,7 +5,9 @@ from pathlib import Path
 import fitz
 from PIL import Image, ImageDraw
 
+from build_problem_board_edb import build_problem_entries
 from build_structured_page_json import build_page_model
+from layout_template_schema import LayoutTemplate
 from page_repair import build_ai_fallback_config
 import preprocess as preprocess_module
 from preprocess import prepare_source_pages
@@ -165,6 +167,193 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             )
             self.assertEqual("pdf-passage-range", shared_block.metadata.get("segmenter"))
             self.assertGreater(shared_block.bbox.top, first_problem_block.bbox.top)
+
+    def test_pdf_passage_range_stitches_following_column_before_child_questions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pdf_path = root / "two_column_continued_passage.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.draw_line((300, 45), (300, 755), color=(0, 0, 0), width=0.5)
+            page.insert_text((48, 82), "[1~2] Read the passage and answer the questions.", fontsize=12)
+            for row, y in enumerate(range(120, 730, 28), start=1):
+                page.insert_text((48, y), f"left passage line {row:02d}", fontsize=11)
+            for row, y in enumerate(range(82, 300, 28), start=1):
+                page.insert_text((330, y), f"continued passage line {row:02d}", fontsize=11)
+            page.insert_text((330, 350), "1. first question", fontsize=14)
+            page.insert_text((342, 410), "① a   ② b   ③ c", fontsize=12)
+            page.insert_text((330, 540), "2. second question", fontsize=14)
+            page.insert_text((342, 600), "① a   ② b   ③ c", fontsize=12)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.KOREAN,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            by_number = {
+                problem.metadata.get("problem_number"): problem
+                for problem in page_model.problems
+                if problem.metadata.get("problem_number") is not None
+            }
+            self.assertEqual({1, 2}, set(by_number))
+            passage = next(
+                problem
+                for problem in page_model.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            )
+            shared_ids = _problem_block_ids(passage)
+            self.assertEqual(2, len(shared_ids))
+            self.assertEqual(shared_ids, by_number[1].metadata.get("shared_passage_block_ids"))
+            self.assertEqual(shared_ids, by_number[2].metadata.get("shared_passage_block_ids"))
+            shared_blocks = [
+                next(block for block in page_model.blocks if block.block_id == block_id)
+                for block_id in shared_ids
+            ]
+            self.assertEqual({1, 2}, {block.metadata.get("column_index") for block in shared_blocks})
+            first_question = next(
+                block for block in page_model.blocks if block.metadata.get("problem_number") == 1
+            )
+            right_fragment = next(
+                block for block in shared_blocks if block.metadata.get("column_index") == 2
+            )
+            self.assertLess(right_fragment.bbox.bottom, first_question.bbox.top)
+
+            entries = build_problem_entries(
+                [prepared],
+                [page_model],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+            passage_entry = next(entry for entry in entries if entry.problem_id == passage.unit_id)
+            with Image.open(passage_entry.crop_path) as stitched:
+                self.assertLess(stitched.width, prepared.image.width * 0.7)
+                self.assertGreater(stitched.height, prepared.image.height * 0.75)
+
+    def test_pdf_passage_range_without_same_page_questions_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "passage_only_page.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.draw_line((300, 45), (300, 755), color=(0, 0, 0), width=0.5)
+            page.insert_text((48, 82), "[31~34] Read the passage and answer the questions.", fontsize=12)
+            for row, y in enumerate(range(120, 730, 28), start=1):
+                page.insert_text((48, y), f"left passage line {row:02d}", fontsize=11)
+            for row, y in enumerate(range(82, 730, 28), start=1):
+                page.insert_text((330, y), f"right passage line {row:02d}", fontsize=11)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.KOREAN,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            passages = [
+                problem
+                for problem in page_model.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            ]
+            self.assertEqual(1, len(passages))
+            self.assertEqual({"start": 31, "end": 34}, passages[0].metadata.get("passage_range"))
+            self.assertEqual(2, len(_problem_block_ids(passages[0])))
+            self.assertEqual("pdf-passage-ranges", page_model.metadata.get("segmenter"))
+
+    def test_pdf_passage_range_prevents_exw_from_becoming_example_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "exw_passage_page.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 82), "10. preceding question", fontsize=14)
+            page.insert_text((48, 280), "[11~15] Read the passage and answer the questions.", fontsize=12)
+            page.insert_text((48, 330), "shared passage first line", fontsize=11)
+            page.insert_text((330, 82), "EXW means Ex Works in international trade.", fontsize=11)
+            page.insert_text((330, 120), "continued passage line", fontsize=11)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.KOREAN,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertEqual("pdf-text-markers", page_model.metadata.get("segmenter"))
+            self.assertIn(10, {
+                problem.metadata.get("problem_number")
+                for problem in page_model.problems
+            })
+            passages = [
+                problem
+                for problem in page_model.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            ]
+            self.assertEqual(1, len(passages))
+            self.assertEqual({"start": 11, "end": 15}, passages[0].metadata.get("passage_range"))
+
+    def test_pdf_problem_markers_ignore_nested_low_number_procedure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "nested_procedure.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 82), "7. seventh question", fontsize=14)
+            page.insert_text((48, 260), "8. eighth question", fontsize=14)
+            page.insert_text((72, 350), "1. first procedure step", fontsize=11)
+            page.insert_text((72, 400), "2. second procedure step", fontsize=11)
+            page.insert_text((330, 82), "9. ninth question", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.KOREAN,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertEqual(
+                [7, 8, 9],
+                [
+                    problem.metadata.get("problem_number")
+                    for problem in page_model.problems
+                    if problem.metadata.get("problem_number") is not None
+                ],
+            )
+            self.assertEqual(2, page_model.metadata.get("pdf_nested_enumeration_marker_count"))
 
     def test_pdf_workbook_example_markers_ignore_section_headings_and_footer(self):
         with tempfile.TemporaryDirectory() as temp_dir:

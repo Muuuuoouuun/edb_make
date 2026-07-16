@@ -707,7 +707,15 @@ def group_problem_units(page: PageModel) -> PageModel:
             block.metadata["problem_number_source"] = diagnostic["problem_number_source"]
     has_text_markers = any(detect_problem_start(block) for block in classified_blocks)
     has_band_metadata = any("question_band_index" in block.metadata for block in classified_blocks)
-    fallback_grouping = not has_text_markers and (has_band_metadata or len(classified_blocks) > 1)
+    has_passage_range_blocks = any(
+        block.metadata.get("segmenter") == "pdf-passage-range"
+        for block in classified_blocks
+    )
+    fallback_grouping = (
+        not has_text_markers
+        and not has_passage_range_blocks
+        and (has_band_metadata or len(classified_blocks) > 1)
+    )
 
     diagnostics = _build_grouping_diagnostics(
         page=relabeled,
@@ -821,6 +829,45 @@ def group_problem_units(page: PageModel) -> PageModel:
     active_range: tuple[int, int] | None = None
     active_shared_blocks: list[str] = []
 
+    # PDF text-layer range blocks already carry an explicit range.  Build the
+    # mapping from that metadata instead of relying on their position relative
+    # to question markers; this also supports a passage-only page and a range
+    # whose questions begin in the following column/page.
+    explicit_range_blocks: dict[tuple[int, int], list[ContentBlock]] = {}
+    for block in classified_blocks:
+        if block.metadata.get("segmenter") != "pdf-passage-range":
+            continue
+        passage_range = block.metadata.get("passage_range")
+        if not isinstance(passage_range, dict):
+            continue
+        start = passage_range.get("start")
+        end = passage_range.get("end")
+        if not isinstance(start, int) or not isinstance(end, int) or start > end:
+            continue
+        explicit_range_blocks.setdefault((start, end), []).append(block)
+
+    explicit_range_block_ids: set[str] = set()
+    for (start, end), range_blocks in explicit_range_blocks.items():
+        ordered_range_blocks = sorted(
+            range_blocks,
+            key=lambda block: (
+                int(block.metadata.get("passage_fragment_index") or 0),
+                block.reading_order,
+            ),
+        )
+        shared_ids = [block.block_id for block in ordered_range_blocks]
+        explicit_range_block_ids.update(shared_ids)
+        shared_metadata = {
+            "passage_group_id": f"{page.page_id}-passage-{start}-{end}",
+            "passage_range": {"start": start, "end": end},
+            "passage_role": "child_question",
+            "shared_passage_block_ids": shared_ids,
+            "passage_child_problem_numbers": list(range(start, end + 1)),
+        }
+        for num in range(start, end + 1):
+            shared_blocks_by_number[num] = list(shared_ids)
+            shared_metadata_by_number[num] = dict(shared_metadata)
+
     def flush_active_shared_range() -> None:
         if active_range is None:
             return
@@ -837,6 +884,8 @@ def group_problem_units(page: PageModel) -> PageModel:
             shared_metadata_by_number[num] = dict(shared_metadata)
 
     for block in classified_blocks:
+        if block.block_id in explicit_range_block_ids:
+            continue
         range_val = extract_set_problem_range(block.text)
         if range_val is not None:
             flush_active_shared_range()
@@ -909,6 +958,9 @@ def group_problem_units(page: PageModel) -> PageModel:
 
         emitted_passage_group_ids.add(group_id)
         problems.append(passage_problem)
+
+    for shared_metadata in shared_metadata_by_number.values():
+        append_shared_passage_problem(shared_metadata)
 
     current: ProblemUnit | None = None
 
