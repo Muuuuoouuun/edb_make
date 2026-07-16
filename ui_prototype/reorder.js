@@ -66,6 +66,33 @@
     return direction * Math.max(1, Math.ceil(accelerated * safeMax));
   }
 
+  function appendBoundedHistory(history, entry, limit = 20) {
+    const current = Array.isArray(history) ? history : [];
+    if (!entry) return current;
+    const numericLimit = Math.floor(Number(limit));
+    const safeLimit = Number.isFinite(numericLimit) && numericLimit > 0 ? numericLimit : 20;
+    if (current.length < safeLimit) return [...current, entry];
+    return [...current.slice(current.length - safeLimit + 1), entry];
+  }
+
+  function nearestPlacementIndex(positions, targetTop) {
+    if (!Array.isArray(positions) || positions.length === 0) return -1;
+    const target = Number(targetTop) || 0;
+    let low = 0;
+    let high = positions.length;
+    while (low < high) {
+      const mid = low + Math.floor((high - low) / 2);
+      const top = Number(positions[mid]?.top) || 0;
+      if (top < target) low = mid + 1;
+      else high = mid;
+    }
+    if (low <= 0) return 0;
+    if (low >= positions.length) return positions.length - 1;
+    const previousTop = Number(positions[low - 1]?.top) || 0;
+    const nextTop = Number(positions[low]?.top) || 0;
+    return target - previousTop <= nextTop - target ? low - 1 : low;
+  }
+
   function problemDisplayName(item, index) {
     const raw = String(item?.name ?? item?.title ?? '').trim();
     const order = Math.max(1, Number(index) + 1 || 1);
@@ -96,8 +123,10 @@
   return {
     AFTER,
     BEFORE,
+    appendBoundedHistory,
     dropPositionFromClientY,
     edgeAutoScrollDelta,
+    nearestPlacementIndex,
     normalizeDropPosition,
     problemDisplayName,
     problemSourceLabel,

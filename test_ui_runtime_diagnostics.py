@@ -202,7 +202,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", reorder_flow)
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
-        self.assertIn("setHistoryStack(prev => [...prev, snapshotBefore])", reorder_flow)
+        self.assertIn("appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT)", reorder_flow)
         self.assertIn("setActiveId(fromId)", reorder_flow)
         self.assertIn("if (session)", remove_flow)
         self.assertIn("void mutateSession('exclude', { problemId: id });", remove_flow)
@@ -216,6 +216,20 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("const activeBeforeUndo = activeId;", undo_flow)
         self.assertIn("setView(viewBeforeUndo);", undo_flow)
         self.assertIn("setActiveId(activeBeforeUndo);", undo_flow)
+
+    def test_reorder_motion_avoids_drag_frame_wide_rerenders(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        board_stage = source.split("function BoardStage({", 1)[1].split("// ─── RIGHT:", 1)[0]
+
+        self.assertIn("}, [itemOrderSignature]);", items_rail)
+        self.assertIn("}, [boardOrderSignature, pageH, contentW, columnCount]);", board_stage)
+        self.assertIn("setCurrentPage(prev => prev === nextPage ? prev : nextPage);", board_stage)
+        self.assertIn("nearestPlacementIndex(layout.positions, c.scrollTop + 24)", board_stage)
+        self.assertNotIn("setScrollTop(scroll.scrollTop)", board_stage)
+        self.assertNotIn("layout.positions\n      .map", board_stage)
+        self.assertIn("top: el.offsetTop, height: el.offsetHeight", items_rail)
+        self.assertNotIn("rail.querySelectorAll('.item[data-item-id]')", items_rail)
 
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -13,6 +13,38 @@ def run_node(script: str) -> None:
 
 
 class TestUiReorderHelper(unittest.TestCase):
+    def test_nearest_placement_index_uses_sorted_page_positions(self) -> None:
+        run_node(
+            """
+            const { nearestPlacementIndex } = require('./ui_prototype/reorder.js');
+            const positions = [{ top: 0 }, { top: 100 }, { top: 100 }, { top: 260 }];
+            if (nearestPlacementIndex(positions, -20) !== 0) throw new Error('top clamp failed');
+            if (nearestPlacementIndex(positions, 90) !== 1) throw new Error('nearest middle failed');
+            if (nearestPlacementIndex(positions, 100) !== 1) throw new Error('duplicate first match failed');
+            if (nearestPlacementIndex(positions, 220) !== 3) throw new Error('lower neighbor failed');
+            if (nearestPlacementIndex(positions, 999) !== 3) throw new Error('bottom clamp failed');
+            if (nearestPlacementIndex([], 10) !== -1) throw new Error('empty positions failed');
+            """
+        )
+
+    def test_undo_history_is_bounded_without_mutating_the_original(self) -> None:
+        run_node(
+            """
+            const { appendBoundedHistory } = require('./ui_prototype/reorder.js');
+            const original = Array.from({ length: 20 }, (_, index) => ({ index }));
+            const next = appendBoundedHistory(original, { index: 20 }, 20);
+            if (next.length !== 20 || next[0].index !== 1 || next[19].index !== 20) {
+              throw new Error(`history was not capped correctly: ${JSON.stringify(next)}`);
+            }
+            if (original.length !== 20 || original[0].index !== 0) {
+              throw new Error('original history was mutated');
+            }
+            if (appendBoundedHistory(original, null, 20) !== original) {
+              throw new Error('empty snapshots should reuse the original history');
+            }
+            """
+        )
+
     def test_reorder_helper_inserts_before_and_after_targets(self) -> None:
         run_node(
             """

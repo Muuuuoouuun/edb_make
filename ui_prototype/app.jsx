@@ -119,6 +119,25 @@ const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clien
   if (bottomStrength > 0) return Math.max(1, Math.ceil((bottomStrength ** 2) * maxPx));
   return 0;
 });
+const appendBoundedHistory = REORDER_HELPERS.appendBoundedHistory || ((history, entry, limit = 20) => {
+  if (!entry) return history;
+  const next = [...history, entry];
+  return next.length > limit ? next.slice(next.length - limit) : next;
+});
+const UNDO_HISTORY_LIMIT = 20;
+const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positions, targetTop) => {
+  if (!positions.length) return -1;
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  positions.forEach((placement, index) => {
+    const distance = Math.abs(placement.top - targetTop);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+});
 const problemDisplayName = REORDER_HELPERS.problemDisplayName || ((item, index) => item?.name || `문제 ${index + 1}`);
 const problemSourceLabel = REORDER_HELPERS.problemSourceLabel || (item => item?.source || '업로드 원본');
 
@@ -3239,6 +3258,7 @@ function ItemsRail({
     }
   });
   const hasSessionItems = items.length > 0;
+  const itemOrderSignature = items.map(item => String(item.id)).join('|');
 
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
@@ -3264,7 +3284,7 @@ function ItemsRail({
       nextRects.set(it.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
     });
     previousItemRects.current = nextRects;
-  }, [items]);
+  }, [itemOrderSignature]);
 
   const clearDragState = () => {
     dragId.current = null;
@@ -3291,36 +3311,27 @@ function ItemsRail({
     setCurrentDropTarget({ id: targetId, position });
   };
 
-  const findPointerDropTarget = (clientX, clientY, sourceId) => {
+  const findPointerDropTarget = (_clientX, clientY, sourceId) => {
     const rail = railRef.current;
     if (!rail) return null;
-    const hit = document.elementFromPoint(clientX, clientY);
-    const row = hit?.closest?.('.item[data-item-id]');
-    if (row && rail.contains(row)) {
-      const id = row.getAttribute('data-item-id');
-      if (!id || id === sourceId) return null;
-      return {
-        id,
-        position: dropPositionFromClientY(row.getBoundingClientRect(), clientY),
-      };
-    }
-
-    const rows = Array.from(rail.querySelectorAll('.item[data-item-id]'));
+    const drag = pointerDragRef.current;
+    const rows = drag?.id === sourceId ? drag.rows : [];
     if (!rows.length) return null;
-    const first = rows[0].getBoundingClientRect();
-    if (clientY < first.top) {
-      const id = rows[0].getAttribute('data-item-id');
+    const railRect = rail.getBoundingClientRect();
+    const contentY = clientY - railRect.top + rail.scrollTop;
+    const first = rows[0];
+    if (contentY < first.top) {
+      const id = first.id;
       return id && id !== sourceId ? { id, position: 'before' } : null;
     }
     for (const candidate of rows) {
-      const rect = candidate.getBoundingClientRect();
-      const id = candidate.getAttribute('data-item-id');
-      if (clientY < rect.top + rect.height / 2) {
+      const id = candidate.id;
+      if (contentY < candidate.top + candidate.height / 2) {
         return id && id !== sourceId ? { id, position: 'before' } : null;
       }
     }
     const last = rows[rows.length - 1];
-    const id = last.getAttribute('data-item-id');
+    const id = last.id;
     return id && id !== sourceId ? { id, position: 'after' } : null;
   };
 
@@ -3372,12 +3383,17 @@ function ItemsRail({
 
   const startPointerDrag = (event, itemId) => {
     if (event.button !== 0 || event.target.closest?.('button')) return;
+    const rows = items.map(item => {
+      const el = itemRefs.current[item.id];
+      return el ? { id: item.id, top: el.offsetTop, height: el.offsetHeight } : null;
+    }).filter(Boolean);
     pointerDragRef.current = {
       id: itemId,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
+      rows,
     };
     dragId.current = itemId;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -3388,10 +3404,12 @@ function ItemsRail({
     if (!drag || drag.pointerId !== event.pointerId) return;
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
-    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
-    drag.moved = true;
+    if (!drag.moved) {
+      if (Math.hypot(dx, dy) < 5) return;
+      drag.moved = true;
+      setDraggingId(drag.id);
+    }
     event.preventDefault();
-    setDraggingId(drag.id);
     applyRailAutoScroll(event.clientX, event.clientY);
     const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
     setCurrentDropTarget(target);
@@ -3849,6 +3867,17 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const [pageH, setPageH] = useState(400);
   const [contentW, setContentW] = useState(0);
   const columnCount = normalizeBoardColumns(boardColumns);
+  const boardOrderSignature = items.map(item => String(item.id)).join('|');
+
+  const captureBoardTileRects = () => {
+    const nextRects = new Map();
+    Object.entries(tileRefs.current).forEach(([id, el]) => {
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      nextRects.set(id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
+    });
+    previousTileRects.current = nextRects;
+  };
 
   // measure page (viewport) height
   useEffect(() => {
@@ -3918,19 +3947,18 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
   }, [items, pageH, columnCount]);
 
-  const [scrollTop, setScrollTop] = useState(0);
-  const currentPage = Math.min(layout.totalPages, Math.floor(scrollTop / pageH) + 1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const visibleCurrentPage = Math.min(currentPage, layout.totalPages);
 
   useLayoutEffect(() => {
-    const nextOrder = items.map(item => String(item.id)).join('|');
-    const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== nextOrder);
+    const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== boardOrderSignature);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     const nextRects = new Map();
     items.forEach(item => {
       const el = tileRefs.current[item.id];
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const previous = previousTileRects.current.get(item.id);
+      const previous = previousTileRects.current.get(String(item.id));
       if (orderChanged && previous && !reduceMotion) {
         const dx = previous.left - rect.left;
         const dy = previous.top - rect.top;
@@ -3944,10 +3972,10 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
           );
         }
       }
-      nextRects.set(item.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
+      nextRects.set(String(item.id), { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
     });
     previousTileRects.current = nextRects;
-    previousBoardOrder.current = nextOrder;
+    previousBoardOrder.current = boardOrderSignature;
 
     if (!orderChanged || !activeId) return;
     const activeIndex = items.findIndex(item => item.id === activeId);
@@ -3957,7 +3985,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     window.requestAnimationFrame(() => {
       smoothScrollTo(container, Math.max(0, activePlacement.top - 12), reduceMotion ? 0 : 420);
     });
-  }, [items, layout, activeId]);
+  }, [boardOrderSignature, pageH, contentW, columnCount]);
 
   // when activeId changes externally, scroll the board to it
   useEffect(() => {
@@ -3968,19 +3996,14 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     const target = Math.max(0, layout.positions[idx].top - 8);
     if (Math.abs(container.scrollTop - target) < 6) return;
     smoothScrollTo(container, target);
-  }, [activeId, layout]);
+  }, [activeId, boardOrderSignature, pageH, columnCount]);
 
   const onScroll = () => {
     const c = scrollRef.current;
     if (!c) return;
-    setScrollTop(c.scrollTop);
-    // find item whose start is closest to (just below) scrollTop
-    let nearestIdx = 0;
-    let nearestDist = Infinity;
-    layout.positions.forEach((p, idx) => {
-      const dist = Math.abs(p.top - c.scrollTop - 24);
-      if (dist < nearestDist){ nearestDist = dist; nearestIdx = idx; }
-    });
+    const nextPage = Math.min(layout.totalPages, Math.floor(c.scrollTop / pageH) + 1);
+    setCurrentPage(prev => prev === nextPage ? prev : nextPage);
+    const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
       syncLock.current = Date.now();
@@ -4015,18 +4038,18 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (!content || !items.length) return null;
     const rect = content.getBoundingClientRect();
     const contentY = clientY - rect.top;
-    const candidates = layout.positions
-      .map((placement, index) => ({ placement, item: items[index] }))
-      .filter(row => row.item?.id && row.item.id !== sourceId);
-    if (!candidates.length) return null;
-    for (const row of candidates) {
-      const midpoint = row.placement.top + (row.placement.height / 2);
+    let lastCandidateId = null;
+    for (let index = 0; index < layout.positions.length; index += 1) {
+      const placement = layout.positions[index];
+      const item = items[index];
+      if (!item?.id || item.id === sourceId) continue;
+      lastCandidateId = item.id;
+      const midpoint = placement.top + (placement.height / 2);
       if (contentY < midpoint) {
-        return { id: row.item.id, position: 'before' };
+        return { id: item.id, position: 'before' };
       }
     }
-    const last = candidates[candidates.length - 1];
-    return last?.item?.id ? { id: last.item.id, position: 'after' } : null;
+    return lastCandidateId ? { id: lastCandidateId, position: 'after' } : null;
   };
 
   const updateBoardDropTarget = (clientY, sourceId, force = false) => {
@@ -4064,7 +4087,6 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     );
     if (delta) {
       scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta));
-      setScrollTop(scroll.scrollTop);
       updateBoardDropTarget(clientY, drag.id);
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
     } else {
@@ -4201,13 +4223,21 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     setCurrentBoardDropTarget(null);
     setDragMagnet(null);
     stopBoardAutoScroll();
+    window.requestAnimationFrame(captureBoardTileRects);
   };
 
-  const processedCount = items.filter(i => i.step !== 'raw').length;
-  const aiCount = items.filter(i => i.step === 's2').length;
-  const reconstructCount = items.filter(i => i.step === 's3').length;
-  const rawCount = items.filter(i => i.step === 'raw').length;
-  const s1Count = items.filter(i => i.step === 's1').length;
+  let processedCount = 0;
+  let aiCount = 0;
+  let reconstructCount = 0;
+  let rawCount = 0;
+  let s1Count = 0;
+  items.forEach(item => {
+    if (item.step === 'raw') rawCount += 1;
+    else processedCount += 1;
+    if (item.step === 's1') s1Count += 1;
+    else if (item.step === 's2') aiCount += 1;
+    else if (item.step === 's3') reconstructCount += 1;
+  });
   const leftZonePercent = `${FIXED_LEFT_ZONE_RATIO * 100}%`;
   const activeIndex = items.findIndex(x => x.id === activeId);
   const activePlacement = layout.positions[activeIndex] || null;
@@ -4366,7 +4396,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
             </div>
 
             <div className="board-pageind">
-              <span>{String(currentPage).padStart(2,'0')}</span>
+              <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
               <span className="sep">/</span>
               <span className="total">{String(layout.totalPages).padStart(2,'0')}</span>
               <span style={{marginLeft:6, opacity:.6}}>p</span>
@@ -9159,7 +9189,7 @@ function App(){
     try {
       await postRestore(snapshotBefore);
       const next = await postMutate(action, args);
-      setHistoryStack(prev => [...prev, snapshotBefore]);
+      setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       adoptMutatedSession(next, snapshotBefore);
       refreshSessionHistory();
       showToast(
@@ -9475,7 +9505,7 @@ function App(){
       const preserved = appliedRows.filter(row => row.resolvedMode === 'preserve').length;
       const generated = appliedRows.filter(row => row.resolvedMode === 'ai').length;
       const resultHint = [preserved ? `글자 보존 ${preserved}` : '', generated ? `AI ${generated}` : ''].filter(Boolean).join(' · ');
-      setHistoryStack(prev => [...prev, snapshotBefore]);
+      setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       adoptMutatedSession(next, snapshotBefore);
       settleBackgroundJob(job.id, {
         status: 'done',
@@ -9831,7 +9861,11 @@ function App(){
           problemIds: review.problemIds || [],
         });
         const restored = await postRestore(candidate);
-        setHistoryStack(prev => [...prev, review.snapshotBefore || currentSnapshot].filter(Boolean));
+        setHistoryStack(prev => appendBoundedHistory(
+          prev,
+          review.snapshotBefore || currentSnapshot,
+          UNDO_HISTORY_LIMIT
+        ));
         if (session) {
           adoptMutatedSession(restored, session);
         } else {
@@ -9927,7 +9961,9 @@ function App(){
     setActiveId(fromId);
     if (session) {
       const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns) || session;
-      if (snapshotBefore) setHistoryStack(prev => [...prev, snapshotBefore]);
+      if (snapshotBefore) {
+        setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
+      }
       setSession(nextSession);
       mutatingRef.current = true;
       setMutating(true);
