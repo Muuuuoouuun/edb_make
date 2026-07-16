@@ -26,7 +26,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("cropDraft.topRatio", side_panel)
         self.assertIn("cropDraft.bottomRatio", side_panel)
 
-    def test_side_panel_keeps_editor_controls_collapsed_behind_detail_settings(self) -> None:
+    def test_side_panel_splits_material_details_from_placement_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
@@ -40,11 +40,29 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("상세 설정", side_panel)
         self.assertNotIn("className=\"ptools\"", preview_block)
         self.assertIn("className=\"ptools detail-tools\"", detail_block)
-        self.assertIn("이동 · 자르기 · 확대 · 업스케일", detail_block)
+        self.assertIn("자르기 · 업스케일", detail_block)
+        self.assertIn("tab === 'placement'", side_panel)
+        self.assertIn("placement-position-control", side_panel)
         self.assertIn("const [cropPresetsOpen, setCropPresetsOpen] = useState(false)", side_panel)
         self.assertIn("자르기 프리셋", side_panel)
         self.assertIn("showItemConfirmBar", side_panel)
         self.assertIn("view === 'review'", side_panel)
+
+    def test_side_panel_exposes_three_tabs_and_group_placement_rules(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn('role="tablist"', side_panel)
+        self.assertEqual(side_panel.count('role="tab"'), 3)
+        self.assertIn("자료 <span", side_panel)
+        self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
+        self.assertIn("레이아웃, 색상, AI 인식 설정", side_panel)
+        self.assertIn("지문 한 번만 배치", side_panel)
+        self.assertIn("문항 함께 이동", side_panel)
+        self.assertIn("공간 부족 시 다음 칠판", side_panel)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", html)
 
     def test_main_controls_are_compact_by_default(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -93,7 +111,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("보드 배치 화면으로 이동", topbar)
         self.assertIn("현재 배치로 EDB 파일 제작", topbar)
         self.assertIn("선택한 자료의 처리 방식과 세부 편집", side_panel)
-        self.assertIn("위치 이동, 여백 자르기, 확대, 업스케일 상세 설정", side_panel)
+        self.assertIn("여백 자르기와 업스케일 상세 설정", side_panel)
+        self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
         self.assertIn(".ui-tooltip", html)
         self.assertIn("position: fixed", html)
 
@@ -113,7 +132,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".review-canvas-zoom-shell", html)
         self.assertIn("width: calc(100% * var(--review-zoom, 1))", html)
 
-    def test_side_panel_scale_control_explains_dynamic_maximum(self) -> None:
+    def test_placement_tab_exposes_scoped_dynamic_scale_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
@@ -121,14 +140,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         publish_panel = source.split("function PublishResultPanel", 1)[1]
         publish_panel = publish_panel.split("function SidePanel", 1)[0]
 
-        self.assertIn("scaleLimitBySlot", side_panel)
-        self.assertIn("현재 칸 높이 기준 최대", side_panel)
+        self.assertIn("const maxScale = maxPlacementScaleRatio(item)", side_panel)
+        self.assertIn("placementScalePercent", side_panel)
         self.assertIn("className=\"scale-range\"", side_panel)
-        self.assertIn("quick-scale-control", side_panel)
-        self.assertIn("scale-limit-note", side_panel)
+        self.assertIn("placement-width-options", side_panel)
+        self.assertIn("placementScope", side_panel)
         self.assertIn("--range-progress", side_panel)
         self.assertIn("너비 맞춤 이어붙임", side_panel)
-        self.assertIn("title=\"너비 맞춤 후 아래로 이어붙이기\"", side_panel)
         fit_width_flow = source.split("if (wantsFitWidth) {", 1)[1]
         fit_width_flow = fit_width_flow.split("} else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio'))", 1)[0]
         fit_width_helper = source.split("function fitWidthContinuousPageItem", 1)[1]
@@ -146,9 +164,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertNotIn("snapUpPages(startPages + slotSpanPages)", fit_width_helper)
         self.assertIn("publish-result-panel ${open ? 'open' : 'is-collapsed'}", publish_panel)
         self.assertIn("제작 결과 펼치기", publish_panel)
-        self.assertIn(".position-sliders input.scale-range", html)
-        self.assertIn(".quick-scale-control", html)
-        self.assertIn(".scale-limit-note.limited", html)
+        self.assertIn(".placement-scale-row input.scale-range", html)
+        self.assertIn(".placement-width-options", html)
+        self.assertIn(".placement-position-control", html)
         self.assertIn(".publish-result-panel.is-collapsed", html)
 
     def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:

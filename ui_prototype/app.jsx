@@ -4638,6 +4638,12 @@ function SidePanel({
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
   const [cropPresetsOpen, setCropPresetsOpen] = useState(false);
   const [cropDraft, setCropDraft] = useState({ ...EMPTY_MANUAL_CROP });
+  const [placementScope, setPlacementScope] = useState('item');
+  const [placementPreset, setPlacementPreset] = useState('auto');
+  const [placePassageOnce, setPlacePassageOnce] = useState(true);
+  const [movePassageGroupTogether, setMovePassageGroupTogether] = useState(true);
+  const [breakGroupOnOverflow, setBreakGroupOnOverflow] = useState(true);
+  const [placementApplied, setPlacementApplied] = useState(false);
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
@@ -4690,21 +4696,60 @@ function SidePanel({
   const maxScale = maxPlacementScaleRatio(item);
   const placementScale = item ? normalizePlacementScaleRatio(item.placementScaleRatio, maxScale) : DEFAULT_PLACEMENT_SCALE_RATIO;
   const placementScalePercent = Math.round(placementScale * 100);
-  const maxScalePercent = Math.round(maxScale * 100);
   const scaleRangeProgress = item
     ? Math.round(
         ((placementScale - PLACEMENT_SCALE_MIN) / Math.max(0.01, maxScale - PLACEMENT_SCALE_MIN)) * 100
       )
     : 0;
-  const scaleLimitBySlot = item && maxScale < PLACEMENT_SCALE_MAX - 0.001;
-  const scaleLimitLabel = item
-    ? scaleLimitBySlot
-      ? `현재 칸 높이 기준 최대 ${maxScalePercent}%까지 확대됩니다`
-      : `최대 ${maxScalePercent}%까지 확대됩니다`
-    : '자료를 선택하면 확대 범위가 표시됩니다';
   const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
   const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
+  const selectedPassageGroupId = item ? passageGroupIdFor(item) : '';
+  const selectedPassageRangeLabel = item ? passageRangeLabelFor(item) : '';
+  const selectedGroupItems = useMemo(() => {
+    if (!item) return [];
+    if (!selectedPassageGroupId) return [item];
+    return items.filter(candidate => passageGroupIdFor(candidate) === selectedPassageGroupId);
+  }, [item?.id, items, selectedPassageGroupId]);
+  const placementTargets = placementScope === 'all'
+    ? items
+    : placementScope === 'group' && selectedPassageGroupId
+      ? selectedGroupItems
+      : item
+        ? [item]
+        : [];
+  const passageFragmentCount = selectedGroupItems.filter(isPassageFragmentProblem).length;
+  const passageQuestionCount = Math.max(0, selectedGroupItems.length - passageFragmentCount);
+  const placementGroupHeightPages = selectedGroupItems.reduce((total, target) => (
+    total + Math.max(0.12, Number(target?.actualHeightPages ?? target?.actual_height_pages ?? target?.heightFrac) || 0.8)
+  ), 0);
+  const placementIntervals = selectedGroupItems
+    .map(target => {
+      const start = Math.max(0, Number(target?.startYPages ?? target?.start_y_pages) || 0);
+      const height = Math.max(0.12, Number(target?.actualHeightPages ?? target?.actual_height_pages ?? target?.heightFrac) || 0.8);
+      const scale = normalizePlacementScaleRatio(target?.placementScaleRatio ?? target?.placement_scale_ratio, maxPlacementScaleRatio(target));
+      const snapped = Number(target?.snappedNextStartYPages ?? target?.snapped_next_start_y_pages);
+      return {
+        start,
+        bottom: start + (height * scale),
+        next: Number.isFinite(snapped) ? snapped : start + (height * scale),
+      };
+    })
+    .sort((a, b) => a.start - b.start);
+  const placementHasOverlap = placementIntervals.some((interval, index) => (
+    index < placementIntervals.length - 1 && interval.bottom > placementIntervals[index + 1].start + 0.001
+  ));
+  const placementNextStartPages = placementIntervals.reduce((maximum, interval) => Math.max(maximum, interval.next), 0);
+  const placementGroupTitle = selectedPassageGroupId
+    ? `지문 묶음 ${selectedPassageRangeLabel || '연결'}`
+    : item
+      ? problemDisplayName(item, activeIndex)
+      : '배치할 자료를 선택하세요';
+  const placementGroupMeta = selectedPassageGroupId
+    ? `지문 ${passageFragmentCount}개 · 문항 ${passageQuestionCount}개 · ${placementGroupHeightPages.toFixed(1)}p`
+    : item
+      ? `자료 1개 · ${placementGroupHeightPages.toFixed(1)}p`
+      : '왼쪽 목록 또는 칠판에서 자료를 선택하세요';
   const currentInputIntent = normalizeInputIntent(session?.inputIntent || session?.input_intent || inputIntent);
   const itemInputIntent = normalizeInputIntent(item?.inputIntent || currentInputIntent);
   const itemIntentMeta = inputIntentMeta(itemInputIntent);
@@ -4746,38 +4791,63 @@ function SidePanel({
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
   const showItemConfirmBar = !!item && (bulk || item.step !== 'raw');
+  useEffect(() => {
+    setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
+    setPlacementPreset('auto');
+    setPlacementApplied(false);
+  }, [item?.id, selectedPassageGroupId]);
+
+  const updatePlacementTargets = (patchForTarget) => {
+    placementTargets.forEach(target => {
+      const patch = typeof patchForTarget === 'function' ? patchForTarget(target) : patchForTarget;
+      if (patch && target?.id) setPlacement?.(target.id, patch);
+    });
+    setPlacementApplied(false);
+  };
   const updatePlacement = (patch) => {
     if (!item) return;
-    setPlacement?.(item.id, patch);
+    updatePlacementTargets(patch);
   };
   const nudgePlacement = (dx, dy) => {
     if (!item) return;
-    updatePlacement({
-      xRatio: placementX + dx,
-      yRatio: placementY + dy,
-    });
+    updatePlacementTargets(target => ({
+      xRatio: normalizePlacementXRatio(target?.placementXRatio) + dx,
+      yRatio: normalizePlacementYRatio(target?.placementYRatio) + dy,
+    }));
   };
   const nudgeScale = (delta) => {
     if (!item) return;
-    updatePlacement({ scaleRatio: placementScale + delta });
+    updatePlacementTargets(target => ({
+      scaleRatio: normalizePlacementScaleRatio(target?.placementScaleRatio, maxPlacementScaleRatio(target)) + delta,
+    }));
   };
   const resetPlacement = () => {
-    updatePlacement({
+    updatePlacementTargets({
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
+      scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
     });
   };
-  const resetScale = () => {
-    updatePlacement({ scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO });
-  };
   const fitPlacementWidth = () => {
-    updatePlacement({
+    updatePlacementTargets({
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
       xEdited: false,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
       scaleRatio: PLACEMENT_FIT_WIDTH_SCALE_RATIO,
       fitWidth: true,
     });
+  };
+  const applyWidthPreset = (scaleRatio) => {
+    updatePlacementTargets(target => ({
+      scaleRatio: Math.min(scaleRatio, maxPlacementScaleRatio(target)),
+      fitWidth: false,
+    }));
+  };
+  const applyPlacementPreset = (preset) => {
+    setPlacementPreset(preset);
+    setPlacementApplied(false);
+    if (preset === 'side-by-side') setBoardColumns?.(2);
+    if (preset === 'auto' || preset === 'vertical' || preset === 'passage-only') setBoardColumns?.(1);
   };
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
@@ -4812,20 +4882,34 @@ function SidePanel({
 
   return (
     <div className={`col right ${view === 'review' ? 'review-context' : ''}`}>
-      <div className="tab-bar">
+      <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
         <button
           className={tab==='item' ? 'on' : ''}
           onClick={() => setTab('item')}
           title="선택 자료"
           data-tooltip="선택한 자료의 처리 방식과 세부 편집"
+          role="tab"
+          aria-selected={tab === 'item'}
         >
           자료 <span className="badge">{itemPosLabel}</span>
+        </button>
+        <button
+          className={tab==='placement' ? 'on' : ''}
+          onClick={() => setTab('placement')}
+          title="배치"
+          data-tooltip="자료 위치, 크기, 지문 묶음 배치"
+          role="tab"
+          aria-selected={tab === 'placement'}
+        >
+          배치
         </button>
         <button
           className={tab==='board' ? 'on' : ''}
           onClick={() => setTab('board')}
           title="설정"
           data-tooltip="레이아웃, 색상, AI 인식 설정"
+          role="tab"
+          aria-selected={tab === 'board'}
         >
           설정
         </button>
@@ -4937,17 +5021,16 @@ function SidePanel({
                   <button
                     className="detail-settings-toggle"
                     type="button"
-                    data-tooltip="위치 이동, 여백 자르기, 확대, 업스케일 상세 설정"
+                    data-tooltip="여백 자르기와 업스케일 상세 설정"
                     aria-expanded={advancedSettingsOpen}
                     onClick={() => setAdvancedSettingsOpen(open => !open)}
                   >
                     <span>
                       <strong>상세 설정</strong>
-                      <small>이동 · 자르기 · 확대 · 업스케일</small>
+                      <small>자르기 · 업스케일</small>
                     </span>
                     <span className="detail-settings-state">
                       {savedCropActive && <em>crop</em>}
-                      {Math.abs(placementScale - DEFAULT_PLACEMENT_SCALE_RATIO) >= 0.001 && <em>{placementScalePercent}%</em>}
                       <i aria-hidden="true">{advancedSettingsOpen ? '접기' : '펼치기'}</i>
                     </span>
                   </button>
@@ -4966,45 +5049,6 @@ function SidePanel({
                           title="상하좌우 여백 자르기"
                           onClick={focusManualCrop}
                         >{Icon.crop}</button>
-                        <button
-                          className="icon-btn"
-                          title="축소"
-                          disabled={!canZoomOut}
-                          onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}
-                        >{Icon.zoomOut}</button>
-                        <button
-                          className="icon-btn"
-                          title="확대"
-                          disabled={!canZoomIn}
-                          onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}
-                        >{Icon.zoomIn}</button>
-                        {showFitWidth && (
-                          <button
-                            className="btn fit-width-action"
-                            type="button"
-                            title="너비 맞춤 후 아래로 이어붙이기"
-                            disabled={!item}
-                            onClick={fitPlacementWidth}
-                          >{Icon.stretchHorizontal} 너비 맞춤 이어붙임</button>
-                        )}
-                        <div className="spacer" />
-                        <span className="scale">{placementScalePercent}%</span>
-                      </div>
-                      <div className="quick-scale-control">
-                        <input
-                          className="scale-range compact"
-                          type="range"
-                          min={Math.round(PLACEMENT_SCALE_MIN * 100)}
-                          max={Math.round(maxScale * 100)}
-                          value={placementScalePercent}
-                          style={{ '--range-progress': `${Math.max(0, Math.min(100, scaleRangeProgress))}%` }}
-                          title={scaleLimitLabel}
-                          data-tooltip={scaleLimitLabel}
-                          aria-label={`선택 자료 빠른 크기 조절 ${placementScalePercent}%`}
-                          onChange={e => updatePlacement({ scaleRatio: Number(e.target.value) / 100 })}
-                        />
-                        <strong>{placementScalePercent}%</strong>
-                        <small>{scaleLimitBySlot ? `최대 ${maxScalePercent}% · 칸 제한` : `최대 ${maxScalePercent}%`}</small>
                       </div>
 
                       <div className="panel-section-hd">
@@ -5108,114 +5152,6 @@ function SidePanel({
                       </div>
 
                       <div className="panel-section-hd">
-                        위치·크기 <span className="line" />
-                      </div>
-
-                      <div className="position-control">
-                        <div className="position-pad" aria-label="선택 자료 위치 미세 조절">
-                          <button
-                            className="pos-btn up"
-                            type="button"
-                            title="위로"
-                            disabled={!hasVerticalRoom}
-                            onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}
-                          >{Icon.arrowUp}</button>
-                          <button
-                            className="pos-btn left"
-                            type="button"
-                            title="왼쪽으로"
-                            onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}
-                          >{Icon.arrowLeft}</button>
-                          <button
-                            className="pos-btn reset"
-                            type="button"
-                            title="위치 초기화"
-                            onClick={resetPlacement}
-                          >{Icon.reset}</button>
-                          <button
-                            className="pos-btn right"
-                            type="button"
-                            title="오른쪽으로"
-                            onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}
-                          >{Icon.arrowRight}</button>
-                          <button
-                            className="pos-btn down"
-                            type="button"
-                            title="아래로"
-                            disabled={!hasVerticalRoom}
-                            onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}
-                          >{Icon.arrowDown}</button>
-                        </div>
-                        <div className="position-sliders">
-                          <label>
-                            <span>좌우</span>
-                            <input
-                              type="range"
-                              min="0"
-                              max="100"
-                              value={Math.round(placementX * 100)}
-                              onChange={e => updatePlacement({ xRatio: Number(e.target.value) / 100 })}
-                            />
-                            <strong>{Math.round(placementX * 100)}%</strong>
-                          </label>
-                          <label>
-                            <span>상하</span>
-                            <input
-                              type="range"
-                              min="0"
-                              max="100"
-                              value={Math.round((hasVerticalRoom ? placementY : 0) * 100)}
-                              disabled={!hasVerticalRoom}
-                              onChange={e => updatePlacement({ yRatio: Number(e.target.value) / 100 })}
-                            />
-                            <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
-                          </label>
-                          <label className="scale-slider-row">
-                            <span>크기</span>
-                            <input
-                              className="scale-range"
-                              type="range"
-                              min={Math.round(PLACEMENT_SCALE_MIN * 100)}
-                              max={Math.round(maxScale * 100)}
-                              value={placementScalePercent}
-                              style={{ '--range-progress': `${Math.max(0, Math.min(100, scaleRangeProgress))}%` }}
-                              title={scaleLimitLabel}
-                              data-tooltip={scaleLimitLabel}
-                              aria-label={`선택 자료 크기 ${placementScalePercent}%`}
-                              onChange={e => updatePlacement({ scaleRatio: Number(e.target.value) / 100 })}
-                            />
-                            <strong>{placementScalePercent}%</strong>
-                          </label>
-                          <div className={`scale-limit-note ${scaleLimitBySlot ? 'limited' : ''}`}>
-                            <span>최대 {maxScalePercent}%</span>
-                            <small>{scaleLimitBySlot ? '칸 높이 제한' : '전체 허용 한도'}</small>
-                          </div>
-                          <div className="scale-actions">
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              title="축소"
-                              disabled={!canZoomOut}
-                              onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}
-                            >{Icon.zoomOut}</button>
-                            <button
-                              className="scale-reset"
-                              type="button"
-                              onClick={resetScale}
-                              disabled={!item || Math.abs(placementScale - DEFAULT_PLACEMENT_SCALE_RATIO) < 0.001}
-                            >100%</button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              title="확대"
-                              disabled={!canZoomIn}
-                              onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}
-                            >{Icon.zoomIn}</button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="panel-section-hd">
                         추가 업스케일 <span className="line" />
                       </div>
                       <button
@@ -5288,6 +5224,176 @@ function SidePanel({
             </button>
           </div>
           )}
+        </>
+      )}
+
+      {tab === 'placement' && (
+        <>
+          <div className="tab-body placement-tab-body">
+            <section className="placement-context" aria-label="선택 배치 대상">
+              <div>
+                <strong>{placementGroupTitle}</strong>
+                <small>{placementGroupMeta}</small>
+              </div>
+              {item && <span className={`status-badge ${reviewStatusClass(item.reviewStatus)}`}>{item.statusLabel}</span>}
+            </section>
+
+            <section className="placement-section">
+              <div className="placement-section-title">
+                <span>편집 범위</span>
+                <small>{placementTargets.length}개 대상</small>
+              </div>
+              <div className="placement-scope" role="group" aria-label="배치 편집 범위">
+                <button
+                  type="button"
+                  className={placementScope === 'item' ? 'on' : ''}
+                  aria-pressed={placementScope === 'item'}
+                  disabled={!item}
+                  onClick={() => setPlacementScope('item')}
+                >이 문항</button>
+                <button
+                  type="button"
+                  className={placementScope === 'group' ? 'on' : ''}
+                  aria-pressed={placementScope === 'group'}
+                  disabled={!selectedPassageGroupId}
+                  onClick={() => setPlacementScope('group')}
+                >지문 묶음</button>
+                <button
+                  type="button"
+                  className={placementScope === 'all' ? 'on' : ''}
+                  aria-pressed={placementScope === 'all'}
+                  disabled={!items.length}
+                  onClick={() => setPlacementScope('all')}
+                >전체 자료</button>
+              </div>
+            </section>
+
+            <section className="placement-section">
+              <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
+              <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
+                {[
+                  ['auto', '자동 추천'],
+                  ['vertical', '세로 연결'],
+                  ['side-by-side', '좌우 병렬'],
+                  ['passage-only', '지문 전용'],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={placementPreset === value ? 'on' : ''}
+                    aria-pressed={placementPreset === value}
+                    disabled={!item}
+                    onClick={() => applyPlacementPreset(value)}
+                  >{value === 'auto' && <span aria-hidden="true">✦</span>}{label}</button>
+                ))}
+              </div>
+            </section>
+
+            <section className="placement-section placement-size-section">
+              <div className="placement-section-title">
+                <span>크기 및 위치</span>
+                <small>{placementScalePercent}%</small>
+              </div>
+              <div className="placement-width-row">
+                <span>콘텐츠 너비</span>
+                <div className="placement-width-options" role="group" aria-label="콘텐츠 너비">
+                  {[
+                    ['1/3', 1],
+                    ['42%', 1.26],
+                    ['50%', 1.5],
+                  ].map(([label, scale]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className={Math.abs(placementScale - scale) < 0.035 ? 'on' : ''}
+                      aria-pressed={Math.abs(placementScale - scale) < 0.035}
+                      disabled={!item}
+                      onClick={() => applyWidthPreset(scale)}
+                    >{label}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="placement-scale-row">
+                <span>비율(스케일)</span>
+                <input
+                  className="scale-range"
+                  type="range"
+                  min={Math.round(PLACEMENT_SCALE_MIN * 100)}
+                  max={Math.round(maxScale * 100)}
+                  value={placementScalePercent}
+                  style={{ '--range-progress': `${Math.max(0, Math.min(100, scaleRangeProgress))}%` }}
+                  aria-label={`배치 크기 ${placementScalePercent}%`}
+                  disabled={!item}
+                  onChange={event => updatePlacement({ scaleRatio: Number(event.target.value) / 100 })}
+                />
+                <strong>{placementScalePercent}%</strong>
+              </div>
+
+              <div className="position-control placement-position-control">
+                <div className="position-pad" aria-label="배치 위치 미세 조절">
+                  <button className="pos-btn up" type="button" title="위로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}>{Icon.arrowUp}</button>
+                  <button className="pos-btn left" type="button" title="왼쪽으로" disabled={!item} onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowLeft}</button>
+                  <button className="pos-btn reset" type="button" title="위치 초기화" disabled={!item} onClick={resetPlacement}>{Icon.reset}</button>
+                  <button className="pos-btn right" type="button" title="오른쪽으로" disabled={!item} onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowRight}</button>
+                  <button className="pos-btn down" type="button" title="아래로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}>{Icon.arrowDown}</button>
+                </div>
+                <div className="position-sliders">
+                  <label>
+                    <span>좌우</span>
+                    <input type="range" min="0" max="100" value={Math.round(placementX * 100)} disabled={!item} onChange={event => updatePlacement({ xRatio: Number(event.target.value) / 100 })} />
+                    <strong>{Math.round(placementX * 100)}%</strong>
+                  </label>
+                  <label>
+                    <span>상하</span>
+                    <input type="range" min="0" max="100" value={Math.round((hasVerticalRoom ? placementY : 0) * 100)} disabled={!item || !hasVerticalRoom} onChange={event => updatePlacement({ yRatio: Number(event.target.value) / 100 })} />
+                    <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
+                  </label>
+                  <div className="placement-scale-actions">
+                    <button type="button" className="btn" disabled={!canZoomOut} onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}>{Icon.zoomOut} 축소</button>
+                    <button type="button" className="btn" disabled={!canZoomIn} onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}>{Icon.zoomIn} 확대</button>
+                  </div>
+                </div>
+              </div>
+              {showFitWidth && (
+                <button className="btn placement-fit-width" type="button" disabled={!item} onClick={fitPlacementWidth}>
+                  {Icon.stretchHorizontal} 너비 맞춤 이어붙임
+                </button>
+              )}
+            </section>
+
+            <section className="placement-section placement-rules">
+              <div className="placement-section-title"><span>지문 묶음 규칙</span></div>
+              {[
+                ['지문 한 번만 배치', placePassageOnce, setPlacePassageOnce],
+                ['문항 함께 이동', movePassageGroupTogether, setMovePassageGroupTogether],
+                ['공간 부족 시 다음 칠판', breakGroupOnOverflow, setBreakGroupOnOverflow],
+              ].map(([label, checked, setter]) => (
+                <label key={label} className="placement-rule-row">
+                  <span>{label}</span>
+                  <input type="checkbox" checked={checked} disabled={!item} onChange={event => setter(event.target.checked)} />
+                </label>
+              ))}
+            </section>
+
+            <section className={`placement-diagnostic ${placementHasOverlap ? 'warn' : 'ok'}`}>
+              <div>
+                <span>배치 진단</span>
+                <strong>{placementHasOverlap ? '겹침을 확인하세요' : `다음 문항 ${placementNextStartPages.toFixed(1)}p 시작 · 겹침 없음`}</strong>
+              </div>
+              <span aria-hidden="true">{placementHasOverlap ? '!' : '✓'}</span>
+            </section>
+          </div>
+          <div className="tab-foot placement-tab-foot">
+            <button className="btn" type="button" disabled={!item} onClick={resetPlacement}>초기화</button>
+            <div className="spacer" />
+            <button
+              className="btn primary"
+              type="button"
+              disabled={!item}
+              onClick={() => setPlacementApplied(true)}
+            >{Icon.check} {placementApplied ? '적용됨' : placementScope === 'group' ? '묶음 적용' : '배치 적용'}</button>
+          </div>
         </>
       )}
 
