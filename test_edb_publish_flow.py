@@ -28,6 +28,7 @@ from build_problem_board_edb import (
     ProblemEntry,
     V1_DEFAULT_DISPLAY_WIDTH_PX,
     build_problem_entries,
+    configure_problem_entries_for_export,
     build_ui_session as build_problem_ui_session,
     build_image_only_records,
     run_problem_export,
@@ -128,7 +129,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             lock = threading.Lock()
             calls = 0
 
-            def fake_cutout(crop, *, chalk_color=None):
+            def fake_cutout(crop, *, chalk_color=None, text_priority=False):
                 nonlocal calls
                 with lock:
                     calls += 1
@@ -551,6 +552,188 @@ class TestEdbPublishFlow(unittest.TestCase):
             reading_heavy=False,
             risk_flags=[],
         )
+
+    def test_text_cutout_finalizer_removes_alpha_dust_and_normalizes_chalk_rgb(self):
+        image = Image.new("RGBA", (5, 1), (255, 255, 255, 0))
+        image.putdata(
+            [
+                (255, 255, 255, 0),
+                (32, 220, 180, 1),
+                (20, 190, 150, problem_board.TEXT_DEHALO_ALPHA_CUTOFF),
+                (180, 210, 200, problem_board.TEXT_DEHALO_ALPHA_CUTOFF + 1),
+                (255, 255, 255, 255),
+            ]
+        )
+        chalk = (248, 249, 246)
+
+        finalized = problem_board._finalize_text_cutout(image, chalk_color=chalk)
+
+        pixels = list(finalized.get_flattened_data())
+        self.assertEqual([0, 0, 0, 13, 255], [pixel[3] for pixel in pixels])
+        self.assertEqual({chalk}, {pixel[:3] for pixel in pixels})
+
+    def test_text_priority_cutout_skips_diagram_dilation_without_losing_core_ink(self):
+        source = Image.new("RGB", (80, 48), "white")
+        draw = ImageDraw.Draw(source)
+        draw.rectangle((24, 8, 27, 39), fill="black")
+        draw.rectangle((42, 18, 43, 20), fill="black")
+
+        generic = problem_board._extract_problem_cutout(source)
+        text = problem_board._extract_problem_cutout(source, text_priority=True)
+        generic_alpha = list(generic.getchannel("A").get_flattened_data())
+        text_alpha = list(text.getchannel("A").get_flattened_data())
+
+        self.assertGreater(
+            sum(value > 0 for value in generic_alpha),
+            sum(value > 0 for value in text_alpha),
+        )
+        self.assertFalse(
+            any(0 < value <= problem_board.TEXT_DEHALO_ALPHA_CUTOFF for value in text_alpha)
+        )
+        self.assertEqual(255, text.getpixel((25, 20))[3])
+        self.assertEqual(255, text.getpixel((42, 19))[3])
+
+    def test_text_priority_board_export_rebuilds_from_raw_crop_not_tinted_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            board_render_path = root / "tinted-board.png"
+            rendered = Image.new("RGBA", (100, 60), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(rendered)
+            draw.rectangle((2, 2, 95, 55), fill=(30, 220, 180, 80))
+            board_render_path.parent.mkdir(parents=True, exist_ok=True)
+            rendered.save(board_render_path)
+
+            crop = Image.new("RGB", (80, 48), "white")
+            draw = ImageDraw.Draw(crop)
+            draw.rectangle((24, 8, 27, 39), fill="black")
+            chalk = problem_board._resolve_chalk_color(problem_board.DEFAULT_BOARD_THEME)
+
+            exported = problem_board._load_board_export_image(
+                board_render_path,
+                crop,
+                board_theme=problem_board.DEFAULT_BOARD_THEME,
+                target_size=crop.size,
+                text_priority=True,
+            )
+
+            alpha = exported.getchannel("A")
+            self.assertEqual((24, 8, 28, 40), alpha.getbbox())
+            self.assertEqual({chalk}, {pixel[:3] for pixel in exported.get_flattened_data()})
+            self.assertFalse(
+                any(
+                    0 < value <= problem_board.TEXT_DEHALO_ALPHA_CUTOFF
+                    for value in alpha.get_flattened_data()
+                )
+            )
+
+    def test_passage_stitch_removes_footer_badge_and_collapses_join(self):
+        first = Image.new("RGB", (240, 300), "white")
+        first_draw = ImageDraw.Draw(first)
+        first_draw.rectangle((24, 20, 215, 160), outline="black", width=2)
+        first_draw.text((36, 52), "passage end", fill="black")
+        first_draw.ellipse((150, 220, 215, 260), outline="black", width=3)
+        first_draw.text((172, 232), "G2", fill="black")
+        first_draw.line((12, 280, 228, 280), fill="black", width=3)
+        second = Image.new("RGB", (240, 140), "white")
+        second_draw = ImageDraw.Draw(second)
+        second_draw.text((24, 10), "continued first glyph", fill="black")
+        # Ordinary continuation content must not resemble a near-full-width
+        # page-header rule, otherwise the fixture would intentionally trigger
+        # the header cleanup exercised by the next test.
+        second_draw.rectangle((24, 44, 100, 118), outline="black", width=2)
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertEqual(2, len(prepared))
+        self.assertLess(prepared[0].height, 210)
+        self.assertEqual(second.size, prepared[1].size)
+        self.assertEqual((0, 0, 0), prepared[0].getpixel((24, 160)))
+
+    def test_passage_stitch_removes_following_column_page_header(self):
+        first = Image.new("RGB", (240, 120), "white")
+        ImageDraw.Draw(first).text((24, 72), "left column ending", fill="black")
+        second = Image.new("RGB", (240, 180), "white")
+        draw = ImageDraw.Draw(second)
+        draw.ellipse((150, 2, 220, 30), outline="black", width=2)
+        draw.text((172, 8), "G2", fill="black")
+        draw.line((8, 42, 232, 42), fill="black", width=3)
+        draw.text((24, 64), "continued first glyph", fill="black")
+        draw.rectangle((24, 90, 215, 160), outline="black", width=2)
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertLess(prepared[1].height, 140)
+        self.assertGreater(prepared[1].height, 110)
+        self.assertLess(prepared[1].convert("L").crop((0, 0, 240, 24)).getextrema()[0], 200)
+
+    def test_passage_source_bounds_recover_edge_glyphs(self):
+        expanded = problem_board._expand_passage_source_bounds_horizontally(
+            Box(100, 40, 200, 320),
+            image_width=400,
+        )
+
+        self.assertEqual(76.0, expanded.left)
+        self.assertEqual(248.0, expanded.width)
+        self.assertEqual(40.0, expanded.top)
+        self.assertEqual(320.0, expanded.height)
+        right_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(240, 40, 120, 320),
+            image_width=400,
+        )
+        self.assertEqual(200.0, right_column.left)
+        self.assertEqual(184.0, right_column.width)
+        left_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(40, 40, 120, 320),
+            image_width=400,
+        )
+        self.assertEqual(16.0, left_column.left)
+        self.assertEqual(184.0, left_column.width)
+
+    def test_continuous_full_width_records_keep_explicit_non_overlap_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = [
+                self._make_problem_entry(root, "passage-1", Box(0, 0, 900, 1200)),
+                self._make_problem_entry(root, "passage-2", Box(0, 0, 900, 1200)),
+            ]
+            for entry in entries:
+                entry.subject = Subject.KOREAN
+                entry.input_intent = "page-as-is"
+                entry.processing_step = problem_board.PROCESSING_STEP_CHALK
+                entry.placement_scale_ratio = problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX
+            _records, placements = build_image_only_records(
+                entries,
+                LayoutTemplate(name="academy-default", board_page_count=20),
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            actual_gap = placements[1]["record_top_y_pages"] - placements[0]["record_bottom_y_pages"]
+            expected_gap = problem_board.CONTINUOUS_RECORD_GAP_PX / problem_board.CANVAS_WIDTH
+            self.assertGreater(actual_gap, 0.0)
+            self.assertAlmostEqual(expected_gap, actual_gap, places=5)
+
+    def test_passage_only_s2_full_width_export_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = self._make_problem_entry(root, "page-1-passage-28-30", Box(0, 0, 900, 1800))
+            question = self._make_problem_entry(root, "page-1-problem-28", Box(0, 0, 900, 600))
+
+            selected = configure_problem_entries_for_export(
+                [passage, question],
+                passage_problem_ids={passage.problem_id},
+                passages_only=True,
+                processing_step="s2",
+                full_width=True,
+            )
+
+            self.assertEqual([passage.problem_id], [entry.problem_id for entry in selected])
+            self.assertEqual(problem_board.PROCESSING_STEP_CHALK, selected[0].processing_step)
+            self.assertEqual("page-as-is", selected[0].input_intent)
+            self.assertEqual(0.0, selected[0].placement_x_ratio)
+            self.assertEqual(
+                problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX,
+                selected[0].placement_scale_ratio,
+            )
 
     def test_generated_single_problem_edb_validates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4276,7 +4459,11 @@ class TestEdbPublishFlow(unittest.TestCase):
             applied_scale = placements[0]["placement_scale_ratio"]
             self.assertGreater(applied_scale, problem_board.PLACEMENT_SCALE_MAX)
             self.assertLessEqual(applied_scale, problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX)
-            expected_span = round(placements[0]["actual_content_height_pages"] * applied_scale, 6)
+            expected_span = round(
+                placements[0]["actual_content_height_pages"] * applied_scale
+                + problem_board.CONTINUOUS_RECORD_GAP_PX / problem_board.CANVAS_WIDTH,
+                6,
+            )
             self.assertEqual(0.0, placements[0]["start_y_pages"])
             self.assertAlmostEqual(expected_span, placements[0]["snapped_next_start_y_pages"], places=5)
             self.assertAlmostEqual(expected_span, placements[1]["start_y_pages"], places=5)

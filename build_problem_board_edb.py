@@ -83,6 +83,7 @@ CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 CHOICE_BOTTOM_SAFE_PADDING_PX = 44.0
 PROBLEM_CROP_TOP_SAFE_PADDING_PX = 36
 PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 52
+PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX = 24
 PROBLEM_EDGE_INK_SCAN_PX = 18
 PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
 PROBLEM_EDGE_INK_MIN_DARK_PIXELS = 6
@@ -157,7 +158,12 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
-PASSAGE_FRAGMENT_STITCH_GAP_PX = 20
+PASSAGE_FRAGMENT_STITCH_GAP_PX = 16
+PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
+PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
+PASSAGE_JOIN_BLANK_RUN_MIN_PX = 40
+PASSAGE_JOIN_EDGE_PADDING_PX = 16
+CONTINUOUS_RECORD_GAP_PX = 20.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
@@ -170,7 +176,11 @@ PASSAGE_REVIEW_REASON_LABELS = {
 }
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
-TEXT_PRIORITY_SUBJECTS = {"korean", "english"}
+TEXT_PRIORITY_SUBJECTS = {"korean", "english", "social"}
+TEXT_DEHALO_ALPHA_CUTOFF = 12
+TEXT_PRIORITY_UNSHARP_RADIUS = 0.6
+TEXT_PRIORITY_UNSHARP_PERCENT = 70
+TEXT_PRIORITY_UNSHARP_THRESHOLD = 3
 V2_ENCODED_IMAGE_MIN_WIDTH_PX = 1024
 V2_ENCODED_IMAGE_MAX_WIDTH_PX = 2048
 V2_ENCODED_IMAGE_OVERSAMPLE = 2.5
@@ -743,9 +753,21 @@ def _erase_corner_page_badges(image: Image.Image) -> Image.Image:
     return output if "A" in image.getbands() else output.convert(mode)
 
 
-def _trim_source_page_chrome(image: Image.Image) -> Image.Image:
-    trimmed = _trim_edge_vertical_guides(image)
-    trimmed = _trim_edge_attached_page_chrome(trimmed)
+def _trim_source_page_chrome(
+    image: Image.Image,
+    *,
+    preserve_horizontal_bounds: bool = False,
+) -> Image.Image:
+    # Passage columns commonly end with real glyph strokes very close to the
+    # crop boundary.  The generic vertical-guide detector can mistake those
+    # strokes for scanner/page chrome and remove the final 1-3 characters.
+    # Passage assets already use PDF column bounds plus a safety margin, so
+    # preserve their horizontal extent while still cleaning other page chrome.
+    if preserve_horizontal_bounds:
+        trimmed = image
+    else:
+        trimmed = _trim_edge_vertical_guides(image)
+        trimmed = _trim_edge_attached_page_chrome(trimmed)
     trimmed = _trim_bottom_blue_watermark(trimmed)
     trimmed = _erase_corner_page_badges(trimmed)
     return trimmed
@@ -757,6 +779,43 @@ def _integer_crop_rect_for_box(box: Box, *, image_width: int, image_height: int)
     right = int(max(left + 1, min(image_width, math.ceil(box.right))))
     bottom = int(max(top + 1, min(image_height, math.ceil(box.bottom))))
     return left, top, right, bottom
+
+
+def _expand_passage_source_bounds_horizontally(
+    bounds: Box,
+    *,
+    image_width: int,
+    padding_px: int = PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX,
+) -> Box:
+    """Recover glyphs that sit just outside PDF-derived column bounds."""
+    padding = max(0.0, float(padding_px))
+    # PDF text ranges can omit the final glyph in the left column or the first
+    # glyph in the right column. Recover both toward the page midpoint, but
+    # clamp there so adjacent columns never duplicate each other's text.
+    midpoint = float(image_width) * 0.5
+    bounds_left = float(bounds.left)
+    bounds_right = float(bounds.right)
+    if bounds_right <= midpoint:
+        left = max(0.0, bounds_left - padding)
+        right = min(
+            midpoint,
+            bounds_right + max(padding, float(PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX)),
+        )
+    elif bounds_left >= midpoint:
+        left = max(
+            midpoint,
+            bounds_left - max(padding, float(PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX)),
+        )
+        right = min(float(image_width), bounds_right + padding)
+    else:
+        left = max(0.0, bounds_left - padding)
+        right = min(float(image_width), bounds_right + padding)
+    return Box(
+        left=left,
+        top=float(bounds.top),
+        width=max(1.0, right - left),
+        height=float(bounds.height),
+    )
 
 
 def _edge_band_has_dark_content(image: Image.Image, box: Box, *, edge: str) -> bool:
@@ -867,8 +926,15 @@ def _pad_problem_crop_edges(
     *,
     top_padding_px: int = PROBLEM_CROP_TOP_SAFE_PADDING_PX,
     bottom_padding_px: int = PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX,
+    left_padding_px: int = 0,
+    right_padding_px: int = 0,
 ) -> Image.Image:
-    if (top_padding_px <= 0 and bottom_padding_px <= 0) or image.width <= 0 or image.height <= 0:
+    if (
+        top_padding_px <= 0
+        and bottom_padding_px <= 0
+        and left_padding_px <= 0
+        and right_padding_px <= 0
+    ) or image.width <= 0 or image.height <= 0:
         return image
     if "A" in image.getbands():
         fill = (255, 255, 255, 0)
@@ -879,8 +945,17 @@ def _pad_problem_crop_edges(
     converted = image.convert(mode)
     top_padding = max(0, int(top_padding_px))
     bottom_padding = max(0, int(bottom_padding_px))
-    padded = Image.new(mode, (converted.width, converted.height + top_padding + bottom_padding), fill)
-    padded.paste(converted, (0, top_padding))
+    left_padding = max(0, int(left_padding_px))
+    right_padding = max(0, int(right_padding_px))
+    padded = Image.new(
+        mode,
+        (
+            converted.width + left_padding + right_padding,
+            converted.height + top_padding + bottom_padding,
+        ),
+        fill,
+    )
+    padded.paste(converted, (left_padding, top_padding))
     return padded
 
 
@@ -893,6 +968,8 @@ def _enhance_problem_crop(
     *,
     target_min_width_px: int = PROBLEM_CROP_TARGET_MIN_WIDTH_PX,
     max_upscale: float = PROBLEM_CROP_MAX_UPSCALE,
+    text_priority: bool = False,
+    allow_text_upscale: bool = False,
 ) -> Image.Image:
     """Upscale small crops and sharpen ink so the chalk render reads cleanly.
 
@@ -907,7 +984,11 @@ def _enhance_problem_crop(
     converted = image.convert("RGBA" if has_alpha else "RGB")
     alpha = converted.getchannel("A") if has_alpha else None
     rgb = converted.convert("RGB")
-    if rgb.width < target_min_width_px:
+    # Dense text is already rasterized at PDF render resolution. Upscaling it
+    # here and shrinking it again for V1 exports creates a second antialiasing
+    # fringe around every glyph, so keep its native pixel grid. Diagram-heavy
+    # problems retain the existing upscale path for thin graph/math strokes.
+    if (not text_priority or allow_text_upscale) and rgb.width < target_min_width_px:
         scale = min(
             max_upscale,
             target_min_width_px / max(rgb.width, 1),
@@ -921,7 +1002,13 @@ def _enhance_problem_crop(
     # Unsharp mask brings ink-on-paper transitions back after upscale and also
     # helps thin-stroke text survive the alpha-mask threshold inside
     # _extract_problem_cutout.
-    sharpened = rgb.filter(ImageFilter.UnsharpMask(radius=1.4, percent=140, threshold=2))
+    sharpened = rgb.filter(
+        ImageFilter.UnsharpMask(
+            radius=TEXT_PRIORITY_UNSHARP_RADIUS if text_priority else 1.4,
+            percent=TEXT_PRIORITY_UNSHARP_PERCENT if text_priority else 140,
+            threshold=TEXT_PRIORITY_UNSHARP_THRESHOLD if text_priority else 2,
+        )
+    )
     if alpha is not None:
         rgba = sharpened.convert("RGBA")
         rgba.putalpha(alpha)
@@ -933,6 +1020,7 @@ def _extract_problem_cutout(
     image: Image.Image,
     *,
     chalk_color: tuple[int, int, int] | None = None,
+    text_priority: bool = False,
 ) -> Image.Image:
     """Recolor problem ink as chalk on a transparent canvas.
 
@@ -965,7 +1053,7 @@ def _extract_problem_cutout(
             # small lower-corner page number badges before they get encoded.
             if np is not None:
                 alpha_array = np.asarray(alpha_mask, dtype=np.float32) / 255.0
-                if clean_stats.get("background_kind") == "light":
+                if clean_stats.get("background_kind") == "light" and not text_priority:
                     dilated = np.copy(alpha_array)
                     for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                         shifted = np.roll(np.roll(alpha_array, dy, axis=0), dx, axis=1)
@@ -979,8 +1067,14 @@ def _extract_problem_cutout(
                             shifted[:, 0] = 0.0
                         dilated = np.maximum(dilated, shifted)
                     alpha_array = np.clip((0.75 * alpha_array) + (0.25 * dilated), 0.0, 1.0)
-                return _compose_chalk_rgba(alpha_array, resolved_chalk)
-            return _compose_chalk_rgba_pil(alpha_mask, cleaned.size, resolved_chalk)
+                cutout = _compose_chalk_rgba(alpha_array, resolved_chalk)
+            else:
+                cutout = _compose_chalk_rgba_pil(alpha_mask, cleaned.size, resolved_chalk)
+            return (
+                _finalize_text_cutout(cutout, chalk_color=resolved_chalk)
+                if text_priority
+                else cutout
+            )
 
     rgb = image.convert("RGB")
     gray = ImageOps.autocontrast(rgb.convert("L"))
@@ -992,35 +1086,51 @@ def _extract_problem_cutout(
         # chalkboard) — bright pixels are the ink so alpha follows brightness.
         if np is not None:
             np_alpha = np.asarray(gray, dtype=np.float32) / 255.0
-            return _compose_chalk_rgba(np_alpha, resolved_chalk)
-        return _compose_chalk_rgba_pil(gray, image.size, resolved_chalk)
+            cutout = _compose_chalk_rgba(np_alpha, resolved_chalk)
+        else:
+            cutout = _compose_chalk_rgba_pil(gray, image.size, resolved_chalk)
+        return (
+            _finalize_text_cutout(cutout, chalk_color=resolved_chalk)
+            if text_priority
+            else cutout
+        )
 
     if np is None:
         mask = gray.point(lambda px: 255 if px < 242 else 0, mode="L")
-        mask_dilated = mask.filter(ImageFilter.MaxFilter(3))
-        mask = Image.blend(mask, mask_dilated, 0.35)
-        return _compose_chalk_rgba_pil(mask, image.size, resolved_chalk)
+        if not text_priority:
+            mask_dilated = mask.filter(ImageFilter.MaxFilter(3))
+            mask = Image.blend(mask, mask_dilated, 0.35)
+        cutout = _compose_chalk_rgba_pil(mask, image.size, resolved_chalk)
+        return (
+            _finalize_text_cutout(cutout, chalk_color=resolved_chalk)
+            if text_priority
+            else cutout
+        )
 
     rgb_array = np.asarray(rgb, dtype=np.float32) / 255.0
     gray_array = np.asarray(gray, dtype=np.float32)
     darkness = 255.0 - gray_array
 
-    # Thicken thin math lines/symbols via a fast 4-connectivity morphological dilation in NumPy
-    dilated_darkness = np.copy(darkness)
-    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-        shifted = np.roll(np.roll(darkness, dy, axis=0), dx, axis=1)
-        if dy < 0:
-            shifted[-1, :] = 0.0
-        elif dy > 0:
-            shifted[0, :] = 0.0
-        if dx < 0:
-            shifted[:, -1] = 0.0
-        elif dx > 0:
-            shifted[:, 0] = 0.0
-        dilated_darkness = np.maximum(dilated_darkness, shifted)
+    if not text_priority:
+        # Thicken thin math lines/symbols via a fast 4-connectivity
+        # morphological dilation. Dense Korean/English text deliberately
+        # skips this: the added outside pixel reads as a drop shadow when
+        # thousands of glyphs are placed together.
+        dilated_darkness = np.copy(darkness)
+        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            shifted = np.roll(np.roll(darkness, dy, axis=0), dx, axis=1)
+            if dy < 0:
+                shifted[-1, :] = 0.0
+            elif dy > 0:
+                shifted[0, :] = 0.0
+            if dx < 0:
+                shifted[:, -1] = 0.0
+            elif dx > 0:
+                shifted[:, 0] = 0.0
+            dilated_darkness = np.maximum(dilated_darkness, shifted)
 
-    # Smooth blend to keep edge anti-aliasing while keeping thin lines bright
-    darkness = 0.65 * darkness + 0.35 * dilated_darkness
+        # Smooth blend keeps edge antialiasing while retaining thin lines.
+        darkness = 0.65 * darkness + 0.35 * dilated_darkness
 
     noise_floor = max(10.0, float(np.percentile(darkness, 62)) + 4.0)
     alpha_strength = np.clip((darkness - noise_floor) / max(1.0, 255.0 - noise_floor), 0.0, 1.0)
@@ -1034,7 +1144,12 @@ def _extract_problem_cutout(
     alpha = np.maximum(alpha_strength, np.maximum(keep_color * 0.92, keep_dark))
     alpha = np.where(max_channel > 0.985, alpha * 0.08, alpha)
 
-    return _compose_chalk_rgba(alpha, resolved_chalk)
+    cutout = _compose_chalk_rgba(alpha, resolved_chalk)
+    return (
+        _finalize_text_cutout(cutout, chalk_color=resolved_chalk)
+        if text_priority
+        else cutout
+    )
 
 
 def _compose_chalk_rgba(alpha_array, chalk_color: tuple[int, int, int]) -> Image.Image:
@@ -1058,6 +1173,28 @@ def _compose_chalk_rgba_pil(
     alpha = alpha_mask if alpha_mask.size == size else alpha_mask.resize(size)
     chalk.putalpha(alpha)
     return chalk
+
+
+def _finalize_text_cutout(
+    image: Image.Image,
+    *,
+    chalk_color: tuple[int, int, int],
+    alpha_cutoff: int = TEXT_DEHALO_ALPHA_CUTOFF,
+) -> Image.Image:
+    """Remove low-alpha text halos and normalize all RGB to one chalk tone.
+
+    Keeping the same RGB even in fully transparent pixels prevents straight-
+    alpha Lanczos resizing from pulling white/cyan edge colors back into a
+    glyph. The conservative cutoff removes resampling dust while retaining
+    punctuation and thin antialiased strokes.
+    """
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    cutoff = max(0, min(254, int(alpha_cutoff)))
+    alpha = alpha.point(lambda value: 0 if value <= cutoff else value)
+    finalized = Image.new("RGBA", rgba.size, tuple(int(value) for value in chalk_color) + (0,))
+    finalized.putalpha(alpha)
+    return finalized
 
 
 def _prepare_image_for_dark_board(image: Image.Image, *, board_theme: str = DEFAULT_BOARD_THEME) -> Image.Image:
@@ -1090,7 +1227,21 @@ def _load_board_export_image(
     *,
     board_theme: str = DEFAULT_BOARD_THEME,
     target_size: tuple[int, int] | None = None,
+    text_priority: bool = False,
 ) -> Image.Image:
+    chalk_color = _resolve_chalk_color(board_theme)
+    if text_priority:
+        # Rebuild dense text from the raw crop instead of reusing the generic
+        # board render, which may already contain diagram-oriented dilation.
+        cutout = _extract_problem_cutout(
+            _enhance_problem_crop(crop_image, text_priority=True),
+            chalk_color=chalk_color,
+            text_priority=True,
+        )
+        if target_size is not None and cutout.size != target_size:
+            cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
+        return _finalize_text_cutout(cutout, chalk_color=chalk_color)
+
     try:
         rendered = Image.open(board_render_path)
     except OSError:
@@ -1111,12 +1262,12 @@ def _load_board_export_image(
         if mean_brightness <= DARK_BOARD_BRIGHTNESS_THRESHOLD:
             return _extract_problem_cutout(
                 rendered_rgb,
-                chalk_color=_resolve_chalk_color(board_theme),
+                chalk_color=chalk_color,
             )
 
     cutout = _extract_problem_cutout(
         _enhance_problem_crop(crop_image),
-        chalk_color=_resolve_chalk_color(board_theme),
+        chalk_color=chalk_color,
     )
     if target_size is not None and cutout.size != target_size:
         cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
@@ -1144,8 +1295,14 @@ def _build_transparent_reconstruction_image(
         crop_image,
         target_min_width_px=RECONSTRUCT_TARGET_MIN_WIDTH_PX,
         max_upscale=RECONSTRUCT_MAX_UPSCALE,
+        text_priority=text_priority,
+        allow_text_upscale=True,
     )
-    return _extract_problem_cutout(enhanced_crop, chalk_color=_resolve_chalk_color(board_theme))
+    return _extract_problem_cutout(
+        enhanced_crop,
+        chalk_color=_resolve_chalk_color(board_theme),
+        text_priority=text_priority,
+    )
 
 
 def _problem_prefers_text_preservation(
@@ -1225,6 +1382,9 @@ class _ProblemAssetTask:
     text_payload: str | None = None
     text_title: str | None = None
     trim_edge_guides: bool = True
+    preserve_horizontal_bounds: bool = False
+    horizontal_safe_padding_px: int = 0
+    text_priority: bool = False
     pad_edges: bool = True
 
 
@@ -1385,29 +1545,53 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         crop = _render_text_fallback_problem_card(task.text_payload, title=task.text_title)
         task.crop_path.parent.mkdir(parents=True, exist_ok=True)
         crop.save(task.crop_path)
-        cutout_image = _extract_problem_cutout(
-            _enhance_problem_crop(crop),
-            chalk_color=task.chalk_color,
-        )
+        enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
+        if task.text_priority:
+            cutout_image = _extract_problem_cutout(
+                enhanced_crop,
+                chalk_color=task.chalk_color,
+                text_priority=True,
+            )
+        else:
+            cutout_image = _extract_problem_cutout(
+                enhanced_crop,
+                chalk_color=task.chalk_color,
+            )
         _write_render_image(cutout_image, task.board_render_path)
         return crop.size
 
     def crop_segment(bounds: Box) -> Image.Image:
+        source_bounds = (
+            _expand_passage_source_bounds_horizontally(
+                bounds,
+                image_width=task.source_image.width,
+            )
+            if task.preserve_horizontal_bounds
+            else bounds
+        )
         segment = task.source_image.crop(
             _integer_crop_rect_for_box(
-                bounds,
+                source_bounds,
                 image_width=task.source_image.width,
                 image_height=task.source_image.height,
             )
         )
         if task.trim_edge_guides:
-            segment = _trim_source_page_chrome(segment)
+            segment = _trim_source_page_chrome(
+                segment,
+                preserve_horizontal_bounds=task.preserve_horizontal_bounds,
+            )
         if task.pad_edges:
-            segment = _pad_problem_crop_edges(segment)
+            segment = _pad_problem_crop_edges(
+                segment,
+                left_padding_px=task.horizontal_safe_padding_px,
+                right_padding_px=task.horizontal_safe_padding_px,
+            )
         return _flatten_passage_segment_on_white(segment)
 
     if task.segment_bounds:
         segments = [crop_segment(bounds) for bounds in task.segment_bounds]
+        segments = _prepare_passage_segments_for_stitch(segments)
         gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(segments) > 1 else 0
         crop = Image.new(
             "RGB",
@@ -1425,8 +1609,18 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         crop = crop_segment(task.bounds)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(task.crop_path)
-    enhanced_crop = _enhance_problem_crop(crop)
-    cutout_image = _extract_problem_cutout(enhanced_crop, chalk_color=task.chalk_color)
+    enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
+    if task.text_priority:
+        cutout_image = _extract_problem_cutout(
+            enhanced_crop,
+            chalk_color=task.chalk_color,
+            text_priority=True,
+        )
+    else:
+        cutout_image = _extract_problem_cutout(
+            enhanced_crop,
+            chalk_color=task.chalk_color,
+        )
     _write_render_image(cutout_image, task.board_render_path)
     return crop.size
 
@@ -2984,6 +3178,137 @@ def _flatten_passage_segment_on_white(image: Image.Image) -> Image.Image:
     return flattened
 
 
+def _passage_foreground_row_counts(image: Image.Image) -> list[int]:
+    rgba = image.convert("RGBA")
+    if np is not None:
+        arr = np.asarray(rgba, dtype=np.uint8)
+        alpha = arr[..., 3]
+        rgb = arr[..., :3].astype(np.float32)
+        luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        has_transparency = bool(int(alpha.min()) < 245)
+        foreground = (
+            alpha > 24
+            if has_transparency
+            else (luminance <= 246.0) | (saturation >= 24.0)
+        )
+        return [int(value) for value in foreground.sum(axis=1)]
+
+    pixels = rgba.load()
+    has_transparency = rgba.getchannel("A").getextrema()[0] < 245
+    counts: list[int] = []
+    for y in range(rgba.height):
+        count = 0
+        for x in range(rgba.width):
+            red, green, blue, alpha = pixels[x, y]
+            luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            saturation = max(red, green, blue) - min(red, green, blue)
+            if (alpha > 24) if has_transparency else (luminance <= 246 or saturation >= 24):
+                count += 1
+        counts.append(count)
+    return counts
+
+
+def _blank_row_runs(row_counts: Sequence[int], *, end: int) -> list[tuple[int, int]]:
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for index in range(max(0, min(len(row_counts), end))):
+        is_blank = row_counts[index] <= 3
+        if is_blank and start is None:
+            start = index
+        elif not is_blank and start is not None:
+            runs.append((start, index))
+            start = None
+    if start is not None:
+        runs.append((start, max(0, min(len(row_counts), end))))
+    return runs
+
+
+def _trim_passage_segment_for_join(
+    image: Image.Image,
+    *,
+    trim_top: bool,
+    trim_bottom: bool,
+) -> Image.Image:
+    """Remove page footer chrome and excess whitespace at a passage join.
+
+    A page footer is recognized conservatively: a near-full-width rule in the
+    lower quarter plus a long blank run before it. This removes page labels
+    such as ``고2`` without treating normal paragraph spacing as chrome.
+    """
+    if image.width <= 0 or image.height <= 0:
+        return image
+    row_counts = _passage_foreground_row_counts(image)
+    top = 0
+    bottom = image.height
+
+    if trim_top:
+        # Short continuation fragments may devote more than a quarter of
+        # their crop to the page header before the first body line.
+        upper_end = max(1, int(round(image.height * 0.45)))
+        long_rule_threshold = max(48, int(round(image.width * 0.55)))
+        top_rule_rows = [
+            index
+            for index in range(upper_end)
+            if row_counts[index] >= long_rule_threshold
+        ]
+        if top_rule_rows:
+            first_rule = top_rule_rows[0]
+            rule_end = first_rule + 1
+            while rule_end < upper_end and row_counts[rule_end] >= long_rule_threshold:
+                rule_end += 1
+            top = min(
+                image.height - 1,
+                rule_end + PASSAGE_JOIN_EDGE_PADDING_PX,
+            )
+        else:
+            first_ink = next((index for index, value in enumerate(row_counts) if value > 3), 0)
+            if 0 < first_ink <= int(round(image.height * 0.18)):
+                top = max(0, first_ink - PASSAGE_JOIN_EDGE_PADDING_PX)
+
+    if trim_bottom:
+        lower_start = int(round(image.height * 0.65))
+        long_rule_threshold = max(48, int(round(image.width * 0.55)))
+        long_rule_rows = [
+            index
+            for index in range(lower_start, image.height)
+            if row_counts[index] >= long_rule_threshold
+        ]
+        if long_rule_rows:
+            footer_rule_start = long_rule_rows[-1]
+            candidates = [
+                (start, end)
+                for start, end in _blank_row_runs(row_counts, end=footer_rule_start)
+                if start >= int(round(image.height * 0.50))
+                and end - start >= PASSAGE_JOIN_BLANK_RUN_MIN_PX
+            ]
+            if candidates:
+                blank_start, _blank_end = candidates[-1]
+                candidate_bottom = min(
+                    image.height,
+                    blank_start + PASSAGE_JOIN_EDGE_PADDING_PX,
+                )
+                if candidate_bottom >= top + 80 and image.height - candidate_bottom >= 32:
+                    bottom = candidate_bottom
+
+    if top <= 0 and bottom >= image.height:
+        return image
+    return image.crop((0, top, image.width, bottom))
+
+
+def _prepare_passage_segments_for_stitch(images: Sequence[Image.Image]) -> list[Image.Image]:
+    if len(images) <= 1:
+        return list(images)
+    return [
+        _trim_passage_segment_for_join(
+            image,
+            trim_top=index > 0,
+            trim_bottom=index < len(images) - 1,
+        )
+        for index, image in enumerate(images)
+    ]
+
+
 def _stitch_passage_image_files(
     paths: Sequence[Path],
     output_path: Path,
@@ -3001,6 +3326,7 @@ def _stitch_passage_image_files(
     if not images:
         raise ValueError("At least one passage image is required for stitching")
 
+    images = _prepare_passage_segments_for_stitch(images)
     max_width = max(image.width for image in images)
     gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(images) > 1 else 0
     total_height = sum(image.height for image in images) + gap * max(0, len(images) - 1)
@@ -3177,6 +3503,7 @@ def build_problem_entries(
 
         for problem in ordered_problems:
             trusted_pdf_marker_problem = False
+            passage_fragment_problem = _problem_is_passage_fragment_unit(problem)
             next_problem = next_problem_for_crop.get(problem.unit_id)
             own_ids = set(_iter_problem_block_ids_raw(problem))
             other_problem_block_ids = all_assigned_ids - own_ids
@@ -3366,6 +3693,17 @@ def build_problem_entries(
                         text_payload=text_fallback_payload or None,
                         text_title=problem_title if text_fallback_payload else None,
                         trim_edge_guides=not preserve_page_as_is,
+                        preserve_horizontal_bounds=passage_fragment_problem,
+                        horizontal_safe_padding_px=(
+                            PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX
+                            if passage_fragment_problem
+                            else 0
+                        ),
+                        text_priority=_problem_prefers_text_preservation(
+                            problem.subject,
+                            prepared_page.source_path,
+                            problem_title,
+                        ),
                         pad_edges=not preserve_page_as_is,
                     ),
                 )
@@ -6683,6 +7021,12 @@ def _build_image_only_record_image(
     processing_step = _normalize_processing_step(
         entry.processing_step or placement.metadata.get("processing_step")
     )
+    text_priority = _problem_prefers_text_preservation(
+        entry.subject,
+        entry.source_path,
+        entry.title,
+    )
+    chalk_color = _resolve_chalk_color(board_theme)
     crop_path = Path(str(placement.metadata["crop_path"]))
     board_render_path = Path(str(placement.metadata["board_render_path"]))
     with Image.open(crop_path) as loaded_crop:
@@ -6725,11 +7069,7 @@ def _build_image_only_record_image(
         board_image = _build_transparent_reconstruction_image(
             crop_image,
             board_theme=board_theme,
-            text_priority=_problem_prefers_text_preservation(
-                entry.subject,
-                entry.source_path,
-                entry.title,
-            ),
+            text_priority=text_priority,
         )
     elif dark_board:
         board_image = _load_board_export_image(
@@ -6737,6 +7077,7 @@ def _build_image_only_record_image(
             crop_image,
             board_theme=board_theme,
             target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
+            text_priority=text_priority,
         )
     else:
         board_image = crop_image
@@ -6763,6 +7104,12 @@ def _build_image_only_record_image(
         board_image = _resize_to_target_width(board_image, int(target_image_width_px))
         display_width = float(board_image.width)
         display_height = float(board_image.height)
+
+    if dark_board and text_priority:
+        # Resizing can create fresh subpixel alpha dust. Normalize once at the
+        # final encoded size so the EDB itself, not only the preview asset, is
+        # guaranteed to be halo-free and single-tone.
+        board_image = _finalize_text_cutout(board_image, chalk_color=chalk_color)
 
     image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
     if crop_format == CROP_FORMAT_V2:
@@ -6933,7 +7280,11 @@ def build_image_only_records(
             actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
             rendered_height_pages = rendered_height_px / CANVAS_WIDTH
             actual_bottom_y_pages = start_y_pages + actual_height_pages
-            snapped_next_start_y_pages = start_y_pages + rendered_height_pages
+            snapped_next_start_y_pages = (
+                start_y_pages
+                + rendered_height_pages
+                + CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH
+            )
             overflow_amount_pages = max(0.0, rendered_height_pages - template.base_slot_height_pages)
             slot_span_count = max(
                 1,
@@ -6985,6 +7336,7 @@ def build_image_only_records(
                 "snapped_next_start_y_pages": round(snapped_next_start_y_pages, 6),
                 "record_top_y_pages": round(y_px / CANVAS_WIDTH, 6),
                 "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
+                "record_gap_px": CONTINUOUS_RECORD_GAP_PX if continuous_flow else 0.0,
                 "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),
@@ -7488,6 +7840,41 @@ def build_placement_summary(placements: list[dict[str, object]]) -> dict[str, ob
     }
 
 
+def configure_problem_entries_for_export(
+    problem_entries: Sequence[ProblemEntry],
+    *,
+    passage_problem_ids: Iterable[str] = (),
+    passages_only: bool = False,
+    processing_step: str | None = None,
+    full_width: bool = False,
+) -> list[ProblemEntry]:
+    selected = list(problem_entries)
+    if passages_only:
+        allowed_ids = {str(problem_id) for problem_id in passage_problem_ids if str(problem_id)}
+        selected = [entry for entry in selected if entry.problem_id in allowed_ids]
+        if not selected:
+            raise ValueError("--passages-only did not find any passage fragments")
+
+    resolved_step: str | None = None
+    if processing_step is not None and str(processing_step).strip():
+        resolved_step = str(processing_step).strip().lower()
+        if resolved_step not in PROCESSING_STEPS:
+            raise ValueError(f"Unsupported processing step: {processing_step}")
+
+    for entry in selected:
+        if resolved_step is not None:
+            entry.processing_step = resolved_step
+        if full_width:
+            # The continuous page flow is the established ClassIn fit-width
+            # path and permits the 3x V1 width used by existing full-width EDBs.
+            # This changes placement only; the extracted passage bounds remain
+            # intact and the S2 transparent board render stays the image source.
+            entry.input_intent = "page-as-is"
+            entry.placement_x_ratio = 0.0
+            entry.placement_scale_ratio = PLACEMENT_FIT_WIDTH_SCALE_MAX
+    return selected
+
+
 def run_problem_export(
     source: str | Path | Sequence[str | Path],
     *,
@@ -7783,6 +8170,22 @@ def main() -> int:
     parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
     parser.add_argument("--input-intent", choices=tuple(sorted(INPUT_INTENTS)), default="auto", help="How to treat uploaded source pages")
     parser.add_argument(
+        "--passages-only",
+        action="store_true",
+        help="Export only passage-fragment records detected from set-problem ranges",
+    )
+    parser.add_argument(
+        "--processing-step",
+        choices=tuple(sorted(PROCESSING_STEPS)),
+        default="",
+        help="Override exported problem processing step (for example s2 for transparent chalk cutouts)",
+    )
+    parser.add_argument(
+        "--full-width",
+        action="store_true",
+        help="Use ClassIn continuous fit-width placement for the selected records",
+    )
+    parser.add_argument(
         "--crop-format",
         choices=(CROP_FORMAT_V1, CROP_FORMAT_V2),
         default=DEFAULT_CROP_FORMAT,
@@ -7875,6 +8278,19 @@ def main() -> int:
         template,
         board_theme=resolved_board_theme,
     )
+    passage_problem_ids = {
+        problem.unit_id
+        for page in pages
+        for problem in page.problems
+        if _problem_is_passage_fragment_unit(problem)
+    }
+    problem_entries = configure_problem_entries_for_export(
+        problem_entries,
+        passage_problem_ids=passage_problem_ids,
+        passages_only=args.passages_only,
+        processing_step=args.processing_step or None,
+        full_width=args.full_width,
+    )
     save_pages_json(pages, output_dir / "pages.json")
     resolved_crop_format = args.crop_format if args.crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
     records, placements, header_flag = build_records(
@@ -7922,6 +8338,9 @@ def main() -> int:
         "ocr_backend_requested": args.ocr,
         "ocr_summary": ocr_summary,
         "input_intent": resolved_input_intent,
+        "passages_only": bool(args.passages_only),
+        "processing_step_override": args.processing_step or None,
+        "full_width": bool(args.full_width),
     }
     summary_path = output_dir / "board_run_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

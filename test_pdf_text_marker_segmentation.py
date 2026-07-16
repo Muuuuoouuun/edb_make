@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import fitz
@@ -277,6 +278,36 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             self.assertEqual({"start": 31, "end": 34}, passages[0].metadata.get("passage_range"))
             self.assertEqual(2, len(_problem_block_ids(passages[0])))
             self.assertEqual("pdf-passage-ranges", page_model.metadata.get("segmenter"))
+
+            # Passage rendering must not run the generic vertical-guide trim:
+            # on real exam columns it can interpret final glyph strokes as a
+            # guide and remove the rightmost 1-3 characters.
+            with patch(
+                "build_problem_board_edb._trim_edge_vertical_guides",
+                side_effect=AssertionError("passage crop must preserve horizontal bounds"),
+            ), patch(
+                "build_problem_board_edb._trim_edge_attached_page_chrome",
+                side_effect=AssertionError("passage crop must not trim edge-adjacent glyphs"),
+            ):
+                entries = build_problem_entries(
+                    [prepared],
+                    [page_model],
+                    Path(temp_dir) / "out",
+                    LayoutTemplate(name="academy-default"),
+                )
+            passage_entry = next(
+                entry for entry in entries if entry.problem_id == passages[0].unit_id
+            )
+            shared_blocks = [
+                block
+                for block in page_model.blocks
+                if block.block_id in set(_problem_block_ids(passages[0]))
+            ]
+            with Image.open(passage_entry.crop_path) as preserved_crop:
+                self.assertGreaterEqual(
+                    preserved_crop.width,
+                    max(round(block.bbox.width) for block in shared_blocks) + 40,
+                )
 
     def test_pdf_passage_range_prevents_exw_from_becoming_example_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
