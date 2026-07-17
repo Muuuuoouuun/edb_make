@@ -163,6 +163,7 @@ PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
 PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
 PASSAGE_JOIN_BLANK_RUN_MIN_PX = 40
 PASSAGE_JOIN_EDGE_PADDING_PX = 16
+PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO = 0.45
 CONTINUOUS_RECORD_GAP_PX = 20.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
@@ -3279,7 +3280,7 @@ def _trim_passage_segment_for_join(
             candidates = [
                 (start, end)
                 for start, end in _blank_row_runs(row_counts, end=footer_rule_start)
-                if start >= int(round(image.height * 0.50))
+                if start >= int(round(image.height * PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO))
                 and end - start >= PASSAGE_JOIN_BLANK_RUN_MIN_PX
             ]
             if candidates:
@@ -3368,7 +3369,13 @@ def _coalesce_cross_page_passage_drafts(
     removed_indices: set[int] = set()
     updated_crop_sizes = list(crop_sizes)
     for group_id, fragment_indices in fragment_indices_by_group.items():
-        ordered_indices = sorted(fragment_indices)
+        ordered_indices = sorted(
+            fragment_indices,
+            key=lambda index: (
+                int(drafts[index].prepared_page.page_number),
+                index,
+            ),
+        )
         source_page_ids = list(
             dict.fromkeys(drafts[index].source_page_id for index in ordered_indices)
         )
