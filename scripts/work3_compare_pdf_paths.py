@@ -11,6 +11,7 @@ so the timing and pixel comparisons isolate the rendering decision.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -31,8 +32,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from build_problem_board_edb import (
+    PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX,
     PASSAGE_FRAGMENT_STITCH_GAP_PX,
+    _annotate_cross_page_passage_groups,
     _prepare_passage_segments_for_stitch,
+    _trim_source_page_chrome,
     build_pages,
     resolve_subject,
 )
@@ -48,6 +52,8 @@ class PassageFragment:
     bbox_px: tuple[float, float, float, float]
     page_width_px: int
     page_height_px: int
+    segmenter: str = ""
+    cross_page_passage_inferred: bool = False
 
 
 def _safe_name(value: str) -> str:
@@ -100,6 +106,10 @@ def _collect_fragments(prepared_pages: Sequence[Any], pages: Sequence[Any]) -> l
                         ),
                         page_width_px=int(page.width_px),
                         page_height_px=int(page.height_px),
+                        segmenter=str(block.metadata.get("segmenter") or ""),
+                        cross_page_passage_inferred=bool(
+                            block.metadata.get("cross_page_passage_inferred")
+                        ),
                     )
                 )
     return fragments
@@ -108,7 +118,7 @@ def _collect_fragments(prepared_pages: Sequence[Any], pages: Sequence[Any]) -> l
 def _expanded_bbox_px(fragment: PassageFragment) -> tuple[float, float, float, float]:
     left, top, right, bottom = fragment.bbox_px
     midpoint = fragment.page_width_px * 0.5
-    outer_padding = 24.0
+    outer_padding = float(PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX)
     inner_recovery = 64.0
     vertical_recovery = 8.0
     if right <= midpoint:
@@ -166,7 +176,10 @@ def _is_page_chrome_char(char: dict[str, Any], page_rect: fitz.Rect) -> bool:
     normalized = re.sub(r"\s+", "", str(char.get("_line_text") or ""))
     if not normalized:
         return True
-    if in_top_band and any(token in normalized for token in ("영역", "학년도", "문제지", "고2")):
+    if in_top_band and any(
+        token in normalized
+        for token in ("영역", "학년도", "문제지", "고2", "화법과작문", "언어와매체")
+    ):
         return True
     if re.fullmatch(r"[━─―—·.ㆍ0-9]+", normalized):
         return True
@@ -260,7 +273,12 @@ def _full_page_crop(image: Image.Image, clip: fitz.Rect, *, dpi: int) -> Image.I
 
 
 def _stitch(images: Sequence[Image.Image]) -> Image.Image:
-    prepared = _prepare_passage_segments_for_stitch(images)
+    prepared = _prepare_passage_segments_for_stitch(
+        [
+            _trim_source_page_chrome(image, preserve_horizontal_bounds=True)
+            for image in images
+        ]
+    )
     width = max(image.width for image in prepared)
     gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(prepared) > 1 else 0
     height = sum(image.height for image in prepared) + gap * max(0, len(prepared) - 1)
@@ -334,6 +352,7 @@ def compare_pdf_paths(
         max_dimension=None,
         input_intent="auto",
     )
+    _annotate_cross_page_passage_groups(pages)
     segmentation_seconds = time.perf_counter() - segmentation_started
     fragments = _collect_fragments(prepared_pages, pages)
     if not fragments:
@@ -378,15 +397,24 @@ def compare_pdf_paths(
             v0_fragments[key] = v0_image
             v1_fragments[key] = v1_image
             clip_text = page.get_text("text", clip=clip)
+            normalized_clip_text = re.sub(r"\s+", "", clip_text)
+            page_chrome_tokens = [
+                token
+                for token in ("저작권", "문제지에관한저작권", "한국교육과정평가원")
+                if token in normalized_clip_text
+            ]
             fragment_rows.append(
                 {
                     "group_id": fragment.group_id,
                     "label": fragment.label,
                     "page_number": fragment.page_number,
                     "fragment_index": fragment.fragment_index,
+                    "segmenter": fragment.segmenter,
+                    "cross_page_passage_inferred": fragment.cross_page_passage_inferred,
                     "page_route": page_routes[fragment.page_number],
                     "clip_points": [round(value, 3) for value in (clip.x0, clip.y0, clip.x1, clip.y1)],
                     "clip_text_char_count": sum(not char.isspace() for char in clip_text),
+                    "clip_page_chrome_tokens": page_chrome_tokens,
                     "v0_size": list(v0_image.size),
                     "v1_size": list(v1_image.size),
                     **_char_bbox_audit(page, fragment, clip, dpi=dpi),
@@ -407,7 +435,8 @@ def compare_pdf_paths(
             [v1_fragments[(group_id, item.page_number, item.fragment_index)] for item in ordered]
         )
         label = ordered[0].label
-        filename = f"passage_{_safe_name(label)}.png"
+        group_suffix = hashlib.sha1(group_id.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        filename = f"passage_{_safe_name(label)}_{group_suffix}.png"
         v0_path = v0_dir / filename
         v1_path = v1_dir / filename
         v0_stitched.save(v0_path, optimize=True)
@@ -419,6 +448,7 @@ def compare_pdf_paths(
                 "group_id": group_id,
                 "label": label,
                 "fragment_count": len(ordered),
+                "artifact_filename": filename,
                 **_image_metrics(v0_stitched, v1_stitched),
             }
         )
@@ -512,6 +542,10 @@ def compare_pdf_paths(
                     if row["minimum_horizontal_char_margin_px"] is not None
                 ),
                 3,
+            ),
+            "page_chrome_fragment_count": sum(
+                bool(row["clip_page_chrome_tokens"])
+                for row in fragment_rows
             ),
         },
         "groups": group_rows,

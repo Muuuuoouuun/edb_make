@@ -26,10 +26,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from build_problem_board_edb import (
     CONTINUOUS_RECORD_GAP_PX,
+    PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX,
     PASSAGE_FRAGMENT_STITCH_GAP_PX,
     _composite_on_board_background,
     _enhance_problem_crop,
     _extract_problem_cutout,
+    _pad_problem_crop_edges,
     _prepare_passage_segments_for_stitch,
 )
 from edb_builder import CANVAS_HEIGHT, CANVAS_WIDTH
@@ -697,11 +699,17 @@ def render_actual_s2_preview(benchmark_path: Path, output_path: Path) -> dict[st
         return None
     group = max(groups, key=lambda item: int(item["reference_size"][1]))
     label = str(group["label"])
-    source_path = benchmark_path.parent / "v1-direct-clip" / f"passage_{_safe_name(label)}.png"
+    artifact_filename = str(group.get("artifact_filename") or f"passage_{_safe_name(label)}.png")
+    source_path = benchmark_path.parent / "v1-direct-clip" / artifact_filename
     if not source_path.is_file():
         return None
     with Image.open(source_path) as loaded:
         crop = loaded.convert("RGB")
+    crop = _pad_problem_crop_edges(
+        crop,
+        left_padding_px=PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX,
+        right_padding_px=PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX,
+    )
     cutout = _extract_problem_cutout(
         _enhance_problem_crop(crop, text_priority=True),
         text_priority=True,

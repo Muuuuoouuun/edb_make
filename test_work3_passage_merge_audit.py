@@ -7,10 +7,11 @@ from PIL import Image, ImageDraw
 
 from build_problem_board_edb import (
     _ProblemEntryDraft,
+    _annotate_cross_page_passage_groups,
     _coalesce_cross_page_passage_drafts,
 )
 from preprocess import PreparedPage
-from structured_schema import Box, PageModel, ProblemUnit, Subject
+from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject
 from scripts.work3_passage_merge_audit import (
     analyze_benchmark_layouts,
     analyze_multi_dpi_benchmarks,
@@ -21,6 +22,179 @@ from scripts.work3_passage_merge_audit import (
 
 
 class TestWork3PassageMergeAudit(unittest.TestCase):
+    def _pdf_cross_page_fixture(self, *, first_question_column=1, first_question_top=700):
+        passage_block = ContentBlock(
+            block_id="page-1-passage",
+            block_type=BlockType.IMAGE,
+            bbox=Box.from_points(100, 650, 480, 950),
+            reading_order=0,
+            metadata={"column_index": 1, "passage_fragment_index": 1},
+        )
+        passage = ProblemUnit(
+            unit_id="passage-10-13",
+            subject=Subject.KOREAN,
+            title="지문 10~13",
+            figure_block_ids=[passage_block.block_id],
+            metadata={
+                "passage_group_id": "passage-10-13",
+                "passage_range": {"start": 10, "end": 13},
+                "passage_role": "passage_fragment",
+                "shared_passage_block_ids": [passage_block.block_id],
+                "passage_child_problem_numbers": [10, 11, 12, 13],
+            },
+        )
+        page_1 = PageModel(
+            page_id="page-1",
+            width_px=1000,
+            height_px=1000,
+            subject=Subject.KOREAN,
+            blocks=[passage_block],
+            problems=[passage],
+            metadata={"source_type": "pdf", "segmenter": "pdf-text-markers"},
+        )
+        left, right = ((100, 480) if first_question_column == 1 else (520, 900))
+        question_blocks = []
+        questions = []
+        for offset, number in enumerate(range(10, 14)):
+            block = ContentBlock(
+                block_id=f"page-2-question-{number}",
+                block_type=BlockType.TITLE,
+                bbox=Box.from_points(left, first_question_top + offset * 60, right, first_question_top + 50 + offset * 60),
+                reading_order=offset,
+                text=f"{number}.",
+                metadata={"column_index": first_question_column, "problem_number": number},
+            )
+            question_blocks.append(block)
+            questions.append(
+                ProblemUnit(
+                    unit_id=f"question-{number}",
+                    subject=Subject.KOREAN,
+                    title=f"{number}.",
+                    stem_block_ids=[block.block_id],
+                    metadata={"problem_number": number},
+                )
+            )
+        page_2 = PageModel(
+            page_id="page-2",
+            width_px=1000,
+            height_px=1000,
+            subject=Subject.KOREAN,
+            blocks=question_blocks,
+            problems=questions,
+            metadata={
+                "source_type": "pdf",
+                "segmenter": "pdf-text-markers",
+                "pdf_pre_question_text_regions": (
+                    [
+                        {
+                            "column_index": 1,
+                            "before_problem_number": 10,
+                            "line_count": 20,
+                            "char_count": 300,
+                            "bbox": {
+                                "left": 100,
+                                "top": 85,
+                                "right": 480,
+                                "bottom": first_question_top - 2,
+                            },
+                        }
+                    ]
+                    if first_question_column == 1
+                    else [
+                        {
+                            "column_index": 1,
+                            "before_problem_number": 10,
+                            "line_count": 30,
+                            "char_count": 450,
+                            "bbox": {"left": 100, "top": 85, "right": 480, "bottom": 900},
+                        },
+                        {
+                            "column_index": 2,
+                            "before_problem_number": 10,
+                            "line_count": 8,
+                            "char_count": 120,
+                            "bbox": {
+                                "left": 520,
+                                "top": 85,
+                                "right": 900,
+                                "bottom": first_question_top - 2,
+                            },
+                        },
+                    ]
+                ),
+            },
+        )
+        return [page_1, page_2]
+
+    def test_pdf_structure_recovers_unmarked_next_page_passage_fragment(self):
+        pages = self._pdf_cross_page_fixture()
+
+        _annotate_cross_page_passage_groups(pages)
+
+        inferred = [
+            problem
+            for problem in pages[1].problems
+            if problem.metadata.get("cross_page_passage_inferred")
+        ]
+        self.assertEqual(1, len(inferred))
+        self.assertEqual("passage_fragment", inferred[0].metadata["passage_role"])
+        self.assertEqual(["page-1", "page-2"], inferred[0].metadata["passage_source_page_ids"])
+        inferred_blocks = [
+            block
+            for block in pages[1].blocks
+            if block.metadata.get("cross_page_passage_inferred")
+        ]
+        self.assertEqual(1, len(inferred_blocks))
+        self.assertEqual(85.0, inferred_blocks[0].bbox.top)
+        self.assertLess(inferred_blocks[0].bbox.bottom, 700.0)
+        self.assertTrue(
+            all(
+                problem.metadata.get("passage_group_id") == "passage-10-13"
+                for problem in pages[1].problems
+                if problem.metadata.get("problem_number") in {10, 11, 12, 13}
+            )
+        )
+
+        _annotate_cross_page_passage_groups(pages)
+        self.assertEqual(
+            1,
+            sum(bool(problem.metadata.get("cross_page_passage_inferred")) for problem in pages[1].problems),
+        )
+
+    def test_pdf_structure_recovers_left_and_right_fragments_before_right_column_question(self):
+        pages = self._pdf_cross_page_fixture(first_question_column=2, first_question_top=360)
+
+        _annotate_cross_page_passage_groups(pages)
+
+        inferred_blocks = [
+            block
+            for block in pages[1].blocks
+            if block.metadata.get("cross_page_passage_inferred")
+        ]
+        self.assertEqual([1, 2], [block.metadata["column_index"] for block in inferred_blocks])
+        self.assertEqual(900.0, inferred_blocks[0].bbox.bottom)
+        self.assertLess(inferred_blocks[1].bbox.bottom, 360.0)
+
+    def test_pdf_structure_requires_prior_passage_to_reach_page_bottom(self):
+        pages = self._pdf_cross_page_fixture()
+        pages[0].blocks[0].bbox = Box.from_points(100, 200, 480, 500)
+
+        _annotate_cross_page_passage_groups(pages)
+
+        self.assertFalse(
+            any(problem.metadata.get("cross_page_passage_inferred") for problem in pages[1].problems)
+        )
+
+    def test_pdf_structure_does_not_infer_header_only_gap_before_questions(self):
+        pages = self._pdf_cross_page_fixture(first_question_top=130)
+        pages[1].metadata["pdf_pre_question_text_regions"] = []
+
+        _annotate_cross_page_passage_groups(pages)
+
+        self.assertFalse(
+            any(problem.metadata.get("cross_page_passage_inferred") for problem in pages[1].problems)
+        )
+
     def _make_draft(self, root, problem_id, prepared, crop_path):
         render_path = root / f"render-{problem_id}-{crop_path.stem}.png"
         with Image.open(crop_path) as image:
