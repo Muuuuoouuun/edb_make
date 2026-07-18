@@ -36,6 +36,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         (build_vendor_root / "babel.min.js").write_text("// babel build tool\n", encoding="utf-8")
         (assets_root / "app_icon.png").write_bytes(b"png")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
+        (ui_root / "favicon.png").write_bytes(b"png")
         (ui_root / "reorder.js").write_text("// reorder\n", encoding="utf-8")
         (ui_root / "review_filters.js").write_text("// filters\n", encoding="utf-8")
         (ui_root / "publish_summary.js").write_text("// summary\n", encoding="utf-8")
@@ -76,6 +77,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         (scripts_root / "render_hwp_with_rhwp_core.mjs").write_text("console.log('ok');\n", encoding="utf-8")
         (assets_root / "app_icon.png").write_bytes(b"png")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
+        (ui_root / "favicon.png").write_bytes(b"png")
         digest = "0" * 64
         (ui_root / "board.html").write_text(
             f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{digest}"></script>\n',
@@ -647,12 +649,14 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn("function Write-EDBArtifactSummary", ps_source)
         self.assertIn("Get-FileHash -Algorithm SHA256", ps_source)
+        self.assertIn('Write-Host "${Label}: $Path"', ps_source)
         self.assertIn('Write-EDBArtifactSummary -Path $ZipPath -Label "Zip archive"', ps_source)
         self.assertIn('Write-EDBArtifactSummary -Path $PackageRoot -Label "PyInstaller one-file executable"', ps_source)
 
         installer_source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
         self.assertIn("function Write-EDBArtifactSummary", installer_source)
         self.assertIn("Get-FileHash -Algorithm SHA256", installer_source)
+        self.assertIn('Write-Host "${Label}: $Path"', installer_source)
         self.assertIn('Write-EDBArtifactSummary -Path $InstallerPath -Label "Windows installer"', installer_source)
 
     def test_windows_installer_metadata_is_parameterized(self) -> None:
@@ -834,6 +838,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("$EffectiveInstallerVersion", source)
         self.assertIn('"/DAppVersion=$EffectiveInstallerVersion"', source)
         self.assertNotIn('"/DAppVersion=$Version"', source)
+
+    def test_windows_installer_finds_per_user_inno_setup(self) -> None:
+        source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('$env:LOCALAPPDATA', source)
+        self.assertIn('"Programs\\Inno Setup 6\\ISCC.exe"', source)
 
     def test_windows_installer_verifies_existing_app_before_installer_build(self) -> None:
         source = (PROJECT_ROOT / "package_windows_installer.ps1").read_text(encoding="utf-8")

@@ -8,13 +8,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TestUiQueueActions(unittest.TestCase):
-    def test_upload_queue_exposes_page_png_and_recognize_actions(self) -> None:
+    def test_upload_queue_exposes_full_page_and_recognize_actions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
 
-        self.assertIn("페이지 PNG", source)
-        self.assertIn("문제 파싱 없음", source)
+        self.assertIn("페이지 전체 넣기", source)
+        self.assertIn("한 페이지를 그대로 칠판에 배치", source)
         self.assertIn("수동 쪼개기", source)
-        self.assertIn("인식 없이 직접 분할", source)
+        self.assertIn("가운데 미리보기에서 Ctrl+휠 확대", source)
         self.assertIn("문항 AI 인식", source)
         self.assertIn("문제별 자동 분리", source)
         self.assertIn("onClick={() => processQueuedFiles('register')}", source)
