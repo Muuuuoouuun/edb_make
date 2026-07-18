@@ -36,6 +36,13 @@ from edb_builder import CANVAS_HEIGHT, CANVAS_WIDTH
 
 
 BODY_MARKERS = ((214, 46, 46), (39, 86, 214), (35, 154, 88))
+STRICT_BODY_MARKERS = (
+    (214, 46, 46),
+    (39, 86, 214),
+    (35, 154, 88),
+    (132, 61, 196),
+    (12, 142, 157),
+)
 HEADER_CHROME = (202, 45, 184)
 FOOTER_CHROME = (230, 136, 24)
 FULL_WIDTH_DISPLAY_PX = CANVAS_HEIGHT - 84.0 - 54.0
@@ -150,7 +157,15 @@ def stitch_fragments(
     for fragment in fragments:
         with Image.open(fragment.path) as image:
             loaded.append(image.convert("RGB").copy())
-    prepared = _prepare_passage_segments_for_stitch(loaded)
+    return _stitch_images(loaded, output_path=output_path)
+
+
+def _stitch_images(
+    images: Sequence[Image.Image],
+    *,
+    output_path: Path | None = None,
+) -> tuple[Image.Image, list[Image.Image]]:
+    prepared = _prepare_passage_segments_for_stitch(images)
     width = max(image.width for image in prepared)
     total_height = sum(image.height for image in prepared)
     total_height += PASSAGE_FRAGMENT_STITCH_GAP_PX * max(0, len(prepared) - 1)
@@ -159,9 +174,153 @@ def stitch_fragments(
     for image in prepared:
         stitched.paste(image, (0, cursor))
         cursor += image.height + PASSAGE_FRAGMENT_STITCH_GAP_PX
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    stitched.save(output_path)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        stitched.save(output_path)
     return stitched, prepared
+
+
+def _strict_matrix_images(
+    fragment_count: int,
+    width: int,
+) -> tuple[list[Image.Image], list[FragmentSpec]]:
+    scale = width / 720.0
+    height = max(300, round(760 * scale))
+    images: list[Image.Image] = []
+    specs: list[FragmentSpec] = []
+    for index in range(fragment_count):
+        marker = STRICT_BODY_MARKERS[index]
+        image = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(image)
+        if index > 0:
+            header_y = max(8, round(38 * scale))
+            draw.rectangle(
+                (
+                    max(4, round(18 * scale)),
+                    header_y,
+                    width - max(4, round(18 * scale)),
+                    header_y + max(3, round(6 * scale)),
+                ),
+                fill=HEADER_CHROME,
+            )
+        body_top = max(36, round((108 if index > 0 else 72) * scale))
+        body_bottom = min(
+            height - max(90, round(180 * scale)),
+            body_top + max(110, round(300 * scale)),
+        )
+        draw.rectangle(
+            (
+                max(18, round(54 * scale)),
+                body_top,
+                width - max(18, round(54 * scale)),
+                body_bottom,
+            ),
+            outline=marker,
+            width=max(3, round(8 * scale)),
+        )
+        draw.rectangle(
+            (
+                max(24, round(74 * scale)),
+                body_top + max(12, round(34 * scale)),
+                max(50, round(164 * scale)),
+                min(body_bottom - 8, body_top + max(44, round(124 * scale))),
+            ),
+            fill=marker,
+        )
+        if index < fragment_count - 1:
+            footer_y = min(height - max(28, round(70 * scale)), round(690 * scale))
+            draw.rectangle(
+                (
+                    max(4, round(18 * scale)),
+                    footer_y,
+                    width - max(4, round(18 * scale)),
+                    footer_y + max(3, round(6 * scale)),
+                ),
+                fill=FOOTER_CHROME,
+            )
+            draw.rectangle(
+                (
+                    width // 2 - max(6, round(18 * scale)),
+                    min(height - 8, footer_y + max(8, round(18 * scale))),
+                    width // 2 + max(6, round(18 * scale)),
+                    min(height - 4, footer_y + max(12, round(28 * scale))),
+                ),
+                fill=FOOTER_CHROME,
+            )
+        images.append(image)
+        specs.append(
+            FragmentSpec(
+                fragment_id=f"strict-{width}-{index + 1}",
+                page_number=index + 1,
+                path=Path("unused"),
+                body_marker=marker,
+            )
+        )
+    return images, specs
+
+
+def run_strict_audit_matrix() -> dict[str, Any]:
+    cases: list[dict[str, Any]] = []
+    for fragment_count in (2, 3, 5):
+        for width in (360, 720, 1440):
+            images, specs = _strict_matrix_images(fragment_count, width)
+            stitched, prepared = _stitch_images(images)
+            audit = audit_stitched_image(specs, stitched, prepared)
+            cases.append(
+                {
+                    "name": f"{fragment_count}-page-{width}px",
+                    "fragment_count": fragment_count,
+                    "width_px": width,
+                    "completeness_score": audit["completeness_score"],
+                    "pass": audit["pass"],
+                }
+            )
+
+    # Negative guardrail 1: a footnote separator followed by substantial text
+    # is document content and must survive a non-final join.
+    footnote = Image.new("RGB", (720, 760), "white")
+    draw = ImageDraw.Draw(footnote)
+    draw.rectangle((60, 80, 660, 360), outline="black", width=5)
+    draw.rectangle((24, 610, 696, 616), fill="black")
+    footnote_marker = (12, 142, 157)
+    for y in (640, 674, 708):
+        draw.rectangle((52, y, 650, y + 5), fill=footnote_marker)
+    footnote_prepared = _prepare_passage_segments_for_stitch(
+        [footnote, Image.new("RGB", (720, 240), "white")]
+    )[0]
+    footnote_preserved = bool(
+        footnote_prepared.size == footnote.size
+        and _count_color(footnote_prepared, footnote_marker)
+        == _count_color(footnote, footnote_marker)
+    )
+
+    # Negative guardrail 2: a rule in the middle of a continuation box is not
+    # a page-header rule and content above it must remain.
+    continuation = Image.new("RGB", (720, 760), "white")
+    draw = ImageDraw.Draw(continuation)
+    box_marker = (132, 61, 196)
+    draw.rectangle((72, 80, 190, 150), fill=box_marker)
+    draw.rectangle((24, 300, 696, 306), fill="black")
+    draw.rectangle((72, 350, 650, 690), outline="black", width=5)
+    continuation_prepared = _prepare_passage_segments_for_stitch(
+        [Image.new("RGB", (720, 240), "white"), continuation]
+    )[1]
+    box_content_preserved = (
+        _count_color(continuation_prepared, box_marker) == _count_color(continuation, box_marker)
+    )
+
+    guardrails = {
+        "substantial_footnote_preserved": footnote_preserved,
+        "midbody_box_rule_preserved": box_content_preserved,
+    }
+    passed_case_count = sum(bool(case["pass"]) for case in cases)
+    return {
+        "case_count": len(cases),
+        "passed_case_count": passed_case_count,
+        "cases": cases,
+        "negative_guardrails": guardrails,
+        "pass": passed_case_count == len(cases) and all(guardrails.values()),
+    }
 
 
 def audit_stitched_image(
@@ -452,6 +611,20 @@ def analyze_benchmark_layouts(
         "cross_page_group_count": len(cross_page_groups),
         "cross_page_group_ids": cross_page_groups,
         "max_record_height_pages": max_record_height_pages,
+        "source_quality_gate": {
+            "minimum_char_bbox_recall": payload.get("quality_summary", {}).get(
+                "minimum_char_bbox_recall"
+            ),
+            "clipped_char_bbox_count": payload.get("quality_summary", {}).get(
+                "clipped_char_bbox_count"
+            ),
+            "pass": bool(
+                float(payload.get("quality_summary", {}).get("minimum_char_bbox_recall") or 0.0)
+                >= 1.0
+                and int(payload.get("quality_summary", {}).get("clipped_char_bbox_count") or 0)
+                == 0
+            ),
+        },
         "width_variants": variants,
         "placement_decision": {
             "literal_full_width": (
@@ -465,8 +638,53 @@ def analyze_benchmark_layouts(
             "wide_safe_pilot_max_record_height_pages": safe_summary["maximum_record_height_pages"],
             "current_adaptive_span_pages": current_summary["total_span_pages"],
             "current_adaptive_max_record_height_pages": current_summary["maximum_record_height_pages"],
-            "note": "840px keeps passage-only output below a 45-page reserve target; questions or extra records require a lower width or a second EDB part",
+            "note": (
+                "840px keeps passage-only output below a 45-page reserve target; "
+                "questions or extra records require a lower width or a second EDB part"
+            ),
         },
+    }
+
+
+def analyze_multi_dpi_benchmarks(benchmark_paths: Sequence[Path]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for path in benchmark_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        quality = payload.get("quality_summary") or {}
+        rows.append(
+            {
+                "dpi": int(payload.get("dpi") or 0),
+                "passage_group_count": int(payload.get("passage_group_count") or 0),
+                "passage_fragment_count": int(payload.get("passage_fragment_count") or 0),
+                "minimum_pixel_similarity": float(quality.get("minimum_pixel_similarity") or 0.0),
+                "minimum_ink_f1": float(quality.get("minimum_ink_f1") or 0.0),
+                "minimum_char_bbox_recall": float(quality.get("minimum_char_bbox_recall") or 0.0),
+                "clipped_char_bbox_count": int(quality.get("clipped_char_bbox_count") or 0),
+                "recovered_outside_block_char_count": int(
+                    quality.get("recovered_outside_block_char_count") or 0
+                ),
+                "minimum_horizontal_char_margin_px": float(
+                    quality.get("minimum_horizontal_char_margin_px") or 0.0
+                ),
+            }
+        )
+    rows.sort(key=lambda row: row["dpi"])
+    group_counts = {row["passage_group_count"] for row in rows}
+    fragment_counts = {row["passage_fragment_count"] for row in rows}
+    checks = {
+        "three_or_more_dpis": len({row["dpi"] for row in rows}) >= 3,
+        "stable_group_count": len(group_counts) == 1,
+        "stable_fragment_count": len(fragment_counts) == 1,
+        "pixel_similarity": all(row["minimum_pixel_similarity"] >= 0.999 for row in rows),
+        "ink_f1": all(row["minimum_ink_f1"] >= 0.999 for row in rows),
+        "char_bbox_recall": all(row["minimum_char_bbox_recall"] >= 1.0 for row in rows),
+        "zero_clipped_chars": all(row["clipped_char_bbox_count"] == 0 for row in rows),
+        "minimum_safe_margin": all(row["minimum_horizontal_char_margin_px"] >= 12.0 for row in rows),
+    }
+    return {
+        "rows": rows,
+        "checks": checks,
+        "pass": bool(rows) and all(checks.values()),
     }
 
 
@@ -488,6 +706,48 @@ def render_actual_s2_preview(benchmark_path: Path, output_path: Path) -> dict[st
         _enhance_problem_crop(crop, text_priority=True),
         text_priority=True,
     )
+    alpha = cutout.getchannel("A")
+    alpha_histogram = alpha.histogram()
+    alpha_bbox = alpha.getbbox()
+    if alpha_bbox is None:
+        margins = {"left": 0, "top": 0, "right": 0, "bottom": 0}
+    else:
+        margins = {
+            "left": int(alpha_bbox[0]),
+            "top": int(alpha_bbox[1]),
+            "right": int(cutout.width - alpha_bbox[2]),
+            "bottom": int(cutout.height - alpha_bbox[3]),
+        }
+    rgb_colors = cutout.convert("RGB").getcolors(maxcolors=16)
+    rgb_color_count = len(rgb_colors) if rgb_colors is not None else 17
+    right_edge_band = alpha.crop((max(0, alpha.width - 3), 0, alpha.width, alpha.height))
+    right_edge_pixels = right_edge_band.load()
+    right_edge_rows = [
+        any(right_edge_pixels[x, y] > 0 for x in range(right_edge_band.width))
+        for y in range(right_edge_band.height)
+    ]
+    right_edge_ink_rows = sum(right_edge_rows)
+    right_edge_ink_row_ratio = right_edge_ink_rows / max(1, right_edge_band.height)
+    longest_right_edge_run = 0
+    current_right_edge_run = 0
+    for has_ink in right_edge_rows:
+        if has_ink:
+            current_right_edge_run += 1
+            longest_right_edge_run = max(longest_right_edge_run, current_right_edge_run)
+        else:
+            current_right_edge_run = 0
+    longest_right_edge_run_ratio = longest_right_edge_run / max(1, right_edge_band.height)
+    right_edge_vertical_rule = longest_right_edge_run_ratio >= 0.10
+    quality_checks = {
+        "nonempty_ink": sum(alpha_histogram[1:]) > 0,
+        "transparent_background": alpha_histogram[0] > 0,
+        "zero_low_alpha_halo_pixels": sum(alpha_histogram[1:13]) == 0,
+        "single_chalk_rgb_tone": rgb_color_count == 1,
+        "left_safe_margin": margins["left"] >= 8,
+        "right_safe_margin_or_vertical_rule": (
+            margins["right"] >= 8 or right_edge_vertical_rule
+        ),
+    }
     preview = _composite_on_board_background(cutout, board_theme="charcoal")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     preview.save(output_path, optimize=True)
@@ -497,6 +757,15 @@ def render_actual_s2_preview(benchmark_path: Path, output_path: Path) -> dict[st
         "preview_size": list(preview.size),
         "board_theme": "charcoal",
         "processing": "s2-dense-text-priority",
+        "alpha_bbox": list(alpha_bbox) if alpha_bbox is not None else None,
+        "ink_margins_px": margins,
+        "low_alpha_halo_pixel_count": sum(alpha_histogram[1:13]),
+        "foreground_rgb_color_count": rgb_color_count,
+        "right_edge_ink_row_ratio": round(right_edge_ink_row_ratio, 6),
+        "longest_right_edge_ink_run_ratio": round(longest_right_edge_run_ratio, 6),
+        "right_edge_vertical_rule": right_edge_vertical_rule,
+        "quality_checks": quality_checks,
+        "pass": all(quality_checks.values()),
         "artifact": output_path.name,
     }
 
@@ -533,7 +802,12 @@ def render_layout_preview(
         y += image.height + stitch_gap
 
     fragment_records = [(image, True) for image in scaled]
-    max_chunk_px = max_record_height_pages * CANVAS_WIDTH * scale / (FULL_WIDTH_DISPLAY_PX / max(img.width for img in prepared))
+    max_chunk_px = (
+        max_record_height_pages
+        * CANVAS_WIDTH
+        * scale
+        / (FULL_WIDTH_DISPLAY_PX / max(img.width for img in prepared))
+    )
     adaptive_records: list[Image.Image] = []
     chunk: list[Image.Image] = []
     chunk_height = 0
@@ -583,7 +857,11 @@ def render_layout_preview(
         for record, border in records:
             preview.paste(record, (x, y))
             if border:
-                draw.rectangle((x - 2, y - 2, x + record.width + 1, y + record.height + 1), outline=(91, 171, 255), width=2)
+                draw.rectangle(
+                    (x - 2, y - 2, x + record.width + 1, y + record.height + 1),
+                    outline=(91, 171, 255),
+                    width=2,
+                )
             y += record.height + gap
     output_path.parent.mkdir(parents=True, exist_ok=True)
     preview.save(output_path)
@@ -595,6 +873,7 @@ def run_synthetic_audit(
     display_width_px: float = FULL_WIDTH_DISPLAY_PX,
     max_record_height_pages: float = 1.8,
     benchmark_path: Path | None = None,
+    strict_benchmark_paths: Sequence[Path] = (),
 ) -> dict[str, Any]:
     fragment_dir = output_dir / "fragments"
     fragments = build_synthetic_fragments(fragment_dir)
@@ -613,18 +892,22 @@ def run_synthetic_audit(
         max_record_height_pages=max_record_height_pages,
     )
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": "work3-cross-page-passage-merge-audit",
         "fixture": "three-page-synthetic-passage-with-page-chrome",
         "display_width_px": round(display_width_px, 1),
         "max_record_height_pages": max_record_height_pages,
         "merge_audit": audit,
+        "strict_matrix": run_strict_audit_matrix(),
         "layouts": [asdict(layout) for layout in layouts],
         "recommendation": {
             "default": "single-stitched-record",
             "fallback": "adaptive-fragment-boundary",
             "fallback_trigger": f"merged rendered height above {max_record_height_pages:.1f} board pages",
-            "reason": "single record has the shortest continuous span; adaptive splitting limits one-record height while preserving source order and a 20px non-overlap gap",
+            "reason": (
+                "single record has the shortest continuous span; adaptive splitting limits "
+                "one-record height while preserving source order and a 20px non-overlap gap"
+            ),
         },
         "artifacts": {
             "merged": merged_path.name,
@@ -643,6 +926,24 @@ def run_synthetic_audit(
         if s2_preview is not None:
             result["actual_s2_preview"] = s2_preview
             result["artifacts"]["actual_s2_preview"] = s2_preview["artifact"]
+    if strict_benchmark_paths:
+        result["multi_dpi_quality"] = analyze_multi_dpi_benchmarks(strict_benchmark_paths)
+    result["pass"] = bool(
+        result["merge_audit"]["pass"]
+        and result["strict_matrix"]["pass"]
+        and (
+            benchmark_path is None
+            or result.get("actual_pdf_layouts", {}).get("source_quality_gate", {}).get("pass")
+        )
+        and (
+            benchmark_path is None
+            or result.get("actual_s2_preview", {}).get("pass")
+        )
+        and (
+            not strict_benchmark_paths
+            or result.get("multi_dpi_quality", {}).get("pass")
+        )
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "audit.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
@@ -657,6 +958,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--display-width-px", type=float, default=FULL_WIDTH_DISPLAY_PX)
     parser.add_argument("--max-record-height-pages", type=float, default=1.8)
     parser.add_argument("--benchmark-json")
+    parser.add_argument("--strict-benchmark-json", action="append", default=[])
     return parser
 
 
@@ -671,9 +973,12 @@ def main() -> int:
             if args.benchmark_json
             else None
         ),
+        strict_benchmark_paths=[
+            Path(path).expanduser().resolve() for path in args.strict_benchmark_json
+        ],
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["merge_audit"]["pass"] else 1
+    return 0 if result["pass"] else 1
 
 
 if __name__ == "__main__":

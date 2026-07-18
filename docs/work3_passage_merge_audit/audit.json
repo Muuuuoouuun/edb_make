@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "experiment": "work3-cross-page-passage-merge-audit",
   "fixture": "three-page-synthetic-passage-with-page-chrome",
   "display_width_px": 1142.0,
@@ -70,6 +70,80 @@
     "completeness_score": 100.0,
     "pass": true
   },
+  "strict_matrix": {
+    "case_count": 9,
+    "passed_case_count": 9,
+    "cases": [
+      {
+        "name": "2-page-360px",
+        "fragment_count": 2,
+        "width_px": 360,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "2-page-720px",
+        "fragment_count": 2,
+        "width_px": 720,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "2-page-1440px",
+        "fragment_count": 2,
+        "width_px": 1440,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "3-page-360px",
+        "fragment_count": 3,
+        "width_px": 360,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "3-page-720px",
+        "fragment_count": 3,
+        "width_px": 720,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "3-page-1440px",
+        "fragment_count": 3,
+        "width_px": 1440,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "5-page-360px",
+        "fragment_count": 5,
+        "width_px": 360,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "5-page-720px",
+        "fragment_count": 5,
+        "width_px": 720,
+        "completeness_score": 100.0,
+        "pass": true
+      },
+      {
+        "name": "5-page-1440px",
+        "fragment_count": 5,
+        "width_px": 1440,
+        "completeness_score": 100.0,
+        "pass": true
+      }
+    ],
+    "negative_guardrails": {
+      "substantial_footnote_preserved": true,
+      "midbody_box_rule_preserved": true
+    },
+    "pass": true
+  },
   "layouts": [
     {
       "name": "single-stitched-record",
@@ -120,6 +194,11 @@
     "cross_page_group_count": 0,
     "cross_page_group_ids": [],
     "max_record_height_pages": 1.8,
+    "source_quality_gate": {
+      "minimum_char_bbox_recall": 1.0,
+      "clipped_char_bbox_count": 0,
+      "pass": true
+    },
     "width_variants": {
       "current-left-column": {
         "display_width_px": 301.0,
@@ -1811,6 +1890,81 @@
     ],
     "board_theme": "charcoal",
     "processing": "s2-dense-text-priority",
+    "alpha_bbox": [
+      19,
+      0,
+      964,
+      4385
+    ],
+    "ink_margins_px": {
+      "left": 19,
+      "top": 0,
+      "right": 0,
+      "bottom": 32
+    },
+    "low_alpha_halo_pixel_count": 0,
+    "foreground_rgb_color_count": 1,
+    "right_edge_ink_row_ratio": 0.408648,
+    "longest_right_edge_ink_run_ratio": 0.408648,
+    "right_edge_vertical_rule": true,
+    "quality_checks": {
+      "nonempty_ink": true,
+      "transparent_background": true,
+      "zero_low_alpha_halo_pixels": true,
+      "single_chalk_rgb_tone": true,
+      "left_safe_margin": true,
+      "right_safe_margin_or_vertical_rule": true
+    },
+    "pass": true,
     "artifact": "actual-s2-longest-preview.png"
-  }
+  },
+  "multi_dpi_quality": {
+    "rows": [
+      {
+        "dpi": 144,
+        "passage_group_count": 11,
+        "passage_fragment_count": 15,
+        "minimum_pixel_similarity": 1.0,
+        "minimum_ink_f1": 1.0,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 138,
+        "minimum_horizontal_char_margin_px": 16.289
+      },
+      {
+        "dpi": 200,
+        "passage_group_count": 11,
+        "passage_fragment_count": 15,
+        "minimum_pixel_similarity": 1.0,
+        "minimum_ink_f1": 1.0,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 138,
+        "minimum_horizontal_char_margin_px": 22.624
+      },
+      {
+        "dpi": 300,
+        "passage_group_count": 11,
+        "passage_fragment_count": 15,
+        "minimum_pixel_similarity": 1.0,
+        "minimum_ink_f1": 1.0,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 138,
+        "minimum_horizontal_char_margin_px": 17.926
+      }
+    ],
+    "checks": {
+      "three_or_more_dpis": true,
+      "stable_group_count": true,
+      "stable_fragment_count": true,
+      "pixel_similarity": true,
+      "ink_f1": true,
+      "char_bbox_recall": true,
+      "zero_clipped_chars": true,
+      "minimum_safe_margin": true
+    },
+    "pass": true
+  },
+  "pass": true
 }

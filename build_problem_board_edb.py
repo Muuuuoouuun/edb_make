@@ -163,7 +163,9 @@ PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
 PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
 PASSAGE_JOIN_BLANK_RUN_MIN_PX = 40
 PASSAGE_JOIN_EDGE_PADDING_PX = 16
+PASSAGE_JOIN_TOP_RULE_MAX_RATIO = 0.32
 PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO = 0.45
+PASSAGE_JOIN_FOOTER_CONTENT_MIN_WIDTH_RATIO = 0.25
 CONTINUOUS_RECORD_GAP_PX = 20.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
@@ -3225,6 +3227,66 @@ def _blank_row_runs(row_counts: Sequence[int], *, end: int) -> list[tuple[int, i
     return runs
 
 
+def _foreground_row_runs(
+    row_counts: Sequence[int],
+    *,
+    start: int,
+    end: int,
+) -> list[tuple[int, int]]:
+    runs: list[tuple[int, int]] = []
+    run_start: int | None = None
+    lower = max(0, min(len(row_counts), start))
+    upper = max(lower, min(len(row_counts), end))
+    for index in range(lower, upper):
+        is_foreground = row_counts[index] > 3
+        if is_foreground and run_start is None:
+            run_start = index
+        elif not is_foreground and run_start is not None:
+            runs.append((run_start, index))
+            run_start = None
+    if run_start is not None:
+        runs.append((run_start, upper))
+    return runs
+
+
+def _has_substantial_content_below_footer_rule(
+    row_counts: Sequence[int],
+    *,
+    rule_end: int,
+    image_width: int,
+) -> bool:
+    """Keep likely footnotes/captions below a rule instead of deleting them.
+
+    Page numbers normally form one narrow ink run. Two separate text lines or
+    a single line spanning at least a quarter of the crop width are treated as
+    document content. This deliberately prefers leaving uncertain chrome over
+    deleting a real passage footnote.
+    """
+
+    raw_runs = [
+        (start, end)
+        for start, end in _foreground_row_runs(
+            row_counts,
+            start=rule_end,
+            end=len(row_counts),
+        )
+        if end - start >= 2
+    ]
+    runs: list[tuple[int, int]] = []
+    for start, end in raw_runs:
+        if runs and start - runs[-1][1] <= 5:
+            runs[-1] = (runs[-1][0], end)
+        else:
+            runs.append((start, end))
+    if len(runs) >= 2:
+        return True
+    below_rule = row_counts[max(0, rule_end) :]
+    return bool(
+        below_rule
+        and max(below_rule) >= int(round(image_width * PASSAGE_JOIN_FOOTER_CONTENT_MIN_WIDTH_RATIO))
+    )
+
+
 def _trim_passage_segment_for_join(
     image: Image.Image,
     *,
@@ -3251,7 +3313,8 @@ def _trim_passage_segment_for_join(
         top_rule_rows = [
             index
             for index in range(upper_end)
-            if row_counts[index] >= long_rule_threshold
+            if index <= int(round(image.height * PASSAGE_JOIN_TOP_RULE_MAX_RATIO))
+            and row_counts[index] >= long_rule_threshold
         ]
         if top_rule_rows:
             first_rule = top_rule_rows[0]
@@ -3276,15 +3339,34 @@ def _trim_passage_segment_for_join(
             if row_counts[index] >= long_rule_threshold
         ]
         if long_rule_rows:
-            footer_rule_start = long_rule_rows[-1]
-            candidates = [
+            blank_candidates = [
                 (start, end)
-                for start, end in _blank_row_runs(row_counts, end=footer_rule_start)
+                for start, end in _blank_row_runs(row_counts, end=image.height)
                 if start >= int(round(image.height * PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO))
                 and end - start >= PASSAGE_JOIN_BLANK_RUN_MIN_PX
+                and any(rule_row >= end for rule_row in long_rule_rows)
             ]
-            if candidates:
-                blank_start, _blank_end = candidates[-1]
+            if blank_candidates:
+                blank_start, blank_end = blank_candidates[-1]
+                footer_rule_start = next(
+                    rule_row for rule_row in long_rule_rows if rule_row >= blank_end
+                )
+                footer_rule_end = footer_rule_start + 1
+                long_rule_row_set = set(long_rule_rows)
+                while footer_rule_end in long_rule_row_set:
+                    footer_rule_end += 1
+            else:
+                footer_rule_start = -1
+                footer_rule_end = -1
+        else:
+            footer_rule_start = -1
+            footer_rule_end = -1
+        if footer_rule_start >= 0:
+            if not _has_substantial_content_below_footer_rule(
+                row_counts,
+                rule_end=footer_rule_end,
+                image_width=image.width,
+            ):
                 candidate_bottom = min(
                     image.height,
                     blank_start + PASSAGE_JOIN_EDGE_PADDING_PX,
@@ -3369,17 +3451,60 @@ def _coalesce_cross_page_passage_drafts(
     removed_indices: set[int] = set()
     updated_crop_sizes = list(crop_sizes)
     for group_id, fragment_indices in fragment_indices_by_group.items():
-        ordered_indices = sorted(
+        ordered_candidates = sorted(
             fragment_indices,
             key=lambda index: (
                 int(drafts[index].prepared_page.page_number),
                 index,
             ),
         )
+        ordered_indices: list[int] = []
+        seen_fragment_ids: set[str] = set()
+        for index in ordered_candidates:
+            fragment_id = drafts[index].problem_id
+            if fragment_id in seen_fragment_ids:
+                removed_indices.add(index)
+                continue
+            seen_fragment_ids.add(fragment_id)
+            ordered_indices.append(index)
         source_page_ids = list(
             dict.fromkeys(drafts[index].source_page_id for index in ordered_indices)
         )
         if len(ordered_indices) < 2 or len(source_page_ids) < 2:
+            continue
+
+        group_problems = [
+            problem
+            for problem in problem_units_by_id.values()
+            if str(problem.metadata.get("passage_group_id") or "").strip() == group_id
+        ]
+        expected_source_page_ids: list[str] = []
+        expected_fragment_count = 0
+        for problem in group_problems:
+            raw_source_page_ids = problem.metadata.get("passage_source_page_ids")
+            if isinstance(raw_source_page_ids, list):
+                for page_id in raw_source_page_ids:
+                    normalized_page_id = str(page_id or "").strip()
+                    if normalized_page_id and normalized_page_id not in expected_source_page_ids:
+                        expected_source_page_ids.append(normalized_page_id)
+            expected_fragment_count = max(
+                expected_fragment_count,
+                _coerce_int(problem.metadata.get("passage_fragment_count")) or 0,
+            )
+        missing_source_page_ids = [
+            page_id for page_id in expected_source_page_ids if page_id not in source_page_ids
+        ]
+        coverage_incomplete = bool(
+            missing_source_page_ids
+            or (expected_fragment_count > 0 and len(source_page_ids) < expected_fragment_count)
+        )
+        if coverage_incomplete:
+            for problem in group_problems:
+                problem.metadata["passage_merge_incomplete"] = True
+                problem.metadata["passage_merge_missing_source_page_ids"] = list(
+                    missing_source_page_ids
+                )
+                problem.metadata["passage_merge_detected_source_page_ids"] = list(source_page_ids)
             continue
 
         primary_index = ordered_indices[0]
@@ -3410,10 +3535,11 @@ def _coalesce_cross_page_passage_drafts(
         primary.risk_flags = merged_risk_flags
         removed_indices.update(ordered_indices[1:])
 
-        for problem in problem_units_by_id.values():
+        for problem in group_problems:
             metadata = problem.metadata
-            if str(metadata.get("passage_group_id") or "").strip() != group_id:
-                continue
+            metadata.pop("passage_merge_incomplete", None)
+            metadata.pop("passage_merge_missing_source_page_ids", None)
+            metadata.pop("passage_merge_detected_source_page_ids", None)
             metadata["passage_fragments_merged"] = True
             metadata["passage_merged_fragment_ids"] = list(fragment_ids)
             metadata["passage_merged_source_page_ids"] = list(source_page_ids)
