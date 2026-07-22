@@ -4612,6 +4612,62 @@ def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
     return _mutate_exclude_many(session, [problem_id])
 
 
+def _mutate_classify(session: dict[str, Any], problem_id: str, classification: str) -> dict[str, Any]:
+    normalized = str(classification or "").strip().lower().replace("_", "-")
+    if normalized not in {"question", "shared-passage"}:
+        raise ValueError("classification must be question or shared-passage")
+    if not problem_id:
+        raise ValueError("problemId is required")
+
+    _index, problem = _find_problem(session, problem_id)
+    metadata = problem.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        problem["metadata"] = metadata
+
+    existing_group_id = str(
+        problem.get("passageGroupId")
+        or problem.get("passage_group_id")
+        or metadata.get("passageGroupId")
+        or metadata.get("passage_group_id")
+        or ""
+    ).strip()
+
+    if normalized == "shared-passage":
+        group_id = existing_group_id or f"manual-passage-{problem_id}"
+        role: str | None = "passage_fragment"
+        supplemental = True
+        problem["passageGroupId"] = group_id
+        problem["passage_group_id"] = group_id
+        metadata["passageGroupId"] = group_id
+        metadata["passage_group_id"] = group_id
+    else:
+        manual_group = existing_group_id.startswith("manual-passage-")
+        role = "child_question" if existing_group_id and not manual_group else None
+        supplemental = False
+        if manual_group:
+            for container in (problem, metadata):
+                container.pop("passageGroupId", None)
+                container.pop("passage_group_id", None)
+                container.pop("passageRange", None)
+                container.pop("passage_range", None)
+
+    for container in (problem, metadata):
+        if role is None:
+            container.pop("passageRole", None)
+            container.pop("passage_role", None)
+        else:
+            container["passageRole"] = role
+            container["passage_role"] = role
+        container["supplementalItem"] = supplemental
+        container["supplemental_item"] = supplemental
+        container["classificationSource"] = "manual"
+        container["classification_source"] = "manual"
+
+    _refresh_session_problem_counts(session)
+    return session
+
+
 def _problem_review_status(problem: dict[str, Any]) -> str:
     explicit = str(problem.get("reviewStatus") or problem.get("review_status") or "").strip().lower()
     if explicit in {"normal", "check_needed", "failed"}:
@@ -6324,7 +6380,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         })
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "bulk-crop" | "exclude", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "bulk-crop" | "exclude" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session = self.app_server.latest_session or load_latest_session()
@@ -6374,13 +6430,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else:
                     problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                     new_session = _mutate_exclude(session, problem_id)
+            elif action == "classify":
+                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                classification = str(payload.get("classification") or "")
+                new_session = _mutate_classify(session, problem_id, classification)
             elif action in {"retry-ai", "retry_ai"}:
                 new_session = _mutate_retry_ai(session, payload)
             elif action in {"enhance-image", "enhance_image"}:
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|classify|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return

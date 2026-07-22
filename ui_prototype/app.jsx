@@ -3242,6 +3242,7 @@ function ItemsRail({
   const [draggingId, setDraggingId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const [materialFilter, setMaterialFilter] = useState('all');
   const railRef = useRef(null);
   const itemRefs = useRef({});
   const previousItemRects = useRef(new Map());
@@ -3258,6 +3259,17 @@ function ItemsRail({
     }
   });
   const hasSessionItems = items.length > 0;
+  const materialCounts = useMemo(() => ({
+    all: items.length,
+    questions: items.filter(item => !isPassageFragmentProblem(item)).length,
+    passages: items.filter(isPassageFragmentProblem).length,
+  }), [items]);
+  const visibleItemRows = useMemo(() => items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => materialFilter === 'all'
+      || (materialFilter === 'questions' && !isPassageFragmentProblem(item))
+      || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter]);
+  const filterActive = materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
 
   useLayoutEffect(() => {
@@ -3382,7 +3394,7 @@ function ItemsRail({
   useEffect(() => () => stopRailAutoScroll(), []);
 
   const startPointerDrag = (event, itemId) => {
-    if (event.button !== 0 || event.target.closest?.('button')) return;
+    if (filterActive || event.button !== 0 || event.target.closest?.('button')) return;
     const rows = items.map(item => {
       const el = itemRefs.current[item.id];
       return el ? { id: item.id, top: el.offsetTop, height: el.offsetHeight } : null;
@@ -3468,7 +3480,7 @@ function ItemsRail({
     <div className="col left">
       <div className="col-hd">
         <h2>자료</h2>
-        <span className="count">{items.length}</span>
+        <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
         <div className="spacer" />
         <button className="icon-btn" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
         <button
@@ -3480,6 +3492,32 @@ function ItemsRail({
         >{Icon.wand}</button>
         <button className="icon-btn" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" onClick={addSample}>{Icon.upload}</button>
       </div>
+
+      {hasSessionItems && (
+        <div className="material-filter" role="group" aria-label="자료 모아보기">
+          {[
+            ['all', '전체', materialCounts.all],
+            ['questions', '문항', materialCounts.questions],
+            ['passages', '공통 지문', materialCounts.passages],
+          ].map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              className={materialFilter === value ? 'on' : ''}
+              aria-pressed={materialFilter === value}
+              onClick={() => {
+                setMaterialFilter(value);
+                const firstMatch = items.find(item => value === 'all'
+                  || (value === 'questions' && !isPassageFragmentProblem(item))
+                  || (value === 'passages' && isPassageFragmentProblem(item)));
+                if (firstMatch) setActive(firstMatch.id);
+              }}
+            >
+              <span>{label}</span><b>{count}</b>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div
         className="items"
@@ -3741,7 +3779,11 @@ function ItemsRail({
           </div>
         )}
 
-        {items.map((it, i) => {
+        {filterActive && !!items.length && (
+          <div className="material-filter-note">모아보기 중 · 순서 변경은 전체 보기에서</div>
+        )}
+
+        {visibleItemRows.map(({ item: it, index: i }) => {
           const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
@@ -3769,6 +3811,10 @@ function ItemsRail({
             onPointerUp={finishPointerDrag}
             onPointerCancel={finishPointerDrag}
             onDragStart={e => {
+              if (filterActive) {
+                e.preventDefault();
+                return;
+              }
               dragId.current = it.id;
               setDraggingId(it.id);
               e.dataTransfer.effectAllowed = 'move';
@@ -3844,6 +3890,12 @@ function ItemsRail({
             </div>
           </div>
         );})}
+        {hasSessionItems && visibleItemRows.length === 0 && (
+          <div className="material-filter-empty">
+            <strong>해당 자료가 없습니다</strong>
+            <small>분류를 수정하거나 전체 보기로 돌아가세요.</small>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4972,6 +5024,31 @@ function SidePanel({
                     </div>
                   </div>
                   <div className="pos-tag">{itemPosLabel}</div>
+                </div>
+
+                <div className="item-classification">
+                  <div>
+                    <strong>자료 분류</strong>
+                    <small>공통 지문은 여러 문항이 함께 쓰는 별도 지문만 지정</small>
+                  </div>
+                  <div className="item-classification-options" role="radiogroup" aria-label="선택 자료 분류">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={!isPassageFragmentProblem(item)}
+                      className={!isPassageFragmentProblem(item) ? 'on' : ''}
+                      disabled={mutating}
+                      onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'question' })}
+                    >문항</button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={isPassageFragmentProblem(item)}
+                      className={isPassageFragmentProblem(item) ? 'on' : ''}
+                      disabled={mutating}
+                      onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'shared-passage' })}
+                    >공통 지문</button>
+                  </div>
                 </div>
 
                 <div className="item-preview" ref={wrapRef}>
@@ -9182,6 +9259,7 @@ function App(){
         : action === 'crop' ? '이미지를 자르는 중…'
         : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
+        : action === 'classify' ? '자료 분류를 저장하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
     });
@@ -9197,6 +9275,7 @@ function App(){
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
         : action === 'bulk-crop' ? '수동 분할을 적용했어요'
+        : action === 'classify' ? '자료 분류를 변경했어요'
         : '문제를 제외했어요'
       );
       return next;

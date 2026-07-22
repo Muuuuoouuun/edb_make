@@ -231,6 +231,34 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("top: el.offsetTop, height: el.offsetHeight", items_rail)
         self.assertNotIn("rail.querySelectorAll('.item[data-item-id]')", items_rail)
 
+    def test_left_rail_filters_questions_and_only_separate_shared_passages(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+
+        self.assertIn('aria-label="자료 모아보기"', items_rail)
+        self.assertIn("['questions', '문항', materialCounts.questions]", items_rail)
+        self.assertIn("['passages', '공통 지문', materialCounts.passages]", items_rail)
+        self.assertIn("items.filter(item => !isPassageFragmentProblem(item)).length", items_rail)
+        self.assertIn("items.filter(isPassageFragmentProblem).length", items_rail)
+        self.assertIn("모아보기 중 · 순서 변경은 전체 보기에서", items_rail)
+        self.assertIn("if (filterActive)", items_rail)
+        self.assertIn(".material-filter", board)
+
+    def test_item_editor_can_correct_question_and_shared_passage_classification(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
+        mutation = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
+        mutation = mutation.split("const retryAiSession", 1)[0]
+
+        self.assertIn('className="item-classification"', side_panel)
+        self.assertIn('role="radiogroup" aria-label="선택 자료 분류"', side_panel)
+        self.assertIn("classification: 'question'", side_panel)
+        self.assertIn("classification: 'shared-passage'", side_panel)
+        self.assertIn("공통 지문은 여러 문항이 함께 쓰는 별도 지문만 지정", side_panel)
+        self.assertIn("action === 'classify' ? '자료 분류를 저장하는 중…'", mutation)
+        self.assertIn("action === 'classify' ? '자료 분류를 변경했어요'", mutation)
+
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         summary_helper = source.split("function hangulRuntimeSummary", 1)[1]

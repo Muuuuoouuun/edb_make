@@ -325,7 +325,7 @@ class TestUiQueueActions(unittest.TestCase):
     def test_items_rail_keeps_step_and_source_on_one_line_without_status_text_chip(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
-        rail_item = source.split("{items.map((it, i) => {", 1)[1]
+        rail_item = source.split("{visibleItemRows.map(({ item: it, index: i }) => {", 1)[1]
         rail_item = rail_item.split("</div>\n        );})}", 1)[0]
 
         self.assertIn('className="source-label"', rail_item)

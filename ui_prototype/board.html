@@ -1920,6 +1920,60 @@
     gap: 5px;
     min-width: 0;
   }
+  .item-classification{
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--surface-2);
+  }
+  .item-classification > div:first-child{
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .item-classification strong{
+    color: var(--ink-2);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .item-classification small{
+    color: var(--muted);
+    font-size: 9.5px;
+    line-height: 1.3;
+    word-break: keep-all;
+  }
+  .item-classification-options{
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+  }
+  .item-classification-options button{
+    min-height: 28px;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .item-classification-options button.on{
+    border-color: rgba(47,111,237,.35);
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+  }
+  .item-classification-options button:disabled{
+    opacity: .55;
+    cursor: wait;
+  }
   .intent-badge{
     display: inline-flex;
     align-items: center;
@@ -2202,6 +2256,46 @@
     border: 1px solid var(--line);
   }
   .col-hd .spacer{ flex: 1; }
+  .material-filter{
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .material-filter button{
+    min-width: 0;
+    min-height: 30px;
+    padding: 5px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    word-break: keep-all;
+    white-space: nowrap;
+  }
+  .material-filter button:hover{
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .material-filter button.on{
+    border-color: rgba(47,111,237,.35);
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+  }
+  .material-filter button b{
+    min-width: 14px;
+    padding: 1px 3px;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    font: 700 9px/1.4 'JetBrains Mono', monospace;
+  }
   .icon-btn{
     width: 26px; height: 26px; border-radius: 6px;
     display: grid; place-items: center;
@@ -2232,6 +2326,28 @@
     font-size: 12.5px;
     background: var(--surface-2);
     cursor: pointer;
+  }
+  .material-filter-note{
+    margin: 8px 6px 0;
+    color: var(--muted);
+    font-size: 10.5px;
+    text-align: center;
+  }
+  .material-filter-empty{
+    min-height: 120px;
+    padding: 22px 14px;
+    display: grid;
+    place-content: center;
+    gap: 5px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .material-filter-empty strong{
+    color: var(--ink-2);
+    font-size: 12px;
+  }
+  .material-filter-empty small{
+    font-size: 10.5px;
   }
   .drop-zone:hover{ border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .drop-zone.is-compact{
@@ -4539,6 +4655,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-scaled-reflow-20260702"></script>
-<script src="app.bundle.js?v=frontend-bundle-4c5ed187fa179218f6d4b0d0ee63ea6e92f42eefcb6efcca871bbe6cc65e6d9d"></script>
+<script src="app.bundle.js?v=frontend-bundle-7124a5d00b903b5e5cbc97f56a3f321a21f812ea4b555a8ad28aeb52d90c7e92"></script>
 </body>
 </html>

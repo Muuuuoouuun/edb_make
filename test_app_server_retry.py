@@ -1381,6 +1381,60 @@ class TestRetryAiResilience(unittest.TestCase):
             self.assertTrue(new_session["ai_retry_summary"][0]["partial"])
 
 
+class TestSessionClassifyMutation(unittest.TestCase):
+    def test_classify_round_trip_uses_only_separate_shared_passage_role(self):
+        session = {
+            "pages": [{"id": "page-1", "problemIds": ["p1"]}],
+            "problems": [{"id": "p1", "sourcePageId": "page-1", "metadata": {}}],
+        }
+
+        updated = app_server._mutate_classify(session, "p1", "shared-passage")
+        passage = updated["problems"][0]
+        self.assertEqual("passage_fragment", passage["passageRole"])
+        self.assertTrue(passage["supplementalItem"])
+        self.assertEqual("manual-passage-p1", passage["passageGroupId"])
+        self.assertEqual("passage_fragment", passage["metadata"]["passage_role"])
+
+        updated = app_server._mutate_classify(session, "p1", "question")
+        question = updated["problems"][0]
+        self.assertNotIn("passageRole", question)
+        self.assertNotIn("passageGroupId", question)
+        self.assertFalse(question["supplementalItem"])
+        self.assertEqual("manual", question["classificationSource"])
+
+    def test_classify_rejects_unsupported_value(self):
+        with self.assertRaisesRegex(ValueError, "classification must be"):
+            app_server._mutate_classify({"problems": [{"id": "p1"}]}, "p1", "table")
+
+    def test_session_mutate_classify_routes_payload(self):
+        session = {"problems": [{"id": "p1", "metadata": {}}]}
+
+        class FakeServer:
+            def __init__(self, latest_session):
+                self.latest_session = latest_session
+                self.remembered_session = None
+
+            def remember_session(self, new_session):
+                self.latest_session = new_session
+                self.remembered_session = new_session
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = FakeServer(session)
+        handler._read_json_body = lambda: {
+            "action": "classify",
+            "problemId": "p1",
+            "classification": "shared-passage",
+        }
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        handler._handle_session_mutate()
+
+        self.assertEqual(1, len(responses))
+        self.assertTrue(responses[0][0]["ok"])
+        self.assertEqual("passage_fragment", handler.server.remembered_session["problems"][0]["passageRole"])
+
+
 class TestSessionExcludeMutation(unittest.TestCase):
     def _session(self) -> dict:
         return {
