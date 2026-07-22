@@ -25,6 +25,7 @@ DMG=0
 CONSOLE=0
 INSTALL_PYINSTALLER=0
 SKIP_FRONTEND_BUILD=0
+BUNDLE_UPSCAYL=0
 PYTHON_EXE=""
 
 usage() {
@@ -57,6 +58,7 @@ Options:
   --console                Keep a console build for debugging
   --install-pyinstaller    Install PyInstaller before packaging
   --skip-frontend-build     Use existing ui_prototype/app.bundle.js
+  --bundle-upscayl         Bundle resources/upscayl after license-compliance validation
   -h, --help               Show this help
 EOF
 }
@@ -108,7 +110,8 @@ require_zip_entry() {
 
 verify_packaged_app_root() {
   local package_root="$1"
-  "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "$package_root" \
+  local verify_args=(
+    "$package_root" \
     --expected-app-id "$EFFECTIVE_APP_ID" \
     --expected-app-name "$APP_NAME" \
     --expected-version "$EFFECTIVE_APP_VERSION" \
@@ -116,6 +119,11 @@ verify_packaged_app_root() {
     --expected-download-url "$EFFECTIVE_DOWNLOAD_URL" \
     --expected-release-notes-url "$EFFECTIVE_RELEASE_NOTES_URL" \
     --expected-bundle-id "$BUNDLE_ID"
+  )
+  if [[ -n "${EDB_RELEASE_GIT_COMMIT:-}" ]]; then
+    verify_args+=(--expected-git-commit "$EDB_RELEASE_GIT_COMMIT")
+  fi
+  "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "${verify_args[@]}"
 }
 
 verify_dmg_contains_app() {
@@ -268,6 +276,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_FRONTEND_BUILD=1
       shift
       ;;
+    --bundle-upscayl)
+      BUNDLE_UPSCAYL=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -318,15 +330,59 @@ if [[ -z "$PYTHON_EXE" ]]; then
   fi
 fi
 
-RESOLVED_OUTPUT_DIR="$OUTPUT_DIR"
-if [[ "$RESOLVED_OUTPUT_DIR" != /* ]]; then
-  RESOLVED_OUTPUT_DIR="$PROJECT_ROOT/$RESOLVED_OUTPUT_DIR"
+RESOLVED_OUTPUT_DIR="$("$PYTHON_EXE" - "$PROJECT_ROOT" "$OUTPUT_DIR" "$CLEAN" <<'PY'
+import sys
+from pathlib import Path
+import re
+
+project_root = Path(sys.argv[1]).resolve()
+raw_output = Path(sys.argv[2]).expanduser()
+will_clean = sys.argv[3] == "1"
+output = (raw_output if raw_output.is_absolute() else project_root / raw_output).resolve()
+protected = {Path(output.anchor), Path.home().resolve(), project_root}
+if output in protected or output in project_root.parents or any(part.lower() == ".git" for part in output.parts):
+    raise SystemExit(f"Refusing unsafe packaging output directory: {output}")
+try:
+    relative = output.relative_to(project_root)
+except ValueError:
+    relative = None
+if relative is not None:
+    top_level = relative.parts[0] if relative.parts else ""
+    if top_level != "dist":
+        raise SystemExit(
+            f"Refusing project-internal packaging output outside the exact dist allowlist: {output}"
+        )
+elif output.exists() and any(output.iterdir()):
+    sentinel = output / ".edb-packaging-output"
+    if not sentinel.is_file():
+        raise SystemExit(
+            f"Refusing to clean non-empty unmarked external packaging output: {output}"
+        )
+print(output)
+PY
+)"
+
+if [[ "$INSTALL_PYINSTALLER" == "1" ]]; then
+  "$PYTHON_EXE" -m pip install --disable-pip-version-check --require-hashes -r "$PROJECT_ROOT/requirements-release-bootstrap.lock"
+  "$PYTHON_EXE" -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r "$PROJECT_ROOT/requirements-release.lock"
 fi
 
+LICENSE_VERIFY_ARGS=(
+  --root "$PROJECT_ROOT"
+  --require-release-policy
+  --require-locked-environment
+  --reject-unlocked-environment
+)
+if [[ "$BUNDLE_UPSCAYL" == "1" ]]; then
+  LICENSE_VERIFY_ARGS+=(--bundle-upscayl)
+fi
+"$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_release_licenses.py" "${LICENSE_VERIFY_ARGS[@]}"
+
 if [[ "$CLEAN" == "1" ]]; then
-  rm -rf "$RESOLVED_OUTPUT_DIR" build
+  rm -rf "$RESOLVED_OUTPUT_DIR"
 fi
 mkdir -p "$RESOLVED_OUTPUT_DIR"
+echo "generated; safe to replace" > "$RESOLVED_OUTPUT_DIR/.edb-packaging-output"
 SPEC_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_spec"
 mkdir -p "$SPEC_DIR"
 WORK_DIR="$RESOLVED_OUTPUT_DIR/_pyinstaller_build"
@@ -335,8 +391,9 @@ APP_DIR_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME"
 ZIP_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.zip"
 DMG_PATH="$RESOLVED_OUTPUT_DIR/$APP_NAME-macOS.dmg"
 APP_NOTARY_ZIP="$RESOLVED_OUTPUT_DIR/$APP_NAME-notary-upload.zip"
+RELEASE_METADATA_DIR="$RESOLVED_OUTPUT_DIR/release-metadata"
 
-rm -rf "$WORK_DIR" "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP"
+rm -rf "$WORK_DIR" "$APP_PATH" "$APP_DIR_PATH" "$ZIP_PATH" "$DMG_PATH" "$APP_NOTARY_ZIP" "$RELEASE_METADATA_DIR"
 find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.dmg.*" -exec rm -rf {} +
 find "$RESOLVED_OUTPUT_DIR" -maxdepth 1 -type d -name "$APP_NAME.mount.*" -exec rm -rf {} +
 
@@ -399,9 +456,13 @@ print(str(config.get("releaseNotesUrl") or ""))
 PY
 )"
 
-if [[ "$INSTALL_PYINSTALLER" == "1" ]]; then
-  "$PYTHON_EXE" -m pip install pyinstaller
-fi
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" \
+"$PYTHON_EXE" "$PROJECT_ROOT/scripts/build_release_metadata.py" build \
+  --root "$PROJECT_ROOT" \
+  --output-dir "$RELEASE_METADATA_DIR" \
+  --version "$EFFECTIVE_APP_VERSION" \
+  --git-commit "${EDB_RELEASE_GIT_COMMIT:-}" \
+  --strict-environment
 
 FRONTEND_BUNDLE="$PROJECT_ROOT/ui_prototype/app.bundle.js"
 if [[ "$SKIP_FRONTEND_BUILD" == "0" ]]; then
@@ -434,6 +495,7 @@ fi
 
 DATA_ARGS=()
 DATA_ARGS+=(--add-data "$APP_UPDATE_CONFIG:.")
+DATA_ARGS+=(--add-data "${RELEASE_METADATA_DIR}:release_metadata")
 HIDDEN_IMPORT_ARGS=(
   --hidden-import preprocess
   --hidden-import build_mvp_export
@@ -463,7 +525,13 @@ add_data "ui_prototype/vendor/react.production.min.js" "ui_prototype/vendor"
 add_data "ui_prototype/vendor/react-dom.production.min.js" "ui_prototype/vendor"
 add_data "scripts/render_hwp_with_rhwp_core.mjs" "scripts"
 add_data "assets/app_icon.png" "assets"
-add_data "resources/upscayl" "resources/upscayl"
+if [[ "$BUNDLE_UPSCAYL" == "1" ]]; then
+  add_data "resources/upscayl/LICENSE" "resources/upscayl"
+  add_data "resources/upscayl/THIRD_PARTY_NOTICES.md" "resources/upscayl"
+  add_data "resources/upscayl/CORRESPONDING_SOURCE.txt" "resources/upscayl"
+  add_data "resources/upscayl/models" "resources/upscayl/models"
+  add_data "resources/upscayl/mac" "resources/upscayl/mac"
+fi
 
 "$PYTHON_EXE" -m PyInstaller \
   --noconfirm \
@@ -530,6 +598,17 @@ if [[ -d "$APP_PATH" ]] && command -v codesign >/dev/null 2>&1; then
     fi
     codesign "${SIGN_ARGS[@]}" "$APP_PATH"
     codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    if [[ "$NOTARIZE" == "1" ]]; then
+      SIGNING_DETAILS="$(codesign -dvvv "$APP_PATH" 2>&1)"
+      if ! grep -Fq "Authority=Developer ID Application:" <<<"$SIGNING_DETAILS"; then
+        echo "Notarization requires a Developer ID Application signature." >&2
+        exit 2
+      fi
+      if ! grep -Eq 'flags=.*\(runtime\)' <<<"$SIGNING_DETAILS"; then
+        echo "Notarization requires the hardened runtime flag." >&2
+        exit 2
+      fi
+    fi
   else
     codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
   fi
@@ -542,6 +621,7 @@ if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
   require_nonempty_file "$APP_NOTARY_ZIP" "Notary upload archive"
   notarytool_submit "$APP_NOTARY_ZIP"
   xcrun stapler staple "$APP_PATH"
+  xcrun stapler validate "$APP_PATH"
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
   verify_packaged_app_root "$APP_PATH"
   rm -f "$APP_NOTARY_ZIP"
@@ -577,6 +657,7 @@ if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
   if [[ "$NOTARIZE" == "1" ]]; then
     notarytool_submit "$DMG_PATH"
     xcrun stapler staple "$DMG_PATH"
+    xcrun stapler validate "$DMG_PATH"
     hdiutil verify "$DMG_PATH"
     verify_dmg_contains_app "$DMG_PATH" "$APP_NAME"
   fi

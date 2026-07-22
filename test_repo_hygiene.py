@@ -35,6 +35,7 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
             ".DS_Store",
             ".claude/settings.local.json",
             "pipeline_output_worker99_img1/pages.json",
+            "output/edb/private-session/ui_session.json",
             "ffffffffffffffffffffffffffffffffffffffff_img_sample_deadbeef/pages.json",
             f"{'a' * 40}_legacy_session_deadbeef00/pages.json",
             "generated_edb_pair_future_20990101/page_as_is/classin_handoff.json",

@@ -14,6 +14,7 @@ app_server_stdout.log
 app_server_stderr.log
 
 # Generated upload/export output directories
+/output/
 samples/
 out_image1/
 out_images_sample4/

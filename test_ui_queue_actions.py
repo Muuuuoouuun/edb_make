@@ -28,7 +28,10 @@ class TestUiQueueActions(unittest.TestCase):
         queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
 
         self.assertIn("function isImageOnlyFileBatch(files)", source)
-        self.assertIn("const fastImageRecognition = isRecognition && isImageOnlyFileBatch(files);", queue_source)
+        self.assertIn(
+            "const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);",
+            queue_source,
+        )
         self.assertIn("!fastImageRecognition", queue_source)
         self.assertIn("const recognitionOcr = fastImageRecognition ? 'none' : 'auto';", queue_source)
         self.assertIn("ocr: recognitionOcr", queue_source)
@@ -62,7 +65,10 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("function simpleToastErrorMessage", source)
         self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage) => {", source)
         self.assertIn("showSimpleErrorToast(error, '미리보기 실패')", source)
-        self.assertIn("showSimpleErrorToast(e, '문제 인식 실패')", queue_source)
+        self.assertIn(
+            "showSimpleErrorToast(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패')",
+            queue_source,
+        )
         self.assertIn("showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패')", queue_source)
         self.assertNotIn("문제 인식 실패: ${e.message}", queue_source)
         self.assertNotIn("등록'} 실패: ${e.message}", queue_source)
@@ -80,6 +86,57 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("setView('review');", queue_source)
         self.assertIn("const pageId = String(reviewFocus?.manualSplitPageId || '').trim();", review_stage)
         self.assertIn("beginManualPageSplit(page, replacementIds);", review_stage)
+
+    def test_review_crop_editors_expand_the_workspace_and_restore_the_side_panel(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1].split("function ItemsRail", 1)[0]
+
+        self.assertIn("const reviewEditorActive = Boolean(splitTarget || boxEdit || manualSplit);", review_stage)
+        self.assertIn("onEditorModeChange?.(reviewEditorActive);", review_stage)
+        self.assertIn("onEditorModeChange?.(false)", review_stage)
+        self.assertIn("const [reviewEditorActive, setReviewEditorActive] = useState(false);", source)
+        self.assertIn("view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''", source)
+        self.assertIn("onEditorModeChange={setReviewEditorActive}", source)
+        self.assertIn(".main.review-editor-focus", html)
+        self.assertIn(".main.review-editor-focus > .col.right", html)
+
+    def test_manual_split_panel_stays_beside_canvas_at_standard_desktop_widths(self) -> None:
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        responsive_block = html.split("@media (max-width: 820px){", 1)[1]
+        responsive_block = responsive_block.split(".view-toggle", 1)[0]
+
+        self.assertIn(".manual-split-layout.panel-left", responsive_block)
+        self.assertIn(".manual-split-layout.panel-right", responsive_block)
+        self.assertIn("grid-template-columns: 1fr", responsive_block)
+
+    def test_manual_split_exposes_productive_keyboard_shortcuts_and_bulk_actions(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1].split("function ItemsRail", 1)[0]
+
+        self.assertIn("const selectAllManualSplitRegions = () => {", review_stage)
+        self.assertIn("const duplicateManualSplitSelected = () => {", review_stage)
+        self.assertIn("const toggleManualSplitPanelSide = () => {", review_stage)
+        self.assertIn("primaryModifier && !evt.altKey && key === 'a'", review_stage)
+        self.assertIn("primaryModifier && !evt.altKey && key === 'd'", review_stage)
+        self.assertIn("key === 'g'", review_stage)
+        self.assertIn("key === 's'", review_stage)
+        self.assertIn("key === 'p'", review_stage)
+        self.assertIn("evt.key === '?'", review_stage)
+        self.assertIn('aria-keyshortcuts="Control+A Meta+A"', review_stage)
+        self.assertIn('aria-keyshortcuts="Control+D Meta+D"', review_stage)
+        self.assertIn("manual-split-shortcut-guide", source)
+
+    def test_review_actionbars_keep_top_actions_in_one_row(self) -> None:
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        actionbar_css = html.split(".review-actionbar{", 1)[1].split(".review-summary-strip", 1)[0]
+        manual_css = html.split(".manual-split-actionbar{", 1)[1].split("@media (max-width: 820px)", 1)[0]
+        self.assertIn("flex-wrap: nowrap", actionbar_css)
+        self.assertIn(".review-actionbar-actions", actionbar_css)
+        self.assertIn("overflow-x: auto", actionbar_css)
+        self.assertIn("flex-wrap: nowrap", manual_css)
+        self.assertIn(".manual-split-toolbar-actions", manual_css)
 
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
@@ -229,7 +286,10 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("주변 포함 빠른 자르기", source)
         self.assertIn("applyExpandedCrop", source)
         self.assertIn("pendingBoxEditProblemIdRef", source)
-        self.assertIn("다른 문제를 클릭하면 현재 자르기를 적용하고 다음 틀을 이어 조정합니다", source)
+        self.assertIn("모서리와 변을 끌어 맞추세요. Enter 적용 · Esc 취소", source)
+        self.assertIn("onBoxEditKeyDown", source)
+        self.assertIn("aria-keyshortcuts=\"Enter\"", source)
+        self.assertIn("aria-keyshortcuts=\"Escape\"", source)
         self.assertIn("MANUAL_CROP_OUTSET_MAX", source)
         self.assertIn("인식 중단", source)
         self.assertIn("onManualCropOutsideMouseDown", source)
@@ -297,11 +357,18 @@ class TestUiQueueActions(unittest.TestCase):
         key_handler = key_handler.split("if (evt.key === 'Delete'", 1)[0]
         self.assertLess(key_handler.index("manualSplit.mode === 'stamp'"), key_handler.index("if (isFormControl) return;"))
         self.assertIn("0 0 0 9999px rgba(13,18,30,.20)", html)
-        self.assertIn("이 크기로 계속", source)
-        self.assertIn("onManualSplitOutsideMouseDown", source)
-        self.assertIn("window.addEventListener('mousedown', onManualSplitOutsideMouseDown, true)", source)
-        self.assertIn("target?.closest?.('.manual-split-layout')", source)
-        self.assertIn("void applyManualPageSplit();", source)
+        self.assertIn("선택 크기로 반복", source)
+        self.assertNotIn("onManualSplitOutsideMouseDown", source)
+        self.assertIn("panel-${panelSide}", source)
+        self.assertIn("영역 패널을 ${panelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동", source)
+        self.assertIn("manual-split-row-grip", source)
+        self.assertIn("drop-${listDragState.position}", source)
+        self.assertIn("영역을 새 문제로 만들어요", source)
+        self.assertIn("Enter 적용 · Esc 취소", source)
+        manual_actionbar = source.split('className="review-actionbar manual-split-actionbar"', 1)[1]
+        manual_actionbar = manual_actionbar.split(") : selectedList.length === 0", 1)[0]
+        self.assertNotIn("onClick={applyManualPageSplit}", manual_actionbar)
+        self.assertEqual(source.count('aria-keyshortcuts="Enter"'), 2)
         self.assertIn("manual-split-box", bundle)
         self.assertIn("스탬프", bundle)
 

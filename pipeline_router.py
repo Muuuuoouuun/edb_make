@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -227,6 +228,11 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
     line_count = 0
     latency_values: list[float] = []
     backend_names: dict[str, int] = {}
+    fallback_reason_counts: dict[str, int] = {}
+    fallback_messages: list[str] = []
+    circuit_open_count = 0
+    retry_after_values: list[float] = []
+    cache_write_skipped_count = 0
     for block in page.blocks:
         backend = str(block.metadata.get("ocr_backend") or "none")
         backend_names[backend] = backend_names.get(backend, 0) + 1
@@ -236,8 +242,45 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
             line_count += len(block.ocr_lines)
         if isinstance(block.metadata.get("ocr_latency_ms"), (int, float)):
             latency_values.append(float(block.metadata["ocr_latency_ms"]))
+        fallback_reason = str(
+            block.metadata.get("ocr_fallback_reason")
+            or block.metadata.get("fallback_reason")
+            or ""
+        ).strip()
+        if fallback_reason:
+            fallback_reason_counts[fallback_reason] = (
+                fallback_reason_counts.get(fallback_reason, 0) + 1
+            )
+        fallback_message = str(block.metadata.get("ocr_fallback_message") or "").strip()
+        if fallback_message and fallback_message not in fallback_messages:
+            fallback_messages.append(fallback_message)
+        if block.metadata.get("ocr_circuit_open"):
+            circuit_open_count += 1
+        if isinstance(block.metadata.get("ocr_retry_after_ms"), (int, float)):
+            retry_after_values.append(float(block.metadata["ocr_retry_after_ms"]))
+        if block.metadata.get("ocr_cache_write_skipped"):
+            cache_write_skipped_count += 1
     text_block_count = len(text_blocks)
     avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else None
+    sorted_latencies = sorted(latency_values)
+    p95_latency = None
+    if sorted_latencies:
+        p95_index = min(
+            len(sorted_latencies) - 1,
+            max(0, math.ceil(len(sorted_latencies) * 0.95) - 1),
+        )
+        p95_latency = sorted_latencies[p95_index]
+    all_text_from_trusted_pdf_markers = (
+        bool(text_blocks) and trusted_pdf_marker_text_blocks == len(text_blocks)
+    )
+    if all_text_from_trusted_pdf_markers:
+        semantic_text_route = "trusted_pdf_text_markers"
+    elif fallback_reason_counts or empty_blocks:
+        semantic_text_route = "review_required_image_fallback"
+    else:
+        semantic_text_route = "ocr_text"
+    recognition_timing = page.metadata.get("recognition_timing_ms")
+    recognition_timing = recognition_timing if isinstance(recognition_timing, dict) else {}
     return {
         "ocr_mode": ocr_mode,
         "text_block_count": text_block_count,
@@ -249,9 +292,18 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
         "recognized_line_count": line_count,
         "ocr_cache_hit_count": cache_hits,
         "ocr_cache_miss_count": cache_misses,
+        "ocr_cache_write_skipped_count": cache_write_skipped_count,
         "backend_counts": backend_names,
         "backend_latency_ms_avg": (sum(latency_values) / len(latency_values)) if latency_values else None,
-        "all_text_from_trusted_pdf_markers": bool(text_blocks) and trusted_pdf_marker_text_blocks == len(text_blocks),
+        "backend_latency_ms_p95": p95_latency,
+        "backend_latency_ms_max": max(latency_values) if latency_values else None,
+        "processing_time_ms": recognition_timing.get("block_ocr"),
+        "fallback_reason_counts": fallback_reason_counts,
+        "fallback_messages": fallback_messages,
+        "circuit_open_block_count": circuit_open_count,
+        "retry_after_ms_max": max(retry_after_values) if retry_after_values else 0,
+        "semantic_text_route": semantic_text_route,
+        "all_text_from_trusted_pdf_markers": all_text_from_trusted_pdf_markers,
     }
 
 

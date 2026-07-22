@@ -1,0 +1,10 @@
+{
+  "qualityObservation": {
+    "questionNumbers": [1, 2],
+    "passageRanges": [],
+    "preflightIssues": [],
+    "manualReviewCount": 0,
+    "reviewPopulation": 2,
+    "processingMs": 620
+  }
+}

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import plistlib
+import hashlib
+import json
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -19,6 +21,71 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TestPackagingFrontendManifest(unittest.TestCase):
+    def _write_release_metadata(self, resource_root: Path, version: str = "test") -> None:
+        metadata_root = resource_root / "release_metadata"
+        metadata_root.mkdir(parents=True)
+        component = {
+            "name": "react",
+            "normalizedName": "react",
+            "version": "18.2.0",
+            "licenseExpression": "MIT",
+            "disposition": "notice",
+            "licenseFiles": [{"path": "THIRD_PARTY_NOTICES.md"}],
+        }
+        payloads = {
+            "dependency-inventory.json": {
+                "schemaVersion": 1,
+                "appVersion": version,
+                "environment": "test",
+                "components": [component],
+            },
+            "sbom.spdx.json": {
+                "spdxVersion": "SPDX-2.3",
+                "dataLicense": "CC0-1.0",
+                "SPDXID": "SPDXRef-DOCUMENT",
+                "packages": [{"SPDXID": "SPDXRef-Package-react", "name": "react"}],
+            },
+            "release-provenance.json": {
+                "schemaVersion": 1,
+                "appVersion": version,
+                "gitCommit": "unknown",
+                "dependencyFingerprintSha256": "0" * 64,
+                "toolFingerprintSha256": "1" * 64,
+                "toolInventory": {
+                    "python": "test",
+                    "pythonImplementation": "test",
+                    "pip": "test",
+                    "pyinstaller": "test",
+                    "platform": "test",
+                },
+            },
+        }
+        for file_name, payload in payloads.items():
+            (metadata_root / file_name).write_text(
+                json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        (metadata_root / "THIRD_PARTY_NOTICES.md").write_text("MIT notice\n", encoding="utf-8")
+        manifest_files = []
+        for path in sorted(metadata_root.iterdir()):
+            if not path.is_file():
+                continue
+            content = path.read_bytes()
+            manifest_files.append(
+                {
+                    "path": path.name,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "sizeBytes": len(content),
+                }
+            )
+        (metadata_root / "metadata-manifest.json").write_text(
+            json.dumps(
+                {"schemaVersion": 1, "appVersion": version, "files": manifest_files},
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
     def _write_frontend_project(self, project_root: Path) -> None:
         ui_root = project_root / "ui_prototype"
         vendor_root = ui_root / "vendor"
@@ -73,6 +140,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             '{"appId":"ClassInEDBMVP","appName":"ClassInEDBMVP","version":"test"}\n',
             encoding="utf-8",
         )
+        self._write_release_metadata(resource_root)
         (scripts_root / "render_hwp_with_rhwp_core.mjs").write_text("console.log('ok');\n", encoding="utf-8")
         (assets_root / "app_icon.png").write_bytes(b"png")
         (ui_root / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
@@ -229,6 +297,21 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             self._write_packaged_runtime(package_root)
 
             self.assertEqual([], collect_package_errors(package_root))
+
+    def test_packaged_app_layout_rejects_missing_release_metadata(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            for path in sorted((resource_root / "release_metadata").rglob("*"), reverse=True):
+                if path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            (resource_root / "release_metadata").rmdir()
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("release metadata" in error for error in errors))
 
     def test_packaged_app_layout_accepts_app_name_alias(self) -> None:
         with TemporaryDirectory() as raw_tmp:
@@ -553,6 +636,16 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("assets/app_icon.svg" in error for error in errors))
         self.assertTrue(any("assets/brand_mark.svg" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_unlicensed_upscayl_bundle(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "resources" / "upscayl").mkdir(parents=True)
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("Upscayl runtime is missing compliance file" in error for error in errors))
+
     def test_packaged_app_layout_dedupes_macos_resource_symlinks(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP.app"
@@ -690,8 +783,9 @@ class TestPackagingFrontendManifest(unittest.TestCase):
     def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         for rel_path in (*REQUIRED_SOURCE_PACKAGE_FILES, "scripts\\render_hwp_with_rhwp_core.mjs"):
-            with self.subTest(rel_path=rel_path):
-                self.assertIn(f'"{rel_path}"', source)
+            windows_rel_path = rel_path.replace("/", "\\")
+            with self.subTest(rel_path=windows_rel_path):
+                self.assertIn(f'"{windows_rel_path}"', source)
         self.assertNotRegex(source, r'(?m)^\s+"scripts",\s*$')
 
     def test_windows_source_package_fallback_copies_only_runtime_assets(self) -> None:
@@ -915,7 +1009,10 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn("function Assert-EDBNativeCommandSucceeded", ps_source)
         for command, label in (
-            ("& $PythonExe -m pip install pyinstaller", "PyInstaller installation"),
+            (
+                '& $PythonExe -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r (Join-Path $ProjectRoot "requirements-release.lock")',
+                "Locked release dependency installation",
+            ),
             ("& $PythonExe $UpdateConfigScript $ProjectUpdateConfig $BuildUpdateConfig", "app_update_config generation"),
             ("& $PythonExe @VerifierArgs", "Packaged app verification"),
             ('& $PythonExe (Join-Path $ProjectRoot "scripts\\verify_frontend_package.py") --root $ProjectRoot', "Frontend package verification"),
@@ -949,7 +1046,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
     def test_ci_installer_workflow_uses_packaging_wrappers(self) -> None:
         workflow = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
-        self.assertIn("actions/setup-node@v4", workflow)
+        self.assertIn("actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4", workflow)
         self.assertIn("./package_macos_app.sh", workflow)
         self.assertIn(".\\package_windows_installer.ps1", workflow)
         self.assertNotIn("-SkipFrontendBuild", workflow)

@@ -93,6 +93,23 @@
     return target - previousTop <= nextTop - target ? low - 1 : low;
   }
 
+  function adjacentReorderCommand(items, itemIdValue, direction) {
+    if (!Array.isArray(items) || !items.length) return null;
+    const sourceId = itemIdValue == null ? '' : String(itemIdValue);
+    const sourceIndex = items.findIndex(item => itemId(item) === sourceId);
+    if (sourceIndex < 0) return null;
+    const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+    if (!delta) return null;
+    const targetIndex = sourceIndex + delta;
+    if (targetIndex < 0 || targetIndex >= items.length) return null;
+    return {
+      sourceId,
+      targetId: itemId(items[targetIndex]),
+      position: delta < 0 ? BEFORE : AFTER,
+      nextIndex: targetIndex,
+    };
+  }
+
   function problemDisplayName(item, index) {
     const raw = String(item?.name ?? item?.title ?? '').trim();
     const order = Math.max(1, Number(index) + 1 || 1);
@@ -123,6 +140,7 @@
   return {
     AFTER,
     BEFORE,
+    adjacentReorderCommand,
     appendBoundedHistory,
     dropPositionFromClientY,
     edgeAutoScrollDelta,

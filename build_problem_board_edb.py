@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,7 +25,11 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     np = None
 
-from build_structured_page_json import build_page_models_for_prepared_pages, resolve_recognition_worker_count
+from build_structured_page_json import (
+    build_page_models_for_prepared_pages,
+    resolve_global_ocr_worker_limit,
+    resolve_recognition_worker_count,
+)
 from assemble_page import extract_set_problem_range
 from segment import draw_segment_debug
 from edb_builder import (
@@ -161,6 +166,7 @@ PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 PASSAGE_FRAGMENT_STITCH_GAP_PX = 16
 PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
 PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
+PASSAGE_SOURCE_VERTICAL_RECOVERY_PX = 12
 PASSAGE_JOIN_BLANK_RUN_MIN_PX = 40
 PASSAGE_JOIN_EDGE_PADDING_PX = 16
 CONTINUOUS_RECORD_GAP_PX = 20.0
@@ -815,6 +821,37 @@ def _expand_passage_source_bounds_horizontally(
         top=float(bounds.top),
         width=max(1.0, right - left),
         height=float(bounds.height),
+    )
+
+
+def _expand_passage_segment_source_bounds(
+    bounds: Box,
+    *,
+    image_width: int,
+    image_height: int,
+    horizontal_padding_px: int = PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX,
+    vertical_padding_px: int = PASSAGE_SOURCE_VERTICAL_RECOVERY_PX,
+) -> Box:
+    """Recover glyph strokes at every edge of an explicit passage segment.
+
+    PDF passage ranges are tighter than ordinary problem crops. Horizontal
+    recovery remains column-aware, while the small vertical outset protects
+    ascenders, punctuation, and the final baseline without reaching far
+    enough into the following question band.
+    """
+    expanded = _expand_passage_source_bounds_horizontally(
+        bounds,
+        image_width=image_width,
+        padding_px=horizontal_padding_px,
+    )
+    vertical_padding = max(0.0, float(vertical_padding_px))
+    top = max(0.0, float(expanded.top) - vertical_padding)
+    bottom = min(float(image_height), float(expanded.bottom) + vertical_padding)
+    return Box(
+        left=float(expanded.left),
+        top=top,
+        width=float(expanded.width),
+        height=max(1.0, bottom - top),
     )
 
 
@@ -1560,11 +1597,17 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         _write_render_image(cutout_image, task.board_render_path)
         return crop.size
 
-    def crop_segment(bounds: Box) -> Image.Image:
+    def crop_segment(bounds: Box, *, recover_vertical_edges: bool = False) -> Image.Image:
         source_bounds = (
-            _expand_passage_source_bounds_horizontally(
+            _expand_passage_segment_source_bounds(
                 bounds,
                 image_width=task.source_image.width,
+                image_height=task.source_image.height,
+                vertical_padding_px=(
+                    PASSAGE_SOURCE_VERTICAL_RECOVERY_PX
+                    if recover_vertical_edges
+                    else 0
+                ),
             )
             if task.preserve_horizontal_bounds
             else bounds
@@ -1590,21 +1633,13 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         return _flatten_passage_segment_on_white(segment)
 
     if task.segment_bounds:
-        segments = [crop_segment(bounds) for bounds in task.segment_bounds]
-        segments = _prepare_passage_segments_for_stitch(segments)
-        gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(segments) > 1 else 0
-        crop = Image.new(
-            "RGB",
-            (
-                max(segment.width for segment in segments),
-                sum(segment.height for segment in segments) + gap * (len(segments) - 1),
-            ),
-            "white",
+        crop = _compose_passage_segments(
+            [
+                crop_segment(bounds, recover_vertical_edges=True)
+                for bounds in task.segment_bounds
+            ],
+            transparent=False,
         )
-        cursor_y = 0
-        for segment in segments:
-            crop.paste(segment, (0, cursor_y))
-            cursor_y += segment.height + gap
     else:
         crop = crop_segment(task.bounds)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1737,6 +1772,8 @@ def build_pages(
     max_dimension: int | None,
     debug_segments_dir: Path | None = None,
     input_intent: str = "auto",
+    ocr_semaphore: threading.BoundedSemaphore | None = None,
+    global_ocr_worker_limit: int | None = None,
 ) -> tuple[list[PreparedPage], list[PageModel]]:
     prepared_pages = prepare_source_pages(
         source,
@@ -1755,6 +1792,8 @@ def build_pages(
         subject=subject,
         ocr_mode=ocr_mode,
         ai_config=page_ai_config,
+        ocr_semaphore=ocr_semaphore,
+        global_ocr_worker_limit=global_ocr_worker_limit,
     )
     if debug_segments_dir is not None:
         for prepared_page, page in zip(prepared_pages, page_models):
@@ -3309,6 +3348,183 @@ def _prepare_passage_segments_for_stitch(images: Sequence[Image.Image]) -> list[
     ]
 
 
+def _passage_frame_edges(image: Image.Image) -> tuple[int, int] | None:
+    """Return strong left/right passage-frame columns when both are present."""
+    if image.width < 80 or image.height < 80:
+        return None
+    if "A" in image.getbands():
+        signal = image.convert("RGBA").getchannel("A")
+    else:
+        signal = ImageOps.invert(image.convert("L"))
+    # Reducing the full height to one row turns a long vertical rule into a
+    # strong signal while ordinary glyph columns average out.
+    column_signal = signal.resize((image.width, 1), Image.Resampling.BOX)
+    values = list(column_signal.get_flattened_data())
+    outer_band = max(12, int(round(image.width * 0.30)))
+    edge_inset = max(1, int(round(image.width * 0.01)))
+    left_end = min(image.width // 2, outer_band)
+    right_start = max(image.width // 2, image.width - outer_band)
+    left_candidates = range(edge_inset, max(edge_inset + 1, left_end))
+    right_candidates = range(min(image.width - 1, right_start), max(right_start + 1, image.width - edge_inset))
+    left = max(left_candidates, key=lambda x: values[x], default=-1)
+    right = max(right_candidates, key=lambda x: values[x], default=-1)
+    minimum_strength = 72
+    if (
+        left < 0
+        or right <= left
+        or values[left] < minimum_strength
+        or values[right] < minimum_strength
+        or right - left < image.width * 0.40
+    ):
+        return None
+    return left, right
+
+
+def _passage_frame_center_x(image: Image.Image) -> float | None:
+    """Return the center of a strong left/right passage frame when present."""
+    edges = _passage_frame_edges(image)
+    return ((edges[0] + edges[1]) * 0.5) if edges is not None else None
+
+
+def _passage_frame_ink_span(image: Image.Image, x: int) -> tuple[int, int] | None:
+    """Find the first/last visible rule pixel in one detected frame column."""
+    rgba = image.convert("RGBA")
+    x = max(0, min(rgba.width - 1, int(x)))
+    pixels = rgba.load()
+    has_transparency = rgba.getchannel("A").getextrema()[0] < 245
+    visible_rows: list[int] = []
+    for y in range(rgba.height):
+        red, green, blue, alpha = pixels[x, y]
+        if has_transparency:
+            visible = alpha > 48
+        else:
+            luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            visible = luminance < 220 or max(red, green, blue) - min(red, green, blue) >= 24
+        if visible:
+            visible_rows.append(y)
+    if not visible_rows:
+        return None
+    return visible_rows[0], visible_rows[-1]
+
+
+def _passage_frame_ink_color(image: Image.Image, x: int) -> tuple[int, int, int, int]:
+    """Sample the strongest frame pixel so a seam bridge matches its source."""
+    rgba = image.convert("RGBA")
+    x = max(0, min(rgba.width - 1, int(x)))
+    pixels = rgba.load()
+    has_transparency = rgba.getchannel("A").getextrema()[0] < 245
+
+    def strength(pixel: tuple[int, int, int, int]) -> float:
+        red, green, blue, alpha = pixel
+        if has_transparency:
+            return float(alpha)
+        return 255.0 - (0.299 * red + 0.587 * green + 0.114 * blue)
+
+    return max((pixels[x, y] for y in range(rgba.height)), key=strength)
+
+
+def _bridge_aligned_passage_frames(
+    stitched: Image.Image,
+    *,
+    prepared: Sequence[Image.Image],
+    x_offsets: Sequence[int],
+    y_offsets: Sequence[int],
+    frame_edges: Sequence[tuple[int, int] | None],
+) -> None:
+    """Close only confidently aligned frame-rule gaps between adjacent fragments."""
+    draw = ImageDraw.Draw(stitched)
+    for index in range(len(prepared) - 1):
+        upper_edges = frame_edges[index]
+        lower_edges = frame_edges[index + 1]
+        if upper_edges is None or lower_edges is None:
+            continue
+        upper = prepared[index]
+        lower = prepared[index + 1]
+        for upper_edge, lower_edge in zip(upper_edges, lower_edges):
+            upper_global_x = x_offsets[index] + upper_edge
+            lower_global_x = x_offsets[index + 1] + lower_edge
+            # Different frame widths should keep their natural geometry. A
+            # bridge is safe only when both source rules already share an axis.
+            if abs(upper_global_x - lower_global_x) > 2:
+                continue
+            upper_span = _passage_frame_ink_span(upper, upper_edge)
+            lower_span = _passage_frame_ink_span(lower, lower_edge)
+            if upper_span is None or lower_span is None:
+                continue
+            x = int(round((upper_global_x + lower_global_x) * 0.5))
+            start_y = y_offsets[index] + upper_span[1]
+            end_y = y_offsets[index + 1] + lower_span[0]
+            if end_y <= start_y:
+                continue
+            color = _passage_frame_ink_color(upper, upper_edge)
+            draw.line((x, start_y, x, end_y), fill=color, width=1)
+
+
+def _compose_passage_segments(
+    images: Sequence[Image.Image],
+    *,
+    transparent: bool,
+) -> Image.Image:
+    """Join passage fragments on one stable reading axis.
+
+    Source columns and pages can differ by a few pixels after recovery and
+    chrome cleanup. Centering each fragment avoids a visible left-edge jump
+    while preserving the original font scale of every segment.
+    """
+    if not images:
+        raise ValueError("At least one passage image is required for stitching")
+    prepared = _prepare_passage_segments_for_stitch(images)
+    max_width = max(image.width for image in prepared)
+    gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(prepared) > 1 else 0
+    total_height = sum(image.height for image in prepared) + gap * max(0, len(prepared) - 1)
+    mode = "RGBA" if transparent else "RGB"
+    fill = (255, 255, 255, 0) if transparent else (255, 255, 255)
+    frame_edges = [_passage_frame_edges(image) for image in prepared]
+    frame_centers = [
+        ((edges[0] + edges[1]) * 0.5) if edges is not None else None
+        for edges in frame_edges
+    ]
+    base_offsets = [max(0, (max_width - image.width) // 2) for image in prepared]
+    effective_frame_centers = [
+        base_offset + center if center is not None else None
+        for base_offset, center in zip(base_offsets, frame_centers)
+    ]
+    valid_frame_centers = [center for center in effective_frame_centers if center is not None]
+    frame_offsets = [0] * len(prepared)
+    if len(valid_frame_centers) >= 2:
+        target_center = max(valid_frame_centers)
+        frame_offsets = [
+            max(0, int(round(target_center - center))) if center is not None else 0
+            for center in effective_frame_centers
+        ]
+    stitched_width = max(
+        max_width,
+        *(image.width + offset for image, offset in zip(prepared, frame_offsets)),
+    )
+    stitched = Image.new(mode, (stitched_width, total_height), fill)
+    cursor_y = 0
+    x_offsets: list[int] = []
+    y_offsets: list[int] = []
+    for image, base_offset, frame_offset in zip(prepared, base_offsets, frame_offsets):
+        x = base_offset + frame_offset
+        x_offsets.append(x)
+        y_offsets.append(cursor_y)
+        if transparent:
+            stitched.alpha_composite(image.convert("RGBA"), (x, cursor_y))
+        else:
+            stitched.paste(image.convert("RGB"), (x, cursor_y))
+        cursor_y += image.height + gap
+    if gap > 0:
+        _bridge_aligned_passage_frames(
+            stitched,
+            prepared=prepared,
+            x_offsets=x_offsets,
+            y_offsets=y_offsets,
+            frame_edges=frame_edges,
+        )
+    return stitched
+
+
 def _stitch_passage_image_files(
     paths: Sequence[Path],
     output_path: Path,
@@ -3325,21 +3541,7 @@ def _stitch_passage_image_files(
             )
     if not images:
         raise ValueError("At least one passage image is required for stitching")
-
-    images = _prepare_passage_segments_for_stitch(images)
-    max_width = max(image.width for image in images)
-    gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(images) > 1 else 0
-    total_height = sum(image.height for image in images) + gap * max(0, len(images) - 1)
-    mode = "RGBA" if transparent else "RGB"
-    fill = (255, 255, 255, 0) if transparent else (255, 255, 255)
-    stitched = Image.new(mode, (max_width, total_height), fill)
-    cursor_y = 0
-    for image in images:
-        if transparent:
-            stitched.alpha_composite(image.convert("RGBA"), (0, cursor_y))
-        else:
-            stitched.paste(image.convert("RGB"), (0, cursor_y))
-        cursor_y += image.height + gap
+    stitched = _compose_passage_segments(images, transparent=transparent)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     stitched.save(output_path)
@@ -3442,12 +3644,14 @@ def build_problem_entries(
     template: LayoutTemplate,
     *,
     board_theme: str = DEFAULT_BOARD_THEME,
+    content_target: str = "all",
 ) -> list[ProblemEntry]:
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
     cutout_dir = output_dir / "problem_cutouts"
     cutout_dir.mkdir(parents=True, exist_ok=True)
     chalk_color = _resolve_chalk_color(board_theme)
+    resolved_content_target = _normalize_content_target(content_target)
     prepared_by_page_id = {page.page_id: page for page in prepared_pages}
     drafts: list[_ProblemEntryDraft] = []
     _remove_duplicate_marker_document_problem_numbers(pages)
@@ -3502,8 +3706,11 @@ def build_problem_entries(
             all_assigned_ids.update(_iter_problem_block_ids_raw(prob))
 
         for problem in ordered_problems:
+            if not _problem_matches_content_target(problem, resolved_content_target):
+                continue
+            is_shared_passage = _problem_is_passage_fragment_unit(problem)
             trusted_pdf_marker_problem = False
-            passage_fragment_problem = _problem_is_passage_fragment_unit(problem)
+            passage_fragment_problem = is_shared_passage
             next_problem = next_problem_for_crop.get(problem.unit_id)
             own_ids = set(_iter_problem_block_ids_raw(problem))
             other_problem_block_ids = all_assigned_ids - own_ids
@@ -3998,11 +4205,28 @@ def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
 
 GENERIC_PROBLEM_TITLE_RE = re.compile(r"^\s*(?:문항|문제|臾명빆)\s*\d+(?:\s*[·쨌:\-].*)?$")
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
+CONTENT_TARGETS = {"all", "questions", "shared-passages"}
 
 
 def _normalize_input_intent(value: str | None) -> str:
     normalized = (value or "auto").strip().lower().replace("_", "-")
     return normalized if normalized in INPUT_INTENTS else "auto"
+
+
+def _normalize_content_target(value: str | None) -> str:
+    normalized = (value or "all").strip().lower().replace("_", "-")
+    return normalized if normalized in CONTENT_TARGETS else "all"
+
+
+def _problem_matches_content_target(problem: ProblemUnit, content_target: str | None) -> bool:
+    """Select only separately classified shared passages, never in-question content."""
+    resolved = _normalize_content_target(content_target)
+    is_shared_passage = _problem_is_passage_fragment_unit(problem)
+    if resolved == "questions":
+        return not is_shared_passage
+    if resolved == "shared-passages":
+        return is_shared_passage
+    return True
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -5859,6 +6083,9 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     min_width = CLASSIN_PREFLIGHT_MIN_IMAGE_WIDTH_PX
     min_height = CLASSIN_PREFLIGHT_MIN_IMAGE_HEIGHT_PX
+    passage_only = _normalize_content_target(
+        str(ui_session.get("contentTarget") or ui_session.get("content_target") or "all")
+    ) == "shared-passages"
 
     for problem in problems:
         if not isinstance(problem, dict):
@@ -5960,7 +6187,7 @@ def _classin_handoff_preflight(ui_session: dict[str, Any]) -> dict[str, Any]:
             issues.append(issue)
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
                 break
-    if len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
+    if not passage_only and len(issues) < CLASSIN_PREFLIGHT_MAX_ISSUES:
         for issue in _classin_missing_passage_child_question_issues(problems):
             issues.append(issue)
             if len(issues) >= CLASSIN_PREFLIGHT_MAX_ISSUES:
@@ -6415,6 +6642,10 @@ def write_classin_handoff_manifest(
     template: LayoutTemplate,
 ) -> tuple[Path, Path]:
     expected_record_count = int(summary.get("record_count") or len(summary.get("placements") or []))
+    content_target = _normalize_content_target(
+        str(ui_session.get("contentTarget") or ui_session.get("content_target") or "all")
+    )
+    passage_only = content_target == "shared-passages"
     review_summary = ui_session.get("reviewSummary") or ui_session.get("review_summary") or {}
     duplicate_problem_number_groups = (
         ui_session.get("duplicateProblemNumberGroups")
@@ -6437,13 +6668,26 @@ def write_classin_handoff_manifest(
     if not isinstance(passage_group_source_reuse_groups, list):
         passage_group_source_reuse_groups = []
     passage_groups = _session_passage_groups(problems)
+    if passage_only:
+        passage_groups = [
+            {
+                **group,
+                "missingChildProblemNumbers": [],
+                "missingChildProblemCount": 0,
+            }
+            for group in passage_groups
+        ]
     cross_page_passage_group_count = sum(
         1 for group in passage_groups if group.get("continuesAcrossPages")
     )
     passage_review_items = (
-        ui_session.get("passageReviewItems")
-        or ui_session.get("passage_review_items")
-        or _session_passage_review_items(problems, passage_groups)
+        _session_passage_review_items(problems, passage_groups)
+        if passage_only
+        else (
+            ui_session.get("passageReviewItems")
+            or ui_session.get("passage_review_items")
+            or _session_passage_review_items(problems, passage_groups)
+        )
     )
     if not isinstance(passage_review_items, list):
         passage_review_items = []
@@ -6487,6 +6731,8 @@ def write_classin_handoff_manifest(
         "classinPageCountHint": actual_edb_page_count_hint,
         "globalBoardPageCountEstimate": int(template.board_page_count),
         "recordMode": str(summary.get("record_mode") or ui_session.get("record_mode") or ""),
+        "contentTarget": content_target,
+        "content_target": content_target,
         "cropFormat": str(summary.get("crop_format") or ui_session.get("crop_format") or ""),
         "boardTheme": str(summary.get("board_theme") or ui_session.get("board_theme") or ""),
         "duplicateProblemNumberGroups": duplicate_problem_number_groups,
@@ -7861,10 +8107,17 @@ def configure_problem_entries_for_export(
         if resolved_step not in PROCESSING_STEPS:
             raise ValueError(f"Unsupported processing step: {processing_step}")
 
+    # A passage-only export has one clear safe default: preserve the source
+    # glyphs as a transparent S2 image and place each range on a continuous,
+    # single-column fit-width flow. Requiring two extra flags made it easy to
+    # produce a technically valid but narrow/raw passage export.
+    effective_full_width = full_width or passages_only
+    effective_step = resolved_step or (PROCESSING_STEP_CHALK if passages_only else None)
+
     for entry in selected:
-        if resolved_step is not None:
-            entry.processing_step = resolved_step
-        if full_width:
+        if effective_step is not None:
+            entry.processing_step = effective_step
+        if effective_full_width:
             # The continuous page flow is the established ClassIn fit-width
             # path and permits the 3x V1 width used by existing full-width EDBs.
             # This changes placement only; the extracted passage bounds remain
@@ -7873,6 +8126,16 @@ def configure_problem_entries_for_export(
             entry.placement_x_ratio = 0.0
             entry.placement_scale_ratio = PLACEMENT_FIT_WIDTH_SCALE_MAX
     return selected
+
+
+def resolve_export_record_mode(record_mode: str | None, *, passages_only: bool) -> str:
+    """Choose the record strategy without splitting a stitched passage by default."""
+    requested = str(record_mode or "").strip().lower()
+    if not requested:
+        return "image-only" if passages_only else "mixed"
+    if requested not in {"mixed", "image-only"}:
+        raise ValueError(f"Unsupported record mode: {record_mode}")
+    return requested
 
 
 def run_problem_export(
@@ -7895,6 +8158,7 @@ def run_problem_export(
     sync_ui: bool = False,
     crop_format: str = DEFAULT_CROP_FORMAT,
     input_intent: str = "auto",
+    content_target: str = "all",
     input_notes: str | None = None,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
@@ -7922,6 +8186,7 @@ def run_problem_export(
     out_dir.mkdir(parents=True, exist_ok=True)
     subject = resolve_subject(subject_name)
     resolved_input_intent = _normalize_input_intent(input_intent)
+    resolved_content_target = _normalize_content_target(content_target)
     resolved_board_theme = _resolve_board_theme(board_theme)
     template = LayoutTemplate(
         name="academy-default",
@@ -7946,6 +8211,12 @@ def run_problem_export(
         save_debug=ai_fallback_save_debug,
         fail_on_error=fail_on_ai_error,
     )
+    page_ai_config = _to_page_ai_config(ai_fallback_config)
+    global_ocr_worker_limit = resolve_global_ocr_worker_limit(
+        ocr_mode=ocr,
+        ai_config=page_ai_config,
+    )
+    shared_ocr_semaphore = threading.BoundedSemaphore(global_ocr_worker_limit)
 
     def _build_source_pages(source_path: Path) -> tuple[list[PreparedPage], list[PageModel]]:
         return build_pages(
@@ -7959,6 +8230,8 @@ def run_problem_export(
             crop_margins=not skip_crop,
             max_dimension=max_dimension,
             input_intent=resolved_input_intent,
+            ocr_semaphore=shared_ocr_semaphore,
+            global_ocr_worker_limit=global_ocr_worker_limit,
         )
 
     source_worker_count = resolve_source_build_worker_count(
@@ -8002,7 +8275,18 @@ def run_problem_export(
         out_dir,
         template,
         board_theme=resolved_board_theme,
+        content_target=resolved_content_target,
     )
+    if not problem_entries and resolved_content_target == "shared-passages":
+        raise ValueError("여러 문항이 함께 쓰는 공통 지문을 찾지 못했습니다")
+    if not problem_entries and resolved_content_target == "questions":
+        raise ValueError("공통 지문을 제외한 문항을 찾지 못했습니다")
+    if resolved_content_target == "shared-passages":
+        problem_entries = configure_problem_entries_for_export(
+            problem_entries,
+            passage_problem_ids={entry.problem_id for entry in problem_entries},
+            passages_only=True,
+        )
     timing_ms["problem_assets"] = _elapsed_ms(problem_assets_started_at)
     save_pages_json(pages, out_dir / "pages.json")
     # Match ClassIn's observed publish behaviour: page_count_hint scales with the
@@ -8047,6 +8331,7 @@ def run_problem_export(
         "ocr_backend_requested": ocr,
         "ocr_summary": ocr_summary,
         "input_intent": resolved_input_intent,
+        "content_target": resolved_content_target,
         "timing_ms": dict(timing_ms),
     }
 
@@ -8099,6 +8384,8 @@ def run_problem_export(
         crop_format=resolved_crop_format,
     )
     annotate_ui_session_with_edb_part_metadata(ui_session, edb_parts)
+    ui_session["content_target"] = resolved_content_target
+    ui_session["contentTarget"] = resolved_content_target
     timing_ms["ui_session"] = _elapsed_ms(ui_session_started_at)
     classin_handoff_path: Path | None = None
     classin_handoff_markdown_path: Path | None = None
@@ -8150,6 +8437,7 @@ def run_problem_export(
         "ai_fallback": ai_fallback_config,
         "ai_summary": ai_summary,
         "input_intent": resolved_input_intent,
+        "content_target": resolved_content_target,
     }
 
 
@@ -8167,12 +8455,23 @@ def main() -> int:
     parser.add_argument("--template-name", default="academy-default", help="Layout template name")
     parser.add_argument("--board-pages", type=int, default=50, help="Board page count hint")
     parser.add_argument("--slot-height", type=float, default=ONE_PROBLEM_SLOT_HEIGHT_PAGES, help="Base slot height in board pages")
-    parser.add_argument("--record-mode", choices=("mixed", "image-only"), default="mixed", help="Record generation strategy")
+    parser.add_argument(
+        "--record-mode",
+        choices=("mixed", "image-only"),
+        default=None,
+        help=(
+            "Record generation strategy; defaults to image-only for --passages-only "
+            "so stitched passages stay as one record, otherwise mixed"
+        ),
+    )
     parser.add_argument("--input-intent", choices=tuple(sorted(INPUT_INTENTS)), default="auto", help="How to treat uploaded source pages")
     parser.add_argument(
         "--passages-only",
         action="store_true",
-        help="Export only passage-fragment records detected from set-problem ranges",
+        help=(
+            "Export only passage-fragment records detected from set-problem ranges; "
+            "defaults to S2 text-preserving, continuous fit-width placement"
+        ),
     )
     parser.add_argument(
         "--processing-step",
@@ -8291,12 +8590,16 @@ def main() -> int:
         processing_step=args.processing_step or None,
         full_width=args.full_width,
     )
+    resolved_record_mode = resolve_export_record_mode(
+        args.record_mode,
+        passages_only=bool(args.passages_only),
+    )
     save_pages_json(pages, output_dir / "pages.json")
     resolved_crop_format = args.crop_format if args.crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
     records, placements, header_flag = build_records(
         problem_entries,
         template,
-        record_mode=args.record_mode,
+        record_mode=resolved_record_mode,
         output_dir=output_dir,
         text_confidence_threshold=args.text_confidence_threshold,
         dark_board=not args.light_board,
@@ -8325,7 +8628,7 @@ def main() -> int:
         "problem_crop_dir": str(output_dir / "problem_crops"),
         "block_crop_dir": str(output_dir / "block_crops"),
         "record_count": len(records),
-        "record_mode": args.record_mode,
+        "record_mode": resolved_record_mode,
         "dark_board": not args.light_board,
         "board_theme": resolved_board_theme,
         "crop_format": resolved_crop_format,
@@ -8356,7 +8659,7 @@ def main() -> int:
         "pages_json_path": str(output_dir / "pages.json"),
         "board_run_summary_path": str(summary_path),
         "problem_count": len(placements),
-        "record_mode": args.record_mode,
+        "record_mode": resolved_record_mode,
         "text_record_count": summary["placement_summary"]["text_record_count"],
         "image_record_count": summary["placement_summary"]["image_record_count"],
     }

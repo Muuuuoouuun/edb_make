@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -139,6 +140,7 @@ def repair_page_model(
     ocr_mode: str,
     config: AIFallbackConfig | None = None,
     cache: PipelineCache | None = None,
+    request_semaphore: threading.BoundedSemaphore | None = None,
 ) -> PageModel:
     resolved_config = config or AIFallbackConfig()
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
@@ -256,13 +258,19 @@ def repair_page_model(
     summary["attempted"] = True
     start_time = time.perf_counter()
     try:
-        repair_payload, response_id, used_model, model_attempts = _request_ai_repair_with_model_fallback(
-            prepared_page=prepared_page,
-            page=baseline,
-            config=resolved_config,
-            trigger_reasons=trigger_reasons,
-            api_key=api_key,
-        )
+        if request_semaphore is not None:
+            request_semaphore.acquire()
+        try:
+            repair_payload, response_id, used_model, model_attempts = _request_ai_repair_with_model_fallback(
+                prepared_page=prepared_page,
+                page=baseline,
+                config=resolved_config,
+                trigger_reasons=trigger_reasons,
+                api_key=api_key,
+            )
+        finally:
+            if request_semaphore is not None:
+                request_semaphore.release()
         latency_ms = int(round((time.perf_counter() - start_time) * 1000.0))
     except Exception as exc:
         summary["status"] = "error"

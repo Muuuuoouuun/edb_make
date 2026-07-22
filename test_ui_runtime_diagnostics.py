@@ -14,6 +14,49 @@ def run_node(script: str) -> None:
 
 
 class TestUiRuntimeDiagnostics(unittest.TestCase):
+    def test_session_revision_never_regresses_from_late_preview_response(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        revision_block = "let latestServerSessionRevision" + source.split(
+            "let latestServerSessionRevision", 1
+        )[1].split("function withExpectedSessionRevision", 1)[0]
+        run_node(
+            revision_block
+            + """
+            const epoch1 = '00000000000000000001-epoch-1';
+            const epoch2 = '00000000000000000002-epoch-2';
+            captureSessionRevision({ session: { problems: [] }, sessionRevision: 7, sessionEpoch: epoch1 });
+            const stalePayload = { session: { problems: [{ id: 'old' }] }, sessionRevision: 5, sessionEpoch: epoch1 };
+            if (!sessionResponseRevisionIsStale(stalePayload)) throw new Error('late session was not rejected');
+            captureSessionRevision(stalePayload);
+            if (latestServerSessionRevision !== 7) throw new Error(`revision regressed to ${latestServerSessionRevision}`);
+            if (sessionResponseRevisionIsStale({ session: { problems: [] }, sessionRevision: 8, sessionEpoch: epoch1 })) throw new Error('new session was rejected');
+            captureSessionRevision({ session: { problems: [] }, sessionRevision: 1, sessionEpoch: epoch2 });
+            if (latestServerSessionRevision !== 1 || latestServerSessionEpoch !== epoch2) throw new Error('new server epoch was not accepted');
+            const retiredPayload = { session: { problems: [{ id: 'retired' }] }, sessionRevision: 9, sessionEpoch: epoch1 };
+            if (!sessionResponseRevisionIsStale(retiredPayload)) throw new Error('retired server epoch was accepted');
+            const unseenOldEpoch = '00000000000000000000-unseen-old';
+            if (!sessionResponseRevisionIsStale({ session: { problems: [] }, sessionRevision: 99, sessionEpoch: unseenOldEpoch })) {
+              throw new Error('unseen older server epoch was accepted');
+            }
+            captureSessionRevision({ session: { problems: [] }, sessionRevision: 99, sessionEpoch: unseenOldEpoch });
+            if (latestServerSessionEpoch !== epoch2 || latestServerSessionRevision !== 1) {
+              throw new Error('unseen older server epoch replaced the current server');
+            }
+            """
+        )
+
+    def test_upload_processing_waits_for_initial_session_hydration(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        app = source.split("function App()", 1)[1]
+
+        self.assertIn("const [initialSessionLoaded, setInitialSessionLoaded] = useState(false)", app)
+        self.assertIn("if (!cancelled) setInitialSessionLoaded(true)", app)
+        process_queue = app.split("const processQueuedFiles = useCallback", 1)[1].split(
+            "const cancelRecognitionReview", 1
+        )[0]
+        self.assertIn("if (!initialSessionLoaded)", process_queue)
+        self.assertIn("queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition}", app)
+
     def test_side_panel_exposes_four_edge_manual_crop_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
@@ -25,6 +68,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("cropDraft.rightRatio", side_panel)
         self.assertIn("cropDraft.topRatio", side_panel)
         self.assertIn("cropDraft.bottomRatio", side_panel)
+        self.assertIn("manual-crop-state", side_panel)
+        self.assertIn("변경한 여백을 적용할 수 있어요", side_panel)
+        self.assertIn("여백 변경 없음", side_panel)
 
     def test_side_panel_splits_material_details_from_placement_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -169,6 +215,78 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".placement-position-control", html)
         self.assertIn(".publish-result-panel.is-collapsed", html)
 
+    def test_passage_only_preset_targets_fragments_and_applies_reading_width(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        item_mapper = source.split("function mapProblemToItem(problem, idx){", 1)[1]
+        item_mapper = item_mapper.split("async function fetchLatestSession", 1)[0]
+        preset = side_panel.split("const applyPlacementPreset = (preset) => {", 1)[1]
+        preset = preset.split("const updateCropDraft", 1)[0]
+
+        self.assertIn("passageGroupId:", item_mapper)
+        self.assertIn("passageRole:", item_mapper)
+        self.assertIn("passageRange:", item_mapper)
+        self.assertIn("supplementalItem:", item_mapper)
+        self.assertIn("const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);", side_panel)
+        self.assertIn("placementPreset === 'passage-only'", side_panel)
+        self.assertIn("selectedPassageFragments.forEach(target =>", preset)
+        self.assertIn("scaleRatio: maxPlacementScaleRatio(target)", preset)
+        self.assertIn("fitWidth: true", preset)
+        self.assertIn("setBoardColumns?.(1)", preset)
+        self.assertIn("value === 'passage-only' && passageFragmentCount === 0", side_panel)
+        self.assertIn("['passage-only', '지문 전체 너비']", side_panel)
+        self.assertIn("이미 추출된 지문 본문만 1열 최대 읽기 폭으로 맞춥니다", side_panel)
+
+    def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        export_request = source.split("async function postExport(files", 1)[1]
+        export_request = export_request.split("function formatApiError", 1)[0]
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+
+        self.assertIn('role="group" aria-label="자료 모아보기"', items_rail)
+        self.assertIn("['all', '전체', materialCounts.all]", items_rail)
+        self.assertIn("['questions', '문항', materialCounts.questions]", items_rail)
+        self.assertIn("['passages', '공통 지문', materialCounts.passages]", items_rail)
+        self.assertIn("items.filter(item => !isPassageFragmentProblem(item)).length", items_rail)
+        self.assertIn("items.filter(isPassageFragmentProblem).length", items_rail)
+        self.assertIn("모아보기 중 · 순서 변경은 전체 보기에서", items_rail)
+        self.assertNotIn('aria-label="인식 대상"', side_panel)
+        self.assertIn("contentTarget: resolvedContentTarget", export_request)
+        self.assertIn("content_target: resolvedContentTarget", export_request)
+        self.assertIn("contentTarget: DEFAULT_CONTENT_TARGET", queue_source)
+        self.assertIn("processQueuedFiles('passage-only', key)", items_rail)
+        self.assertIn("onClick={() => processQueuedFiles('passage-only')}", items_rail)
+        self.assertIn("<strong>지문만 추출</strong>", items_rail)
+        self.assertIn("const isPassageOnly = mode === 'passage-only';", queue_source)
+        self.assertIn("const isRecognition = mode === 'recognize' || isPassageOnly;", queue_source)
+        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", queue_source)
+        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", source)
+        self.assertIn("const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);", source)
+        self.assertIn("return CONTENT_TARGETS.has(normalized) ? normalized : DEFAULT_CONTENT_TARGET;", source)
+        self.assertIn("normalizeContentTarget(review?.contentTarget) === 'shared-passages'", source)
+        self.assertIn("공통 지문 ${summary.problems}개", source)
+        self.assertIn(".material-filter", board)
+
+    def test_item_editor_can_correct_question_and_shared_passage_classification(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
+        mutation = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
+        mutation = mutation.split("const retryAiSession", 1)[0]
+
+        self.assertIn('className="item-classification"', side_panel)
+        self.assertIn('role="radiogroup" aria-label="선택 자료 분류"', side_panel)
+        self.assertIn("classification: 'question'", side_panel)
+        self.assertIn("classification: 'shared-passage'", side_panel)
+        self.assertIn("공통 지문은 여러 문항이 함께 쓰는 별도 지문만 지정", side_panel)
+        self.assertIn("action === 'classify' ? '자료 분류를 저장하는 중…'", mutation)
+        self.assertIn("action === 'classify' ? '자료 분류를 변경했어요'", mutation)
+
     def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
@@ -231,33 +349,26 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("top: el.offsetTop, height: el.offsetHeight", items_rail)
         self.assertNotIn("rail.querySelectorAll('.item[data-item-id]')", items_rail)
 
-    def test_left_rail_filters_questions_and_only_separate_shared_passages(self) -> None:
+    def test_reorder_has_keyboard_accessibility_and_failed_save_rollback(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
         items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
 
-        self.assertIn('aria-label="자료 모아보기"', items_rail)
-        self.assertIn("['questions', '문항', materialCounts.questions]", items_rail)
-        self.assertIn("['passages', '공통 지문', materialCounts.passages]", items_rail)
-        self.assertIn("items.filter(item => !isPassageFragmentProblem(item)).length", items_rail)
-        self.assertIn("items.filter(isPassageFragmentProblem).length", items_rail)
-        self.assertIn("모아보기 중 · 순서 변경은 전체 보기에서", items_rail)
-        self.assertIn("if (filterActive)", items_rail)
-        self.assertIn(".material-filter", board)
-
-    def test_item_editor_can_correct_question_and_shared_passage_classification(self) -> None:
-        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
-        mutation = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
-        mutation = mutation.split("const retryAiSession", 1)[0]
-
-        self.assertIn('className="item-classification"', side_panel)
-        self.assertIn('role="radiogroup" aria-label="선택 자료 분류"', side_panel)
-        self.assertIn("classification: 'question'", side_panel)
-        self.assertIn("classification: 'shared-passage'", side_panel)
-        self.assertIn("공통 지문은 여러 문항이 함께 쓰는 별도 지문만 지정", side_panel)
-        self.assertIn("action === 'classify' ? '자료 분류를 저장하는 중…'", mutation)
-        self.assertIn("action === 'classify' ? '자료 분류를 변경했어요'", mutation)
+        self.assertIn("e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')", items_rail)
+        self.assertIn('aria-describedby="problem-order-help"', items_rail)
+        self.assertIn("filterActive ? '필터된 문제' : '순서 변경 가능한 문제'", items_rail)
+        self.assertIn("filterActive ? 'Enter Space' : 'Alt+ArrowUp Alt+ArrowDown Enter Space'", items_rail)
+        self.assertIn('role="status" aria-live="polite"', items_rail)
+        self.assertIn("pendingKeyboardFocusRef.current = item.id", items_rail)
+        self.assertIn("setItems(rollbackItems)", reorder_flow)
+        self.assertIn("setSession(snapshotBefore)", reorder_flow)
+        self.assertIn("순서 저장 실패 · 이전 순서로 복구했습니다", reorder_flow)
+        self.assertIn("return true", reorder_flow)
+        self.assertIn(".item:focus-visible", board)
+        self.assertIn(".problem-order-status", board)
+        self.assertIn("@media (min-width: 701px) and (max-width: 920px)", board)
+        self.assertIn(".item .actions .item-download-action", board)
 
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

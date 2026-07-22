@@ -34,6 +34,8 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
         self.assertIn("options.problemIds", on_confirm)
         self.assertIn("전체 ${confirmedIds.size}개 확인 완료", on_confirm)
+        self.assertIn("mutateSession('confirm', { problemIds: [...confirmedIds] })", on_confirm)
+        self.assertNotIn("postRestore(nextSession)", on_confirm)
 
     def test_board_uses_review_bulk_confirm_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")

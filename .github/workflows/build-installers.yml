@@ -7,6 +7,16 @@ on:
         description: "Release version, for example 0.1.1"
         required: true
         default: "0.1.0"
+      production_release:
+        description: "Require private-corpus quality, signing, and notarization gates"
+        required: true
+        type: boolean
+        default: true
+      license_compliance_approved:
+        description: "Confirm distribution rights/notices were reviewed for AGPL and other bundled dependencies"
+        required: true
+        type: boolean
+        default: false
       update_feed_url:
         description: "Public update feed URL used by installed apps"
         required: false
@@ -29,32 +39,264 @@ on:
         default: ""
 
 jobs:
+  quality-gate:
+    name: Release quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-release-bootstrap.lock
+            requirements-release.lock
+            requirements-ci.lock
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+          python -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r requirements-release.lock
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements-ci.lock
+          python -m pip check
+
+      - name: Verify locked release dependency policy
+        run: python scripts/verify_release_licenses.py --root . --require-release-policy --require-locked-environment
+
+      - name: Validate release inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_MODE: ${{ inputs.production_release && 'public' || 'internal-test' }}
+          LICENSE_COMPLIANCE_APPROVED: ${{ inputs.license_compliance_approved }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
+          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
+        run: |
+          license_args=()
+          if [[ "$LICENSE_COMPLIANCE_APPROVED" == "true" ]]; then
+            license_args+=(--license-compliance-approved)
+          fi
+          python scripts/validate_release_inputs.py \
+            --version "$RELEASE_VERSION" \
+            --release-mode "$RELEASE_MODE" \
+            --update-feed-url "$UPDATE_FEED_URL" \
+            --release-notes-url "$RELEASE_NOTES_URL" \
+            --manifest-url "$MANIFEST_URL" \
+            --macos-download-url "$MACOS_DOWNLOAD_URL" \
+            --windows-download-url "$WINDOWS_DOWNLOAD_URL" \
+            "${license_args[@]}"
+
+      - name: Run release tests
+        run: python -m pytest -q
+
+      - name: Verify frontend package and bundle digest (read-only)
+        run: python scripts/verify_frontend_package.py
+
+      - name: Run synthetic harness smoke (not production evidence)
+        run: python scripts/evaluate_quality_corpus.py quality/synthetic-corpus.json
+
+  private-quality-gate:
+    name: Production private-corpus quality gate
+    if: inputs.production_release
+    needs: quality-gate
+    runs-on: [self-hosted, edb-quality-corpus]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-release-bootstrap.lock
+            requirements-release.lock
+
+      - name: Allocate isolated private-corpus workspace
+        id: private-quality-work
+        run: |
+          work_dir="$(mktemp -d "$RUNNER_TEMP/edb-quality-pipeline.XXXXXX")"
+          echo "work_dir=$work_dir" >> "$GITHUB_OUTPUT"
+          report_dir="$(mktemp -d "$RUNNER_TEMP/edb-quality-report.XXXXXX")"
+          echo "report_dir=$report_dir" >> "$GITHUB_OUTPUT"
+          venv_root="$(mktemp -d "$RUNNER_TEMP/edb-quality-venv.XXXXXX")"
+          echo "venv_root=$venv_root" >> "$GITHUB_OUTPUT"
+          python -m venv "$venv_root/venv"
+          echo "quality_python=$venv_root/venv/bin/python" >> "$GITHUB_OUTPUT"
+
+      - name: Install private quality pipeline dependencies in clean venv
+        env:
+          QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
+          PYTHONNOUSERSITE: "1"
+          PIP_CONFIG_FILE: /dev/null
+        run: |
+          "$QUALITY_PYTHON" -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+          "$QUALITY_PYTHON" -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r requirements-release.lock
+          "$QUALITY_PYTHON" -m pip check
+
+      - name: Verify isolated OCR runtime and credential
+        env:
+          QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
+          EDB_QUALITY_OCR_PROFILE: gemini-3.5-flash
+          EDB_GEMINI_OCR_THINKING_LEVEL: low
+          GEMINI_API_KEY: ${{ secrets.EDB_QUALITY_GEMINI_API_KEY }}
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+        run: |
+          if [[ "$EDB_QUALITY_OCR_PROFILE" != "gemini-3.5-flash" ]]; then
+            echo "Production quality OCR profile must be pinned to gemini-3.5-flash." >&2
+            exit 1
+          fi
+          if [[ -z "$GEMINI_API_KEY" ]]; then
+            echo "Production quality requires the protected EDB_QUALITY_GEMINI_API_KEY secret." >&2
+            exit 1
+          fi
+          "$QUALITY_PYTHON" scripts/verify_release_licenses.py \
+            --root . \
+            --require-release-policy \
+            --require-locked-environment \
+            --reject-unlocked-environment
+          "$QUALITY_PYTHON" - <<'PY'
+          import importlib.metadata
+
+          forbidden = {
+              "google-generativeai",
+              "google-genai",
+              "paddleocr",
+              "paddlepaddle",
+              "pytesseract",
+          }
+          installed = {
+              str(distribution.metadata.get("Name") or "").strip().lower()
+              for distribution in importlib.metadata.distributions()
+          }
+          mixed = sorted(forbidden & installed)
+          if mixed:
+              raise SystemExit(
+                  "Refusing optional OCR backend distributions in the release quality venv: "
+                  + ", ".join(mixed)
+              )
+          PY
+
+      - name: Evaluate protected real-document corpus
+        env:
+          QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
+          EDB_QUALITY_OCR_PROFILE: gemini-3.5-flash
+          EDB_GEMINI_OCR_THINKING_LEVEL: low
+          GEMINI_API_KEY: ${{ secrets.EDB_QUALITY_GEMINI_API_KEY }}
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+          CONFIGURED_CORPUS_MANIFEST: ${{ vars.EDB_QUALITY_CORPUS_MANIFEST }}
+          CONFIGURED_CORPUS_ROOT: ${{ vars.EDB_QUALITY_CORPUS_ROOT }}
+          CONFIGURED_CORPUS_BASELINE: ${{ vars.EDB_QUALITY_CORPUS_BASELINE }}
+        run: |
+          corpus_manifest="${CONFIGURED_CORPUS_MANIFEST:-${EDB_QUALITY_CORPUS_MANIFEST:-}}"
+          corpus_root="${CONFIGURED_CORPUS_ROOT:-${EDB_QUALITY_CORPUS_ROOT:-}}"
+          if [[ -z "$corpus_manifest" || -z "$corpus_root" ]]; then
+            echo "Production release requires EDB_QUALITY_CORPUS_MANIFEST and EDB_QUALITY_CORPUS_ROOT on the protected runner." >&2
+            exit 1
+          fi
+          baseline_args=()
+          if [[ -n "${CONFIGURED_CORPUS_BASELINE:-}" ]]; then
+            baseline_args+=(--baseline "$CONFIGURED_CORPUS_BASELINE")
+          fi
+          "$QUALITY_PYTHON" scripts/run_quality_corpus.py "$corpus_manifest" \
+            --corpus-root "$corpus_root" \
+            --work-dir "${{ steps.private-quality-work.outputs.work_dir }}" \
+            --ocr "$EDB_QUALITY_OCR_PROFILE" \
+            --python "$QUALITY_PYTHON" \
+            --json-report "${{ steps.private-quality-work.outputs.report_dir }}/quality-report.json" \
+            --markdown-report "${{ steps.private-quality-work.outputs.report_dir }}/quality-report.md" \
+            "${baseline_args[@]}"
+
+      - name: Record privacy-minimized quality evidence digest
+        if: success()
+        run: |
+          cd "${{ steps.private-quality-work.outputs.report_dir }}"
+          {
+            echo "### Protected quality gate evidence"
+            echo "Privacy-minimized reports are not uploaded or retained by this workflow. Only these SHA-256 digests are retained in the run summary:"
+            sha256sum quality-report.json quality-report.md | sed 's#  .*/#  #'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Purge protected corpus derivatives and reports
+        if: always()
+        env:
+          PRIVATE_WORK_DIR: ${{ steps.private-quality-work.outputs.work_dir }}
+          PRIVATE_REPORT_DIR: ${{ steps.private-quality-work.outputs.report_dir }}
+          PRIVATE_VENV_ROOT: ${{ steps.private-quality-work.outputs.venv_root }}
+        run: |
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve()
+          targets = (
+              (os.environ.get("PRIVATE_WORK_DIR", ""), "edb-quality-pipeline."),
+              (os.environ.get("PRIVATE_REPORT_DIR", ""), "edb-quality-report."),
+              (os.environ.get("PRIVATE_VENV_ROOT", ""), "edb-quality-venv."),
+          )
+          for raw_value, required_prefix in targets:
+              if not raw_value:
+                  continue
+              target = Path(raw_value).resolve()
+              if target.parent != runner_temp or not target.name.startswith(required_prefix):
+                  raise SystemExit(f"Refusing unsafe private quality cleanup target: {target}")
+              if target.is_dir():
+                  shutil.rmtree(target)
+          PY
+
   macos:
     name: macOS DMG
     runs-on: macos-14
+    needs: [quality-gate, private-quality-gate]
+    if: ${{ always() && needs.quality-gate.result == 'success' && (!inputs.production_release || needs.private-quality-gate.result == 'success') }}
+    timeout-minutes: 60
+    outputs:
+      artifact_arch: ${{ steps.package-metadata.outputs.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
       - name: Install Python dependencies
         run: |
           python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -r requirements-local.txt pyinstaller
+          .venv/bin/python -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+          .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r requirements-release.lock
+          .venv/bin/python -m pip check
+
+      - name: Record reproducible build provenance
+        run: |
+          echo "EDB_RELEASE_GIT_COMMIT=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
       - name: Import macOS signing certificate
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          PRODUCTION_RELEASE: ${{ inputs.production_release }}
         run: |
           if [[ -z "${MACOS_CERTIFICATE_P12_BASE64}" ]]; then
+            if [[ "$PRODUCTION_RELEASE" == "true" ]]; then
+              echo "Production release requires MACOS_CERTIFICATE_P12_BASE64." >&2
+              exit 1
+            fi
             echo "No macOS signing certificate configured; building ad-hoc signed package."
             exit 0
           fi
@@ -63,7 +305,8 @@ jobs:
           CERTIFICATE_PATH="$RUNNER_TEMP/app-signing.p12"
           KEYCHAIN_PASSWORD="$(uuidgen)"
 
-          CERTIFICATE_PATH="$CERTIFICATE_PATH" python -c 'import base64, os, pathlib; pathlib.Path(os.environ["CERTIFICATE_PATH"]).write_bytes(base64.b64decode(os.environ["MACOS_CERTIFICATE_P12_BASE64"]))'
+          CERTIFICATE_PATH="$CERTIFICATE_PATH" python -c 'import base64, os, pathlib; path = pathlib.Path(os.environ["CERTIFICATE_PATH"]); path.write_bytes(base64.b64decode(os.environ["MACOS_CERTIFICATE_P12_BASE64"])); path.chmod(0o600)'
+          trap 'rm -f "$CERTIFICATE_PATH"' EXIT
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
@@ -71,7 +314,12 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/[ "]//g')
           security default-keychain -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          identity_output="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH")"
+          printf '%s\n' "$identity_output"
+          if ! grep -Fq "Developer ID Application:" <<< "$identity_output"; then
+            echo "Imported keychain does not contain a Developer ID Application identity." >&2
+            exit 1
+          fi
           echo "MACOS_SIGNING_ENABLED=1" >> "$GITHUB_ENV"
 
       - name: Build macOS package
@@ -80,20 +328,30 @@ jobs:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          PRODUCTION_RELEASE: ${{ inputs.production_release }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
+          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
         run: |
+          NOTARY_KEY_PATH=""
+          trap '[[ -n "$NOTARY_KEY_PATH" ]] && rm -f "$NOTARY_KEY_PATH"' EXIT
           chmod +x ./package_macos_app.sh
           args=(--clean --dmg --zip \
-            --version "${{ inputs.version }}" \
-            --update-feed-url "${{ inputs.update_feed_url }}" \
-            --download-url "${{ inputs.macos_download_url }}" \
-            --release-notes-url "${{ inputs.release_notes_url }}")
+            --version "$RELEASE_VERSION" \
+            --update-feed-url "$UPDATE_FEED_URL" \
+            --download-url "$MACOS_DOWNLOAD_URL" \
+            --release-notes-url "$RELEASE_NOTES_URL")
 
           if [[ "${MACOS_SIGNING_ENABLED:-0}" == "1" ]]; then
             args+=(--sign-identity "${MACOS_CODESIGN_IDENTITY:-auto}")
             if [[ -n "$APPLE_NOTARY_KEY_ID" && -n "$APPLE_NOTARY_ISSUER_ID" && -n "$APPLE_NOTARY_KEY_P8_BASE64" ]]; then
               NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
-              NOTARY_KEY_PATH="$NOTARY_KEY_PATH" python -c 'import base64, os, pathlib; pathlib.Path(os.environ["NOTARY_KEY_PATH"]).write_bytes(base64.b64decode(os.environ["APPLE_NOTARY_KEY_P8_BASE64"]))'
+              NOTARY_KEY_PATH="$NOTARY_KEY_PATH" python -c 'import base64, os, pathlib; path = pathlib.Path(os.environ["NOTARY_KEY_PATH"]); path.write_bytes(base64.b64decode(os.environ["APPLE_NOTARY_KEY_P8_BASE64"])); path.chmod(0o600)'
               args+=(--notarize --notary-key "$NOTARY_KEY_PATH" --notary-key-id "$APPLE_NOTARY_KEY_ID" --notary-issuer "$APPLE_NOTARY_ISSUER_ID")
+            elif [[ "$PRODUCTION_RELEASE" == "true" ]]; then
+              echo "Production release requires all Apple notary API key secrets." >&2
+              exit 1
             else
               echo "Notary API key secrets are missing; signed but not notarized."
             fi
@@ -101,27 +359,83 @@ jobs:
 
           ./package_macos_app.sh "${args[@]}"
 
+      - name: Record macOS artifact architecture
+        id: package-metadata
+        run: echo "arch=$(uname -m)" >> "$GITHUB_OUTPUT"
+
       - name: Verify DMG
         run: hdiutil verify dist/ClassInEDBMVP-macOS.dmg
 
-      - uses: actions/upload-artifact@v4
+      - name: Verify packaged macOS app metadata and launch smoke
+        run: |
+          .venv/bin/python scripts/verify_packaged_app.py dist/ClassInEDBMVP.app \
+            --expected-app-id ClassInEDBMVP \
+            --expected-app-name ClassInEDBMVP \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-update-feed-url "$UPDATE_FEED_URL" \
+            --expected-download-url "$MACOS_DOWNLOAD_URL" \
+            --expected-release-notes-url "$RELEASE_NOTES_URL" \
+            --expected-git-commit "$GITHUB_SHA"
+          .venv/bin/python scripts/smoke_packaged_app.py dist/ClassInEDBMVP.app/Contents/MacOS/ClassInEDBMVP
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
+          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
+
+      - name: Enforce public macOS trust policy
+        if: inputs.production_release
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/ClassInEDBMVP.app
+          signing_details="$(codesign -dvvv dist/ClassInEDBMVP.app 2>&1)"
+          grep -Fq "Authority=Developer ID Application:" <<< "$signing_details"
+          grep -Eq "flags=.*runtime" <<< "$signing_details"
+          xcrun stapler validate dist/ClassInEDBMVP.app
+          xcrun stapler validate dist/ClassInEDBMVP-macOS.dmg
+          spctl --assess --type execute --verbose=4 dist/ClassInEDBMVP.app
+
+      - name: Create exact macOS release evidence
+        run: |
+          .venv/bin/python scripts/build_release_evidence.py create \
+            --platform macos \
+            --version "$RELEASE_VERSION" \
+            --git-commit "$GITHUB_SHA" \
+            --metadata-root dist/release-metadata \
+            --artifact dist/ClassInEDBMVP-macOS.dmg \
+            --artifact dist/ClassInEDBMVP-macOS.zip \
+            --output dist/macos-release-evidence.json
+          .venv/bin/python scripts/build_release_evidence.py verify dist/macos-release-evidence.json \
+            --artifact-root dist \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-git-commit "$GITHUB_SHA"
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-installer
           path: |
             dist/ClassInEDBMVP-macOS.dmg
             dist/ClassInEDBMVP-macOS.zip
+            dist/macos-release-evidence.json
+            dist/release-metadata
 
   windows:
     name: Windows Setup
     runs-on: windows-latest
+    needs: [quality-gate, private-quality-gate]
+    if: ${{ always() && needs.quality-gate.result == 'success' && (!inputs.production_release || needs.private-quality-gate.result == 'success') }}
+    timeout-minutes: 60
+    outputs:
+      artifact_arch: ${{ steps.package-metadata.outputs.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
@@ -129,12 +443,41 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .venv
-          .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv\Scripts\python.exe -m pip install -r requirements-local.txt pyinstaller
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r requirements-release.lock
+          .\.venv\Scripts\python.exe -m pip check
+
+      - name: Record reproducible build provenance
+        shell: pwsh
+        run: |
+          "EDB_RELEASE_GIT_COMMIT=$env:GITHUB_SHA" >> $env:GITHUB_ENV
+          $sourceDateEpoch = git show -s --format=%ct HEAD
+          "SOURCE_DATE_EPOCH=$sourceDateEpoch" >> $env:GITHUB_ENV
 
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup --no-progress -y
+        run: |
+          $innoVersion = "6.7.1"
+          $expectedNupkgSha256 = "a0dad33db33099d9cd2b89ac2d08b5d70c589b15118ced3b95f469f044f99950"
+          $packageDir = Join-Path $env:RUNNER_TEMP "innosetup-pinned"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          $packagePath = Join-Path $packageDir "innosetup.$innoVersion.nupkg"
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://community.chocolatey.org/api/v2/package/InnoSetup/$innoVersion" `
+            -OutFile $packagePath
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagePath).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedNupkgSha256) {
+            throw "Inno Setup package checksum mismatch: $actualSha256"
+          }
+          choco install innosetup --version $innoVersion --source $packageDir --no-progress -y
+          if ($LASTEXITCODE -ne 0) {
+            throw "Pinned Inno Setup installation failed with exit code $LASTEXITCODE."
+          }
+          $iscc = Get-Command ISCC.exe -ErrorAction Stop
+          $installedVersion = (Get-Item -LiteralPath $iscc.Source).VersionInfo.ProductVersion
+          if (-not $installedVersion.StartsWith($innoVersion, [System.StringComparison]::Ordinal)) {
+            throw "Unexpected Inno Setup compiler version: $installedVersion"
+          }
 
       - name: Build Windows installer
         shell: pwsh
@@ -142,15 +485,21 @@ jobs:
           WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           WINDOWS_SIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGN_TIMESTAMP_URL }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          PRODUCTION_RELEASE: ${{ inputs.production_release }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
+          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
         run: |
           $packageArgs = @(
             "-Clean",
-            "-Version", "${{ inputs.version }}",
-            "-UpdateFeedUrl", "${{ inputs.update_feed_url }}",
-            "-DownloadUrl", "${{ inputs.windows_download_url }}",
-            "-ReleaseNotesUrl", "${{ inputs.release_notes_url }}"
+            "-Version", $env:RELEASE_VERSION,
+            "-UpdateFeedUrl", $env:UPDATE_FEED_URL,
+            "-DownloadUrl", $env:WINDOWS_DOWNLOAD_URL,
+            "-ReleaseNotesUrl", $env:RELEASE_NOTES_URL
           )
 
+          $certificatePath = ""
           if ($env:WINDOWS_CERTIFICATE_PFX_BASE64) {
             $certificatePath = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
             [System.IO.File]::WriteAllBytes($certificatePath, [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
@@ -161,56 +510,158 @@ jobs:
             if ($env:WINDOWS_SIGN_TIMESTAMP_URL) {
               $packageArgs += @("-SignTimestampUrl", $env:WINDOWS_SIGN_TIMESTAMP_URL)
             }
+          } elseif ($env:PRODUCTION_RELEASE -eq "true") {
+            throw "Production release requires WINDOWS_CERTIFICATE_PFX_BASE64."
           } else {
             Write-Host "No Windows signing certificate configured; building unsigned package."
           }
 
-          .\package_windows_installer.ps1 @packageArgs
+          try {
+            .\package_windows_installer.ps1 @packageArgs
+          } finally {
+            if ($certificatePath -and (Test-Path -LiteralPath $certificatePath)) {
+              Remove-Item -Force -LiteralPath $certificatePath
+            }
+          }
 
-      - uses: actions/upload-artifact@v4
+      - name: Verify portable and installed Windows launch smoke
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe scripts\verify_packaged_app.py dist\ClassInEDBMVP `
+            --expected-app-id ClassInEDBMVP `
+            --expected-app-name ClassInEDBMVP `
+            --expected-version $env:RELEASE_VERSION `
+            --expected-update-feed-url $env:UPDATE_FEED_URL `
+            --expected-download-url $env:WINDOWS_DOWNLOAD_URL `
+            --expected-release-notes-url $env:RELEASE_NOTES_URL `
+            --expected-git-commit $env:GITHUB_SHA
+          .\.venv\Scripts\python.exe scripts\smoke_packaged_app.py dist\ClassInEDBMVP\ClassInEDBMVP.exe
+
+          $installDir = Join-Path $env:RUNNER_TEMP "ClassInEDBMVP-installed-smoke"
+          $installerArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=$installDir")
+          $installer = Start-Process -FilePath "dist\ClassInEDBMVP-Setup.exe" -ArgumentList $installerArgs -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "Windows installer smoke failed with exit code $($installer.ExitCode)."
+          }
+          .\.venv\Scripts\python.exe scripts\smoke_packaged_app.py (Join-Path $installDir "ClassInEDBMVP.exe")
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
+          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
+
+      - name: Enforce public Windows Authenticode trust policy
+        if: inputs.production_release
+        shell: pwsh
+        run: |
+          $signableFiles = @(
+            Get-ChildItem -LiteralPath dist\ClassInEDBMVP -Recurse -File |
+              Where-Object { $_.Extension -in @(".exe", ".dll", ".pyd") }
+          ) + @(Get-Item -LiteralPath dist\ClassInEDBMVP-Setup.exe)
+          if (-not $signableFiles) {
+            throw "No Windows release artifacts were found for Authenticode verification."
+          }
+          foreach ($file in $signableFiles) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $($file.FullName): $($signature.Status)"
+            }
+          }
+
+      - name: Create exact Windows release evidence
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe scripts\build_release_evidence.py create `
+            --platform windows `
+            --version $env:RELEASE_VERSION `
+            --git-commit $env:GITHUB_SHA `
+            --metadata-root dist\release-metadata `
+            --artifact dist\ClassInEDBMVP-Setup.exe `
+            --output dist\windows-release-evidence.json
+          .\.venv\Scripts\python.exe scripts\build_release_evidence.py verify dist\windows-release-evidence.json `
+            --artifact-root dist `
+            --expected-version $env:RELEASE_VERSION `
+            --expected-git-commit $env:GITHUB_SHA
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+
+      - name: Record Windows artifact architecture
+        id: package-metadata
+        shell: pwsh
+        run: |
+          $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") { "x64" } else { $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() }
+          "arch=$arch" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-installer
-          path: dist/ClassInEDBMVP-Setup.exe
+          path: |
+            dist/ClassInEDBMVP-Setup.exe
+            dist/windows-release-evidence.json
+            dist/release-metadata
 
   update-feed:
     name: Update Feed
     runs-on: ubuntu-latest
+    if: inputs.macos_download_url != '' && inputs.windows_download_url != ''
     needs:
       - macos
       - windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-artifacts
 
+      - name: Install hashed release evidence tools
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+
       - name: Build update feed
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
+          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
+          MACOS_ARTIFACT_ARCH: ${{ needs.macos.outputs.artifact_arch }}
+          WINDOWS_ARTIFACT_ARCH: ${{ needs.windows.outputs.artifact_arch }}
         run: |
+          python scripts/build_release_evidence.py verify release-artifacts/macos-installer/macos-release-evidence.json \
+            --artifact-root release-artifacts/macos-installer \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-git-commit "${{ github.sha }}"
+          python scripts/build_release_evidence.py verify release-artifacts/windows-installer/windows-release-evidence.json \
+            --artifact-root release-artifacts/windows-installer \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-git-commit "${{ github.sha }}"
           python scripts/build_update_feed.py \
-            --version "${{ inputs.version }}" \
+            --version "$RELEASE_VERSION" \
             --app-id "ClassInEDBMVP" \
             --app-name "ClassInEDBMVP" \
             --channel "stable" \
-            --summary "ClassInEDBMVP ${{ inputs.version }}" \
-            --update-feed-url "${{ inputs.update_feed_url }}" \
-            --release-notes-url "${{ inputs.release_notes_url }}" \
-            --manifest-url "${{ inputs.manifest_url }}" \
-            --macos-url "${{ inputs.macos_download_url }}" \
+            --summary "ClassInEDBMVP $RELEASE_VERSION" \
+            --update-feed-url "$UPDATE_FEED_URL" \
+            --release-notes-url "$RELEASE_NOTES_URL" \
+            --manifest-url "$MANIFEST_URL" \
+            --macos-url "$MACOS_DOWNLOAD_URL" \
             --macos-file release-artifacts/macos-installer/ClassInEDBMVP-macOS.dmg \
-            --windows-url "${{ inputs.windows_download_url }}" \
+            --macos-arch "$MACOS_ARTIFACT_ARCH" \
+            --windows-url "$WINDOWS_DOWNLOAD_URL" \
             --windows-file release-artifacts/windows-installer/ClassInEDBMVP-Setup.exe \
+            --windows-arch "$WINDOWS_ARTIFACT_ARCH" \
             --git-commit "${{ github.sha }}" \
             --build-number "${{ github.run_number }}" \
             --manifest-output dist/manifest.json \
             --checksums-output dist/checksums.txt \
             --output dist/update.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: update-feed
           path: |

@@ -128,11 +128,12 @@ Useful options:
 # Reuse an existing frontend bundle instead of running Node
 .\package_mvp.ps1 -SkipFrontendBuild
 
-# Clean previous builds and zip the output directory
-.\package_mvp.ps1 -OutputDir .\dist_smoke -Clean -Zip
+# Use a dedicated external output; the script marks it as safe for later reuse
+.\package_mvp.ps1 -OutputDir (Join-Path $env:TEMP "ClassInEDB-dist-smoke") -Clean -Zip
 ```
 
-The packaging scripts remove deterministic previous outputs for the same app name before writing a new package. PyInstaller work files stay under the selected output directory and are removed after a successful build. Use a separate `-OutputDir` when you need to keep older artifacts side by side.
+The packaging scripts remove deterministic previous outputs for the same app name before writing a new package. PyInstaller work files stay under the selected output directory and are removed after a successful build. Use a dedicated external `-OutputDir` when you need to keep older artifacts side by side.
+Inside the repository, packaging output is restricted to the exact top-level `dist` directory. Outside the repository, a non-empty directory is refused unless a prior packaging run created `.edb-packaging-output`; this applies with or without `--clean`/`-Clean`. Cleanup also refuses the filesystem root, user home, project root, ancestors, `.git`, and source directories. Release-metadata generation independently enforces an exact output-directory name, allowed parent, sentinel, and file allowlist before replacement.
 Before release sanity checks, clear old ignored local app outputs with `python scripts/clean_local_artifacts.py --yes`. The cleanup tool targets root-level `dist*`, `build`, and `tmp_validation_*` artifacts by default so stale test packages such as `dist_sizecheck` cannot be mistaken for the current UI; it also removes stale legacy UI bridge files without deleting the local `.app_runtime` folder. Generated EDB exports and full `.app_runtime` removal are opt-in cleanup targets.
 
 Expected output:
@@ -176,6 +177,7 @@ dist/ClassInEDBMVP-macOS.zip
 
 The macOS wrapper removes stale same-name app folders, `.app` bundles, zip archives, DMGs, notary-upload zips, and previous PyInstaller work files before each build. After verifying the `.app`, it removes PyInstaller's sibling collect folder and temporary work directory so the output directory does not expose an extra runnable-looking copy.
 The app bundle is re-verified after signing/stapling before archive creation. Generated zip archives and DMGs are checked for non-empty output; zip archives are inspected for the expected app entry, and DMGs are verified with `hdiutil verify` plus a mounted app-bundle contents check.
+Notarized builds additionally require the final app to report a Developer ID Application authority and hardened-runtime flag, then run `stapler validate` on the stapled app and DMG.
 The wrapper prints the final zip/DMG file size and SHA-256 hash after all signing/notarization steps that can mutate the artifact.
 
 The default macOS build is windowed and ad-hoc signed when `codesign` is available. Logs are written under:
@@ -300,7 +302,11 @@ The feed builder fails if `appId`, `appName`, `channel`, or release `version` is
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 The feed builder also rejects known platform artifact mismatches, such as a `.exe` local file or download URL passed as a macOS DMG, a download URL without the expected artifact file extension, a download URL file name that disagrees with the supplied local artifact file, or the same local file reused for multiple platforms.
 
-The GitHub Actions workflow in `.github/workflows/build-installers.yml` builds the macOS DMG/zip and Windows Setup.exe on matching runners, then generates `update.json`, `manifest.json`, and `checksums.txt` from those artifacts.
+The GitHub Actions workflow in `.github/workflows/build-installers.yml` builds the macOS DMG/zip and Windows Setup.exe on matching runners. `production_release=true` (the default) fails closed unless the protected real-document corpus gate, explicit `license_compliance_approved` attestation, macOS Developer ID/notary secrets, and Windows Authenticode certificate all pass. Setting production mode to false is an explicit internal-test override that permits ad-hoc/unsigned artifacts. Release inputs are validated before runner-heavy jobs begin, and generated feed architecture comes from the actual build runners instead of a fixed assumption.
+All Python build/test installs use exact hashed locks. GitHub Actions are pinned to full commit SHAs, and Windows downloads an exact Inno Setup 6.7.1 Chocolatey package only after verifying its nupkg SHA-256. Each packaged app embeds an SPDX SBOM, copied license files, exact dependency/tool fingerprints, and Git provenance. Platform evidence files bind the final installer hashes to that metadata and are rechecked after artifact download.
+CI launches the macOS app executable and both the Windows portable and silently installed executables, verifies `/api/health`, `/api/runtime-diagnostics`, and the UI shell, then requires clean API shutdown. Public macOS builds additionally require valid Developer ID/hardened-runtime signatures, stapled tickets, and Gatekeeper acceptance; public Windows builds require every signable app binary and final installer to report a valid Authenticode signature.
+The production corpus gate runs only on a self-hosted runner labeled `edb-quality-corpus`; `EDB_QUALITY_CORPUS_MANIFEST` and `EDB_QUALITY_CORPUS_ROOT` must be configured as repository variables or protected runner environment variables. The public CI synthetic corpus step is named and treated only as a harness smoke test, not production quality evidence. Every private run uses fresh `mktemp` work/report directories under `RUNNER_TEMP`; an `always()` cleanup validates the exact prefixes and removes rendered pages, OCR results, observations, and reports on success or failure. Reports are not uploaded or retained; only their SHA-256 digests remain in the workflow summary.
+`update.json`, `manifest.json`, and `checksums.txt` are generated only when both platform download URLs are supplied. The two URLs must be provided together; production mode also requires the update-feed URL.
 When `package_windows_installer.ps1` wraps an existing app folder, the installer version is derived from packaged `app_update_config.json` unless `-Version` is explicitly supplied; the packaged-app verifier fails if they disagree.
 
 For signed public builds, configure these repository secrets:
@@ -320,7 +326,15 @@ Optional repository variable:
 WINDOWS_SIGN_TIMESTAMP_URL
 ```
 
-If signing secrets are missing, CI still produces internal-test installers. macOS then remains ad-hoc signed, and Windows remains unsigned.
+If signing secrets are missing, disable `production_release` only for an intentional internal test; macOS then remains ad-hoc signed and Windows remains unsigned. Production mode intentionally fails instead of publishing untrusted artifacts.
+
+## Optional Upscayl Redistribution Gate
+
+Packaged apps discover a separately installed Upscayl runtime by default and do not redistribute it. To opt into a reviewed bundle, pass `--bundle-upscayl` on macOS, `-BundleUpscayl` on Windows, or set `EDB_BUNDLE_UPSCAYL=1` for a direct PyInstaller spec build.
+
+Opt-in bundling fails unless `resources/upscayl/LICENSE`, `THIRD_PARTY_NOTICES.md`, and `CORRESPONDING_SOURCE.txt` are non-empty. The final package verifier checks the same files. This is an accidental-bundling safety gate, not a legal conclusion; AGPL corresponding-source scope and every model/binary license still require release-specific review.
+
+The base Python package also includes dependencies with copyleft or dual-license considerations, notably PyMuPDF and pyhwp. Complete the technical/legal checklist in `docs/RELEASE_LICENSE_REVIEW.md` before asserting production license approval.
 
 ## Included Runtime Assets
 - `ui_prototype\index.html`
@@ -333,6 +347,11 @@ If signing secrets are missing, CI still produces internal-test installers. macO
 - `ui_prototype\vendor\react.production.min.js`
 - `ui_prototype\vendor\react-dom.production.min.js`
 - `app_update_config.json`
+- `release_metadata/dependency-inventory.json`
+- `release_metadata/sbom.spdx.json`
+- `release_metadata/THIRD_PARTY_NOTICES.md`
+- `release_metadata/release-provenance.json`
+- `release_metadata/metadata-manifest.json` and copied `license-files/`
 - `scripts\render_hwp_with_rhwp_core.mjs`
 - `assets\app_icon.png`
 

@@ -16,6 +16,12 @@ try:
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
     )
+    from .verify_release_licenses import (
+        UPSCAYL_MODEL_NAME,
+        UPSCAYL_REQUIRED_COMPLIANCE_FILES,
+        current_upscayl_platform,
+    )
+    from .build_release_metadata import collect_release_metadata_errors
 except ImportError:  # pragma: no cover - direct script execution
     from verify_frontend_package import (
         REQUIRED_RUNTIME_SOURCE_FILES,
@@ -23,6 +29,12 @@ except ImportError:  # pragma: no cover - direct script execution
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
     )
+    from verify_release_licenses import (
+        UPSCAYL_MODEL_NAME,
+        UPSCAYL_REQUIRED_COMPLIANCE_FILES,
+        current_upscayl_platform,
+    )
+    from build_release_metadata import collect_release_metadata_errors
 
 
 REQUIRED_RUNTIME_FILES = (
@@ -51,6 +63,10 @@ REQUIRED_SOURCE_PACKAGE_FILES = (
     "edb_builder.py",
     "inspect_edb.py",
     "requirements-local.txt",
+    "requirements-release-bootstrap.lock",
+    "requirements-release.lock",
+    "release/dependency_inventory.json",
+    "release/THIRD_PARTY_NOTICES.md",
     "run_local_app.ps1",
 )
 
@@ -331,6 +347,7 @@ def collect_package_errors(
     expected_download_url: str = "",
     expected_release_notes_url: str = "",
     expected_bundle_id: str = "",
+    expected_git_commit: str = "",
 ) -> list[str]:
     root = package_root.resolve()
     errors: list[str] = []
@@ -351,6 +368,15 @@ def collect_package_errors(
     for rel_path in (*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_FILES):
         if not (resource_root / rel_path).is_file():
             errors.append(f"missing packaged runtime file: {rel_path}")
+    release_metadata_root = resource_root / "release_metadata"
+    errors.extend(
+        f"packaged {error}"
+        for error in collect_release_metadata_errors(
+            release_metadata_root,
+            expected_version=expected_version,
+            expected_git_commit=expected_git_commit,
+        )
+    )
     if _looks_like_source_package(root):
         for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
             if not (root / rel_path).is_file():
@@ -466,6 +492,39 @@ def collect_package_errors(
         if (resource_root / rel_path).exists():
             errors.append(f"forbidden packaged source asset exists: {rel_path}")
 
+    packaged_upscayl_root = resource_root / "resources" / "upscayl"
+    if packaged_upscayl_root.exists():
+        if not packaged_upscayl_root.is_dir():
+            errors.append("packaged Upscayl runtime path must be a directory: resources/upscayl")
+        else:
+            for compliance_name in UPSCAYL_REQUIRED_COMPLIANCE_FILES:
+                compliance_path = packaged_upscayl_root / compliance_name
+                if not compliance_path.is_file() or compliance_path.stat().st_size <= 0:
+                    errors.append(
+                        "packaged Upscayl runtime is missing compliance file: "
+                        f"resources/upscayl/{compliance_name}"
+                    )
+            if root.suffix == ".app":
+                platform_name = "mac"
+            elif any(root.glob("*.exe")):
+                platform_name = "win"
+            else:
+                platform_name = current_upscayl_platform()
+            binary_name = "upscayl-bin.exe" if platform_name == "win" else "upscayl-bin"
+            binary_path = packaged_upscayl_root / platform_name / "bin" / binary_name
+            if not binary_path.is_file() or binary_path.stat().st_size <= 0:
+                errors.append(
+                    "packaged Upscayl runtime is missing platform binary: "
+                    f"resources/upscayl/{platform_name}/bin/{binary_name}"
+                )
+            for suffix in ("bin", "param"):
+                model_path = packaged_upscayl_root / "models" / f"{UPSCAYL_MODEL_NAME}.{suffix}"
+                if not model_path.is_file() or model_path.stat().st_size <= 0:
+                    errors.append(
+                        "packaged Upscayl runtime is missing Lite model asset: "
+                        f"resources/upscayl/models/{UPSCAYL_MODEL_NAME}.{suffix}"
+                    )
+
     runtime_scan_roots = [root]
     for candidate in resource_roots:
         if candidate not in runtime_scan_roots:
@@ -559,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-download-url", default="", help="Expected downloadUrl in packaged metadata")
     parser.add_argument("--expected-release-notes-url", default="", help="Expected releaseNotesUrl in packaged metadata")
     parser.add_argument("--expected-bundle-id", default="", help="Expected macOS CFBundleIdentifier")
+    parser.add_argument("--expected-git-commit", default="", help="Expected full git commit in release provenance")
     args = parser.parse_args(argv)
 
     errors = collect_package_errors(
@@ -570,6 +630,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_download_url=args.expected_download_url,
         expected_release_notes_url=args.expected_release_notes_url,
         expected_bundle_id=args.expected_bundle_id,
+        expected_git_commit=args.expected_git_commit,
     )
     if errors:
         for error in errors:

@@ -13,6 +13,24 @@ def run_node(script: str) -> None:
 
 
 class TestUiReorderHelper(unittest.TestCase):
+    def test_adjacent_reorder_command_supports_keyboard_moves(self) -> None:
+        run_node(
+            """
+            const { adjacentReorderCommand } = require('./ui_prototype/reorder.js');
+            const items = ['a', 'b', 'c'].map(id => ({ id }));
+            const up = adjacentReorderCommand(items, 'b', 'up');
+            const down = adjacentReorderCommand(items, 'b', 'down');
+            if (JSON.stringify(up) !== JSON.stringify({ sourceId: 'b', targetId: 'a', position: 'before', nextIndex: 0 })) {
+              throw new Error(`unexpected up command: ${JSON.stringify(up)}`);
+            }
+            if (JSON.stringify(down) !== JSON.stringify({ sourceId: 'b', targetId: 'c', position: 'after', nextIndex: 2 })) {
+              throw new Error(`unexpected down command: ${JSON.stringify(down)}`);
+            }
+            if (adjacentReorderCommand(items, 'a', 'up') !== null) throw new Error('first item cannot move up');
+            if (adjacentReorderCommand(items, 'c', 'down') !== null) throw new Error('last item cannot move down');
+            """
+        )
+
     def test_nearest_placement_index_uses_sorted_page_positions(self) -> None:
         run_node(
             """

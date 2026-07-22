@@ -1,0 +1,58 @@
+name: Quality and Test Gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python, quality, and frontend gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-local.txt
+            requirements-dev.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Run Python test suite
+        run: python -m pytest -q
+
+      - name: Verify frontend package and bundle digest (read-only)
+        run: python scripts/verify_frontend_package.py
+
+      - name: Run synthetic quality gate
+        run: |
+          python scripts/evaluate_quality_corpus.py quality/synthetic-corpus.json \
+            --json-report "$RUNNER_TEMP/quality-report.json" \
+            --markdown-report "$RUNNER_TEMP/quality-report.md"
+
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-report
+          path: |
+            ${{ runner.temp }}/quality-report.json
+            ${{ runner.temp }}/quality-report.md
+          if-no-files-found: ignore
+          retention-days: 14

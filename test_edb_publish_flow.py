@@ -689,6 +689,86 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertEqual(16.0, left_column.left)
         self.assertEqual(184.0, left_column.width)
 
+    def test_passage_segment_source_bounds_recover_vertical_edge_glyphs(self):
+        expanded = problem_board._expand_passage_segment_source_bounds(
+            Box(100, 8, 200, 380),
+            image_width=400,
+            image_height=400,
+        )
+
+        self.assertEqual(76.0, expanded.left)
+        self.assertEqual(0.0, expanded.top)
+        self.assertEqual(248.0, expanded.width)
+        self.assertEqual(400.0, expanded.height)
+
+    def test_passage_segments_are_centered_without_rescaling_at_the_join(self):
+        narrow = Image.new("RGB", (100, 80), "white")
+        ImageDraw.Draw(narrow).rectangle((0, 10, 9, 69), fill="black")
+        wide = Image.new("RGB", (140, 80), "white")
+        ImageDraw.Draw(wide).rectangle((0, 10, 9, 69), fill="black")
+
+        stitched = problem_board._compose_passage_segments(
+            [narrow, wide],
+            transparent=False,
+        )
+
+        self.assertEqual((140, 176), stitched.size)
+        self.assertEqual((255, 255, 255), stitched.getpixel((0, 10)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((20, 10)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((0, 106)))
+
+    def test_passage_segment_frames_share_one_visual_axis(self):
+        first = Image.new("RGB", (200, 200), "white")
+        first_draw = ImageDraw.Draw(first)
+        first_draw.line((10, 8, 10, 191), fill="black", width=2)
+        first_draw.line((190, 8, 190, 191), fill="black", width=2)
+        second = Image.new("RGB", (200, 200), "white")
+        second_draw = ImageDraw.Draw(second)
+        second_draw.line((14, 8, 14, 191), fill="black", width=2)
+        second_draw.line((194, 8, 194, 191), fill="black", width=2)
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=False,
+        )
+
+        self.assertEqual(204, stitched.width)
+        self.assertEqual((0, 0, 0), stitched.getpixel((14, 20)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((14, 236)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((14, 207)))
+
+    def test_passage_segment_frame_bridge_preserves_transparent_chalk_color(self):
+        first = Image.new("RGBA", (160, 100), (255, 255, 255, 0))
+        first_draw = ImageDraw.Draw(first)
+        first_draw.line((12, 8, 12, 91), fill=(244, 248, 241, 255), width=1)
+        first_draw.line((148, 8, 148, 91), fill=(244, 248, 241, 255), width=1)
+        second = first.copy()
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=True,
+        )
+
+        self.assertEqual((244, 248, 241, 255), stitched.getpixel((12, 107)))
+
+    def test_passage_segment_frame_bridge_skips_mismatched_widths(self):
+        first = Image.new("RGB", (200, 120), "white")
+        first_draw = ImageDraw.Draw(first)
+        first_draw.line((10, 8, 10, 111), fill="black", width=2)
+        first_draw.line((190, 8, 190, 111), fill="black", width=2)
+        second = Image.new("RGB", (200, 120), "white")
+        second_draw = ImageDraw.Draw(second)
+        second_draw.line((20, 8, 20, 111), fill="black", width=2)
+        second_draw.line((180, 8, 180, 111), fill="black", width=2)
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=False,
+        )
+
+        self.assertEqual((255, 255, 255), stitched.getpixel((10, 127)))
+        self.assertEqual((255, 255, 255), stitched.getpixel((20, 127)))
+
     def test_continuous_full_width_records_keep_explicit_non_overlap_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -734,6 +814,87 @@ class TestEdbPublishFlow(unittest.TestCase):
                 problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX,
                 selected[0].placement_scale_ratio,
             )
+
+    def test_content_target_only_treats_separate_shared_passage_as_passage(self):
+        common_passage = ProblemUnit(
+            unit_id="page-1-passage-1-3",
+            subject=Subject.KOREAN,
+            title="지문 1~3",
+            metadata={"passage_role": "passage_fragment", "passage_group_id": "passage-1-3"},
+        )
+        child_question = ProblemUnit(
+            unit_id="page-1-problem-1",
+            subject=Subject.KOREAN,
+            title="1.",
+            metadata={"passage_role": "child_question", "passage_group_id": "passage-1-3"},
+        )
+        question_with_table = ProblemUnit(
+            unit_id="page-1-problem-4",
+            subject=Subject.MATH,
+            title="4.",
+            metadata={"contains_table": True},
+        )
+
+        self.assertFalse(problem_board._problem_matches_content_target(common_passage, "questions"))
+        self.assertTrue(problem_board._problem_matches_content_target(child_question, "questions"))
+        self.assertTrue(problem_board._problem_matches_content_target(question_with_table, "questions"))
+        self.assertTrue(problem_board._problem_matches_content_target(common_passage, "shared-passages"))
+        self.assertFalse(problem_board._problem_matches_content_target(child_question, "shared-passages"))
+        self.assertFalse(problem_board._problem_matches_content_target(question_with_table, "shared-passages"))
+
+    def test_passage_only_defaults_to_text_preserving_fit_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = self._make_problem_entry(root, "page-1-passage-28-30", Box(0, 0, 900, 1800))
+            question = self._make_problem_entry(root, "page-1-problem-28", Box(0, 0, 900, 600))
+
+            selected = configure_problem_entries_for_export(
+                [passage, question],
+                passage_problem_ids={passage.problem_id},
+                passages_only=True,
+            )
+
+            self.assertEqual([passage.problem_id], [entry.problem_id for entry in selected])
+            self.assertEqual(problem_board.PROCESSING_STEP_CHALK, selected[0].processing_step)
+            self.assertEqual("page-as-is", selected[0].input_intent)
+            self.assertEqual(0.0, selected[0].placement_x_ratio)
+            self.assertEqual(
+                problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX,
+                selected[0].placement_scale_ratio,
+            )
+
+    def test_passage_only_keeps_an_explicit_processing_step_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = self._make_problem_entry(root, "page-1-passage-28-30", Box(0, 0, 900, 1800))
+
+            selected = configure_problem_entries_for_export(
+                [passage],
+                passage_problem_ids={passage.problem_id},
+                passages_only=True,
+                processing_step=problem_board.PROCESSING_STEP_ORIGINAL,
+            )
+
+            self.assertEqual(problem_board.PROCESSING_STEP_ORIGINAL, selected[0].processing_step)
+            self.assertEqual("page-as-is", selected[0].input_intent)
+
+    def test_passage_only_defaults_to_one_stitched_image_record(self):
+        self.assertEqual(
+            "image-only",
+            problem_board.resolve_export_record_mode(None, passages_only=True),
+        )
+
+    def test_passage_only_keeps_explicit_mixed_record_mode(self):
+        self.assertEqual(
+            "mixed",
+            problem_board.resolve_export_record_mode("mixed", passages_only=True),
+        )
+
+    def test_regular_export_keeps_mixed_record_mode_default(self):
+        self.assertEqual(
+            "mixed",
+            problem_board.resolve_export_record_mode(None, passages_only=False),
+        )
 
     def test_generated_single_problem_edb_validates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3451,6 +3612,68 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["p31", "p32", "p34"], missing_issues[0]["problemIds"])
             self.assertIn("passage_missing_child_questions", markdown)
             self.assertIn("문항 누락", markdown)
+
+    def test_classin_preflight_allows_intentional_shared_passage_only_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.pdf"
+            edb_path = root / "passages.edb"
+            passage_crop = root / "passage-31-34.png"
+            source.write_bytes(b"pdf")
+            edb_path.write_bytes(b"edb")
+
+            image = Image.new("RGB", (760, 420), "white")
+            draw = ImageDraw.Draw(image)
+            for line in range(14):
+                y = 24 + line * 27
+                draw.line((40, y, 710, y), fill=(20, 20, 20), width=3)
+            image.save(passage_crop)
+
+            problem = {
+                "id": "passage-31-34",
+                "title": "지문 31~34",
+                "imagePath": passage_crop.resolve().as_uri(),
+                "sourcePageId": "page-1",
+                "bbox": {"left": 40, "top": 80, "width": 670, "height": 378},
+                "passageGroupId": "passage-31-34",
+                "passageRange": {"start": 31, "end": 34},
+                "passageRole": "passage_fragment",
+                "passageChildProblemNumbers": [31, 32, 33, 34],
+                "supplementalItem": True,
+                "riskFlags": [],
+                "reviewStatus": "normal",
+            }
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "contentTarget": "shared-passages",
+                    "content_target": "shared-passages",
+                    "core_problem_count": 0,
+                    "supplemental_item_count": 1,
+                    "detected_problem_count": 1,
+                    "source_page_count": 1,
+                    "reviewSummary": {},
+                    "problems": [problem],
+                },
+                summary={"record_count": 1, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=8),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            preflight = handoff["classinPreflight"]
+            self.assertTrue(handoff["readyForClassIn"])
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual("shared-passages", handoff["contentTarget"])
+            self.assertEqual([], handoff["passageGroups"][0]["missingChildProblemNumbers"])
+            self.assertFalse(
+                any(issue["type"] == "passage_missing_child_questions" for issue in preflight["issues"])
+            )
+            self.assertNotIn("passage_missing_child_questions", markdown)
 
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:

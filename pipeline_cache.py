@@ -221,8 +221,7 @@ class PipelineCache:
                 backend_name=backend_name,
                 cache_identity=cache_identity,
             )
-            if result is not None:
-                return result
+            return result
 
         path = self._ocr_cache_path(image, backend_name)
         return self._load_ocr_payload(path, cache_key_kind="image_hash")

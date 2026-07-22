@@ -186,6 +186,81 @@ class TestPipelineRouter(unittest.TestCase):
         self.assertEqual("ai_repair", decision.next_best_action)
         self.assertIn("merged_problem_block", decision.trigger_reasons)
 
+    def test_ocr_diagnostics_explain_fallback_timing_and_semantic_route(self):
+        page = PageModel(
+            page_id="ocr-backoff-page",
+            width_px=600,
+            height_px=800,
+            subject=Subject.MATH,
+            blocks=[
+                _block(
+                    "fallback-block",
+                    100,
+                    metadata={
+                        "ocr_backend": "gemini",
+                        "ocr_latency_ms": 120,
+                        "ocr_fallback_reason": "network_or_timeout",
+                        "ocr_fallback_message": (
+                            "Gemini OCR is temporarily unavailable. "
+                            "The block remains image-based for review."
+                        ),
+                        "ocr_retry_after_ms": 8000,
+                        "ocr_circuit_open": True,
+                        "ocr_cache_write_skipped": True,
+                    },
+                    text="fallback image",
+                ),
+                _block(
+                    "recognized-block",
+                    400,
+                    metadata={"ocr_backend": "gemini", "ocr_latency_ms": 380},
+                    text="2. recognized",
+                ),
+            ],
+            problems=[_problem("p-2", 2, source="ocr_top_left")],
+            metadata={
+                "segmenter": "document-bands",
+                "block_count": 2,
+                "recognition_timing_ms": {"block_ocr": 510},
+            },
+        )
+
+        decision = decide_page_route(page, ocr_mode="gemini", ai_enabled=False, ai_mode="off")
+        diagnostics = decision.profile.diagnostics["ocr"]
+
+        self.assertEqual({"network_or_timeout": 1}, diagnostics["fallback_reason_counts"])
+        self.assertEqual(1, diagnostics["circuit_open_block_count"])
+        self.assertEqual(1, diagnostics["ocr_cache_write_skipped_count"])
+        self.assertEqual(8000, diagnostics["retry_after_ms_max"])
+        self.assertEqual(250, diagnostics["backend_latency_ms_avg"])
+        self.assertEqual(380, diagnostics["backend_latency_ms_p95"])
+        self.assertEqual(510, diagnostics["processing_time_ms"])
+        self.assertEqual("review_required_image_fallback", diagnostics["semantic_text_route"])
+        self.assertIn("image-based for review", diagnostics["fallback_messages"][0])
+
+    def test_ocr_p95_uses_nearest_rank_for_twenty_samples(self):
+        page = PageModel(
+            page_id="latency-p95",
+            width_px=1000,
+            height_px=1400,
+            subject=Subject.MATH,
+            blocks=[
+                _block(
+                    f"latency-{index}",
+                    index * 20,
+                    metadata={"ocr_backend": "local", "ocr_latency_ms": index},
+                    text=f"{index}. problem",
+                )
+                for index in range(1, 21)
+            ],
+            problems=[],
+            metadata={"segmenter": "document-bands", "block_count": 20},
+        )
+
+        decision = decide_page_route(page, ocr_mode="local", ai_enabled=False, ai_mode="off")
+
+        self.assertEqual(19, decision.profile.diagnostics["ocr"]["backend_latency_ms_p95"])
+
 
 if __name__ == "__main__":
     unittest.main()

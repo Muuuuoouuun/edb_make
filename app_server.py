@@ -9,6 +9,7 @@ import errno
 import gzip
 import hashlib
 import importlib
+import ipaddress
 import json
 import math
 import mimetypes
@@ -19,8 +20,10 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import uuid
 import webbrowser
 import zipfile
 from datetime import datetime
@@ -275,6 +278,7 @@ UPDATE_PLATFORM_ARTIFACT_TYPES = {
     "windows": ("setup-exe",),
 }
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
+CONTENT_TARGETS = {"all", "questions", "shared-passages"}
 OUTER_EDB_PREFIX_LEN = 11
 _update_status_cache_lock = threading.Lock()
 _update_status_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -319,10 +323,70 @@ GENERATED_SESSION_JS = RUNTIME_DIR / "generated_session.js"
 APP_LOG_FILE = RUNTIME_DIR / "app.log"
 EMPTY_GENERATED_SESSION_JS = "window.EDB_UI_SESSION = null;\n"
 DEFAULT_OUTPUT_ROOT_NAME = "outputs"
+RUNTIME_ARTIFACT_ROOT_NAMES = ("uploads", DEFAULT_OUTPUT_ROOT_NAME, "exports")
+DEFAULT_ARTIFACT_RETENTION_DAYS = 30.0
+_session_storage_lock = threading.RLock()
+
+
+class RequestPayloadTooLarge(Exception):
+    def __init__(self, content_length: int, limit: int) -> None:
+        self.content_length = content_length
+        self.limit = limit
+        super().__init__(f"request body is {content_length} bytes; limit is {limit} bytes")
+
+
+class ArtifactCleanupBusy(RuntimeError):
+    """Raised when cleanup would race an artifact-producing request."""
+
+
+class SessionRevisionConflict(RuntimeError):
+    """Raised when a destructive request no longer targets the current session."""
 
 
 def default_output_root() -> Path:
     return RUNTIME_DIR / DEFAULT_OUTPUT_ROOT_NAME
+
+
+def _atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> None:
+    """Durably replace a text file without exposing a partially-written JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        temporary_path = Path(raw_temporary_path)
+        with os.fdopen(descriptor, "w", encoding=encoding) as temporary_file:
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        # fsync the containing directory as well: the file contents and rename
+        # are otherwise atomic but the new directory entry can still be lost
+        # after a sudden power failure on POSIX filesystems. Windows does not
+        # generally allow opening directories this way, so it keeps the safe
+        # atomic-replace behavior and skips only this extra durability step.
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except (AttributeError, OSError):
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                try:
+                    os.fsync(directory_fd)
+                except OSError:
+                    pass
+            finally:
+                os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -516,20 +580,54 @@ def _normalize_update_url(value: Any) -> str:
 
 
 def _is_loopback_hostname(hostname: str | None) -> bool:
-    host = (hostname or "").strip().lower()
-    return host == "localhost" or host == "::1" or host.startswith("127.")
+    host = (hostname or "").strip().lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_host_is_loopback(headers: Any) -> bool:
+    raw_host = str(headers.get("Host") or "").strip()
+    if not raw_host or any(character in raw_host for character in "/\\?#@,"):
+        return False
+    parsed = urlparse(f"http://{raw_host}")
+    try:
+        _ = parsed.port
+    except ValueError:
+        return False
+    return bool(parsed.hostname) and _is_loopback_hostname(parsed.hostname)
 
 
 def _request_is_same_origin(headers: Any) -> bool:
     host = str(headers.get("Host") or "").strip().lower()
-    if not host:
+    if not host or not _request_host_is_loopback(headers):
         return False
     for header_name in ("Origin", "Referer"):
         raw_value = str(headers.get(header_name) or "").strip()
         if not raw_value:
             continue
         parsed = urlparse(raw_value)
-        return parsed.scheme == "http" and parsed.netloc.lower() == host
+        return (
+            parsed.scheme == "http"
+            and parsed.netloc.lower() == host
+            and _is_loopback_hostname(parsed.hostname)
+        )
+    return True
+
+
+def _browser_write_request_is_trusted(headers: Any) -> bool:
+    """Reject cross-site browser writes while preserving native local clients."""
+    if not _request_host_is_loopback(headers):
+        return False
+    origin = str(headers.get("Origin") or "").strip()
+    if origin:
+        return _request_is_same_origin(headers)
+    fetch_site = str(headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if fetch_site in {"cross-site", "same-site"}:
+        return False
     return True
 
 
@@ -1248,6 +1346,12 @@ def _extract_input_intent(payload: dict[str, Any]) -> str:
     return normalized if normalized in INPUT_INTENTS else "auto"
 
 
+def _extract_content_target(payload: dict[str, Any]) -> str:
+    raw = payload.get("contentTarget") or payload.get("content_target") or "all"
+    normalized = str(raw).strip().lower().replace("_", "-")
+    return normalized if normalized in CONTENT_TARGETS else "all"
+
+
 def _extract_input_notes(payload: dict[str, Any]) -> str:
     raw = payload.get("inputNotes")
     if raw is None:
@@ -1263,6 +1367,11 @@ def sanitize_output_dir_name(value: str | None) -> str:
         return f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
     return safe or f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
+
+
+def _unique_artifact_stamp() -> str:
+    """Return a readable, process-unique suffix for immutable artifact paths."""
+    return f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}_{uuid.uuid4().hex[:12]}"
 
 
 def sanitize_upload_file_name(value: str | None) -> str:
@@ -2550,19 +2659,32 @@ def content_disposition_attachment(filename: str) -> str:
 
 
 def load_latest_session() -> dict[str, Any] | None:
-    if LATEST_SESSION_JSON.exists():
-        return json.loads(LATEST_SESSION_JSON.read_text(encoding="utf-8"))
-    return None
+    with _session_storage_lock:
+        if not LATEST_SESSION_JSON.exists():
+            return None
+        try:
+            payload = json.loads(LATEST_SESSION_JSON.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def save_latest_session(session: dict[str, Any], path: Path | None = None) -> None:
+    target = path or LATEST_SESSION_JSON
+    payload = json.dumps(session, ensure_ascii=False, indent=2)
+    with _session_storage_lock:
+        _atomic_write_text(target, payload)
 
 
 def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
     target = path or SESSION_HISTORY_JSON
-    if not target.exists():
-        return []
-    try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    with _session_storage_lock:
+        if not target.exists():
+            return []
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
     if not isinstance(payload, list):
         return []
     return [entry for entry in payload if isinstance(entry, dict)]
@@ -2570,8 +2692,9 @@ def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
 
 def save_session_history(history: list[dict[str, Any]], path: Path | None = None) -> None:
     target = path or SESSION_HISTORY_JSON
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = json.dumps(history, ensure_ascii=False, indent=2)
+    with _session_storage_lock:
+        _atomic_write_text(target, payload)
 
 
 def remember_session_history(
@@ -2582,9 +2705,45 @@ def remember_session_history(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     target = path or SESSION_HISTORY_JSON
-    history = _session_history_with_session(load_session_history(target), session, updated_at=updated_at, limit=limit)
-    save_session_history(history, target)
+    # Keep read/merge/write inside one re-entrant critical section so concurrent
+    # requests cannot silently discard another request's history entry.
+    with _session_storage_lock:
+        history = _session_history_with_session(
+            load_session_history(target),
+            session,
+            updated_at=updated_at,
+            limit=limit,
+        )
+        save_session_history(history, target)
     return history
+
+
+def persist_latest_session_with_history(
+    session: dict[str, Any],
+    *,
+    updated_at: str | None = None,
+    limit: int = 10,
+) -> tuple[list[dict[str, Any]], OSError | None]:
+    """Commit the authoritative latest snapshot, then best-effort its history.
+
+    The latest snapshot is the source of truth.  A history write failure must
+    not leave in-memory state behind a latest-session file that already
+    committed, otherwise a subsequent CAS mutation could overwrite it.
+    """
+
+    with _session_storage_lock:
+        history = _session_history_with_session(
+            load_session_history(),
+            session,
+            updated_at=updated_at,
+            limit=limit,
+        )
+        save_latest_session(session)
+        try:
+            save_session_history(history)
+        except OSError as exc:
+            return history, exc
+    return history, None
 
 
 def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
@@ -2672,6 +2831,8 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         add_path(value)
     for value in session.get("rendered_page_file_uris", []):
         add_path(value)
+    for value in session.get("input_files", []) or session.get("inputFiles", []):
+        add_path(value)
 
     for problem in session.get("problems", []):
         for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
@@ -2694,6 +2855,146 @@ def collect_session_history_file_paths(history: list[dict[str, Any]]) -> set[str
         if isinstance(snapshot, dict):
             paths |= collect_session_file_paths(snapshot)
     return paths
+
+
+def _session_artifact_protection_paths(session: dict[str, Any] | None) -> set[Path]:
+    if not isinstance(session, dict):
+        return set()
+    protected = {Path(value).resolve() for value in collect_session_file_paths(session)}
+    for key in ("output_dir", "outputDir"):
+        raw_value = session.get(key)
+        if not raw_value:
+            continue
+        decoded = decode_file_reference(str(raw_value))
+        if decoded is not None:
+            try:
+                protected.add(decoded.resolve())
+            except (OSError, ValueError):
+                continue
+    return protected
+
+
+def _history_artifact_protection_paths(history: list[dict[str, Any]]) -> set[Path]:
+    protected: set[Path] = set()
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        protected |= _session_artifact_protection_paths(entry)
+        protected |= _session_artifact_protection_paths(
+            entry.get("session") if isinstance(entry.get("session"), dict) else None
+        )
+    return protected
+
+
+def _path_is_protected(path: Path, protected_paths: set[Path]) -> bool:
+    return path in protected_paths or any(parent in protected_paths for parent in path.parents)
+
+
+def cleanup_runtime_artifacts(
+    *,
+    runtime_dir: Path | None = None,
+    active_session: dict[str, Any] | None = None,
+    history: list[dict[str, Any]] | None = None,
+    dry_run: bool = True,
+    min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+    max_bytes: int | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Plan or remove old, unreferenced runtime artifacts.
+
+    The default is intentionally non-destructive. Files referenced by the
+    active session or any retained history snapshot are never selected.
+    """
+    if min_age_seconds < 0:
+        raise ValueError("minAgeSeconds must be non-negative")
+    if max_bytes is not None and max_bytes < 0:
+        raise ValueError("maxBytes must be non-negative")
+
+    base = (runtime_dir or RUNTIME_DIR).resolve()
+    current_session = active_session if active_session is not None else load_latest_session()
+    current_history = history if history is not None else load_session_history()
+    protected_paths = _session_artifact_protection_paths(current_session)
+    protected_paths |= _history_artifact_protection_paths(current_history)
+    observed_at = time.time() if now is None else float(now)
+
+    files: list[tuple[Path, int, float, bool]] = []
+    for root_name in RUNTIME_ARTIFACT_ROOT_NAMES:
+        root = base / root_name
+        if not root.is_dir():
+            continue
+        resolved_root = root.resolve()
+        for path in root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(resolved_root)
+                stat = path.stat()
+            except (OSError, ValueError):
+                continue
+            files.append((path, int(stat.st_size), float(stat.st_mtime), _path_is_protected(resolved, protected_paths)))
+
+    total_bytes = sum(size for _, size, _, _ in files)
+    protected_bytes = sum(size for _, size, _, protected in files if protected)
+    eligible = [
+        item
+        for item in files
+        if not item[3] and observed_at - item[2] >= min_age_seconds
+    ]
+    eligible.sort(key=lambda item: (item[2], str(item[0])))
+
+    if max_bytes is None:
+        selected = eligible
+    else:
+        bytes_to_reclaim = max(0, total_bytes - max_bytes)
+        selected = []
+        selected_bytes = 0
+        for item in eligible:
+            if selected_bytes >= bytes_to_reclaim:
+                break
+            selected.append(item)
+            selected_bytes += item[1]
+
+    deleted_paths: list[str] = []
+    errors: list[dict[str, str]] = []
+    if not dry_run:
+        for path, _, _, _ in selected:
+            try:
+                path.unlink()
+                deleted_paths.append(str(path.resolve()))
+            except OSError as exc:
+                errors.append({"path": str(path), "error": str(exc)})
+        for root_name in RUNTIME_ARTIFACT_ROOT_NAMES:
+            root = base / root_name
+            if not root.is_dir():
+                continue
+            for directory in sorted((path for path in root.rglob("*") if path.is_dir()), key=lambda path: len(path.parts), reverse=True):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+
+    selected_bytes = sum(size for _, size, _, _ in selected)
+    deleted_path_set = set(deleted_paths)
+    return {
+        "ok": not errors,
+        "dryRun": bool(dry_run),
+        "runtimeDir": str(base),
+        "minAgeSeconds": float(min_age_seconds),
+        "maxBytes": max_bytes,
+        "totalFileCount": len(files),
+        "totalBytes": total_bytes,
+        "protectedFileCount": sum(1 for _, _, _, protected in files if protected),
+        "protectedBytes": protected_bytes,
+        "eligibleFileCount": len(eligible),
+        "selectedFileCount": len(selected),
+        "selectedBytes": selected_bytes,
+        "selectedPaths": [str(path.resolve()) for path, _, _, _ in selected],
+        "deletedFileCount": len(deleted_paths),
+        "deletedBytes": sum(size for path, size, _, _ in selected if str(path.resolve()) in deleted_path_set),
+        "deletedPaths": deleted_paths,
+        "errors": errors,
+    }
 
 
 def _file_uri_to_path(value: Any) -> Path | None:
@@ -4507,7 +4808,7 @@ def _write_session_image_export_zip(
     export_dir = RUNTIME_DIR / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     safe_session_name = sanitize_output_dir_name(session_name or "session")
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stamp = _unique_artifact_stamp()
     digest = hashlib.sha1(f"{safe_session_name}|{stamp}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
     zip_path = (export_dir / f"{safe_session_name}_images_{stamp}_{digest}.zip").resolve()
 
@@ -4612,59 +4913,53 @@ def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
     return _mutate_exclude_many(session, [problem_id])
 
 
-def _mutate_classify(session: dict[str, Any], problem_id: str, classification: str) -> dict[str, Any]:
-    normalized = str(classification or "").strip().lower().replace("_", "-")
-    if normalized not in {"question", "shared-passage"}:
-        raise ValueError("classification must be question or shared-passage")
-    if not problem_id:
-        raise ValueError("problemId is required")
+def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]:
+    ids = set(_coerce_problem_ids(problem_ids))
+    if not ids:
+        raise ValueError("problemIds is required")
+    problems = session.get("problems")
+    if not isinstance(problems, list):
+        raise ValueError("session problems are missing")
+    available_ids = {
+        str(problem.get("id"))
+        for problem in problems
+        if isinstance(problem, dict) and problem.get("id")
+    }
+    missing = sorted(ids - available_ids)
+    if missing:
+        raise ValueError(f"problem not found: {', '.join(missing)}")
 
-    _index, problem = _find_problem(session, problem_id)
-    metadata = problem.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-        problem["metadata"] = metadata
+    for problem in problems:
+        if not isinstance(problem, dict) or str(problem.get("id") or "") not in ids:
+            continue
+        problem["riskFlags"] = []
+        problem["risk_flags"] = []
+        problem["reviewStatus"] = "normal"
+        problem["review_status"] = "normal"
+        problem["parseFailed"] = False
+        problem["parse_failed"] = False
 
-    existing_group_id = str(
-        problem.get("passageGroupId")
-        or problem.get("passage_group_id")
-        or metadata.get("passageGroupId")
-        or metadata.get("passage_group_id")
-        or ""
-    ).strip()
-
-    if normalized == "shared-passage":
-        group_id = existing_group_id or f"manual-passage-{problem_id}"
-        role: str | None = "passage_fragment"
-        supplemental = True
-        problem["passageGroupId"] = group_id
-        problem["passage_group_id"] = group_id
-        metadata["passageGroupId"] = group_id
-        metadata["passage_group_id"] = group_id
-    else:
-        manual_group = existing_group_id.startswith("manual-passage-")
-        role = "child_question" if existing_group_id and not manual_group else None
-        supplemental = False
-        if manual_group:
-            for container in (problem, metadata):
-                container.pop("passageGroupId", None)
-                container.pop("passage_group_id", None)
-                container.pop("passageRange", None)
-                container.pop("passage_range", None)
-
-    for container in (problem, metadata):
-        if role is None:
-            container.pop("passageRole", None)
-            container.pop("passage_role", None)
-        else:
-            container["passageRole"] = role
-            container["passage_role"] = role
-        container["supplementalItem"] = supplemental
-        container["supplemental_item"] = supplemental
-        container["classificationSource"] = "manual"
-        container["classification_source"] = "manual"
-
-    _refresh_session_problem_counts(session)
+    normalized_by_id = {
+        str(problem.get("id")): problem
+        for problem in problems
+        if isinstance(problem, dict) and problem.get("id")
+    }
+    for page in session.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_problem_ids = page.get("problemIds")
+        if not isinstance(page_problem_ids, list):
+            page_problem_ids = page.get("problem_ids")
+        page_problems = [
+            normalized_by_id[str(problem_id)]
+            for problem_id in (page_problem_ids or [])
+            if str(problem_id) in normalized_by_id
+        ]
+        if page_problems and all(_problem_review_status(problem) == "normal" for problem in page_problems):
+            page["riskFlags"] = []
+            page["risk_flags"] = []
+            page["reviewStatus"] = "normal"
+            page["review_status"] = "normal"
     return session
 
 
@@ -5116,7 +5411,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     transparent_background = _payload_bool(payload, "transparentBackground", "transparent_background", True)
     sharpen = _payload_bool(payload, "sharpen", "sharpen", True)
     output_dir = _image_reconstruction_dir(session)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stamp = _unique_artifact_stamp()
     summaries: list[dict[str, Any]] = []
     preserve_results = _content_safe_primary_batch(
         session,
@@ -5444,7 +5739,7 @@ def _payload_crop_box_for_problem(payload: dict[str, Any], problem_id: str) -> A
 
 
 def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stamp = _unique_artifact_stamp()
     session_output_dir = session.get("output_dir")
     if session_output_dir:
         output_root = Path(session_output_dir).resolve() / "ai_retries"
@@ -5564,6 +5859,62 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
     return session
 
 
+def _mutate_classify(session: dict[str, Any], problem_id: str, classification: str) -> dict[str, Any]:
+    normalized = str(classification or "").strip().lower().replace("_", "-")
+    if normalized not in {"question", "shared-passage"}:
+        raise ValueError("classification must be question or shared-passage")
+    if not problem_id:
+        raise ValueError("problemId is required")
+
+    _index, problem = _find_problem(session, problem_id)
+    metadata = problem.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        problem["metadata"] = metadata
+
+    existing_group_id = str(
+        problem.get("passageGroupId")
+        or problem.get("passage_group_id")
+        or metadata.get("passageGroupId")
+        or metadata.get("passage_group_id")
+        or ""
+    ).strip()
+
+    if normalized == "shared-passage":
+        group_id = existing_group_id or f"manual-passage-{problem_id}"
+        role: str | None = "passage_fragment"
+        supplemental = True
+        problem["passageGroupId"] = group_id
+        problem["passage_group_id"] = group_id
+        metadata["passageGroupId"] = group_id
+        metadata["passage_group_id"] = group_id
+    else:
+        manual_group = existing_group_id.startswith("manual-passage-")
+        role = "child_question" if existing_group_id and not manual_group else None
+        supplemental = False
+        if manual_group:
+            for container in (problem, metadata):
+                container.pop("passageGroupId", None)
+                container.pop("passage_group_id", None)
+                container.pop("passageRange", None)
+                container.pop("passage_range", None)
+
+    for container in (problem, metadata):
+        if role is None:
+            container.pop("passageRole", None)
+            container.pop("passage_role", None)
+        else:
+            container["passageRole"] = role
+            container["passage_role"] = role
+        container["supplementalItem"] = supplemental
+        container["supplemental_item"] = supplemental
+        container["classificationSource"] = "manual"
+        container["classification_source"] = "manual"
+
+    _refresh_session_problem_counts(session)
+    return session
+
+
 def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
@@ -5578,7 +5929,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
     if not page_ids:
         raise ValueError("AI 재인식할 페이지가 없습니다")
 
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stamp = _unique_artifact_stamp()
     session_output_dir = session.get("output_dir")
     if session_output_dir:
         output_root = Path(session_output_dir).resolve() / "ai_retries"
@@ -5805,16 +6156,214 @@ class AppHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, server_address, RequestHandlerClass):
         super().__init__(server_address, RequestHandlerClass)
-        self.latest_session: dict[str, Any] | None = load_latest_session()
-        self.allowed_files: set[str] = collect_session_file_paths(self.latest_session) if self.latest_session else set()
-        self.allowed_files |= collect_session_history_file_paths(load_session_history())
+        self._state_lock = threading.RLock()
+        # Artifact-producing handlers write files before committing session
+        # metadata. Serialize the entire handler so a stale CAS loser cannot
+        # overwrite the winner's files before its commit is rejected.
+        self._artifact_job_lock = threading.Lock()
+        self._active_artifact_jobs = 0
+        # Encode process start order into the epoch so a browser can reject a
+        # delayed response from a server incarnation it never observed.  The
+        # UUID keeps concurrently-started processes unique.
+        self._session_epoch = f"{time.time_ns():020d}-{uuid.uuid4().hex}"
+        latest_session = load_latest_session()
+        history = load_session_history()
+        if latest_session is not None:
+            _refresh_session_problem_counts(latest_session)
+        self.latest_session: dict[str, Any] | None = _clone_jsonish(latest_session) if latest_session else None
+        self._session_revision = 1 if latest_session is not None else 0
+        self.allowed_files: set[str] = collect_session_file_paths(latest_session) if latest_session else set()
+        self.allowed_files |= collect_session_history_file_paths(history)
+
+    def session_snapshot(self) -> dict[str, Any] | None:
+        with self._state_lock:
+            return _clone_jsonish(self.latest_session) if self.latest_session is not None else None
+
+    def session_snapshot_with_revision(self) -> tuple[dict[str, Any] | None, int]:
+        with self._state_lock:
+            snapshot = _clone_jsonish(self.latest_session) if self.latest_session is not None else None
+            return snapshot, self._session_revision
+
+    def session_revision(self) -> int:
+        with self._state_lock:
+            return self._session_revision
+
+    def session_epoch(self) -> str:
+        return self._session_epoch
+
+    def add_allowed_files(self, paths: set[str]) -> None:
+        with self._state_lock:
+            self.allowed_files.update(paths)
+
+    def is_file_allowed(self, path: str) -> bool:
+        with self._state_lock:
+            return path in self.allowed_files
 
     def remember_session(self, session: dict[str, Any]) -> None:
-        self.latest_session = session
-        self.allowed_files = collect_session_file_paths(session)
-        LATEST_SESSION_JSON.parent.mkdir(parents=True, exist_ok=True)
-        LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
-        remember_session_history(session)
+        snapshot = _clone_jsonish(session)
+        with self._state_lock:
+            history, history_error = persist_latest_session_with_history(snapshot)
+            self.latest_session = snapshot
+            self._session_revision += 1
+            self.allowed_files.update(collect_session_file_paths(snapshot))
+            self.allowed_files.update(collect_session_history_file_paths(history))
+            if history_error is not None:
+                print(
+                    f"[app-server] latest session committed but history update failed: {history_error}",
+                    file=sys.stderr,
+                )
+
+    def remember_session_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> int | None:
+        """Persist ``updated_session`` only when the caller's base is current.
+
+        Request handlers perform image/OCR work outside the server lock.  Two
+        concurrent requests may therefore start from the same snapshot.  The
+        equality check and write must share one critical section so the slower
+        request cannot silently overwrite the result that committed first.
+        """
+        expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
+        updated_snapshot = _clone_jsonish(updated_session)
+        with self._state_lock:
+            if expected_revision is not None and self._session_revision != expected_revision:
+                return None
+            if self.latest_session != expected_snapshot:
+                return None
+            history, history_error = persist_latest_session_with_history(updated_snapshot)
+            self.latest_session = updated_snapshot
+            self._session_revision += 1
+            self.allowed_files.update(collect_session_file_paths(updated_snapshot))
+            self.allowed_files.update(collect_session_history_file_paths(history))
+            if history_error is not None:
+                print(
+                    f"[app-server] latest session committed but history update failed: {history_error}",
+                    file=sys.stderr,
+                )
+            return self._session_revision
+
+    def begin_artifact_job(self) -> None:
+        self._artifact_job_lock.acquire()
+        try:
+            with self._state_lock:
+                self._active_artifact_jobs += 1
+        except BaseException:
+            self._artifact_job_lock.release()
+            raise
+
+    def end_artifact_job(self) -> None:
+        try:
+            with self._state_lock:
+                self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
+        finally:
+            self._artifact_job_lock.release()
+
+    def register_current_session(self, session: dict[str, Any]) -> bool:
+        """Persist history only if ``session`` is still the current snapshot."""
+        snapshot = _clone_jsonish(session)
+        with self._state_lock:
+            if self.latest_session != snapshot:
+                return False
+            self.allowed_files.update(collect_session_file_paths(snapshot))
+            with _session_storage_lock:
+                if not LATEST_SESSION_JSON.exists():
+                    save_latest_session(snapshot)
+                history = _session_history_with_session(load_session_history(), snapshot)
+                try:
+                    save_session_history(history)
+                except OSError as exc:
+                    print(
+                        f"[app-server] session history refresh failed: {exc}",
+                        file=sys.stderr,
+                    )
+        return True
+
+    def cleanup_artifacts(
+        self,
+        *,
+        dry_run: bool = True,
+        min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        # Hold the state lock through selection/deletion. Otherwise a concurrent
+        # remember_session could make an already-selected file active.
+        with self._state_lock:
+            if not dry_run and self._active_artifact_jobs:
+                raise ArtifactCleanupBusy(
+                    f"artifact cleanup paused while {self._active_artifact_jobs} job(s) are writing files"
+                )
+            return cleanup_runtime_artifacts(
+                active_session=_clone_jsonish(self.latest_session) if self.latest_session is not None else {},
+                history=load_session_history(),
+                dry_run=dry_run,
+                min_age_seconds=min_age_seconds,
+                max_bytes=max_bytes,
+            )
+
+    def clear_session(
+        self,
+        *,
+        expected_revision: int | None = None,
+        cleanup_artifacts: bool = False,
+        dry_run: bool = True,
+        min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+    ) -> dict[str, Any] | None:
+        cleanup_result, _revision = self.clear_session_with_revision(
+            expected_revision=expected_revision,
+            cleanup_artifacts=cleanup_artifacts,
+            dry_run=dry_run,
+            min_age_seconds=min_age_seconds,
+        )
+        return cleanup_result
+
+    def clear_session_with_revision(
+        self,
+        *,
+        expected_revision: int | None = None,
+        cleanup_artifacts: bool = False,
+        dry_run: bool = True,
+        min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+    ) -> tuple[dict[str, Any] | None, int]:
+        with self._state_lock:
+            if expected_revision is not None and self._session_revision != expected_revision:
+                raise SessionRevisionConflict(
+                    f"session revision changed from {expected_revision} to {self._session_revision}"
+                )
+            if self._active_artifact_jobs:
+                raise ArtifactCleanupBusy(
+                    f"session reset paused while {self._active_artifact_jobs} job(s) are writing files"
+                )
+            with _session_storage_lock:
+                if SESSION_HISTORY_JSON.exists():
+                    SESSION_HISTORY_JSON.unlink()
+                if LATEST_SESSION_JSON.exists():
+                    LATEST_SESSION_JSON.unlink()
+            self.latest_session = None
+            self._session_revision += 1
+            cleared_revision = self._session_revision
+            self.allowed_files.clear()
+            try:
+                _atomic_write_text(GENERATED_SESSION_JS, EMPTY_GENERATED_SESSION_JS)
+            except OSError as exc:
+                print(
+                    f"[app-server] session cleared but generated UI state refresh failed: {exc}",
+                    file=sys.stderr,
+                )
+            if cleanup_artifacts:
+                return (
+                    cleanup_runtime_artifacts(
+                        active_session={},
+                        history=[],
+                        dry_run=dry_run,
+                        min_age_seconds=min_age_seconds,
+                    ),
+                    cleared_revision,
+                )
+        return None, cleared_revision
 
 
 class AppRequestHandler(SimpleHTTPRequestHandler):
@@ -5824,6 +6373,140 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     @property
     def app_server(self) -> AppHTTPServer:
         return self.server  # type: ignore[return-value]
+
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        if not _request_host_is_loopback(self.headers):
+            self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "loopback Host header required")
+            return False
+        if self.command in {"POST", "PUT", "PATCH", "DELETE", "OPTIONS"}:
+            if not _browser_write_request_is_trusted(self.headers):
+                self.send_error(HTTPStatus.FORBIDDEN, "cross-site state-changing request rejected")
+                return False
+        return True
+
+    def _current_session_snapshot(self) -> dict[str, Any] | None:
+        server = getattr(self, "server", None)
+        if server is None:
+            return load_latest_session()
+        snapshotter = getattr(server, "session_snapshot", None)
+        if callable(snapshotter):
+            return snapshotter()
+        session = getattr(server, "latest_session", None)
+        return session if isinstance(session, dict) else load_latest_session()
+
+    def _current_session_state(self) -> tuple[dict[str, Any] | None, int | None]:
+        server = getattr(self, "server", None)
+        if server is None:
+            return self._current_session_snapshot(), None
+        snapshotter = getattr(server, "session_snapshot_with_revision", None)
+        if callable(snapshotter):
+            return snapshotter()
+        return self._current_session_snapshot(), None
+
+    @staticmethod
+    def _payload_session_revision(payload: dict[str, Any]) -> int | None:
+        raw_revision = payload.get("expectedSessionRevision", payload.get("expected_session_revision"))
+        if isinstance(raw_revision, bool) or raw_revision is None:
+            return None
+        try:
+            revision = int(raw_revision)
+        except (TypeError, ValueError):
+            return None
+        return revision if revision >= 0 else None
+
+    @staticmethod
+    def _payload_session_epoch(payload: dict[str, Any]) -> str | None:
+        raw_epoch = payload.get("expectedSessionEpoch", payload.get("expected_session_epoch"))
+        epoch = str(raw_epoch or "").strip()
+        return epoch or None
+
+    def _validate_expected_session_revision(
+        self,
+        payload: dict[str, Any],
+        current_revision: int | None,
+    ) -> bool:
+        # Test doubles and older embedding hosts without revision support keep
+        # their compatibility path. The real server requires a revision that
+        # came from the client's last successful session response.
+        if current_revision is None:
+            return True
+        epoch_getter = getattr(getattr(self, "server", None), "session_epoch", None)
+        current_epoch = str(epoch_getter() or "").strip() if callable(epoch_getter) else ""
+        epoch_matches = not current_epoch or self._payload_session_epoch(payload) == current_epoch
+        if epoch_matches and self._payload_session_revision(payload) == current_revision:
+            return True
+        self._send_session_conflict()
+        return False
+
+    def _remember_session_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[bool, int | None]:
+        registrar = getattr(self.app_server, "remember_session_if_current", None)
+        if callable(registrar):
+            result = registrar(
+                expected_session,
+                updated_session,
+                expected_revision=expected_revision,
+            )
+            if type(result) is int:
+                return True, result
+            return bool(result), None
+        # Lightweight test doubles and older embedding hosts do not expose the
+        # CAS helper. Preserve compatibility while the real server remains
+        # concurrency-safe.
+        self.app_server.remember_session(updated_session)
+        return True, None
+
+    def _send_session_conflict(self) -> None:
+        current, current_revision = self._current_session_state()
+        payload: dict[str, Any] = {
+            "ok": False,
+            "code": "session_conflict",
+            "error": "다른 작업이 먼저 세션을 변경했습니다. 최신 상태를 불러온 뒤 다시 시도해 주세요.",
+            "session": rewrite_session_for_http(current) if isinstance(current, dict) else None,
+            "recoverySteps": [
+                "화면의 최신 세션 상태를 확인해 주세요.",
+                "방금 수행한 작업을 최신 상태에서 다시 시도해 주세요.",
+            ],
+        }
+        if current_revision is not None:
+            payload["sessionRevision"] = current_revision
+        self._send_json(
+            payload,
+            status=HTTPStatus.CONFLICT,
+        )
+
+    def _run_artifact_job(self, handler) -> None:
+        server = getattr(self, "server", None)
+        starter = getattr(server, "begin_artifact_job", None)
+        finisher = getattr(server, "end_artifact_job", None)
+        if not callable(starter) or not callable(finisher):
+            handler()
+            return
+        starter()
+        try:
+            handler()
+        finally:
+            finisher()
+
+    def _allow_session_files(self, paths: set[str]) -> None:
+        adder = getattr(self.app_server, "add_allowed_files", None)
+        if callable(adder):
+            adder(paths)
+            return
+        self.app_server.allowed_files |= paths
+
+    def _file_is_allowed(self, path: str) -> bool:
+        checker = getattr(self.app_server, "is_file_allowed", None)
+        if callable(checker):
+            return bool(checker(path))
+        return path in self.app_server.allowed_files
 
     def log_message(self, format: str, *args) -> None:
         client = self.client_address[0] if self.client_address else "-"
@@ -5891,15 +6574,37 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self) -> None:
+        try:
+            self._dispatch_post()
+        except RequestPayloadTooLarge as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "upload payload is too large",
+                    "code": "payload_too_large",
+                    "maxBytes": exc.limit,
+                    "receivedBytes": exc.content_length,
+                    "recoverySteps": [
+                        "한 번에 올리는 파일 수를 줄여 다시 시도해 주세요.",
+                        "큰 PDF는 여러 파일로 나누거나 이미지 해상도를 낮춰 주세요.",
+                    ],
+                },
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+
+    def _dispatch_post(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/export":
-            self._handle_export()
+            self._run_artifact_job(self._handle_export)
             return
         if parsed.path == "/api/user-settings":
             self._handle_user_settings_post()
             return
+        if parsed.path == "/api/runtime/artifacts/cleanup":
+            self._handle_runtime_artifact_cleanup()
+            return
         if parsed.path == "/api/session/publish":
-            self._handle_session_publish()
+            self._run_artifact_job(self._handle_session_publish)
             return
         if parsed.path == "/api/session/classin-review":
             self._handle_session_classin_review()
@@ -5917,19 +6622,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._handle_shutdown()
             return
         if parsed.path == "/api/session/mutate":
-            self._handle_session_mutate()
+            self._run_artifact_job(self._handle_session_mutate)
             return
         if parsed.path == "/api/session/export-images":
-            self._handle_session_export_images()
+            self._run_artifact_job(self._handle_session_export_images)
             return
         if parsed.path == "/api/session/problem-image":
             self._handle_session_problem_image_post()
             return
         if parsed.path == "/api/session/retry-ai":
-            self._handle_session_retry_ai()
+            self._run_artifact_job(self._handle_session_retry_ai)
             return
         if parsed.path == "/api/session/enhance-image":
-            self._handle_session_enhance_image()
+            self._run_artifact_job(self._handle_session_enhance_image)
             return
         if parsed.path == "/api/session/restore":
             self._handle_session_restore()
@@ -5942,19 +6647,22 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/session/latest":
-            self._handle_session_clear()
+            self._handle_session_clear(parsed)
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
     def _handle_session_publish(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
 
         payload_session = payload.get("session")
@@ -6106,6 +6814,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             new_session,
             session,
             ("inputIntent", "input_intent"),
+        )
+        _copy_session_metadata_aliases_overwrite(
+            new_session,
+            session,
+            ("contentTarget", "content_target"),
         )
         new_session["crop_format"] = crop_format
         # publish only re-renders records; page-level review metadata
@@ -6367,8 +7080,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         new_session["publishSummary"] = publish_summary
         new_session["publish_history"] = publish_history
         new_session["publishHistory"] = publish_history
-        self.app_server.remember_session(new_session)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            new_session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "edbValidation": edb_validation,
@@ -6377,20 +7097,26 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "publish_summary": publish_summary,
             "publishHistory": publish_history,
             "publish_history": publish_history,
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     # ── /api/session/mutate ──────────────────────────────────────────────
     # Body: { "action": "split" | "merge" | "crop" | "bulk-crop" | "exclude" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
 
         action = str(payload.get("action") or "").strip().lower()
@@ -6430,6 +7156,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else:
                     problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                     new_session = _mutate_exclude(session, problem_id)
+            elif action == "confirm":
+                ids_raw = payload.get("problemIds", payload.get("problem_ids"))
+                if ids_raw is None:
+                    ids_raw = [payload.get("problemId", payload.get("problem_id"))]
+                new_session = _mutate_confirm(session, ids_raw)
             elif action == "classify":
                 problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                 classification = str(payload.get("classification") or "")
@@ -6440,7 +7171,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|classify|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|confirm|classify|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
@@ -6451,11 +7182,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
-        self.app_server.remember_session(new_session)
-        self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            new_session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {"ok": True, "session": rewrite_session_for_http(new_session)}
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     def _handle_session_export_images(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session = self._current_session_snapshot()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
@@ -6485,7 +7226,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         zip_path = Path(result["zipPath"]).resolve()
-        self.app_server.allowed_files.add(str(zip_path))
+        self._allow_session_files({str(zip_path)})
         self._send_json({
             "ok": True,
             "downloadUrl": path_to_api_url(zip_path),
@@ -6554,7 +7295,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _handle_session_problem_image(self, parsed) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session = self._current_session_snapshot()
         if session is None:
             self.send_error(HTTPStatus.NOT_FOUND, "no session available")
             return
@@ -6564,7 +7305,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_session_problem_image_response(session, problem_id, variant)
 
     def _handle_session_problem_image_post(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session = self._current_session_snapshot()
         if session is None:
             self.send_error(HTTPStatus.NOT_FOUND, "no session available")
             return
@@ -6581,12 +7322,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_session_problem_image_response(session, problem_id, variant)
 
     def _handle_session_retry_ai(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
+            if not self._validate_expected_session_revision(payload, current_revision):
+                return
             preview_only = _coerce_bool(
                 payload.get("preview")
                 if "preview" in payload
@@ -6607,45 +7351,73 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
+        response_revision = current_revision
         if preview_only:
-            self.app_server.allowed_files |= collect_session_file_paths(new_session)
+            self._allow_session_files(collect_session_file_paths(new_session))
         else:
-            self.app_server.remember_session(new_session)
-        self._send_json({
+            committed, committed_revision = self._remember_session_if_current(
+                base_session,
+                new_session,
+                expected_revision=current_revision,
+            )
+            if not committed:
+                self._send_session_conflict()
+                return
+            response_revision = committed_revision
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "retry": new_session.get("ai_retry_summary") or [],
             "preview": preview_only,
-        })
+        }
+        if response_revision is not None:
+            response["sessionRevision"] = response_revision
+        self._send_json(response)
 
     def _handle_session_classin_review(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        if not self._validate_expected_session_revision(payload, current_revision):
+            return
         review = _apply_classin_review_result(session, payload)
-        self.app_server.remember_session(session)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(session),
             "review": review,
             "classinReview": review,
             "classin_review": review,
             "history": _public_session_history(load_session_history()),
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     def _handle_session_enhance_image(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
+            if not self._validate_expected_session_revision(payload, current_revision):
+                return
             new_session = _mutate_enhance_image(session, payload)
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
@@ -6657,22 +7429,35 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
-        self.app_server.remember_session(new_session)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            new_session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "enhance": new_session.get("ai_image_reconstruction_summary") or [],
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     # ── /api/session/restore ────────────────────────────────────────────
     # Body: { "session": { ... full session JSON ... } }
     # Replaces the server's "latest" session with the provided snapshot. Used
     # by the front-end Undo stack so a single round-trip is enough to revert.
     def _handle_session_restore(self) -> None:
+        base_session, current_revision = self._current_session_state()
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
         snapshot = payload.get("session")
         if not isinstance(snapshot, dict) or "problems" not in snapshot:
@@ -6687,22 +7472,35 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # would otherwise drift over time.
         restored = _denormalize_session_paths(snapshot)
         _refresh_session_problem_counts(restored)
-        self.app_server.remember_session(restored)
-        self._send_json({"ok": True, "session": rewrite_session_for_http(restored)})
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            restored,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {"ok": True, "session": rewrite_session_for_http(restored)}
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     def _handle_session_history(self) -> None:
         history = load_session_history()
-        self.app_server.allowed_files |= collect_session_history_file_paths(history)
+        self._allow_session_files(collect_session_history_file_paths(history))
         self._send_json({
             "ok": True,
             "history": _public_session_history(history),
         })
 
     def _handle_session_history_restore(self) -> None:
+        base_session, current_revision = self._current_session_state()
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
         session_id = str(payload.get("id") or payload.get("sessionId") or payload.get("session_id") or "").strip()
         if not session_id:
@@ -6714,30 +7512,170 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         restored = _denormalize_session_paths(entry["session"])
         _refresh_session_problem_counts(restored)
-        self.app_server.remember_session(restored)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            restored,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(restored),
             "history": _public_session_history(load_session_history()),
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
-    def _handle_session_clear(self) -> None:
-        self.app_server.latest_session = None
-        self.app_server.allowed_files = set()
-        for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON):
-            try:
-                if path.exists():
-                    path.unlink()
-            except OSError as exc:
-                self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
-                return
-        # also blank out the generated_session.js bridge so a refresh shows empty state
+    def _handle_runtime_artifact_cleanup(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json(
+                {"ok": False, "error": "cross-origin request rejected"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
         try:
-            GENERATED_SESSION_JS.parent.mkdir(parents=True, exist_ok=True)
-            GENERATED_SESSION_JS.write_text(EMPTY_GENERATED_SESSION_JS, encoding="utf-8")
-        except OSError:
-            pass
-        self._send_json({"ok": True, "history": []})
+            payload = self._read_json_body()
+            dry_run = _coerce_bool(payload.get("dryRun", payload.get("dry_run")), default=True)
+            raw_min_age_seconds = payload.get("minAgeSeconds", payload.get("min_age_seconds"))
+            raw_min_age_days = payload.get("minAgeDays", payload.get("min_age_days"))
+            if raw_min_age_seconds is not None:
+                min_age_seconds = float(raw_min_age_seconds)
+            elif raw_min_age_days is not None:
+                min_age_seconds = float(raw_min_age_days) * 86_400
+            else:
+                min_age_seconds = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400
+            raw_max_bytes = payload.get("maxBytes", payload.get("max_bytes"))
+            max_bytes = int(raw_max_bytes) if raw_max_bytes is not None else None
+            cleaner = getattr(self.app_server, "cleanup_artifacts", None)
+            if callable(cleaner):
+                result = cleaner(
+                    dry_run=dry_run,
+                    min_age_seconds=min_age_seconds,
+                    max_bytes=max_bytes,
+                )
+            else:
+                result = cleanup_runtime_artifacts(
+                    active_session=self._current_session_snapshot(),
+                    history=load_session_history(),
+                    dry_run=dry_run,
+                    min_age_seconds=min_age_seconds,
+                    max_bytes=max_bytes,
+                )
+        except ArtifactCleanupBusy as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "artifact_cleanup_busy",
+                    "error": str(exc),
+                    "recoverySteps": ["진행 중인 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(result)
+
+    def _handle_session_clear(self, parsed=None) -> None:
+        params = parse_qs(parsed.query) if parsed is not None else {}
+        _, current_revision = self._current_session_state()
+        revision_payload = {
+            "expectedSessionRevision": params.get(
+                "expectedSessionRevision",
+                params.get("expected_session_revision", [None]),
+            )[0],
+            "expectedSessionEpoch": params.get(
+                "expectedSessionEpoch",
+                params.get("expected_session_epoch", [None]),
+            )[0],
+        }
+        if not self._validate_expected_session_revision(revision_payload, current_revision):
+            return
+        expected_revision = self._payload_session_revision(revision_payload)
+        cleanup_requested = _coerce_bool(
+            params.get("cleanupArtifacts", params.get("cleanup_artifacts", [False]))[0],
+            default=False,
+        )
+        dry_run = _coerce_bool(params.get("dryRun", params.get("dry_run", [True]))[0], default=True)
+        try:
+            raw_min_age_days = params.get("minAgeDays", params.get("min_age_days", [DEFAULT_ARTIFACT_RETENTION_DAYS]))[0]
+            min_age_seconds = float(raw_min_age_days) * 86_400
+            clearer_with_revision = getattr(self.app_server, "clear_session_with_revision", None)
+            clearer = getattr(self.app_server, "clear_session", None)
+            cleared_revision: int | None = None
+            if callable(clearer_with_revision):
+                cleanup_result, cleared_revision = clearer_with_revision(
+                    expected_revision=expected_revision,
+                    cleanup_artifacts=cleanup_requested,
+                    dry_run=dry_run,
+                    min_age_seconds=min_age_seconds,
+                )
+            elif callable(clearer):
+                clear_kwargs: dict[str, Any] = {}
+                if isinstance(self.app_server, AppHTTPServer):
+                    clear_kwargs["expected_revision"] = expected_revision
+                if cleanup_requested:
+                    cleanup_result = clearer(
+                        cleanup_artifacts=True,
+                        dry_run=dry_run,
+                        min_age_seconds=min_age_seconds,
+                        **clear_kwargs,
+                    )
+                else:
+                    clearer(**clear_kwargs)
+                    cleanup_result = None
+            else:
+                with _session_storage_lock:
+                    for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON):
+                        if path.exists():
+                            path.unlink()
+                    _atomic_write_text(GENERATED_SESSION_JS, EMPTY_GENERATED_SESSION_JS)
+                self.app_server.latest_session = None
+                self.app_server.allowed_files = set()
+                cleanup_result = (
+                    cleanup_runtime_artifacts(
+                        active_session={},
+                        history=[],
+                        dry_run=dry_run,
+                        min_age_seconds=min_age_seconds,
+                    )
+                    if cleanup_requested
+                    else None
+                )
+        except SessionRevisionConflict:
+            self._send_session_conflict()
+            return
+        except ArtifactCleanupBusy as exc:
+            current_session, busy_revision = self._current_session_state()
+            busy_payload: dict[str, Any] = {
+                "ok": False,
+                "code": "artifact_cleanup_busy",
+                "error": str(exc),
+                "session": rewrite_session_for_http(current_session)
+                if isinstance(current_session, dict)
+                else None,
+                "recoverySteps": ["진행 중인 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+            }
+            if busy_revision is not None:
+                busy_payload["sessionRevision"] = busy_revision
+            self._send_json(
+                busy_payload,
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except (OSError, TypeError, ValueError) as exc:
+            self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        response: dict[str, Any] = {"ok": True, "history": [], "session": None}
+        if cleared_revision is not None:
+            response["sessionRevision"] = cleared_revision
+        if cleanup_result is not None:
+            response["artifactCleanup"] = cleanup_result
+        self._send_json(response)
 
     def _handle_open_folder(self) -> None:
         if not _request_is_same_origin(self.headers):
@@ -6854,15 +7792,25 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             content_length = int(raw_content_length)
         except (TypeError, ValueError) as exc:
             raise json.JSONDecodeError("invalid Content-Length", str(raw_content_length), 0) from exc
+        if content_length < 0:
+            raise json.JSONDecodeError("invalid Content-Length", str(raw_content_length), 0)
         if content_length > MAX_JSON_BODY_BYTES:
-            raise json.JSONDecodeError("JSON body too large", "", 0)
+            raise RequestPayloadTooLarge(content_length, MAX_JSON_BODY_BYTES)
         raw_body = self.rfile.read(content_length) if content_length else b"{}"
         if not raw_body:
             return {}
         return json.loads(raw_body.decode("utf-8"))
 
     def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        response_payload = payload
+        if "session" in payload and "sessionEpoch" not in payload:
+            epoch_getter = getattr(getattr(self, "server", None), "session_epoch", None)
+            if callable(epoch_getter):
+                epoch = str(epoch_getter() or "").strip()
+                if epoch:
+                    response_payload = dict(payload)
+                    response_payload["sessionEpoch"] = epoch
+        body = json.dumps(response_payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -6884,23 +7832,34 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_latest_session(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
-            self._send_json({"ok": True, "session": None})
+            response: dict[str, Any] = {"ok": True, "session": None}
+            if current_revision is not None:
+                response["sessionRevision"] = current_revision
+            self._send_json(response)
             return
         _refresh_session_problem_counts(session)
-        self.app_server.latest_session = session
-        self.app_server.allowed_files |= collect_session_file_paths(session)
-        if not LATEST_SESSION_JSON.exists():
-            LATEST_SESSION_JSON.parent.mkdir(parents=True, exist_ok=True)
-            LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
-        remember_session_history(session)
-        self._send_json(
-            {
-                "ok": True,
-                "session": rewrite_session_for_http(session),
-            }
-        )
+        registrar = getattr(self.app_server, "register_current_session", None)
+        if callable(registrar):
+            if not registrar(session):
+                session, current_revision = self._current_session_state()
+                if session is None:
+                    response = {"ok": True, "session": None}
+                    if current_revision is not None:
+                        response["sessionRevision"] = current_revision
+                    self._send_json(response)
+                    return
+                _refresh_session_problem_counts(session)
+        else:
+            self._allow_session_files(collect_session_file_paths(session))
+            if not LATEST_SESSION_JSON.exists():
+                save_latest_session(session)
+            remember_session_history(session)
+        response = {"ok": True, "session": rewrite_session_for_http(session)}
+        if current_revision is not None:
+            response["sessionRevision"] = current_revision
+        self._send_json(response)
 
     def _handle_file(self, parsed) -> None:
         query = parse_qs(parsed.query)
@@ -6911,7 +7870,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         normalized = str(path.resolve())
-        if normalized not in self.app_server.allowed_files:
+        if not self._file_is_allowed(normalized):
             self.send_error(HTTPStatus.FORBIDDEN, "file not allowed")
             return
 
@@ -7003,11 +7962,30 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         batch_name = f"{source_paths[0].stem}_{len(source_paths)}files"
         return (output_root / sanitize_output_dir_name(batch_name)).resolve()
 
+    def _resolve_preview_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
+        """Keep speculative exports immutable and separate from active output.
+
+        A preview may later be adopted through session restore, but it must not
+        touch the deterministic directory referenced by the current session.
+        Unadopted previews remain under the managed runtime root and are
+        eligible for the normal retention cleanup.
+        """
+        requested = payload.get("output_dir") or payload.get("outputDir")
+        if requested:
+            name_hint = Path(str(requested)).name
+        elif len(source_paths) == 1:
+            name_hint = source_paths[0].stem
+        elif source_paths:
+            name_hint = f"{source_paths[0].stem}_{len(source_paths)}files"
+        else:
+            name_hint = "preview"
+        run_name = sanitize_output_dir_name(f"{name_hint}_{_unique_artifact_stamp()}")
+        return (default_output_root() / "previews" / run_name).resolve()
+
     def _handle_export(self) -> None:
+        base_session, current_revision = self._current_session_state()
         try:
             payload = self._read_json_body()
-            source_paths = self._resolve_source_paths(payload)
-            output_dir = self._resolve_output_dir(payload, source_paths)
             preview_only = _coerce_bool(
                 payload.get("preview")
                 if "preview" in payload
@@ -7016,8 +7994,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else payload.get("dryRun"),
                 default=False,
             )
+            if not preview_only and not self._validate_expected_session_revision(payload, current_revision):
+                return
+            source_paths = self._resolve_source_paths(payload)
+            output_dir = (
+                self._resolve_preview_output_dir(payload, source_paths)
+                if preview_only
+                else self._resolve_output_dir(payload, source_paths)
+            )
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
             input_intent = _extract_input_intent(payload)
+            content_target = _extract_content_target(payload)
             input_notes = _extract_input_notes(payload)
             crop_format = _extract_crop_format(payload)
             detect_perspective = _coerce_bool(payload.get("detectPerspective") if "detectPerspective" in payload else payload.get("detect_perspective"))
@@ -7058,15 +8045,20 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
+                    content_target=content_target,
                     input_notes=input_notes,
                     **common_kwargs,
                 )
+        except RequestPayloadTooLarge:
+            raise
         except Exception as exc:
             self._send_json(_export_error_payload(exc), status=HTTPStatus.BAD_REQUEST)
             return
 
         session = result["ui_session"]
         session.setdefault("input_intent", input_intent)
+        session.setdefault("content_target", content_target)
+        session.setdefault("contentTarget", content_target)
         if input_notes:
             session["input_notes"] = input_notes
         _refresh_session_problem_counts(session)
@@ -7106,10 +8098,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             session["edb_split"] = len(normalized_parts) > 1
             session["edbSplit"] = len(normalized_parts) > 1
             _annotate_session_with_edb_part_metadata(session, normalized_parts)
+        response_revision = current_revision
         if preview_only:
-            self.app_server.allowed_files |= collect_session_file_paths(session)
+            self._allow_session_files(collect_session_file_paths(session))
         else:
-            self.app_server.remember_session(session)
+            committed, committed_revision = self._remember_session_if_current(
+                base_session,
+                session,
+                expected_revision=current_revision,
+            )
+            if not committed:
+                self._send_session_conflict()
+                return
+            response_revision = committed_revision
         classin_preflight = session.get("classinPreflight")
         if not isinstance(classin_preflight, dict):
             classin_preflight = session.get("classin_preflight")
@@ -7120,8 +8121,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         )
         classin_preflight_passed = bool(classin_preflight.get("passed")) if classin_preflight else False
         classin_preflight_status = str(classin_preflight.get("status") or "")
-        self._send_json(
-            {
+        response = {
                 "ok": True,
                 "session": rewrite_session_for_http(session),
                 "preview": preview_only,
@@ -7152,7 +8152,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "export_mode": session.get("export_mode"),
                 "exportMode": session.get("export_mode"),
             }
-        )
+        if response_revision is not None:
+            response["sessionRevision"] = response_revision
+        self._send_json(response)
 
 
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
