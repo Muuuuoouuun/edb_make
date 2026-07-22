@@ -686,7 +686,6 @@ const Icon = {
   power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
   more:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>,
   close:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>,
-  split:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M5 12h14M9 8h6M9 16h6"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
   scan:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M7 9h10M7 13h7M7 17h5"/></svg>,
@@ -757,6 +756,111 @@ function ReviewCanvasZoomShell({ children }){
         {children}
       </div>
     </div>
+  );
+}
+
+function reviewBoxesEqual(leftBox, rightBox){
+  return ['left', 'top', 'width', 'height'].every(key => (
+    Math.abs(finiteNumber(leftBox?.[key], 0) - finiteNumber(rightBox?.[key], 0)) < 0.5
+  ));
+}
+
+function BoxEditPreview({ label, page, box }){
+  const pageWidth = Math.max(1, finiteNumber(page?.width, 1));
+  const cropWidth = Math.max(1, finiteNumber(box?.width, 1));
+  const cropHeight = Math.max(1, finiteNumber(box?.height, 1));
+  return (
+    <div className="box-edit-preview-item">
+      <span>{label}</span>
+      <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}` }}>
+        {page?.sourceImageUri ? (
+          <img
+            src={page.sourceImageUri}
+            alt={`${label} 영역 미리보기`}
+            draggable={false}
+            style={{
+              width: `${(pageWidth / cropWidth) * 100}%`,
+              left: `${(-finiteNumber(box?.left, 0) / cropWidth) * 100}%`,
+              top: `${(-finiteNumber(box?.top, 0) / cropHeight) * 100}%`,
+            }}
+          />
+        ) : (
+          <span className="box-edit-preview-empty">미리보기 없음</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BoxEditPanel({
+  page,
+  problem,
+  displayNumber,
+  originalBox,
+  box,
+  mutating,
+  onReset,
+  onCancel,
+  onApply,
+}){
+  const changed = !reviewBoxesEqual(originalBox, box);
+  const nearPageEdge = finiteNumber(box?.left, 0) < 4
+    || finiteNumber(box?.top, 0) < 4
+    || finiteNumber(box?.left, 0) + finiteNumber(box?.width, 0) > finiteNumber(page?.width, 1) - 4
+    || finiteNumber(box?.top, 0) + finiteNumber(box?.height, 0) > finiteNumber(page?.height, 1) - 4;
+  return (
+    <aside className="box-edit-panel" aria-label="영역 다시 잡기 확인 패널">
+      <div className="box-edit-panel-head">
+        <div>
+          <span>선택된 항목</span>
+          <strong>{displayNumber ? `${displayNumber}번 문항` : (problem?.title || '선택 문항')}</strong>
+        </div>
+        <button className="icon-btn" type="button" aria-label="영역 편집 취소" onClick={onCancel} disabled={mutating}>
+          {Icon.close}
+        </button>
+      </div>
+      <div className="box-edit-panel-section">
+        <h3>영역 다시 잡기</h3>
+        <p>시험지 위의 파란 테두리와 조절점을 직접 움직이세요.</p>
+      </div>
+      <div className="box-edit-panel-section">
+        <div className="box-edit-section-head">
+          <h4>미리보기</h4>
+          <button className="text-action" type="button" onClick={onReset} disabled={mutating || !changed}>원래 영역으로</button>
+        </div>
+        <div className="box-edit-previews">
+          <BoxEditPreview label="조정 전" page={page} box={originalBox} />
+          <BoxEditPreview label="조정 후" page={page} box={box} />
+        </div>
+      </div>
+      <div className="box-edit-panel-section">
+        <h4>적용 방식</h4>
+        <label className="box-edit-mode selected">
+          <input type="radio" checked readOnly />
+          <span><strong>자르기만 적용</strong><small>영역의 크기와 위치만 조정합니다.</small></span>
+        </label>
+        <label className="box-edit-mode disabled" title="부분 재인식의 번호 보존 검증 후 지원할 예정입니다">
+          <input type="radio" disabled />
+          <span><strong>이 영역 다시 인식</strong><small>준비 중 · 현재 문항을 자동 분할하지 않습니다.</small></span>
+        </label>
+      </div>
+      {nearPageEdge && (
+        <div className="box-edit-warning" role="status">
+          <strong>페이지 가장자리에 닿아 있습니다.</strong>
+          <span>글자나 그림이 잘리지 않았는지 미리보기를 확인하세요.</span>
+        </div>
+      )}
+      <div className="box-edit-impact">
+        <span>영향 요약</span>
+        <strong>{displayNumber ? `${displayNumber}번 문항만 교체` : '선택 문항만 교체'} <small>· 번호와 순서 유지</small></strong>
+      </div>
+      <div className="box-edit-panel-footer">
+        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={mutating}>취소</button>
+        <button className="btn primary" type="button" aria-keyshortcuts="Enter" onClick={onApply} disabled={mutating || !changed}>
+          {Icon.check} {mutating ? '적용 중…' : '적용'}
+        </button>
+      </div>
+    </aside>
   );
 }
 
@@ -1411,10 +1515,37 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
+function ReviewToolbarGroup({ label, className = '', ariaLabel, children }){
+  return (
+    <div className={`review-toolbar-group ${className}`.trim()} role="group" aria-label={ariaLabel || label}>
+      <span className="review-toolbar-group-label">{label}</span>
+      <div className="review-toolbar-group-content">{children}</div>
+    </div>
+  );
+}
+
+function ReviewFilterTabs({ options, value, onChange }){
+  return (
+    <div className="review-filters" role="group" aria-label="검수 상태 필터">
+      {options.map(([filterValue, label, count]) => (
+        <button
+          key={filterValue}
+          className={value === filterValue ? 'on' : ''}
+          type="button"
+          aria-pressed={value === filterValue}
+          onClick={() => onChange(filterValue)}
+        >
+          {label} <span>{count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ReviewStage({
   session, items, activeId, setActive, mutateSession, retryAiSession, mutating,
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
-  onEditorModeChange,
+  onEditorModeChange, onOpenBoard,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
@@ -1433,10 +1564,6 @@ function ReviewStage({
   // Multi-select state: ids of bboxes currently selected. Clicking without
   // shift replaces selection; shift-click toggles.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  // Split mode: when set to a problem id, that bbox shows a draggable
-  // horizontal guideline. The ratio is in (0, 1).
-  const [splitTarget, setSplitTarget] = useState(null);
-  const [splitRatio, setSplitRatio] = useState(0.5);
   const [boxEdit, setBoxEdit] = useState(null);
   const [manualSplit, setManualSplit] = useState(null);
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
@@ -1447,47 +1574,37 @@ function ReviewStage({
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
   const [reviewScopePageIds, setReviewScopePageIds] = useState([]);
   const [reviewZoom, setReviewZoom] = useState(1);
-  const splitDraggingRef = useRef(false);
-  const splitBoxRef = useRef(null);
   const boxEditDragRef = useRef(null);
   const boxEditCommitRef = useRef(false);
   const manualSplitDragRef = useRef(null);
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
   const manualSplitFocusRef = useRef('');
-  const pendingBoxEditProblemIdRef = useRef('');
+  const pendingReviewSelectionProblemIdRef = useRef('');
   const reviewWrapRef = useRef(null);
-  const reviewEditorActive = Boolean(splitTarget || boxEdit || manualSplit);
+  const reviewEditorActive = Boolean(boxEdit || manualSplit);
 
   useEffect(() => {
     onEditorModeChange?.(reviewEditorActive);
   }, [onEditorModeChange, reviewEditorActive]);
   useEffect(() => () => onEditorModeChange?.(false), [onEditorModeChange]);
 
-  // Cancel split mode if the session changes underneath (e.g. after a mutation).
+  // Reset transient editors if the session changes underneath after a mutation.
   useEffect(() => {
-    setSplitTarget(null);
     boxEditCommitRef.current = false;
     manualSplitCommitRef.current = false;
     setManualSplit(null);
     setManualSplitDraftBox(null);
     setManualSplitShortcutHelpOpen(false);
     setReviewRiskFilter(null);
-    const pendingProblemId = String(pendingBoxEditProblemIdRef.current || '').trim();
-    pendingBoxEditProblemIdRef.current = '';
+    const pendingProblemId = String(pendingReviewSelectionProblemIdRef.current || '').trim();
+    pendingReviewSelectionProblemIdRef.current = '';
     if (pendingProblemId) {
       const nextProblem = (session?.problems || []).find(problem => String(problem?.id || '') === pendingProblemId);
-      const nextPage = nextProblem
-        ? (session?.pages || []).find(page => page.id === (nextProblem.sourcePageId || nextProblem.source_page_id))
-        : null;
-      if (nextProblem && nextPage) {
+      if (nextProblem) {
         setSelectedIds(new Set([pendingProblemId]));
         if (setActive) setActive(pendingProblemId);
-        setBoxEdit({
-          problemId: pendingProblemId,
-          pageId: nextPage.id,
-          box: clampReviewBox(nextProblem.bbox, nextPage),
-        });
+        setBoxEdit(null);
         return;
       }
     }
@@ -1554,13 +1671,9 @@ function ReviewStage({
 
   const onBoxClick = (probId, evt) => {
     if (manualSplit) return;
-    if (splitTarget) return;  // ignore clicks while splitting
     if (boxEdit) {
       evt.preventDefault();
       evt.stopPropagation();
-      if (boxEdit.problemId !== probId) {
-        void applyBoxEdit({ continueWithProblemId: probId });
-      }
       return;
     }
     if (evt.shiftKey) {
@@ -1675,6 +1788,13 @@ function ReviewStage({
   const actionableProblemIds = useMemo(() => scopedProblems
     .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
     .map(problem => problem.id), [scopedProblems]);
+  const reviewFlow = useMemo(() => reviewFlowState(reviewSummary), [reviewSummary]);
+  const unresolvedProblemIdSet = useMemo(
+    () => new Set(reviewSummary.unresolvedReviewProblemIds || []),
+    [reviewSummary.unresolvedReviewProblemIds]
+  );
+  const selectedUnresolvedProblemIds = selectedList.filter(id => unresolvedProblemIdSet.has(id));
+  const nextUnresolvedProblemId = (reviewSummary.unresolvedReviewProblemIds || [])[0] || null;
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
   const selectedCanBoxEdit = Boolean(
@@ -1809,7 +1929,6 @@ function ReviewStage({
     manualSplitCommitRef.current = false;
     setManualSplitDraftBox(null);
     setManualSplitShortcutHelpOpen(false);
-    setSplitTarget(null);
     setBoxEdit(null);
     setSelectedIds(new Set(replacementIds));
     setManualSplit({
@@ -2252,14 +2371,15 @@ function ReviewStage({
 
   const beginBoxEdit = () => {
     if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
-    setSplitTarget(null);
     setManualSplit(null);
     setManualSplitDraftBox(null);
     boxEditCommitRef.current = false;
+    const initialBox = clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage);
     setBoxEdit({
       problemId: selectedSingleProblem.id,
       pageId: selectedSinglePage.id,
-      box: clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage),
+      originalBox: initialBox,
+      box: initialBox,
     });
   };
   const cancelBoxEdit = () => {
@@ -2267,16 +2387,19 @@ function ReviewStage({
     boxEditCommitRef.current = false;
     setBoxEdit(null);
   };
-  const applyBoxEdit = useCallback(async (options = {}) => {
+  const resetBoxEdit = () => {
+    boxEditDragRef.current = null;
+    setBoxEdit(prev => prev?.originalBox ? { ...prev, box: { ...prev.originalBox } } : prev);
+  };
+  const applyBoxEdit = useCallback(async () => {
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
-    const continueWithProblemId = String(options?.continueWithProblemId || '').trim();
-    const shouldContinue = continueWithProblemId && continueWithProblemId !== boxEdit.problemId;
+    if (reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
     boxEditCommitRef.current = true;
-    if (shouldContinue) pendingBoxEditProblemIdRef.current = continueWithProblemId;
+    pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;
     try {
       const nextSession = await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
-      if (nextSession && !shouldContinue) setBoxEdit(null);
-      if (!nextSession && shouldContinue) pendingBoxEditProblemIdRef.current = '';
+      if (nextSession) setBoxEdit(null);
+      if (!nextSession) pendingReviewSelectionProblemIdRef.current = '';
     } finally {
       boxEditCommitRef.current = false;
     }
@@ -2285,13 +2408,6 @@ function ReviewStage({
     if (!problem?.id || !page?.id) return;
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
     await mutateSession?.('crop', { problemId: problem.id, cropBox: retryBox });
-  };
-  const applyExpandedBoxEdit = async () => {
-    if (!boxEdit?.problemId || !boxEdit?.box) return;
-    const problem = problemsById.get(boxEdit.problemId);
-    const page = pages.find(item => item.id === (problem?.sourcePageId || boxEdit.pageId));
-    await applyExpandedCrop(problem, page, boxEdit.box);
-    setBoxEdit(null);
   };
   const beginBoxDrag = (evt, mode, page) => {
     if (!boxEdit?.box || evt.button !== 0) return;
@@ -2312,27 +2428,12 @@ function ReviewStage({
     };
   };
 
-  const beginSplit = () => {
-    if (selectedList.length !== 1) return;
-    setBoxEdit(null);
-    setManualSplit(null);
-    setManualSplitDraftBox(null);
-    setSplitTarget(selectedList[0]);
-    setSplitRatio(0.5);
-  };
-  const cancelSplit = () => setSplitTarget(null);
-  const confirmSplit = async () => {
-    if (!splitTarget) return;
-    const ratio = Math.max(0.06, Math.min(0.94, splitRatio));
-    await mutateSession?.('split', { problemId: splitTarget, splitYRatio: ratio });
-  };
   const doMerge = async () => {
     if (!sameSourcePage) return;
     await mutateSession?.('merge', { problemIds: selectedList });
   };
   const doExclude = useCallback(async () => {
     if (selectedActionIds.length === 0 || mutating) return;
-    setSplitTarget(null);
     setBoxEdit(null);
     if (selectedActionIds.length === 1) {
       await mutateSession?.('exclude', { problemId: selectedActionIds[0] });
@@ -2356,6 +2457,11 @@ function ReviewStage({
     setSelectedIds(new Set(visibleReviewScope.problemIds));
     if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
+  const selectNextUnresolvedProblem = () => {
+    if (!nextUnresolvedProblemId) return;
+    setSelectedIds(new Set([nextUnresolvedProblemId]));
+    if (setActive) setActive(nextUnresolvedProblemId);
+  };
 
   useEffect(() => {
     if (manualSplit || selectedActionIds.length === 0) return undefined;
@@ -2371,43 +2477,6 @@ function ReviewStage({
     window.addEventListener('keydown', onReviewDeleteKey);
     return () => window.removeEventListener('keydown', onReviewDeleteKey);
   }, [manualSplit, selectedActionIds, mutating, doExclude]);
-
-  // Drag handler for the split guideline. Tracks against the splitting bbox
-  // element so the ratio is relative to the box, not the page image.
-  useEffect(() => {
-    if (!splitTarget) return;
-    const onMove = (evt) => {
-      if (!splitDraggingRef.current || !splitBoxRef.current) return;
-      const rect = splitBoxRef.current.getBoundingClientRect();
-      const y = evt.clientY - rect.top;
-      const ratio = Math.max(0.06, Math.min(0.94, y / rect.height));
-      setSplitRatio(ratio);
-    };
-    const onUp = () => { splitDraggingRef.current = false; };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [splitTarget]);
-
-  useEffect(() => {
-    if (!boxEdit || mutating) return undefined;
-    const onManualCropOutsideMouseDown = (evt) => {
-      if (boxEditDragRef.current || boxEditCommitRef.current) return;
-      const target = evt.target;
-      if (target?.closest?.('.review-bbox.editing')) return;
-      if (target?.closest?.('.review-bbox')) return;
-      if (target?.closest?.('.crop-frame-handle')) return;
-      if (target?.closest?.('.review-actionbar')) return;
-      evt.preventDefault();
-      evt.stopPropagation();
-      void applyBoxEdit();
-    };
-    window.addEventListener('mousedown', onManualCropOutsideMouseDown, true);
-    return () => window.removeEventListener('mousedown', onManualCropOutsideMouseDown, true);
-  }, [boxEdit, mutating, applyBoxEdit]);
 
   useEffect(() => {
     const onMove = (evt) => {
@@ -2704,35 +2773,18 @@ function ReviewStage({
   const bulkRetryPageIds = activeReviewFilter ? visibleReviewScope.retryPageIds : pageRetryIds;
   const bulkRetryProblemCount = activeReviewFilter ? visibleReviewScope.problemCount : riskyCount;
   const showBulkRetry = reviewFilter !== 'normal' && reviewFilter !== 'supplemental' && bulkRetryProblemCount > 0 && bulkRetryPageIds.length > 0;
+  const showOverviewBatchActions = (
+    (activeReviewFilter && visibleReviewScope.problemIds.length > 0)
+    || (!activeReviewFilter && actionableProblemIds.length > 0)
+    || showBulkRetry
+  );
 
   const actionBar = boxEdit ? (
-    <div className="review-actionbar">
-      <span className="count-chip">틀 조정 중</span>
-      <span className="hint">모서리와 변을 끌어 맞추세요. Enter 적용 · Esc 취소</span>
+    <div className="review-actionbar box-edit-actionbar">
+      <span className="count-chip">영역 다시 잡기</span>
+      <span className="hint">시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. Enter 적용 · Esc 취소</span>
       <div className="spacer" />
-      <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
-      <button
-        className="btn"
-        type="button"
-        title="조정한 틀에 주변 여백을 더해 빠르게 다시 자릅니다"
-        onClick={applyExpandedBoxEdit}
-        disabled={mutating}
-      >
-        주변 포함 빠른 자르기
-      </button>
-      <button className="btn primary" type="button" onClick={applyBoxEdit} aria-keyshortcuts="Enter" disabled={mutating}>
-        {Icon.check} {mutating ? '적용 중…' : '자르기 적용'}
-      </button>
-    </div>
-  ) : splitTarget ? (
-    <div className="review-actionbar">
-      <span className="count-chip">가르기 중</span>
-      <span className="hint">박스 안의 파란 선을 드래그해서 위치를 정한 다음 [가르기]를 눌러주세요.</span>
-      <div className="spacer" />
-      <button className="btn" onClick={cancelSplit} disabled={mutating}>취소</button>
-      <button className="btn primary" onClick={confirmSplit} disabled={mutating}>
-        ✂ {(splitRatio * 100).toFixed(0)}% 위치에서 가르기
-      </button>
+      <span className="box-edit-actionbar-impact">선택 문항만 변경 · 번호와 순서 유지</span>
     </div>
   ) : manualSplit ? (
     <div className="review-actionbar manual-split-actionbar">
@@ -2813,73 +2865,68 @@ function ReviewStage({
       </div>
     </div>
   ) : selectedList.length === 0 ? (
-    <div className="review-actionbar">
-      <div className="review-filters" aria-label="검수 상태 필터">
-        {filterOptions.map(([value, label, count]) => (
-          <button
-            key={value}
-            className={reviewFilter === value ? 'on' : ''}
-            type="button"
-            onClick={() => setReviewFilter(value)}
-          >
-            {label} <span>{count}</span>
-          </button>
-        ))}
-      </div>
-      {reviewRiskFilter && (
-        <span className="review-risk-filter-active">
-          원인 필터 · {riskFlagLabel(reviewRiskFilter)}
-          <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
-        </span>
-      )}
-      {reviewScopeActive && (
-        <span className="review-risk-filter-active">
-          최근 추가 묶음 · {formatProblemCount(sessionCounts)}
-          <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
-        </span>
-      )}
-      <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
+    <div className="review-actionbar review-overview-toolbar">
+      <ReviewToolbarGroup label="상태 보기" className="review-toolbar-view-group">
+        <ReviewFilterTabs options={filterOptions} value={reviewFilter} onChange={setReviewFilter} />
+        {reviewRiskFilter && (
+          <span className="review-risk-filter-active">
+            원인 필터 · {riskFlagLabel(reviewRiskFilter)}
+            <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
+          </span>
+        )}
+        {reviewScopeActive && (
+          <span className="review-risk-filter-active">
+            최근 추가 묶음 · {formatProblemCount(sessionCounts)}
+            <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
+          </span>
+        )}
+      </ReviewToolbarGroup>
+      <span className="review-toolbar-guidance">의심 항목만 골라 확인하거나 필요한 페이지만 다시 인식하세요.</span>
       <div className="spacer" />
-      {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
-        <>
-          <button
-            className="btn"
-            type="button"
-            onClick={selectVisibleProblems}
-            disabled={mutating}
-          >
-            표시 항목 선택 {visibleReviewScope.problemIds.length}
-          </button>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
-            disabled={mutating}
-          >
-            표시 항목 확인 완료 {visibleReviewScope.problemIds.length}
-          </button>
-        </>
-      )}
-      {!activeReviewFilter && actionableProblemIds.length > 0 && (
-        <button
-          className="btn"
-          type="button"
-          onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
-          disabled={mutating}
-        >
-          확인 필요 전체 확인 {actionableProblemIds.length}
-        </button>
-      )}
-      {showBulkRetry && (
-        <button
-          className="btn primary"
-          type="button"
-          title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
-          onClick={() => doRetryAi(bulkRetryPageIds)}
-          disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
-        >
-          페이지 전체 AI 재인식 {bulkRetryProblemCount}
-        </button>
+      {showOverviewBatchActions && (
+        <ReviewToolbarGroup label="일괄 작업" className="review-toolbar-batch-group">
+          {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
+            <>
+              <button
+                className="btn review-toolbar-action"
+                type="button"
+                onClick={selectVisibleProblems}
+                disabled={mutating}
+              >
+                표시 항목 선택 <span className="review-toolbar-count">{visibleReviewScope.problemIds.length}</span>
+              </button>
+              <button
+                className="btn review-toolbar-action"
+                type="button"
+                onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
+                disabled={mutating}
+              >
+                {Icon.check} 표시 항목 확인 완료 <span className="review-toolbar-count">{visibleReviewScope.problemIds.length}</span>
+              </button>
+            </>
+          )}
+          {!activeReviewFilter && actionableProblemIds.length > 0 && (
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
+              disabled={mutating}
+            >
+              {Icon.check} 확인 필요 전체 확인 <span className="review-toolbar-count">{actionableProblemIds.length}</span>
+            </button>
+          )}
+          {showBulkRetry && (
+            <button
+              className="btn primary review-toolbar-action"
+              type="button"
+              title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
+              onClick={() => doRetryAi(bulkRetryPageIds)}
+              disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
+            >
+              {Icon.wand} 페이지 전체 AI 재인식 <span className="review-toolbar-count">{bulkRetryProblemCount}</span>
+            </button>
+          )}
+        </ReviewToolbarGroup>
       )}
     </div>
   ) : (
@@ -2890,7 +2937,7 @@ function ReviewStage({
           {selectedHasPageChromeArtifact
             ? '페이지 선/번호가 감지된 문제입니다. 3단계 원문 보존으로 다시 뽑거나 원본 틀을 조정하세요.'
             : selectedList.length === 1
-            ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
+            ? '현재 문항의 테두리를 원본 위에서 바로 조정할 수 있어요.'
             : sameSourcePage
               ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
               : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
@@ -2898,6 +2945,7 @@ function ReviewStage({
       </div>
       <div className="review-actionbar-actions">
         <div className="review-action-group review-action-group-main">
+          <span className="review-action-group-label">보정</span>
           {selectedHasPageChromeArtifact && (
             <button
               className="btn danger"
@@ -2923,49 +2971,29 @@ function ReviewStage({
           {selectedList.length === 1 && (
             <>
               <button
-                className="btn primary"
+                className="btn"
                 type="button"
                 onClick={() => applyExpandedCrop()}
                 disabled={mutating || !selectedCanBoxEdit}
                 title="선택한 박스 주변 여백까지 포함해 빠르게 다시 자르기"
               >
-                {Icon.crop} 주변 포함 빠른 자르기
+                {Icon.crop} 빠른 자르기
               </button>
               <button
-                className="btn"
+                className="btn primary"
                 type="button"
                 onClick={beginBoxEdit}
                 disabled={mutating || !selectedCanBoxEdit}
                 title={selectedCanBoxEdit ? '원본 페이지 위에서 자르기 틀을 직접 조정' : '원본 페이지 이미지가 있어야 합니다'}
               >
-                {Icon.crop} 틀 조정/자르기
+                {Icon.crop} 영역 다시 잡기
               </button>
             </>
           )}
         </div>
-        <div className="review-action-group review-action-group-reshape">
-          {selectedList.length === 1 && (
-            <>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginSplit}
-                disabled={mutating}
-              >
-                {Icon.split} 두 문제로 나누기
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginManualSplitForSelection}
-                disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 원본 페이지를 직접 여러 영역으로 자르기' : '같은 원본 페이지의 항목을 선택해야 합니다'}
-              >
-                {Icon.pen} 수동 쪼개기
-              </button>
-            </>
-          )}
-          {selectedList.length >= 2 && (
+        {selectedList.length >= 2 && (
+          <div className="review-action-group review-action-group-reshape">
+            <span className="review-action-group-label">구조</span>
             <>
               <button
                 className="btn primary"
@@ -2973,7 +3001,7 @@ function ReviewStage({
                 onClick={doMerge}
                 disabled={!sameSourcePage || mutating}
               >
-                {Icon.align} 합치기
+                {Icon.align} 하나로 합치기
               </button>
               <button
                 className="btn"
@@ -2982,19 +3010,20 @@ function ReviewStage({
                 disabled={mutating || !selectedCanManualSplit}
                 title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 수동 분할할 수 있습니다'}
               >
-                {Icon.pen} 수동 쪼개기
+                {Icon.pen} 영역 다시 지정
               </button>
             </>
-          )}
-        </div>
+          </div>
+        )}
         <div className="review-action-group review-action-group-status">
+          <span className="review-action-group-label">처리</span>
           <button
             className="btn soft-success"
             type="button"
             onClick={() => onConfirm?.(null, { problemIds: selectedList, bulk: true })}
             disabled={mutating}
           >
-            {Icon.check} 확인 완료 {selectedList.length}
+            {Icon.check} 그대로 확인 {selectedList.length}
           </button>
           <button className="btn danger" type="button" onClick={doExclude} disabled={mutating}>
             {Icon.trash} 제외 {selectedList.length}
@@ -3016,52 +3045,57 @@ function ReviewStage({
   return (
     <div className="col center">
       <div className="stage">
-        <div className="stage-toolbar">
-          <span className="name">검수 — 검출된 문제 박스</span>
+        <div className="stage-toolbar review-stage-toolbar">
+          <div className="review-stage-heading">
+            <span className="name">문항 검수</span>
+            <span className="review-stage-subtitle">검출 영역</span>
+          </div>
           <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {formatProblemCount(sessionCounts)}</span>
           <div className="spacer" />
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-            빨간 박스는 인식이 의심됩니다. 클릭 후 가르기·합치기·제외하세요.
-          </span>
-          <div className="review-zoom-controls" aria-label="검수 화면 확대">
-            <button
-              type="button"
-              className="icon-btn"
-              title="문제 이미지 축소"
-              onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
-              disabled={reviewZoom <= REVIEW_ZOOM_MIN}
-            >
-              {Icon.zoomOut}
-            </button>
-            <input
-              className="review-zoom-range"
-              type="range"
-              min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
-              max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
-              step="1"
-              value={reviewZoomPercent(reviewZoom)}
-              aria-label="검수 이미지 확대율"
-              title="문제 이미지만 확대/축소"
-              onChange={updateReviewZoomPercent}
-            />
-            <button
-              type="button"
-              className="review-zoom-reset"
-              title="100%로 되돌리기"
-              onClick={resetReviewZoom}
-              disabled={Math.abs(reviewZoom - 1) < 0.001}
-            >
-              {reviewZoomPercent(reviewZoom)}%
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              title="문제 이미지 확대"
-              onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
-              disabled={reviewZoom >= REVIEW_ZOOM_MAX}
-            >
-              {Icon.zoomIn}
-            </button>
+          <div className="review-view-control-group" role="group" aria-label="검수 화면 배율">
+            <span className="review-view-control-label">배율</span>
+            <div className="review-zoom-controls">
+              <button
+                type="button"
+                className="icon-btn"
+                title="문제 이미지 축소"
+                aria-label="문제 이미지 축소"
+                onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
+                disabled={reviewZoom <= REVIEW_ZOOM_MIN}
+              >
+                {Icon.zoomOut}
+              </button>
+              <input
+                className="review-zoom-range"
+                type="range"
+                min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
+                max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
+                step="1"
+                value={reviewZoomPercent(reviewZoom)}
+                aria-label="검수 이미지 확대율"
+                title="문제 이미지만 확대/축소"
+                onChange={updateReviewZoomPercent}
+              />
+              <button
+                type="button"
+                className="review-zoom-reset"
+                title="100%로 되돌리기"
+                onClick={resetReviewZoom}
+                disabled={Math.abs(reviewZoom - 1) < 0.001}
+              >
+                {reviewZoomPercent(reviewZoom)}%
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="문제 이미지 확대"
+                aria-label="문제 이미지 확대"
+                onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
+                disabled={reviewZoom >= REVIEW_ZOOM_MAX}
+              >
+                {Icon.zoomIn}
+              </button>
+            </div>
           </div>
         </div>
         <div
@@ -3284,11 +3318,11 @@ function ReviewStage({
                   <button
                     className="mini-action"
                     type="button"
-                    title={page.sourceImageUri ? '이 페이지를 직접 여러 문제로 자르기' : '페이지 원본 이미지가 있어야 합니다'}
-                    onClick={() => beginManualPageSplit(page, allPageProblems.map(problem => problem.id))}
+                    title={page.sourceImageUri ? '인식에서 누락된 문항 영역을 이 페이지에 추가' : '페이지 원본 이미지가 있어야 합니다'}
+                    onClick={() => beginManualPageSplit(page, [])}
                     disabled={mutating || !!manualSplit || !page.sourceImageUri}
                   >
-                    수동 쪼개기
+                    새 영역 추가
                   </button>
                   <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
                     {page.width}×{page.height}
@@ -3323,8 +3357,9 @@ function ReviewStage({
                     shortcutHelpOpen={manualSplitShortcutHelpOpen}
                   />
                 ) : (
-                  <ReviewCanvasZoomShell>
-                    <div className="review-page-canvas">
+                  <div className={`box-edit-layout ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
+                    <ReviewCanvasZoomShell>
+                      <div className="review-page-canvas">
                     {page.sourceImageUri ? (
                       <img src={page.sourceImageUri} alt={page.id} draggable={false} />
                     ) : (
@@ -3347,7 +3382,6 @@ function ReviewStage({
                     const status = deriveProblemStatus(prob);
                     const statusMeta = reviewStatusMeta(status);
                     const isRisky = status !== 'normal';
-                    const isSplitting = splitTarget === prob.id;
                     const passageGroupId = passageGroupIdFor(prob);
                     const isPassage = Boolean(passageGroupId);
                     const order = orderMap.get(prob.id);
@@ -3370,13 +3404,11 @@ function ReviewStage({
                       isActive ? 'active' : '',
                       isRisky ? 'risky' : '',
                       reviewStatusClass(status),
-                      isSplitting ? 'splitting' : '',
                       isEditing ? 'editing' : '',
                     ].filter(Boolean).join(' ');
                     return (
                       <div
                         key={prob.id}
-                        ref={isSplitting ? splitBoxRef : null}
                         className={classes}
                         style={{
                           left: `${leftPct}%`,
@@ -3403,7 +3435,7 @@ function ReviewStage({
                         </div>
                         {isEditing && (
                           <>
-                            <div className="crop-frame-label">틀 조정</div>
+                            <div className="crop-frame-label">영역 조정</div>
                             {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
                               <button
                                 key={mode}
@@ -3416,26 +3448,73 @@ function ReviewStage({
                             ))}
                           </>
                         )}
-                        {isSplitting && (
-                          <div
-                            className="split-guide"
-                            style={{ top: `${splitRatio * 100}%` }}
-                            onMouseDown={(evt) => {
-                              evt.stopPropagation();
-                              splitDraggingRef.current = true;
-                            }}
-                          />
-                        )}
                       </div>
                     );
                     })}
-                    </div>
-                  </ReviewCanvasZoomShell>
+                      </div>
+                    </ReviewCanvasZoomShell>
+                    {boxEdit?.pageId === page.id && (
+                      <BoxEditPanel
+                        page={page}
+                        problem={problemsById.get(boxEdit.problemId)}
+                        displayNumber={orderMap.get(boxEdit.problemId)}
+                        originalBox={boxEdit.originalBox}
+                        box={boxEdit.box}
+                        mutating={mutating}
+                        onReset={resetBoxEdit}
+                        onCancel={cancelBoxEdit}
+                        onApply={applyBoxEdit}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             );
           })}
         </div>
+        {!reviewEditorActive && (
+          <div className={`review-completion-bar ${reviewFlow.complete ? 'is-complete' : ''}`} aria-live="polite">
+            <div className="review-completion-progress" aria-label={`검수 ${reviewFlow.reviewed} / ${reviewFlow.total}`}>
+              <span>검수</span>
+              <strong>{reviewFlow.reviewed} / {reviewFlow.total}</strong>
+            </div>
+            <span className={`review-completion-state ${reviewFlow.complete ? 'done' : ''}`}>
+              {reviewFlow.complete ? '모두 확인됨' : `남은 ${reviewFlow.remaining}개`}
+            </span>
+            <span className="review-completion-help">
+              {reviewFlow.complete
+                ? '모든 확인이 끝났어요. 칠판 배치를 바로 확인해 보세요.'
+                : reviewFlow.remaining === 1
+                  ? '마지막 항목을 확인하면 칠판 미리보기가 자동으로 열립니다.'
+                  : '선택한 문제를 확인하면 다음 검수 항목으로 이어집니다.'}
+            </span>
+            <div className="review-completion-actions">
+              {reviewFlow.complete ? (
+                <button className="btn primary review-completion-primary" type="button" onClick={() => onOpenBoard?.()}>
+                  {Icon.board} 칠판 미리보기
+                </button>
+              ) : selectedUnresolvedProblemIds.length > 0 ? (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={() => onConfirm?.(null, { problemIds: selectedUnresolvedProblemIds, bulk: true })}
+                  disabled={mutating}
+                >
+                  {Icon.check} {reviewFlow.remaining === selectedUnresolvedProblemIds.length ? '확인하고 칠판 보기' : `선택 확인 완료 ${selectedUnresolvedProblemIds.length}`}
+                </button>
+              ) : (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={selectNextUnresolvedProblem}
+                  disabled={mutating || !nextUnresolvedProblemId}
+                >
+                  다음 확인 항목 보기 {Icon.arrowRight}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -8232,6 +8311,7 @@ function sessionReviewSummary(session){
     supplementalReviewStatusCounts: rawSupplementalStatusCounts,
     needsReviewCount: Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
     actionableNeedsReviewCount,
+    unresolvedReviewProblemIds: Array.from(unresolvedReviewProblemIds),
     riskFlagCounts,
     actionableRiskFlagCounts,
     topRiskFlags,
@@ -8275,6 +8355,24 @@ function sessionReviewSummary(session){
     passageReviewLabel: passageReviewSummary.passageReviewLabel,
     passageReviewPreview: passageReviewSummary.passageReviewPreview,
     passageReviewReasonLabel: passageReviewSummary.passageReviewReasonLabel,
+  };
+}
+
+function reviewFlowState(reviewSummary){
+  const total = Math.max(0, Number(reviewSummary?.reviewStatusCounts?.all) || 0);
+  const unresolvedIds = Array.isArray(reviewSummary?.unresolvedReviewProblemIds)
+    ? reviewSummary.unresolvedReviewProblemIds.filter(Boolean)
+    : [];
+  const remaining = Math.min(total, Math.max(
+    unresolvedIds.length,
+    Number(reviewSummary?.actionableNeedsReviewCount) || 0,
+    Number(reviewSummary?.passageReviewItemCount) || 0
+  ));
+  return {
+    total,
+    remaining,
+    reviewed: Math.max(0, total - remaining),
+    complete: total > 0 && remaining === 0,
   };
 }
 
@@ -10674,7 +10772,7 @@ function App(){
     triggerUpload();
   };
 
-  const onConfirm = (id, options = {}) => {
+  const onConfirm = async (id, options = {}) => {
     const explicitProblemIds = Array.isArray(options.problemIds) ? options.problemIds : null;
     const targetIds = explicitProblemIds?.length
       ? explicitProblemIds
@@ -10682,16 +10780,35 @@ function App(){
     const confirmedIds = new Set(targetIds.filter(Boolean));
     if (!confirmedIds.size) return;
     if (!session) {
+      const allItemsConfirmedByBulk = options.bulk
+        && items.length > 0
+        && items.every(item => confirmedIds.has(item.id));
       setItems(prev => prev.map(item => (
         confirmedIds.has(item.id) ? confirmedItemState(item) : item
       )));
       setPublished(false);
-      showToast(options.bulk
-        ? `전체 ${confirmedIds.size}개 확인 완료`
-        : `"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+      if (allItemsConfirmedByBulk) {
+        setReviewFocus(null);
+        setView('board');
+        showToast('일괄 확인 완료 · 칠판 미리보기로 이동했어요');
+      } else {
+        showToast(options.bulk
+          ? `전체 ${confirmedIds.size}개 확인 완료`
+          : `"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+      }
       return;
     }
-    void mutateSession('confirm', { problemIds: [...confirmedIds] });
+    const beforeFlow = reviewFlowState(sessionReviewSummary(session));
+    const nextSession = await mutateSession('confirm', { problemIds: [...confirmedIds] });
+    if (!nextSession) return;
+    const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));
+    if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk)) {
+      setReviewFocus(null);
+      setView('board');
+      showToast(options.bulk
+        ? '일괄 확인 완료 · 칠판 미리보기로 이동했어요'
+        : '검수 완료 · 칠판 미리보기로 이동했어요');
+    }
   };
 
   const markClassinReviewComplete = useCallback(async () => {
@@ -10919,6 +11036,7 @@ function App(){
             onEnhanceImage={enhanceImageSession}
             imageEnhanceBusy={hasRunningImageEnhance}
             onEditorModeChange={setReviewEditorActive}
+            onOpenBoard={() => setView('board')}
           />
         ) : (
           <BoardStage

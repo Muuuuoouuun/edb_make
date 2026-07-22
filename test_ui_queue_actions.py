@@ -129,7 +129,7 @@ class TestUiQueueActions(unittest.TestCase):
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
         review_stage = source.split("function ReviewStage", 1)[1].split("function ItemsRail", 1)[0]
 
-        self.assertIn("const reviewEditorActive = Boolean(splitTarget || boxEdit || manualSplit);", review_stage)
+        self.assertIn("const reviewEditorActive = Boolean(boxEdit || manualSplit);", review_stage)
         self.assertIn("onEditorModeChange?.(reviewEditorActive);", review_stage)
         self.assertIn("onEditorModeChange?.(false)", review_stage)
         self.assertIn("const [reviewEditorActive, setReviewEditorActive] = useState(false);", source)
@@ -319,33 +319,32 @@ class TestUiQueueActions(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("틀 조정/자르기", source)
-        self.assertIn("주변 포함 빠른 자르기", source)
+        self.assertIn("영역 조정", source)
+        self.assertIn("영역 다시 잡기", source)
         self.assertIn("applyExpandedCrop", source)
-        self.assertIn("pendingBoxEditProblemIdRef", source)
-        self.assertIn("모서리와 변을 끌어 맞추세요. Enter 적용 · Esc 취소", source)
+        self.assertIn("pendingReviewSelectionProblemIdRef", source)
+        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. Enter 적용 · Esc 취소", source)
         self.assertIn("onBoxEditKeyDown", source)
         self.assertIn("aria-keyshortcuts=\"Enter\"", source)
         self.assertIn("aria-keyshortcuts=\"Escape\"", source)
         self.assertIn("MANUAL_CROP_OUTSET_MAX", source)
         self.assertIn("인식 중단", source)
-        self.assertIn("onManualCropOutsideMouseDown", source)
-        self.assertIn("window.addEventListener('mousedown', onManualCropOutsideMouseDown, true)", source)
-        self.assertIn("target?.closest?.('.review-bbox.editing')", source)
-        self.assertIn("target?.closest?.('.review-bbox')", source)
+        self.assertIn('className="box-edit-panel"', source)
+        self.assertIn("onApply={applyBoxEdit}", source)
+        self.assertIn("onCancel={cancelBoxEdit}", source)
         self.assertIn("void applyBoxEdit();", source)
         self.assertIn("crop-frame-handle", html)
         self.assertIn("manual-crop-presets", html)
 
     def test_review_crop_apply_is_primary_rightmost_and_preserves_current_steps(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        box_edit_branch = source.split("const actionBar = boxEdit ? (", 1)[1]
-        box_edit_branch = box_edit_branch.split(") : splitTarget ? (", 1)[0]
-        retry_index = box_edit_branch.index("주변 포함 빠른 자르기")
-        apply_index = box_edit_branch.index("자르기 적용")
+        box_edit_panel = source.split('className="box-edit-panel"', 1)[1]
+        box_edit_panel = box_edit_panel.split("function ManualSplitEditor", 1)[0]
+        cancel_index = box_edit_panel.index("취소")
+        apply_index = box_edit_panel.index("{mutating ? '적용 중…' : '적용'}")
 
-        self.assertLess(retry_index, apply_index)
-        self.assertIn('<button className="btn primary" type="button" onClick={applyBoxEdit}', box_edit_branch)
+        self.assertLess(cancel_index, apply_index)
+        self.assertIn('className="btn primary" type="button" aria-keyshortcuts="Enter" onClick={onApply}', box_edit_panel)
 
         mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
@@ -355,6 +354,28 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
         self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session)", retry_source)
         self.assertLess(retry_source.index("await postRestore(snapshotBefore);"), retry_source.index("const result = await postRetryAi(args"))
+
+    def test_review_area_reset_uses_explicit_panel_apply_and_removes_two_way_split(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+
+        self.assertIn("originalBox: initialBox", review_stage)
+        self.assertIn("box: initialBox", review_stage)
+        self.assertIn("if (reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;", review_stage)
+        self.assertIn("pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;", review_stage)
+        self.assertNotIn("onManualCropOutsideMouseDown", review_stage)
+        self.assertNotIn("continueWithProblemId", review_stage)
+        self.assertNotIn("const [splitTarget", review_stage)
+        self.assertNotIn("const beginSplit", review_stage)
+        self.assertNotIn("mutateSession?.('split'", review_stage)
+        self.assertNotIn("2개로 나누기", review_stage)
+        self.assertNotIn("두 문제로 나누기", review_stage)
+        self.assertIn("새 영역 추가", review_stage)
+        self.assertIn(".box-edit-layout.is-open", html)
+        self.assertIn(".box-edit-panel", html)
+        self.assertNotIn(".split-guide", html)
 
     def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
