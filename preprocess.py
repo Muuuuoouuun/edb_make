@@ -15,7 +15,7 @@ import tempfile
 import time
 import unicodedata
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 2
+PDF_NORMALIZED_CACHE_VERSION = 3
 IMAGE_NORMALIZED_CACHE_VERSION = 1
 HWP_NORMALIZED_CACHE_VERSION = 5
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
@@ -131,12 +131,13 @@ def looks_like_decimal_continuation(text, match):
     return after_dot_index < len(text) and text[after_dot_index].isdigit()
 
 
-def extract_pdf_problem_markers(page, scale):
+def extract_pdf_problem_markers(page, scale, data=None):
     markers = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return markers
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
             continue
@@ -177,12 +178,13 @@ def extract_pdf_problem_markers(page, scale):
     return markers
 
 
-def extract_pdf_text_lines(page, scale):
+def extract_pdf_text_lines(page, scale, data=None):
     lines = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return lines
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return lines
     line_index = 0
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
@@ -219,6 +221,78 @@ def extract_pdf_text_lines(page, scale):
     return lines
 
 
+def bbox_payload(raw_bbox, scale):
+    left, top, right, bottom = [float(value) * scale for value in raw_bbox]
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": max(0.0, right - left),
+        "height": max(0.0, bottom - top),
+    }
+
+
+def extract_pdf_media_regions(page, scale, data=None):
+    regions = []
+    page_area = max(1.0, float(page.rect.width) * float(page.rect.height))
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            data = {}
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict) or block.get("type") != 1:
+            continue
+        bbox = block.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        if width < 12.0 or height < 12.0 or area_ratio < 0.0005 or area_ratio > 0.25:
+            continue
+        regions.append(
+            {
+                "kind": "image",
+                "source": "pdf_image_block",
+                "confidence": 0.99,
+                "bbox": bbox_payload(bbox, scale),
+            }
+        )
+    try:
+        tables = list(page.find_tables().tables)
+    except Exception:
+        tables = []
+    for table in tables:
+        bbox = table.bbox
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        cell_count = int(table.row_count) * int(table.col_count)
+        if (
+            int(table.row_count) < 2
+            or int(table.col_count) < 2
+            or cell_count < 6
+            or width < 24.0
+            or height < 24.0
+            or area_ratio < 0.002
+            or area_ratio > 0.15
+        ):
+            continue
+        regions.append(
+            {
+                "kind": "table",
+                "source": "pymupdf_table",
+                "confidence": 0.94,
+                "row_count": int(table.row_count),
+                "column_count": int(table.col_count),
+                "bbox": bbox_payload(bbox, scale),
+            }
+        )
+    return regions
+
+
 source_path = Path(sys.argv[1])
 target_dir = Path(sys.argv[2])
 dpi = int(sys.argv[3])
@@ -233,6 +307,10 @@ try:
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
         pix.save(out_path.as_posix())
+        try:
+            page_dict = page.get_text("dict")
+        except Exception:
+            page_dict = {}
         pages.append(
             {
                 "page_id": f"{source_path.stem}-page-{page_index + 1:03d}",
@@ -246,8 +324,9 @@ try:
                     "dpi": dpi,
                     "pdf_page_width_pt": float(page.rect.width),
                     "pdf_page_height_pt": float(page.rect.height),
-                    "pdf_problem_markers": extract_pdf_problem_markers(page, scale),
-                    "pdf_text_lines": extract_pdf_text_lines(page, scale),
+                    "pdf_problem_markers": extract_pdf_problem_markers(page, scale, page_dict),
+                    "pdf_text_lines": extract_pdf_text_lines(page, scale, page_dict),
+                    "pdf_media_regions": extract_pdf_media_regions(page, scale, page_dict),
                 },
             }
         )
@@ -368,6 +447,10 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
             pix.save(out_path.as_posix())
+            try:
+                page_dict = page.get_text("dict")
+            except Exception:
+                page_dict = {}
             pages.append(
                 NormalizedPageImage(
                     page_id=f"{source_path.stem}-page-{page_index + 1:03d}",
@@ -381,9 +464,10 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                         "dpi": dpi,
                         "pdf_page_width_pt": float(page.rect.width),
                         "pdf_page_height_pt": float(page.rect.height),
-                        "pdf_problem_markers": _extract_pdf_problem_markers(page, scale),
-                        "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale),
-                        "pdf_text_lines": _extract_pdf_text_lines(page, scale),
+                        "pdf_problem_markers": _extract_pdf_problem_markers(page, scale, page_dict),
+                        "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale, page_dict),
+                        "pdf_text_lines": _extract_pdf_text_lines(page, scale, page_dict),
+                        "pdf_media_regions": _extract_pdf_media_regions(page, scale, page_dict),
                     },
                 )
             )
@@ -2976,7 +3060,11 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     )
 
 
-def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
+def _extract_pdf_problem_markers(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Extract problem-number line anchors from a PDF text layer.
 
     Coordinates are returned in rendered-pixel space so downstream image
@@ -2985,10 +3073,11 @@ def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]
     import re
 
     markers: list[dict[str, Any]] = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return markers
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
 
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
@@ -3058,12 +3147,17 @@ def _looks_like_pdf_problem_stem_line(text: str) -> bool:
     return any(phrase in normalized for phrase in stem_phrases)
 
 
-def _extract_pdf_text_stem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
+def _extract_pdf_text_stem_markers(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     markers: list[dict[str, Any]] = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return markers
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
 
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
@@ -3100,12 +3194,17 @@ def _extract_pdf_text_stem_markers(page: Any, scale: float) -> list[dict[str, An
     return markers
 
 
-def _extract_pdf_text_lines(page: Any, scale: float) -> list[dict[str, Any]]:
+def _extract_pdf_text_lines(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return lines
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return lines
 
     line_index = 0
     for block in data.get("blocks") or []:
@@ -3142,6 +3241,91 @@ def _extract_pdf_text_lines(page: Any, scale: float) -> list[dict[str, Any]]:
             line_index += 1
 
     return lines
+
+
+def _pdf_bbox_payload(raw_bbox: Sequence[Any], scale: float) -> dict[str, float]:
+    left, top, right, bottom = [float(value) * scale for value in raw_bbox]
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": max(0.0, right - left),
+        "height": max(0.0, bottom - top),
+    }
+
+
+def _extract_pdf_media_regions(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return only high-confidence embedded images and real table grids.
+
+    Full-page raster scans, tiny layout ornaments, and large bordered passage
+    boxes are deliberately excluded. Those regions must continue through the
+    ordinary Stage-2 chalk conversion instead of restoring the whole page.
+    """
+
+    regions: list[dict[str, Any]] = []
+    page_area = max(1.0, float(page.rect.width) * float(page.rect.height))
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            data = {}
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict) or block.get("type") != 1:
+            continue
+        bbox = block.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        if width < 12.0 or height < 12.0 or area_ratio < 0.0005 or area_ratio > 0.25:
+            continue
+        regions.append(
+            {
+                "kind": "image",
+                "source": "pdf_image_block",
+                "confidence": 0.99,
+                "bbox": _pdf_bbox_payload(bbox, scale),
+            }
+        )
+
+    try:
+        tables = list(page.find_tables().tables)
+    except Exception:
+        tables = []
+    for table in tables:
+        bbox = table.bbox
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        row_count = int(table.row_count)
+        column_count = int(table.col_count)
+        if (
+            row_count < 2
+            or column_count < 2
+            or row_count * column_count < 6
+            or width < 24.0
+            or height < 24.0
+            or area_ratio < 0.002
+            or area_ratio > 0.15
+        ):
+            continue
+        regions.append(
+            {
+                "kind": "table",
+                "source": "pymupdf_table",
+                "confidence": 0.94,
+                "row_count": row_count,
+                "column_count": column_count,
+                "bbox": _pdf_bbox_payload(bbox, scale),
+            }
+        )
+    return regions
 
 
 def load_image(source: str | Path) -> Image.Image:
@@ -3267,7 +3451,12 @@ def _transform_pdf_text_geometry(
     offset_y: float = 0.0,
     scale: float = 1.0,
 ) -> None:
-    for key in ("pdf_problem_markers", "pdf_text_stem_markers", "pdf_text_lines"):
+    for key in (
+        "pdf_problem_markers",
+        "pdf_text_stem_markers",
+        "pdf_text_lines",
+        "pdf_media_regions",
+    ):
         _transform_pdf_bbox_list(metadata, key, offset_x=offset_x, offset_y=offset_y, scale=scale)
 
 

@@ -11,7 +11,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -1406,6 +1406,7 @@ class ProblemEntry:
     processing_step: str = PROCESSING_STEP_RAW
     input_intent: str | None = None
     force_full_page_bounds: bool = False
+    preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -1423,6 +1424,8 @@ class _ProblemAssetTask:
     horizontal_safe_padding_px: int = 0
     text_priority: bool = False
     pad_edges: bool = True
+    source_media_regions: tuple[dict[str, Any], ...] = ()
+    rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -1446,6 +1449,7 @@ class _ProblemEntryDraft:
     input_intent: str | None
     force_full_page_bounds: bool
     asset_task: _ProblemAssetTask | None
+    preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -1577,6 +1581,154 @@ def _render_text_fallback_problem_card(text: str, *, title: str | None = None) -
     return card
 
 
+def _media_region_box(region: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
+    bbox = region.get("bbox")
+    if not isinstance(bbox, Mapping):
+        return None
+    try:
+        left = float(bbox.get("left", 0.0))
+        top = float(bbox.get("top", 0.0))
+        right = float(bbox.get("right", left + float(bbox.get("width", 0.0))))
+        bottom = float(bbox.get("bottom", top + float(bbox.get("height", 0.0))))
+    except (TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def _locate_horizontal_crop_offset(before: Image.Image, after: Image.Image) -> int:
+    """Return the exact left offset when a helper cropped only horizontally."""
+    difference = before.width - after.width
+    if difference <= 0 or before.height != after.height:
+        return 0
+    target_bytes = after.tobytes()
+    candidates = [0, difference, *range(1, difference)]
+    for left in dict.fromkeys(candidates):
+        if before.crop((left, 0, left + after.width, after.height)).tobytes() == target_bytes:
+            return int(left)
+    return 0
+
+
+def _trim_source_page_chrome_with_offset(
+    image: Image.Image,
+    *,
+    preserve_horizontal_bounds: bool,
+) -> tuple[Image.Image, int]:
+    """Apply the normal crop cleanup while retaining its x-coordinate shift."""
+    left_offset = 0
+    if preserve_horizontal_bounds:
+        trimmed = image
+    else:
+        next_image = _trim_edge_vertical_guides(image)
+        left_offset += _locate_horizontal_crop_offset(image, next_image)
+        trimmed = next_image
+        next_image = _trim_edge_attached_page_chrome(trimmed)
+        left_offset += _locate_horizontal_crop_offset(trimmed, next_image)
+        trimmed = next_image
+    trimmed = _trim_bottom_blue_watermark(trimmed)
+    trimmed = _erase_corner_page_badges(trimmed)
+    return trimmed, left_offset
+
+
+def _map_source_media_regions_to_crop(
+    regions: Sequence[Mapping[str, Any]],
+    *,
+    source_crop_rect: tuple[int, int, int, int],
+    horizontal_trim_px: int,
+    left_padding_px: int,
+    top_padding_px: int,
+    output_size: tuple[int, int],
+) -> list[dict[str, Any]]:
+    crop_left, crop_top, crop_right, crop_bottom = source_crop_rect
+    output_width, output_height = output_size
+    mapped: list[dict[str, Any]] = []
+    for region in regions:
+        if str(region.get("kind") or "") not in {"image", "table"}:
+            continue
+        try:
+            confidence = float(region.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if confidence < 0.9:
+            continue
+        box = _media_region_box(region)
+        if box is None:
+            continue
+        left, top, right, bottom = box
+        intersect_left = max(left, float(crop_left))
+        intersect_top = max(top, float(crop_top))
+        intersect_right = min(right, float(crop_right))
+        intersect_bottom = min(bottom, float(crop_bottom))
+        if intersect_right <= intersect_left or intersect_bottom <= intersect_top:
+            continue
+        overlap = (intersect_right - intersect_left) * (intersect_bottom - intersect_top)
+        if overlap / max(1.0, (right - left) * (bottom - top)) < 0.8:
+            continue
+        local_left = intersect_left - crop_left - horizontal_trim_px + left_padding_px
+        local_top = intersect_top - crop_top + top_padding_px
+        local_right = intersect_right - crop_left - horizontal_trim_px + left_padding_px
+        local_bottom = intersect_bottom - crop_top + top_padding_px
+        local_left = max(0.0, min(float(output_width), local_left))
+        local_top = max(0.0, min(float(output_height), local_top))
+        local_right = max(local_left, min(float(output_width), local_right))
+        local_bottom = max(local_top, min(float(output_height), local_bottom))
+        if local_right - local_left < 2.0 or local_bottom - local_top < 2.0:
+            continue
+        payload = {key: value for key, value in region.items() if key != "bbox"}
+        payload["bbox"] = {
+            "left": local_left,
+            "top": local_top,
+            "right": local_right,
+            "bottom": local_bottom,
+            "width": local_right - local_left,
+            "height": local_bottom - local_top,
+        }
+        mapped.append(payload)
+    return mapped
+
+
+def _apply_selective_media_preservation(
+    rendered: Image.Image,
+    source_crop: Image.Image,
+    regions: Sequence[Mapping[str, Any]],
+) -> Image.Image:
+    """Restore exact source pixels only inside high-confidence media boxes."""
+    if not regions or source_crop.width <= 0 or source_crop.height <= 0:
+        return rendered
+    output = rendered.convert("RGBA")
+    source = source_crop.convert("RGBA")
+    x_scale = output.width / source.width
+    y_scale = output.height / source.height
+    for region in regions:
+        box = _media_region_box(region)
+        if box is None:
+            continue
+        left, top, right, bottom = box
+        source_box = (
+            max(0, min(source.width, int(math.floor(left)))),
+            max(0, min(source.height, int(math.floor(top)))),
+            max(0, min(source.width, int(math.ceil(right)))),
+            max(0, min(source.height, int(math.ceil(bottom)))),
+        )
+        if source_box[2] <= source_box[0] or source_box[3] <= source_box[1]:
+            continue
+        target_box = (
+            max(0, min(output.width, int(round(left * x_scale)))),
+            max(0, min(output.height, int(round(top * y_scale)))),
+            max(0, min(output.width, int(round(right * x_scale)))),
+            max(0, min(output.height, int(round(bottom * y_scale)))),
+        )
+        target_size = (target_box[2] - target_box[0], target_box[3] - target_box[1])
+        if target_size[0] <= 0 or target_size[1] <= 0:
+            continue
+        patch = source.crop(source_box)
+        if patch.size != target_size:
+            patch = patch.resize(target_size, Image.Resampling.LANCZOS)
+        output.paste(patch, (target_box[0], target_box[1]))
+    return output
+
+
 def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
     if task.text_payload:
         crop = _render_text_fallback_problem_card(task.text_payload, title=task.text_title)
@@ -1597,7 +1749,11 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         _write_render_image(cutout_image, task.board_render_path)
         return crop.size
 
-    def crop_segment(bounds: Box, *, recover_vertical_edges: bool = False) -> Image.Image:
+    def crop_segment(
+        bounds: Box,
+        *,
+        recover_vertical_edges: bool = False,
+    ) -> tuple[Image.Image, list[dict[str, Any]]]:
         source_bounds = (
             _expand_passage_segment_source_bounds(
                 bounds,
@@ -1612,36 +1768,56 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             if task.preserve_horizontal_bounds
             else bounds
         )
-        segment = task.source_image.crop(
-            _integer_crop_rect_for_box(
-                source_bounds,
-                image_width=task.source_image.width,
-                image_height=task.source_image.height,
-            )
+        source_crop_rect = _integer_crop_rect_for_box(
+            source_bounds,
+            image_width=task.source_image.width,
+            image_height=task.source_image.height,
         )
+        segment = task.source_image.crop(source_crop_rect)
+        horizontal_trim_px = 0
         if task.trim_edge_guides:
-            segment = _trim_source_page_chrome(
+            segment, horizontal_trim_px = _trim_source_page_chrome_with_offset(
                 segment,
                 preserve_horizontal_bounds=task.preserve_horizontal_bounds,
             )
+        left_padding_px = 0
+        top_padding_px = 0
         if task.pad_edges:
+            left_padding_px = task.horizontal_safe_padding_px
+            top_padding_px = PROBLEM_CROP_TOP_SAFE_PADDING_PX
             segment = _pad_problem_crop_edges(
                 segment,
                 left_padding_px=task.horizontal_safe_padding_px,
                 right_padding_px=task.horizontal_safe_padding_px,
             )
-        return _flatten_passage_segment_on_white(segment)
+        flattened = _flatten_passage_segment_on_white(segment)
+        mapped_regions = _map_source_media_regions_to_crop(
+            task.source_media_regions,
+            source_crop_rect=source_crop_rect,
+            horizontal_trim_px=horizontal_trim_px,
+            left_padding_px=left_padding_px,
+            top_padding_px=top_padding_px,
+            output_size=flattened.size,
+        )
+        return flattened, mapped_regions
 
     if task.segment_bounds:
+        segment_payloads = [
+            crop_segment(bounds, recover_vertical_edges=True)
+            for bounds in task.segment_bounds
+        ]
+        stitch_placements: list[dict[str, int]] = []
         crop = _compose_passage_segments(
-            [
-                crop_segment(bounds, recover_vertical_edges=True)
-                for bounds in task.segment_bounds
-            ],
+            [payload[0] for payload in segment_payloads],
             transparent=False,
+            placements_output=stitch_placements,
+        )
+        task.rendered_media_regions = _media_regions_after_stitch(
+            [payload[1] for payload in segment_payloads],
+            stitch_placements,
         )
     else:
-        crop = crop_segment(task.bounds)
+        crop, task.rendered_media_regions = crop_segment(task.bounds)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(task.crop_path)
     enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
@@ -1656,6 +1832,11 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             enhanced_crop,
             chalk_color=task.chalk_color,
         )
+    cutout_image = _apply_selective_media_preservation(
+        cutout_image,
+        crop,
+        task.rendered_media_regions,
+    )
     _write_render_image(cutout_image, task.board_render_path)
     return crop.size
 
@@ -2284,6 +2465,11 @@ def _problem_has_number(problem: ProblemUnit) -> bool:
 
 def _problem_is_passage_fragment_unit(problem: ProblemUnit) -> bool:
     return str(problem.metadata.get("passage_role") or "").strip() == "passage_fragment"
+
+
+def _problem_allows_selective_media_preservation(problem: ProblemUnit) -> bool:
+    """Keep shared child questions on the legacy Stage-2 treatment."""
+    return str(problem.metadata.get("passage_role") or "").strip() != "child_question"
 
 
 def _problem_is_passage_scoped_unit(problem: ProblemUnit) -> bool:
@@ -3268,6 +3454,7 @@ def _trim_passage_segment_for_join(
     *,
     trim_top: bool,
     trim_bottom: bool,
+    crop_box_output: list[tuple[int, int, int, int]] | None = None,
 ) -> Image.Image:
     """Remove page footer chrome and excess whitespace at a passage join.
 
@@ -3276,6 +3463,8 @@ def _trim_passage_segment_for_join(
     such as ``고2`` without treating normal paragraph spacing as chrome.
     """
     if image.width <= 0 or image.height <= 0:
+        if crop_box_output is not None:
+            crop_box_output.append((0, 0, image.width, image.height))
         return image
     row_counts = _passage_foreground_row_counts(image)
     top = 0
@@ -3331,18 +3520,29 @@ def _trim_passage_segment_for_join(
                     bottom = candidate_bottom
 
     if top <= 0 and bottom >= image.height:
+        if crop_box_output is not None:
+            crop_box_output.append((0, 0, image.width, image.height))
         return image
+    if crop_box_output is not None:
+        crop_box_output.append((0, top, image.width, bottom))
     return image.crop((0, top, image.width, bottom))
 
 
-def _prepare_passage_segments_for_stitch(images: Sequence[Image.Image]) -> list[Image.Image]:
+def _prepare_passage_segments_for_stitch(
+    images: Sequence[Image.Image],
+    *,
+    crop_boxes_output: list[tuple[int, int, int, int]] | None = None,
+) -> list[Image.Image]:
     if len(images) <= 1:
+        if crop_boxes_output is not None:
+            crop_boxes_output.extend((0, 0, image.width, image.height) for image in images)
         return list(images)
     return [
         _trim_passage_segment_for_join(
             image,
             trim_top=index > 0,
             trim_bottom=index < len(images) - 1,
+            crop_box_output=crop_boxes_output,
         )
         for index, image in enumerate(images)
     ]
@@ -3464,6 +3664,7 @@ def _compose_passage_segments(
     images: Sequence[Image.Image],
     *,
     transparent: bool,
+    placements_output: list[dict[str, int]] | None = None,
 ) -> Image.Image:
     """Join passage fragments on one stable reading axis.
 
@@ -3473,7 +3674,11 @@ def _compose_passage_segments(
     """
     if not images:
         raise ValueError("At least one passage image is required for stitching")
-    prepared = _prepare_passage_segments_for_stitch(images)
+    crop_boxes: list[tuple[int, int, int, int]] = []
+    prepared = _prepare_passage_segments_for_stitch(
+        images,
+        crop_boxes_output=crop_boxes,
+    )
     max_width = max(image.width for image in prepared)
     gap = PASSAGE_FRAGMENT_STITCH_GAP_PX if len(prepared) > 1 else 0
     total_height = sum(image.height for image in prepared) + gap * max(0, len(prepared) - 1)
@@ -3514,6 +3719,19 @@ def _compose_passage_segments(
         else:
             stitched.paste(image.convert("RGB"), (x, cursor_y))
         cursor_y += image.height + gap
+    if placements_output is not None:
+        placements_output.clear()
+        placements_output.extend(
+            {
+                "x": x,
+                "y": y,
+                "crop_left": crop_box[0],
+                "crop_top": crop_box[1],
+                "crop_right": crop_box[2],
+                "crop_bottom": crop_box[3],
+            }
+            for x, y, crop_box in zip(x_offsets, y_offsets, crop_boxes)
+        )
     if gap > 0:
         _bridge_aligned_passage_frames(
             stitched,
@@ -3525,11 +3743,49 @@ def _compose_passage_segments(
     return stitched
 
 
+def _media_regions_after_stitch(
+    region_groups: Sequence[Sequence[Mapping[str, Any]]],
+    placements: Sequence[Mapping[str, int]],
+) -> list[dict[str, Any]]:
+    stitched_regions: list[dict[str, Any]] = []
+    for regions, placement in zip(region_groups, placements):
+        crop_left = float(placement.get("crop_left", 0))
+        crop_top = float(placement.get("crop_top", 0))
+        crop_right = float(placement.get("crop_right", 0))
+        crop_bottom = float(placement.get("crop_bottom", 0))
+        offset_x = float(placement.get("x", 0)) - crop_left
+        offset_y = float(placement.get("y", 0)) - crop_top
+        for region in regions:
+            box = _media_region_box(region)
+            if box is None:
+                continue
+            left, top, right, bottom = box
+            left = max(left, crop_left)
+            top = max(top, crop_top)
+            right = min(right, crop_right)
+            bottom = min(bottom, crop_bottom)
+            if right <= left or bottom <= top:
+                continue
+            payload = {key: value for key, value in region.items() if key != "bbox"}
+            payload["bbox"] = {
+                "left": left + offset_x,
+                "top": top + offset_y,
+                "right": right + offset_x,
+                "bottom": bottom + offset_y,
+                "width": right - left,
+                "height": bottom - top,
+            }
+            stitched_regions.append(payload)
+    return stitched_regions
+
+
 def _stitch_passage_image_files(
     paths: Sequence[Path],
     output_path: Path,
     *,
     transparent: bool,
+    source_region_groups: Sequence[Sequence[Mapping[str, Any]]] | None = None,
+    stitched_regions_output: list[dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     images: list[Image.Image] = []
     for path in paths:
@@ -3541,7 +3797,18 @@ def _stitch_passage_image_files(
             )
     if not images:
         raise ValueError("At least one passage image is required for stitching")
-    stitched = _compose_passage_segments(images, transparent=transparent)
+    placements: list[dict[str, int]] = []
+    stitched = _compose_passage_segments(
+        images,
+        transparent=transparent,
+        placements_output=placements,
+    )
+    if stitched_regions_output is not None:
+        stitched_regions_output.clear()
+        if source_region_groups is not None:
+            stitched_regions_output.extend(
+                _media_regions_after_stitch(source_region_groups, placements)
+            )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     stitched.save(output_path)
@@ -3582,16 +3849,22 @@ def _coalesce_cross_page_passage_drafts(
         fragment_ids = [drafts[index].problem_id for index in ordered_indices]
         primary_crop_paths = [drafts[index].crop_path for index in ordered_indices]
         primary_render_paths = [drafts[index].board_render_path for index in ordered_indices]
+        stitched_regions: list[dict[str, Any]] = []
         updated_crop_sizes[primary_index] = _stitch_passage_image_files(
             primary_crop_paths,
             primary.crop_path,
             transparent=False,
+            source_region_groups=[drafts[index].preserve_media_regions for index in ordered_indices],
+            stitched_regions_output=stitched_regions,
         )
         _stitch_passage_image_files(
             primary_render_paths,
             primary.board_render_path,
             transparent=True,
         )
+        primary.preserve_media_regions = stitched_regions
+        if primary.asset_task is not None:
+            primary.asset_task.rendered_media_regions = list(stitched_regions)
 
         # A stitched passage is a single rendered image. Keeping blocks from
         # later pages would make mixed-mode export crop those bboxes from the
@@ -3888,6 +4161,15 @@ def build_problem_entries(
                     placement_scale_ratio=_default_placement_scale_for_problem(problem),
                     input_intent=problem_input_intent or None,
                     force_full_page_bounds=bool(problem.metadata.get("force_full_page_bounds")),
+                    preserve_media_regions=(
+                        [
+                            dict(region)
+                            for region in (prepared_page.metadata.get("pdf_media_regions") or [])
+                            if isinstance(region, dict)
+                        ]
+                        if reuse_full_page_asset and _problem_allows_selective_media_preservation(problem)
+                        else []
+                    ),
                     asset_task=None
                     if reuse_full_page_asset
                     else _ProblemAssetTask(
@@ -3912,6 +4194,15 @@ def build_problem_entries(
                             problem_title,
                         ),
                         pad_edges=not preserve_page_as_is,
+                        source_media_regions=(
+                            tuple(
+                                region
+                                for region in (prepared_page.metadata.get("pdf_media_regions") or [])
+                                if isinstance(region, dict)
+                            )
+                            if _problem_allows_selective_media_preservation(problem)
+                            else ()
+                        ),
                     ),
                 )
             )
@@ -3923,6 +4214,9 @@ def build_problem_entries(
         draft.prepared_page.image.size if draft.asset_task is None else next(rendered_crop_sizes)
         for draft in drafts
     ]
+    for draft in drafts:
+        if draft.asset_task is not None:
+            draft.preserve_media_regions = list(draft.asset_task.rendered_media_regions)
     drafts, crop_sizes = _coalesce_cross_page_passage_drafts(drafts, crop_sizes, pages)
     entries: list[ProblemEntry] = []
     for draft, crop_size in zip(drafts, crop_sizes):
@@ -3952,6 +4246,7 @@ def build_problem_entries(
                 processing_step=draft.processing_step,
                 input_intent=draft.input_intent,
                 force_full_page_bounds=draft.force_full_page_bounds,
+                preserve_media_regions=list(draft.preserve_media_regions),
             )
         )
     return entries
@@ -6430,6 +6725,8 @@ def build_ui_session(
                 "sourceImagePath": _to_file_uri(source_path),
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
+                "preserveMediaRegions": list(placement.get("preserve_media_regions") or []),
+                "preserve_media_regions": list(placement.get("preserve_media_regions") or []),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
                 "renderedHeightPages": layout_diagnostics["renderedHeightPages"],
                 "overflowAllowed": bool(placement["overflow_allowed"]),
@@ -6996,6 +7293,7 @@ def placement_inputs(
                 "problem_number": entry.problem_number,
                 "crop_path": str(entry.crop_path),
                 "board_render_path": str(entry.board_render_path),
+                "preserve_media_regions": list(entry.preserve_media_regions),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
                 "bbox": {
@@ -7357,6 +7655,20 @@ def _build_image_only_record_image(
         # guaranteed to be halo-free and single-tone.
         board_image = _finalize_text_cutout(board_image, chalk_color=chalk_color)
 
+    if (
+        dark_board
+        and processing_step != PROCESSING_STEP_RECONSTRUCT
+        and entry.preserve_media_regions
+    ):
+        # Text-priority exports rebuild and normalize the cutout at final size.
+        # Restore media last so photos, table shading, legends, and colors can
+        # never be collapsed back into the single chalk tone.
+        board_image = _apply_selective_media_preservation(
+            board_image,
+            crop_image,
+            entry.preserve_media_regions,
+        )
+
     image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
     if crop_format == CROP_FORMAT_V2:
         secondary_bytes = build_tight_crop_image_bytes(
@@ -7574,6 +7886,7 @@ def build_image_only_records(
                 "subject": str(placement.subject),
                 "crop_path": str(image_payload.crop_path),
                 "board_render_path": str(image_payload.board_render_path),
+                "preserve_media_regions": list(entry.preserve_media_regions),
                 "source_page_id": placement.metadata["source_page_id"],
                 "source_path": placement.metadata["source_path"],
                 "start_y_pages": round(start_y_pages, 6),
@@ -7754,6 +8067,7 @@ def build_mixed_records(
                 "subject": str(entry.subject),
                 "crop_path": str(entry.crop_path),
                 "board_render_path": str(entry.board_render_path),
+                "preserve_media_regions": list(entry.preserve_media_regions),
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
                 "start_y_pages": placement.start_y_pages,

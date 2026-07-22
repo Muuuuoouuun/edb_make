@@ -3146,6 +3146,15 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                     or None
                 ),
                 force_full_page_bounds=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
+                preserve_media_regions=[
+                    dict(region)
+                    for region in (
+                        problem.get("preserveMediaRegions")
+                        or problem.get("preserve_media_regions")
+                        or []
+                    )
+                    if isinstance(region, dict)
+                ],
             )
         )
     return entries
@@ -4364,6 +4373,11 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
         }
         problem["cropBaseImagePath"] = crop_base_image_path
         problem["cropBaseBoardRenderPath"] = problem.get("boardRenderPath") or crop_base_image_path
+        problem["cropBasePreserveMediaRegions"] = list(
+            problem.get("preserveMediaRegions")
+            or problem.get("preserve_media_regions")
+            or []
+        )
     else:
         base_bbox = _bbox_from_problem(problem, prefer_crop_base=True)
         if (
@@ -4456,6 +4470,15 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     }
     problem["manualCrop"] = crop
     problem["manual_crop"] = crop
+    # A manual crop changes the local coordinate system. Until those regions
+    # are re-detected, stale PDF media boxes must not be pasted elsewhere.
+    preserved_regions = (
+        list(problem.get("cropBasePreserveMediaRegions") or [])
+        if _manual_crop_is_empty(crop)
+        else []
+    )
+    problem["preserveMediaRegions"] = preserved_regions
+    problem["preserve_media_regions"] = list(preserved_regions)
     if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
         _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
     _refresh_session_problem_counts(session)
