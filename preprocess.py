@@ -23,6 +23,8 @@ import xml.etree.ElementTree as ET
 
 from PIL import Image, ImageOps
 
+from passage_detection import parse_shared_passage_range_header
+
 try:
     import fitz  # type: ignore
 except ImportError:  # pragma: no cover
@@ -1713,22 +1715,10 @@ def _extract_hwp_passage_ranges(
         line = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", raw_line)).strip()
         if not line:
             continue
-        if not any(cue in line.lower() for cue in HWP_TEXT_PASSAGE_RANGE_CUES):
+        header = parse_shared_passage_range_header(line)
+        if header is None:
             continue
-        match = (
-            HWP_TEXT_PASSAGE_RANGE_BRACKET_RE.match(line)
-            or HWP_TEXT_PASSAGE_RANGE_KOREAN_RE.match(line)
-            or HWP_TEXT_PASSAGE_RANGE_COMPACT_RE.match(line)
-        )
-        if not match:
-            continue
-        try:
-            start = int(match.group("start"))
-            end = int(match.group("end"))
-        except (TypeError, ValueError):
-            continue
-        if start <= 0 or end <= start or end - start > 12:
-            continue
+        start, end = header.start, header.end
         key = (start, end)
         if key in seen:
             continue

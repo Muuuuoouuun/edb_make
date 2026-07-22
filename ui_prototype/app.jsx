@@ -6332,6 +6332,12 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
           {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
           <span>{summary.pages} 페이지</span>
           <span>{resultLabel}</span>
+          {passageOnly && Number.isFinite(summary.passageQualityScore) && (
+            <span className={summary.passageQualityReviewCount ? 'warn' : ''}>
+              텍스트·화질 {summary.passageQualityScore.toFixed(1)}/10
+              {summary.passageQualityReviewCount ? ` · 확인 ${summary.passageQualityReviewCount}` : ''}
+            </span>
+          )}
           <span className={summary.riskCount ? 'warn' : ''}>
             {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
           </span>
@@ -7129,10 +7135,10 @@ const INPUT_INTENT_OPTIONS = [
   {
     value: 'page-as-is',
     label: '원본 페이지 이어붙이기',
-    description: '너비에 맞춰 키우고 높이는 비율대로 이어 배치',
+    description: '페이지를 나누지 않고 1열로, 보드 너비에 맞춰 이어 배치',
     icon: 'rows3',
     badgeLabel: '원본 이어붙임',
-    pills: ['3단계 고화질', '너비 맞춤', '비율 높이', '연속 이어붙이기'],
+    pills: ['2단계 원본 보존', '200 DPI', '1열 기본', '너비 맞춤'],
     exportMode: 'question',
   },
 ];
@@ -7197,6 +7203,7 @@ const RISK_FLAG_META = {
   no_problem_markers: '문항 번호 부족',
   ocr_disabled: 'OCR 미사용',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   passage_group_source_reuse: '지문 겹침',
   passage_cross_page_merge_check: '병합 확인',
   problem_per_block: '블록 단위 분리',
@@ -7212,6 +7219,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   low_ink_problem_image: '이미지 내용 부족',
   missing_problem_image: '문항 이미지 없음',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   passage_review_queue_remaining: '지문 확인 필요',
   passage_group_source_reuse: '지문 겹침',
   review_flags_remaining: '검수 플래그 남음',
@@ -7229,6 +7237,7 @@ const PASSAGE_REVIEW_REASON_LABELS = {
   passage_fragment: '지문 본문',
   passage_group_source_reuse: '지문 겹침',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   source_problem_bbox_overlap: '문항 영역 겹침',
 };
 
@@ -8863,6 +8872,19 @@ function summarizeRecognitionSession(session, pageIds){
   });
   const riskCount = problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length;
   const counts = countSessionProblems(problems);
+  const passageQualities = problems
+    .filter(problem => isPassageFragmentProblem(problem))
+    .map(problem => problem?.passageQuality || problem?.passage_quality)
+    .filter(quality => quality && typeof quality === 'object');
+  const passageQualityScores = passageQualities
+    .map(quality => Number(quality.score_10 ?? quality.score10))
+    .filter(score => Number.isFinite(score));
+  const passageQualityScore = passageQualityScores.length
+    ? passageQualityScores.reduce((total, score) => total + score, 0) / passageQualityScores.length
+    : null;
+  const passageQualityReviewCount = passageQualities.filter(quality => (
+    String(quality.grade || '').toLowerCase() !== 'good'
+  )).length;
   return {
     pages: visiblePages.length,
     problems: counts.total,
@@ -8870,6 +8892,9 @@ function summarizeRecognitionSession(session, pageIds){
     supplementalItems: counts.supplemental,
     problemLabel: formatProblemCount(counts),
     riskCount,
+    passageQualityCount: passageQualities.length,
+    passageQualityScore,
+    passageQualityReviewCount,
   };
 }
 
@@ -9119,7 +9144,13 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
         : files.some(f => !isDocumentLikeFile(f)),
       skipDeskew: !!options.skipDeskew,
       skipCrop: !!options.skipCrop,
-      maxDimension: options.maxDimension || 2400,
+      pdfDpi: options.pdfDpi || 200,
+      // Full-page exports are the display master. Keep every pixel rendered at
+      // 200 DPI; recognition modes retain the 2400px performance ceiling.
+      maxDimension: resolvedInputIntent === 'page-as-is' ? null : (options.maxDimension || 2400),
+      // Full-page input stays as one page/one column by default. Column tiling
+      // remains an explicit API option, never an implicit page-as-is behavior.
+      pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off',
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     })),
   });
@@ -10249,7 +10280,7 @@ function App(){
     const isManualSplit = mode === 'manual-split';
     const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
     const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);
-    const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
+    const aiFallback = isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
     const recognitionOcr = fastImageRecognition ? 'none' : 'auto';

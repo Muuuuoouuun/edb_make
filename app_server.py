@@ -53,6 +53,8 @@ DEFAULT_BOARD_THEME = "charcoal"
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
+ACTIVE_IMAGE_ENHANCE_SIZE = "1k"
+HIGH_RES_IMAGE_SIZE_ALIASES = {"2K", "2048", "2048PX", "4K", "4096", "4096PX"}
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
@@ -61,6 +63,7 @@ PASSAGE_REVIEW_REASON_LABELS = {
     "passage_fragment": "지문 본문",
     "passage_group_source_reuse": "지문 겹침",
     "passage_missing_child_questions": "문항 누락",
+    "passage_quality_review": "지문 품질 확인",
     "source_problem_bbox_overlap": "문항 영역 겹침",
 }
 
@@ -5400,6 +5403,17 @@ def _content_safe_primary_batch(
     return results
 
 
+def _active_image_enhance_size(provider: str, requested_size: str) -> tuple[str, bool]:
+    """Keep image regeneration below the temporarily disabled 2K tier."""
+    value = str(requested_size or "auto").strip()
+    if provider != "gemini":
+        return value, False
+    high_resolution_skipped = value.upper() in HIGH_RES_IMAGE_SIZE_ALIASES
+    if value.upper() in {"512", "512PX", "0.5K"}:
+        return value, False
+    return ACTIVE_IMAGE_ENHANCE_SIZE, high_resolution_skipped
+
+
 def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     requested_mode = _normalize_image_enhance_mode(
         payload.get("mode") or payload.get("enhanceMode") or payload.get("enhance_mode") or "auto"
@@ -5429,7 +5443,8 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
     custom_prompt = str(payload.get("prompt") or payload.get("imagePrompt") or "").strip()
     quality = str(payload.get("quality") or "high")
-    size = str(payload.get("size") or "auto")
+    requested_size = str(payload.get("size") or "auto")
+    size, high_resolution_skipped = _active_image_enhance_size(provider, requested_size)
     timeout_ms = int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)
     transparent_background = _payload_bool(payload, "transparentBackground", "transparent_background", True)
     sharpen = _payload_bool(payload, "sharpen", "sharpen", True)
@@ -5670,6 +5685,8 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "quality": quality,
             "size": size,
+            "requestedSize": requested_size,
+            "highResolutionSkipped": high_resolution_skipped,
             "requestedMode": requested_mode,
             "resolvedMode": resolved_mode,
             "subject": subject,
@@ -8037,15 +8054,28 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 detect_perspective = False
                 skip_deskew = True
                 skip_crop = True
+            requested_max_dimension = (
+                int(payload["maxDimension"])
+                if payload.get("maxDimension")
+                else int(payload["max_dimension"])
+                if payload.get("max_dimension")
+                else None
+            )
+            requested_pdf_dpi = int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200)
+            # A page-as-is record is itself the display master. Never shrink it
+            # after the document render, even if an older client still submits
+            # the generic recognition limit or a lower PDF DPI.
+            max_dimension = None if input_intent == "page-as-is" else requested_max_dimension
+            pdf_dpi = max(200, requested_pdf_dpi) if input_intent == "page-as-is" else requested_pdf_dpi
             common_kwargs = {
                 "output_dir": output_dir,
                 "subject_name": str(payload.get("subject") or "unknown"),
                 "ocr": str(payload.get("ocr") or "auto"),
-                "pdf_dpi": int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
+                "pdf_dpi": pdf_dpi,
                 "detect_perspective": detect_perspective,
                 "skip_deskew": skip_deskew,
                 "skip_crop": skip_crop,
-                "max_dimension": int(payload["maxDimension"]) if payload.get("maxDimension") else int(payload["max_dimension"]) if payload.get("max_dimension") else None,
+                "max_dimension": max_dimension,
                 "export_edb": _coerce_bool(payload.get("export_edb") if "export_edb" in payload else payload.get("exportEdb"), default=True),
                 "edb_name": sanitize_edb_file_name(
                     str(payload.get("edbName") or payload.get("edb_name"))
@@ -8068,6 +8098,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
+                    page_tile_mode=str(
+                        payload.get("pageTileMode")
+                        or payload.get("page_tile_mode")
+                        or "off"
+                    ),
                     content_target=content_target,
                     input_notes=input_notes,
                     **common_kwargs,

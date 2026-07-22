@@ -2364,6 +2364,8 @@ class TestExportSourceResolution(unittest.TestCase):
                 "detectPerspective": True,
                 "skipCrop": False,
                 "skipDeskew": False,
+                "maxDimension": 1200,
+                "pdfDpi": 144,
             }
             captured_kwargs = {}
 
@@ -2399,6 +2401,9 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertFalse(captured_kwargs["detect_perspective"])
             self.assertTrue(captured_kwargs["skip_crop"])
             self.assertTrue(captured_kwargs["skip_deskew"])
+            self.assertEqual(200, captured_kwargs["pdf_dpi"])
+            self.assertIsNone(captured_kwargs["max_dimension"])
+            self.assertEqual("off", captured_kwargs["page_tile_mode"])
             self.assertTrue(responses[0][0]["ok"])
 
     def test_export_passes_sanitized_requested_edb_name(self):

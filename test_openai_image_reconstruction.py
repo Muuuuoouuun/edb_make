@@ -105,6 +105,7 @@ class TestImageReconstructionMutation(unittest.TestCase):
             called_kwargs = mock_reconstruct.call_args.kwargs
             self.assertEqual(called_kwargs["provider"], "gemini")
             self.assertEqual(called_kwargs["model"], DEFAULT_GEMINI_IMAGE_MODEL)
+            self.assertEqual(called_kwargs["size"], "1k")
             self.assertTrue(called_kwargs["transparent_background"])
             self.assertTrue(called_kwargs["sharpen"])
 
@@ -112,6 +113,23 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertEqual(summary[0]["status"], "applied")
             self.assertEqual(summary[0]["provider"], "gemini")
             self.assertEqual(summary[0]["problemId"], "problem-1")
+
+    def test_enhance_image_caps_explicit_2k_request_at_1k(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as reconstruct:
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "size": "2k"},
+                )
+
+            self.assertEqual("1k", reconstruct.call_args.kwargs["size"])
+            metadata = updated["problems"][0]["aiImageReconstruction"]
+            self.assertEqual("2k", metadata["requestedSize"])
+            self.assertEqual("1k", metadata["size"])
+            self.assertTrue(metadata["highResolutionSkipped"])
 
     def test_gemini_nano_banana_2k_request_sets_native_image_size(self):
         with TemporaryDirectory() as raw_tmp:

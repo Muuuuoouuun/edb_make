@@ -9,6 +9,11 @@ import unicodedata
 
 from PIL import Image, ImageDraw, ImageOps, ImageStat
 
+from passage_detection import (
+    parse_passage_range_candidate,
+    parse_shared_passage_range_header,
+    passage_header_text_looks_corrupted,
+)
 from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
 
 try:
@@ -1217,28 +1222,13 @@ def _trim_pdf_problem_bottom_to_ink(
 
 
 def _extract_pdf_passage_range(text: Any) -> tuple[int, int] | None:
-    normalized = unicodedata.normalize("NFKC", str(text or ""))
-    compact = re.sub(r"\s+", " ", normalized).strip()
-    if not compact:
-        return None
-    lower = compact.lower()
-    bracket_or_suffix_match = PDF_PASSAGE_RANGE_BRACKET_RE.match(compact) or PDF_PASSAGE_RANGE_KOREAN_RE.match(compact)
-    if bracket_or_suffix_match:
-        match = bracket_or_suffix_match
-    elif any(cue in lower for cue in PDF_PASSAGE_RANGE_CUES):
-        match = PDF_PASSAGE_RANGE_COMPACT_RE.match(compact)
-    else:
-        return None
-    if not match:
-        return None
-    try:
-        start = int(unicodedata.normalize("NFKC", match.group("start")))
-        end = int(unicodedata.normalize("NFKC", match.group("end")))
-    except (TypeError, ValueError):
-        return None
-    if start <= 0 or end <= start or end - start > 12:
-        return None
-    return start, end
+    header = parse_shared_passage_range_header(text)
+    if header is not None:
+        return header.start, header.end
+    candidate = parse_passage_range_candidate(text)
+    if candidate is not None and passage_header_text_looks_corrupted(text):
+        return candidate[0], candidate[1]
+    return None
 
 
 def _pdf_column_bounds_for_x(
@@ -1647,15 +1637,60 @@ def _build_pdf_passage_range_blocks(
             (_marker_bbox(line).left if _marker_bbox(line) else 0.0),
         ),
     )
-    for line in sorted_lines:
+    for line_index, line in enumerate(sorted_lines):
         text = str(line.get("text") or "").strip()
-        passage_range = _extract_pdf_passage_range(text)
-        if passage_range is None:
-            continue
+        range_header = parse_shared_passage_range_header(text)
         header_box = _marker_bbox(line)
+        raw_candidate = parse_passage_range_candidate(text)
+        if range_header is None and raw_candidate is not None and header_box is not None:
+            header_center_x = (header_box.left + header_box.right) / 2.0
+            _column_index, left_bound, right_bound = _pdf_column_bounds_for_x(
+                column_entries,
+                header_center_x,
+                image,
+            )
+            joined_parts = [text]
+            previous_box = header_box
+            same_column_line_count = 0
+            for following_line in sorted_lines[line_index + 1:]:
+                following_box = _marker_bbox(following_line)
+                following_text = str(following_line.get("text") or "").strip()
+                if following_box is None or not following_text:
+                    continue
+                following_center_x = (following_box.left + following_box.right) / 2.0
+                max_gap = max(
+                    24.0,
+                    previous_box.height * 1.6,
+                    following_box.height * 1.6,
+                    float(image.height) * 0.012,
+                )
+                if following_box.top - previous_box.bottom > max_gap:
+                    break
+                if not left_bound - 8.0 <= following_center_x <= right_bound + 8.0:
+                    continue
+                if following_box.top < previous_box.top:
+                    continue
+                joined_parts.append(following_text)
+                same_column_line_count += 1
+                joined_text = " ".join(joined_parts)
+                range_header = parse_shared_passage_range_header(joined_text)
+                if range_header is not None:
+                    text = joined_text
+                    break
+                previous_box = following_box
+                if same_column_line_count >= 2:
+                    break
+        corrupted_header = range_header is None and passage_header_text_looks_corrupted(text)
+        candidate = parse_passage_range_candidate(text) if corrupted_header else None
+        if range_header is None and candidate is None:
+            continue
         if header_box is None:
             continue
-        start, end = passage_range
+        start, end = (
+            (range_header.start, range_header.end)
+            if range_header is not None
+            else (candidate[0], candidate[1])
+        )
         seen_key = (start, end, int(round(header_box.top / 8.0)))
         if seen_key in seen_ranges:
             continue
@@ -1667,6 +1702,48 @@ def _build_pdf_passage_range_blocks(
             image,
         )
         ordered_columns = sorted(column_entries, key=lambda entry: entry[0])
+        current_column_markers = next(
+            (
+                markers
+                for entry_column_index, markers, _bounds in ordered_columns
+                if entry_column_index == column_index
+            ),
+            [],
+        )
+        preceding_numbers = [
+            int(marker["number"])
+            for marker in current_column_markers
+            if isinstance(marker.get("number"), int)
+            and (marker_box := _marker_bbox(marker)) is not None
+            and marker_box.top < header_box.top
+        ]
+        # A standard shared-passage header precedes its first child question.
+        # If the claimed range has already started in the same column, this
+        # header is content inside that question rather than a new common
+        # passage. This is the main guard against in-question ranges being
+        # exported by the passage-only action.
+        if preceding_numbers and preceding_numbers[-1] >= start:
+            continue
+
+        child_marker_numbers = sorted(
+            {
+                int(marker["number"])
+                for _entry_column_index, markers, _bounds in ordered_columns
+                for marker in markers
+                if isinstance(marker.get("number"), int)
+                and start <= int(marker["number"]) <= end
+            }
+        )
+        if corrupted_header and len(child_marker_numbers) < 2 and header_box.top > image.height * 0.25:
+            continue
+        if corrupted_header:
+            detection_confidence = 0.93 if len(child_marker_numbers) >= 2 else 0.82
+        elif len(child_marker_numbers) >= 2:
+            detection_confidence = range_header.confidence if range_header is not None else 0.98
+        elif len(child_marker_numbers) == 1:
+            detection_confidence = 0.94
+        else:
+            detection_confidence = 0.9
         header_column_position = next(
             (
                 position
@@ -1738,7 +1815,60 @@ def _build_pdf_passage_range_blocks(
                     break
                 continue
 
-            box = Box.from_points(fragment_left, fragment_top, fragment_right, fragment_bottom)
+            fragment_text_lines = [
+                candidate
+                for candidate in sorted_lines
+                if (candidate_box := _marker_bbox(candidate)) is not None
+                and fragment_left <= (candidate_box.left + candidate_box.right) / 2.0 <= fragment_right
+                and fragment_top <= (candidate_box.top + candidate_box.bottom) / 2.0 <= fragment_bottom
+                and str(candidate.get("text") or "").strip()
+                and not _looks_like_pdf_footer_text_line(
+                    candidate.get("text"),
+                    candidate_box,
+                    image.height,
+                )
+            ]
+            fragment_text_boxes = [
+                candidate_box
+                for candidate in fragment_text_lines
+                if (candidate_box := _marker_bbox(candidate)) is not None
+            ]
+            # Visual column bounds describe the body flow, but a shared-passage
+            # heading can legitimately span beyond that column.  Keep every
+            # text-layer line assigned to this fragment inside the source box;
+            # otherwise a crisp crop can still lose the right end of a long
+            # instruction line while receiving a misleadingly high image score.
+            box_left = min(
+                fragment_left,
+                *(candidate_box.left for candidate_box in fragment_text_boxes),
+            ) if fragment_text_boxes else fragment_left
+            box_right = max(
+                fragment_right,
+                *(candidate_box.right for candidate_box in fragment_text_boxes),
+            ) if fragment_text_boxes else fragment_right
+            box_bottom = max(
+                fragment_bottom,
+                *(candidate_box.bottom for candidate_box in fragment_text_boxes),
+            ) if fragment_text_boxes else fragment_bottom
+            box = Box.from_points(
+                max(0.0, box_left),
+                fragment_top,
+                min(float(image.width), box_right),
+                min(float(image.height), box_bottom),
+            )
+            fragment_texts = [
+                str(candidate.get("text") or "").strip()
+                for candidate in fragment_text_lines
+            ]
+            text_bounds_scores = [
+                (
+                    max(0.0, min(box.right, candidate_box.right) - max(box.left, candidate_box.left))
+                    * max(0.0, min(box.bottom, candidate_box.bottom) - max(box.top, candidate_box.top))
+                )
+                / max(1.0, candidate_box.area)
+                for candidate_box in fragment_text_boxes
+            ]
+            text_bounds_score = min(text_bounds_scores, default=1.0)
             metadata = _enrich_block_segmentation_metadata(
                 {
                     "segmenter": "pdf-passage-range",
@@ -1750,6 +1880,17 @@ def _build_pdf_passage_range_blocks(
                     "passage_range_end": end,
                     "passage_range": {"start": start, "end": end},
                     "passage_fragment_index": fragment_index,
+                    "passage_detection_confidence": detection_confidence,
+                    "passage_detection_cue_language": (
+                        range_header.cue_language if range_header is not None else "corrupted-text-layer"
+                    ),
+                    "passage_child_marker_numbers": child_marker_numbers,
+                    "passage_text_line_count": len(fragment_texts),
+                    "passage_text_character_count": sum(
+                        len(re.sub(r"\s+", "", fragment_text))
+                        for fragment_text in fragment_texts
+                    ),
+                    "passage_text_bounds_score": text_bounds_score,
                     "display_title": text[:120],
                     "force_image_record": True,
                     "shared_passage": True,
@@ -1776,8 +1917,19 @@ def _build_pdf_passage_range_blocks(
                 break
 
         range_fragment_count = len(blocks) - range_blocks_start
-        for block in blocks[range_blocks_start:]:
+        range_blocks = blocks[range_blocks_start:]
+        total_text_line_count = sum(
+            int(block.metadata.get("passage_text_line_count") or 0)
+            for block in range_blocks
+        )
+        total_text_character_count = sum(
+            int(block.metadata.get("passage_text_character_count") or 0)
+            for block in range_blocks
+        )
+        for block in range_blocks:
             block.metadata["passage_fragment_count"] = range_fragment_count
+            block.metadata["passage_total_text_line_count"] = total_text_line_count
+            block.metadata["passage_total_text_character_count"] = total_text_character_count
         seen_ranges.add(seen_key)
 
     return blocks

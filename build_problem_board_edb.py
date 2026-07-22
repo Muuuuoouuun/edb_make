@@ -46,6 +46,7 @@ from edb_builder import (
     build_preview_image_bytes,
     build_text_record,
     build_tight_crop_image_bytes,
+    build_v1_secondary_image_bytes,
     header_flag_for_crop_format,
     normalize_height_px,
     normalize_width_px,
@@ -58,6 +59,8 @@ from layout_template_schema import LayoutTemplate, ProblemLayoutInput
 from image_reconstruction_backend import clean_problem_image_transparency
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
+from page_tiling import PageTilingOptions, tile_page_columns
+from passage_quality import assess_passage_crop_quality
 from placement_engine import place_problems
 from preprocess import PreparedPage, prepare_source_pages
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
@@ -154,6 +157,7 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "missing_problem_image": "문항 이미지 없음",
     "passage_group_source_reuse": "지문 겹침",
     "passage_missing_child_questions": "문항 누락",
+    "passage_quality_review": "지문 품질 확인",
     "passage_review_queue_remaining": "지문 확인 필요",
     "review_flags_remaining": "검수 플래그 남음",
     "small_problem_image": "문항 이미지 작음",
@@ -163,12 +167,18 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
-PASSAGE_FRAGMENT_STITCH_GAP_PX = 16
+PASSAGE_FRAGMENT_STITCH_GAP_PX = 12
 PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
 PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
 PASSAGE_SOURCE_VERTICAL_RECOVERY_PX = 12
 PASSAGE_JOIN_BLANK_RUN_MIN_PX = 40
 PASSAGE_JOIN_EDGE_PADDING_PX = 16
+PASSAGE_JOIN_CONTENT_PADDING_PX = 8
+PASSAGE_JOIN_EXCESS_BLANK_MIN_PX = 24
+# Crop and cutout PNGs are temporary export assets. A moderate compression
+# level keeps them pixel-identical while avoiding Pillow's slower default
+# encoder setting on long Korean passage images.
+INTERMEDIATE_PNG_COMPRESSION_LEVEL = 3
 CONTINUOUS_RECORD_GAP_PX = 20.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
@@ -178,6 +188,7 @@ PASSAGE_REVIEW_REASON_LABELS = {
     "passage_fragment": "지문 본문",
     "passage_group_source_reuse": "지문 겹침",
     "passage_missing_child_questions": "문항 누락",
+    "passage_quality_review": "지문 품질 확인",
     "source_problem_bbox_overlap": "문항 영역 겹침",
 }
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
@@ -188,7 +199,10 @@ TEXT_PRIORITY_UNSHARP_RADIUS = 0.6
 TEXT_PRIORITY_UNSHARP_PERCENT = 70
 TEXT_PRIORITY_UNSHARP_THRESHOLD = 3
 V2_ENCODED_IMAGE_MIN_WIDTH_PX = 1024
-V2_ENCODED_IMAGE_MAX_WIDTH_PX = 2048
+# 2K+ high-resolution packaging is temporarily disabled to keep large exports
+# responsive. The logical board geometry is unchanged; only bitmap oversampling
+# is capped below the 2K tier.
+V2_ENCODED_IMAGE_MAX_WIDTH_PX = 1600
 V2_ENCODED_IMAGE_OVERSAMPLE = 2.5
 V2_ENCODED_IMAGE_MAX_PIXELS = 8_000_000
 # Brightness above this value (0-255) is treated as a light background that
@@ -308,7 +322,7 @@ def _default_processing_step_for_problem(problem: ProblemUnit) -> str:
     if raw_step:
         return _normalize_processing_step(raw_step)
     if _is_page_as_is_problem(problem):
-        return PROCESSING_STEP_RECONSTRUCT
+        return PROCESSING_STEP_CHALK
     return PROCESSING_STEP_RAW
 
 
@@ -1243,7 +1257,12 @@ def _prepare_image_for_dark_board(image: Image.Image, *, board_theme: str = DEFA
 
 def _write_render_image(image: Image.Image, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, format="PNG")
+    image.save(
+        path,
+        format="PNG",
+        compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL,
+        optimize=False,
+    )
     return path
 
 
@@ -1468,7 +1487,17 @@ class _ImageOnlyRecordImage:
 def _resolve_problem_asset_worker_count(task_count: int) -> int:
     if task_count <= 1:
         return 1
-    return min(4, task_count)
+    max_workers = max(1, min(8, task_count, os.cpu_count() or 2))
+    raw_worker_count = os.environ.get("EDB_PROBLEM_ASSET_WORKERS", "").strip()
+    if raw_worker_count:
+        try:
+            requested_workers = int(raw_worker_count)
+        except ValueError:
+            requested_workers = max_workers
+        if requested_workers <= 0:
+            return 1
+        return max(1, min(max_workers, requested_workers))
+    return max_workers
 
 
 def _resolve_image_record_worker_count(item_count: int) -> int:
@@ -1729,24 +1758,38 @@ def _apply_selective_media_preservation(
     return output
 
 
+def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> None:
+    enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
+    if task.text_priority:
+        cutout_image = _extract_problem_cutout(
+            enhanced_crop,
+            chalk_color=task.chalk_color,
+            text_priority=True,
+        )
+    else:
+        cutout_image = _extract_problem_cutout(
+            enhanced_crop,
+            chalk_color=task.chalk_color,
+        )
+    cutout_image = _apply_selective_media_preservation(
+        cutout_image,
+        crop,
+        task.rendered_media_regions,
+    )
+    _write_render_image(cutout_image, task.board_render_path)
+
+
 def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
     if task.text_payload:
         crop = _render_text_fallback_problem_card(task.text_payload, title=task.text_title)
         task.crop_path.parent.mkdir(parents=True, exist_ok=True)
-        crop.save(task.crop_path)
-        enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
-        if task.text_priority:
-            cutout_image = _extract_problem_cutout(
-                enhanced_crop,
-                chalk_color=task.chalk_color,
-                text_priority=True,
-            )
-        else:
-            cutout_image = _extract_problem_cutout(
-                enhanced_crop,
-                chalk_color=task.chalk_color,
-            )
-        _write_render_image(cutout_image, task.board_render_path)
+        crop.save(
+            task.crop_path,
+            format="PNG",
+            compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL,
+            optimize=False,
+        )
+        _render_problem_board_asset(crop, task)
         return crop.size
 
     def crop_segment(
@@ -1819,25 +1862,13 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
     else:
         crop, task.rendered_media_regions = crop_segment(task.bounds)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
-    crop.save(task.crop_path)
-    enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
-    if task.text_priority:
-        cutout_image = _extract_problem_cutout(
-            enhanced_crop,
-            chalk_color=task.chalk_color,
-            text_priority=True,
-        )
-    else:
-        cutout_image = _extract_problem_cutout(
-            enhanced_crop,
-            chalk_color=task.chalk_color,
-        )
-    cutout_image = _apply_selective_media_preservation(
-        cutout_image,
-        crop,
-        task.rendered_media_regions,
+    crop.save(
+        task.crop_path,
+        format="PNG",
+        compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL,
+        optimize=False,
     )
-    _write_render_image(cutout_image, task.board_render_path)
+    _render_problem_board_asset(crop, task)
     return crop.size
 
 
@@ -1951,6 +1982,7 @@ def build_pages(
     deskew: bool,
     crop_margins: bool,
     max_dimension: int | None,
+    page_tile_mode: str = "off",
     debug_segments_dir: Path | None = None,
     input_intent: str = "auto",
     ocr_semaphore: threading.BoundedSemaphore | None = None,
@@ -1965,6 +1997,10 @@ def build_pages(
         max_dimension=max_dimension,
     )
     if _normalize_input_intent(input_intent) == "page-as-is":
+        prepared_pages = _tile_page_as_is_prepared_pages(
+            prepared_pages,
+            page_tile_mode=page_tile_mode,
+        )
         return prepared_pages, _build_page_as_is_models(prepared_pages, subject=subject)
 
     page_ai_config = _to_page_ai_config(ai_fallback_config)
@@ -1981,6 +2017,126 @@ def build_pages(
             debug_path = debug_segments_dir / f"{page.page_id}_segments.png"
             draw_segment_debug(prepared_page, page.blocks, debug_path)
     return prepared_pages, page_models
+
+
+PAGE_TILE_MODES = {"off", "auto"}
+
+
+def _normalize_page_tile_mode(value: str | None) -> str:
+    normalized = str(value or "off").strip().lower().replace("_", "-")
+    return normalized if normalized in PAGE_TILE_MODES else "off"
+
+
+def _tile_media_regions_for_box(
+    regions: Sequence[Mapping[str, Any]],
+    source_box: tuple[int, int, int, int],
+) -> list[dict[str, Any]]:
+    box_left, box_top, box_right, box_bottom = source_box
+    mapped: list[dict[str, Any]] = []
+    for region in regions:
+        raw_bbox = region.get("bbox") if isinstance(region, Mapping) else None
+        if not isinstance(raw_bbox, Mapping):
+            continue
+        try:
+            left = float(raw_bbox.get("left", 0.0))
+            top = float(raw_bbox.get("top", 0.0))
+            right = float(raw_bbox.get("right", left + float(raw_bbox.get("width", 0.0))))
+            bottom = float(raw_bbox.get("bottom", top + float(raw_bbox.get("height", 0.0))))
+        except (TypeError, ValueError):
+            continue
+        intersection = (
+            max(left, float(box_left)),
+            max(top, float(box_top)),
+            min(right, float(box_right)),
+            min(bottom, float(box_bottom)),
+        )
+        if intersection[2] <= intersection[0] or intersection[3] <= intersection[1]:
+            continue
+        source_area = max(1.0, (right - left) * (bottom - top))
+        intersection_area = (intersection[2] - intersection[0]) * (intersection[3] - intersection[1])
+        if intersection_area / source_area < 0.8:
+            continue
+        local_left = intersection[0] - box_left
+        local_top = intersection[1] - box_top
+        local_right = intersection[2] - box_left
+        local_bottom = intersection[3] - box_top
+        payload = {key: value for key, value in region.items() if key != "bbox"}
+        payload["bbox"] = {
+            "left": local_left,
+            "top": local_top,
+            "right": local_right,
+            "bottom": local_bottom,
+            "width": local_right - local_left,
+            "height": local_bottom - local_top,
+        }
+        mapped.append(payload)
+    return mapped
+
+
+def _tile_page_as_is_prepared_pages(
+    prepared_pages: Sequence[PreparedPage],
+    *,
+    page_tile_mode: str,
+) -> list[PreparedPage]:
+    if _normalize_page_tile_mode(page_tile_mode) != "auto":
+        return list(prepared_pages)
+
+    tiled_pages: list[PreparedPage] = []
+    options = PageTilingOptions(allow_center_vertical_rule=True)
+    for prepared_page in prepared_pages:
+        result = tile_page_columns(prepared_page.image, options)
+        if not result.was_split:
+            prepared_page.metadata["page_tile_mode"] = "auto"
+            prepared_page.metadata["page_tile_split"] = False
+            prepared_page.metadata["page_tile_reason"] = result.reason
+            tiled_pages.append(prepared_page)
+            continue
+
+        tile_dir = Path(prepared_page.source_path).resolve().parent / "page_tiles"
+        tile_dir.mkdir(parents=True, exist_ok=True)
+        source_regions = tuple(
+            region
+            for region in (prepared_page.metadata.get("pdf_media_regions") or [])
+            if isinstance(region, dict)
+        )
+        for tile_number, tile in enumerate(result.tiles, start=1):
+            tile_id = f"{prepared_page.page_id}-tile-{tile_number:02d}"
+            tile_path = tile_dir / f"{tile_id}.png"
+            tile.image.save(tile_path, format="PNG")
+            tile_metadata = {
+                **dict(prepared_page.metadata),
+                "page_tile_mode": "auto",
+                "page_tile_split": True,
+                "page_tile_reason": result.reason,
+                "page_tile_confidence": result.confidence,
+                "page_tile_index": tile_number,
+                "page_tile_count": len(result.tiles),
+                "page_tile_column": "left" if tile.column_index == 0 else "right",
+                "page_tile_parent_page_id": prepared_page.page_id,
+                "page_tile_parent_source_path": prepared_page.source_path,
+                "page_tile_source_box": {
+                    "left": tile.source_box[0],
+                    "top": tile.source_box[1],
+                    "right": tile.source_box[2],
+                    "bottom": tile.source_box[3],
+                    "width": tile.source_box[2] - tile.source_box[0],
+                    "height": tile.source_box[3] - tile.source_box[1],
+                },
+                "page_tile_split_x": result.split_x,
+                "page_tile_gutter_bounds": result.gutter_bounds,
+                "pdf_media_regions": _tile_media_regions_for_box(source_regions, tile.source_box),
+            }
+            tiled_pages.append(
+                PreparedPage(
+                    page_id=tile_id,
+                    source_path=str(tile_path.resolve()),
+                    page_number=prepared_page.page_number,
+                    image=tile.image,
+                    original_size=tile.image.size,
+                    metadata=tile_metadata,
+                )
+            )
+    return tiled_pages
 
 
 def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Subject) -> list[PageModel]:
@@ -2020,10 +2176,16 @@ def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Sub
                 "ocr_skipped_reason": "page_as_is_fast_path",
             },
         )
+        source_page_number = int(prepared_page.page_number or index)
+        tile_count = int(prepared_page.metadata.get("page_tile_count") or 1)
+        tile_column = str(prepared_page.metadata.get("page_tile_column") or "")
+        title = f"페이지 {source_page_number}"
+        if tile_count > 1:
+            title += " · 왼쪽" if tile_column == "left" else " · 오른쪽"
         problem = ProblemUnit(
             unit_id=problem_id,
             subject=subject,
-            title=f"페이지 {index}",
+            title=title,
             stem_block_ids=[block_id],
             metadata={
                 "grouping_source": "user_intent",
@@ -2351,6 +2513,12 @@ def _clamp_box_to_next_problem(
 
 
 def _problem_metadata_bbox(problem: ProblemUnit, page: PageModel) -> Box | None:
+    # Passage fragments already own the exact shared-passage block(s). AI
+    # problem grouping describes child questions and can attach the first
+    # child's bbox to the supplemental passage unit. Treating that bbox as a
+    # crop override turns the passage-only preview into a blank/question strip.
+    if str(problem.metadata.get("passage_role") or "").strip() == "passage_fragment":
+        return None
     raw = problem.metadata.get("bbox_px")
     if not isinstance(raw, dict):
         ai_unit = problem.metadata.get("ai_problem_unit")
@@ -2527,7 +2695,13 @@ def _drop_pre_first_problem_headers(
         return problems
 
     first_numbered = problems[first_numbered_index]
-    if _problem_passage_continues_across_pages(first_numbered.metadata):
+    first_passage_range = _passage_range_tuple(first_numbered.metadata)
+    first_problem_number = _problem_metadata_number(first_numbered)
+    if (
+        _problem_passage_continues_across_pages(first_numbered.metadata)
+        and first_passage_range is not None
+        and first_problem_number == first_passage_range[0]
+    ):
         continuation_problems = [
             problem
             for index, problem in enumerate(problems)
@@ -3355,6 +3529,193 @@ def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
                     break
 
 
+def _pdf_text_line_box(value: Any) -> Box | None:
+    if not isinstance(value, Mapping):
+        return None
+    raw_box = value.get("bbox")
+    if not isinstance(raw_box, Mapping):
+        return None
+    try:
+        left = float(raw_box.get("left", 0.0))
+        top = float(raw_box.get("top", 0.0))
+        right = float(raw_box.get("right", left))
+        bottom = float(raw_box.get("bottom", top))
+    except (TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return Box.from_points(left, top, right, bottom)
+
+
+def _materialize_pdf_pre_question_passage_continuations(
+    pages: Sequence[PageModel],
+    prepared_by_page_id: Mapping[str, PreparedPage],
+) -> None:
+    """Turn next-page text before the first child question into a passage fragment.
+
+    PDF marker segmentation intentionally starts at numbered questions.  Korean
+    exam passages can continue at the top of the next page before that marker,
+    so the text would otherwise be visible in the source but absent from the
+    passage-only image.
+    """
+
+    for page in pages:
+        prepared_page = prepared_by_page_id.get(page.page_id)
+        if prepared_page is None:
+            continue
+        text_lines = prepared_page.metadata.get("pdf_text_lines")
+        if not isinstance(text_lines, list) or not text_lines:
+            continue
+
+        block_by_id = {block.block_id: block for block in page.blocks}
+        group_children: dict[str, list[ProblemUnit]] = {}
+        for problem in page.problems:
+            metadata = problem.metadata
+            if str(metadata.get("passage_role") or "") != "child_question":
+                continue
+            group_id = str(metadata.get("passage_group_id") or "").strip()
+            source_page_ids = _metadata_string_list(metadata, "passage_source_page_ids")
+            if (
+                not group_id
+                or len(source_page_ids) < 2
+                or source_page_ids[0] == page.page_id
+                or page.page_id not in source_page_ids
+            ):
+                continue
+            group_children.setdefault(group_id, []).append(problem)
+
+        for group_id, children in group_children.items():
+            if any(
+                _problem_is_passage_fragment_unit(problem)
+                and str(problem.metadata.get("passage_group_id") or "").strip() == group_id
+                for problem in page.problems
+            ):
+                continue
+            first_child = min(
+                children,
+                key=lambda problem: (
+                    _problem_metadata_number(problem) or 10**9,
+                    _problem_top_y(problem, block_by_id),
+                ),
+            )
+            passage_range = _passage_range_tuple(first_child.metadata)
+            first_child_number = _problem_metadata_number(first_child)
+            # Child questions often continue onto later pages even though the
+            # shared passage itself ended earlier.  Only the page containing
+            # the range's first question can legitimately hold passage text
+            # before that question marker.
+            if passage_range is None or first_child_number != passage_range[0]:
+                continue
+            child_blocks = [
+                block_by_id[block_id]
+                for block_id in _iter_problem_block_ids_raw(first_child)
+                if block_id in block_by_id
+            ]
+            if not child_blocks:
+                continue
+            first_top = min(block.bbox.top for block in child_blocks)
+            if first_top <= float(page.height_px) * 0.08:
+                continue
+            column_index = _problem_column_value(first_child, block_by_id)
+            column_blocks = [
+                block
+                for block in page.blocks
+                if column_index is None or _coerce_int(block.metadata.get("column_index")) == column_index
+            ]
+            reference_blocks = column_blocks or child_blocks
+            left_bound = min(block.bbox.left for block in reference_blocks)
+            right_bound = max(block.bbox.right for block in reference_blocks)
+            top_floor = float(page.height_px) * 0.04
+            bottom_limit = first_top - max(8.0, float(page.height_px) * 0.003)
+
+            continuation_lines: list[tuple[str, Box]] = []
+            for raw_line in text_lines:
+                line_box = _pdf_text_line_box(raw_line)
+                text = str(raw_line.get("text") or "").strip() if isinstance(raw_line, Mapping) else ""
+                if line_box is None or not text:
+                    continue
+                center_x = (line_box.left + line_box.right) / 2.0
+                center_y = (line_box.top + line_box.bottom) / 2.0
+                if (
+                    left_bound - 8.0 <= center_x <= right_bound + 8.0
+                    and top_floor <= center_y <= bottom_limit
+                ):
+                    continuation_lines.append((text, line_box))
+
+            visible_character_count = sum(
+                len(re.sub(r"\s+", "", text)) for text, _line_box in continuation_lines
+            )
+            if len(continuation_lines) < 2 or visible_character_count < 40:
+                continue
+
+            start, end = passage_range
+            box = Box.from_points(
+                max(0.0, min(left_bound, *(line_box.left for _text, line_box in continuation_lines))),
+                max(0.0, min(line_box.top for _text, line_box in continuation_lines) - 12.0),
+                min(float(page.width_px), max(right_bound, *(line_box.right for _text, line_box in continuation_lines))),
+                min(bottom_limit, max(line_box.bottom for _text, line_box in continuation_lines) + 12.0),
+            )
+            block_id = f"{page.page_id}-passage-continuation-{start}-{end}"
+            unit_id = f"{block_id}-fragment"
+            if block_id in block_by_id or any(problem.unit_id == unit_id for problem in page.problems):
+                continue
+
+            source_page_ids = _metadata_string_list(first_child.metadata, "passage_source_page_ids")
+            child_numbers = _passage_child_numbers(first_child.metadata, start, end)
+            page.blocks.append(
+                ContentBlock(
+                    block_id=block_id,
+                    block_type=BlockType.STEM,
+                    bbox=box,
+                    reading_order=-1,
+                    text="\n".join(text for text, _line_box in continuation_lines),
+                    confidence=1.0,
+                    metadata={
+                        "segmenter": "pdf-pre-question-passage-continuation",
+                        "column_index": column_index,
+                        "shared_passage": True,
+                        "passage_range_start": start,
+                        "passage_range_end": end,
+                        "passage_range": {"start": start, "end": end},
+                        "passage_text_line_count": len(continuation_lines),
+                        "passage_text_character_count": visible_character_count,
+                        "passage_text_bounds_score": 1.0,
+                        "passage_detection_confidence": 0.98,
+                        "force_image_record": True,
+                    },
+                )
+            )
+            page.problems.append(
+                ProblemUnit(
+                    unit_id=unit_id,
+                    subject=page.subject,
+                    title=f"지문 {start}~{end}",
+                    stem_block_ids=[block_id],
+                    metadata={
+                        "passage_group_id": group_id,
+                        "passage_range": {"start": start, "end": end},
+                        "passage_child_problem_numbers": child_numbers,
+                        "passage_source_page_ids": source_page_ids,
+                        "passage_continues_across_pages": True,
+                        "passage_fragment_count": len(source_page_ids),
+                        "passage_role": "passage_fragment",
+                        "supplemental_item": True,
+                        "passage_fragment_source": "pdf_pre_question_continuation",
+                        "passage_pre_question_continuation": True,
+                        "passage_detection_confidence": 0.98,
+                        "passage_text_line_count": len(continuation_lines),
+                        "passage_text_character_count": visible_character_count,
+                        "passage_text_bounds_score": 1.0,
+                    },
+                )
+            )
+            continuation_ids = first_child.metadata.setdefault(
+                "passage_pre_question_continuation_block_ids", []
+            )
+            if isinstance(continuation_ids, list) and block_id not in continuation_ids:
+                continuation_ids.append(block_id)
+
+
 def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
     flags: list[str] = []
     if (
@@ -3518,6 +3879,27 @@ def _trim_passage_segment_for_join(
                 )
                 if candidate_bottom >= top + 80 and image.height - candidate_bottom >= 32:
                     bottom = candidate_bottom
+
+    # Asset crops deliberately retain generous safety padding so edge glyphs
+    # cannot be clipped. At a stitched join that padding appears twice and
+    # creates a conspicuous blank band. Collapse only clearly excessive outer
+    # whitespace, retaining a small buffer around the first/last text row.
+    meaningful_rows = [
+        index
+        for index in range(max(0, top), min(image.height, bottom))
+        if row_counts[index] > 3
+    ]
+    if meaningful_rows:
+        if trim_top:
+            content_top = meaningful_rows[0]
+            excess_top = content_top - top
+            if excess_top >= PASSAGE_JOIN_EXCESS_BLANK_MIN_PX:
+                top = max(top, content_top - PASSAGE_JOIN_CONTENT_PADDING_PX)
+        if trim_bottom:
+            content_bottom = meaningful_rows[-1] + 1
+            excess_bottom = bottom - content_bottom
+            if excess_bottom >= PASSAGE_JOIN_EXCESS_BLANK_MIN_PX:
+                bottom = min(bottom, content_bottom + PASSAGE_JOIN_CONTENT_PADDING_PX)
 
     if top <= 0 and bottom >= image.height:
         if crop_box_output is not None:
@@ -3786,6 +4168,7 @@ def _stitch_passage_image_files(
     transparent: bool,
     source_region_groups: Sequence[Sequence[Mapping[str, Any]]] | None = None,
     stitched_regions_output: list[dict[str, Any]] | None = None,
+    stitch_diagnostics_output: dict[str, Any] | None = None,
 ) -> tuple[int, int]:
     images: list[Image.Image] = []
     for path in paths:
@@ -3809,9 +4192,41 @@ def _stitch_passage_image_files(
             stitched_regions_output.extend(
                 _media_regions_after_stitch(source_region_groups, placements)
             )
+    if stitch_diagnostics_output is not None:
+        row_counts = _passage_foreground_row_counts(stitched)
+        blank_runs = _blank_row_runs(row_counts, end=stitched.height)
+        join_blank_bands: list[int] = []
+        for placement in placements[1:]:
+            join_y = int(placement.get("y", 0))
+            matching_run = next(
+                (
+                    (start, end)
+                    for start, end in blank_runs
+                    if start <= max(0, join_y - 1) < end or start <= join_y < end
+                ),
+                None,
+            )
+            join_blank_bands.append(
+                matching_run[1] - matching_run[0]
+                if matching_run is not None
+                else 0
+            )
+        stitch_diagnostics_output.clear()
+        stitch_diagnostics_output.update(
+            {
+                "join_count": max(0, len(placements) - 1),
+                "join_blank_band_px": join_blank_bands,
+                "max_join_blank_band_px": max(join_blank_bands, default=0),
+            }
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    stitched.save(output_path)
+    stitched.save(
+        output_path,
+        format="PNG",
+        compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL,
+        optimize=False,
+    )
     return stitched.size
 
 
@@ -3848,29 +4263,60 @@ def _coalesce_cross_page_passage_drafts(
         primary = drafts[primary_index]
         fragment_ids = [drafts[index].problem_id for index in ordered_indices]
         primary_crop_paths = [drafts[index].crop_path for index in ordered_indices]
-        primary_render_paths = [drafts[index].board_render_path for index in ordered_indices]
         stitched_regions: list[dict[str, Any]] = []
+        stitch_diagnostics: dict[str, Any] = {}
         updated_crop_sizes[primary_index] = _stitch_passage_image_files(
             primary_crop_paths,
             primary.crop_path,
             transparent=False,
             source_region_groups=[drafts[index].preserve_media_regions for index in ordered_indices],
             stitched_regions_output=stitched_regions,
-        )
-        _stitch_passage_image_files(
-            primary_render_paths,
-            primary.board_render_path,
-            transparent=True,
+            stitch_diagnostics_output=stitch_diagnostics,
         )
         primary.preserve_media_regions = stitched_regions
         if primary.asset_task is not None:
             primary.asset_task.rendered_media_regions = list(stitched_regions)
+        _stitch_passage_image_files(
+            [drafts[index].board_render_path for index in ordered_indices],
+            primary.board_render_path,
+            transparent=True,
+        )
 
         # A stitched passage is a single rendered image. Keeping blocks from
         # later pages would make mixed-mode export crop those bboxes from the
         # first page again, so deliberately fall back to the composite image.
         primary.blocks = []
         merged_risk_flags: list[str] = []
+        fragment_problems = [
+            problem_units_by_id.get(drafts[index].problem_id)
+            for index in ordered_indices
+        ]
+        fragment_problems = [problem for problem in fragment_problems if problem is not None]
+        primary_problem = problem_units_by_id.get(primary.problem_id)
+        if primary_problem is not None and fragment_problems:
+            primary_problem.metadata["passage_stitch_diagnostics"] = stitch_diagnostics
+            primary_problem.metadata["passage_text_line_count"] = sum(
+                max(0, _coerce_int(problem.metadata.get("passage_text_line_count")) or 0)
+                for problem in fragment_problems
+            )
+            primary_problem.metadata["passage_text_character_count"] = sum(
+                max(0, _coerce_int(problem.metadata.get("passage_text_character_count")) or 0)
+                for problem in fragment_problems
+            )
+            bounds_scores = [
+                float(problem.metadata["passage_text_bounds_score"])
+                for problem in fragment_problems
+                if isinstance(problem.metadata.get("passage_text_bounds_score"), (int, float))
+            ]
+            if bounds_scores:
+                primary_problem.metadata["passage_text_bounds_score"] = min(bounds_scores)
+            detection_scores = [
+                float(problem.metadata["passage_detection_confidence"])
+                for problem in fragment_problems
+                if isinstance(problem.metadata.get("passage_detection_confidence"), (int, float))
+            ]
+            if detection_scores:
+                primary_problem.metadata["passage_detection_confidence"] = min(detection_scores)
         for index in ordered_indices:
             for flag in drafts[index].risk_flags:
                 if flag != PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG and flag not in merged_risk_flags:
@@ -3910,6 +4356,40 @@ def _coalesce_cross_page_passage_drafts(
     )
 
 
+def _annotate_passage_crop_quality(
+    drafts: Sequence[_ProblemEntryDraft],
+    pages: Sequence[PageModel],
+) -> None:
+    problems_by_id = {
+        problem.unit_id: problem
+        for page in pages
+        for problem in page.problems
+    }
+    for draft in drafts:
+        problem = problems_by_id.get(draft.problem_id)
+        if problem is None or not _problem_is_passage_fragment_unit(problem):
+            continue
+        try:
+            with Image.open(draft.crop_path) as loaded:
+                quality = assess_passage_crop_quality(
+                    loaded,
+                    source_dpi=draft.prepared_page.metadata.get("dpi"),
+                    detection_confidence=problem.metadata.get("passage_detection_confidence"),
+                    text_line_count=int(problem.metadata.get("passage_text_line_count") or 0),
+                    text_character_count=int(problem.metadata.get("passage_text_character_count") or 0),
+                    text_bounds_score=problem.metadata.get("passage_text_bounds_score"),
+                    stitch_diagnostics=problem.metadata.get("passage_stitch_diagnostics"),
+                )
+        except (OSError, ValueError, TypeError):
+            quality = {
+                "overall_score": 0.0,
+                "score_10": 0.0,
+                "grade": "poor",
+                "warnings": ["passage_crop_quality_unavailable"],
+            }
+        problem.metadata["passage_quality"] = quality
+
+
 def build_problem_entries(
     prepared_pages: list[PreparedPage],
     pages: list[PageModel],
@@ -3931,6 +4411,7 @@ def build_problem_entries(
     _remove_hwp_template_instruction_problems(pages)
     _restore_hwp_text_fallback_problems(pages)
     _annotate_cross_page_passage_groups(pages)
+    _materialize_pdf_pre_question_passage_continuations(pages, prepared_by_page_id)
 
     for page in pages:
         prepared_page = prepared_by_page_id.get(page.page_id)
@@ -4218,6 +4699,7 @@ def build_problem_entries(
         if draft.asset_task is not None:
             draft.preserve_media_regions = list(draft.asset_task.rendered_media_regions)
     drafts, crop_sizes = _coalesce_cross_page_passage_drafts(drafts, crop_sizes, pages)
+    _annotate_passage_crop_quality(drafts, pages)
     entries: list[ProblemEntry] = []
     for draft, crop_size in zip(drafts, crop_sizes):
         actual_height_pages = (
@@ -4735,6 +5217,12 @@ def _problem_passage_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if role:
         payload["passageRole"] = role
         payload["passage_role"] = role
+
+    passage_quality = metadata.get("passage_quality")
+    if isinstance(passage_quality, dict):
+        normalized_quality = dict(passage_quality)
+        payload["passageQuality"] = normalized_quality
+        payload["passage_quality"] = normalized_quality
 
     shared_block_ids = metadata.get("shared_passage_block_ids")
     if isinstance(shared_block_ids, list):
@@ -6813,6 +7301,16 @@ def build_ui_session(
                 "source_type": page_metadata.get("source_type"),
                 "pageAsIsFastPath": bool(page_metadata.get("page_as_is_fast_path")),
                 "page_as_is_fast_path": bool(page_metadata.get("page_as_is_fast_path")),
+                "pageTileMode": str(page_metadata.get("page_tile_mode") or "off"),
+                "page_tile_mode": str(page_metadata.get("page_tile_mode") or "off"),
+                "pageTileSplit": bool(page_metadata.get("page_tile_split")),
+                "page_tile_split": bool(page_metadata.get("page_tile_split")),
+                "pageTileColumn": page_metadata.get("page_tile_column"),
+                "page_tile_column": page_metadata.get("page_tile_column"),
+                "pageTileConfidence": page_metadata.get("page_tile_confidence"),
+                "page_tile_confidence": page_metadata.get("page_tile_confidence"),
+                "pageTileParentPageId": page_metadata.get("page_tile_parent_page_id"),
+                "page_tile_parent_page_id": page_metadata.get("page_tile_parent_page_id"),
                 "segmentationSkipped": bool(page_metadata.get("segmentation_skipped")),
                 "segmentation_skipped": bool(page_metadata.get("segmentation_skipped")),
                 "ocrSkipped": bool(page_metadata.get("ocr_skipped")),
@@ -7675,8 +8173,10 @@ def _build_image_only_record_image(
             image_bytes, format_hint=image_format, quality=88
         )
     else:
-        secondary_bytes = build_preview_image_bytes(
-            image_bytes, max_size=(768, 768), format_hint=image_format, quality=88
+        secondary_bytes = build_v1_secondary_image_bytes(
+            image_bytes,
+            page_as_is=_entry_uses_continuous_page_flow(entry),
+            format_hint=image_format,
         )
     return _ImageOnlyRecordImage(
         crop_path=crop_path,
@@ -8472,6 +8972,7 @@ def run_problem_export(
     sync_ui: bool = False,
     crop_format: str = DEFAULT_CROP_FORMAT,
     input_intent: str = "auto",
+    page_tile_mode: str = "off",
     content_target: str = "all",
     input_notes: str | None = None,
     ai_fallback_enabled: bool = False,
@@ -8543,6 +9044,7 @@ def run_problem_export(
             deskew=not skip_deskew,
             crop_margins=not skip_crop,
             max_dimension=max_dimension,
+            page_tile_mode=page_tile_mode,
             input_intent=resolved_input_intent,
             ocr_semaphore=shared_ocr_semaphore,
             global_ocr_worker_limit=global_ocr_worker_limit,
@@ -8568,7 +9070,7 @@ def run_problem_export(
         prepared_pages.extend(prepared)
         pages.extend(page_models)
 
-    if resolved_input_intent in {"single-problem", "page-as-is"}:
+    if resolved_input_intent == "single-problem":
         pages = _force_single_problem_per_page(pages, input_intent=resolved_input_intent)
 
     save_pages_json(pages, out_dir / "pages.json")
@@ -8645,6 +9147,10 @@ def run_problem_export(
         "ocr_backend_requested": ocr,
         "ocr_summary": ocr_summary,
         "input_intent": resolved_input_intent,
+        "page_tile_mode": _normalize_page_tile_mode(page_tile_mode),
+        "page_tile_count": sum(
+            1 for prepared_page in prepared_pages if prepared_page.metadata.get("page_tile_split")
+        ),
         "content_target": resolved_content_target,
         "timing_ms": dict(timing_ms),
     }

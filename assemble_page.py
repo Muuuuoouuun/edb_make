@@ -5,6 +5,7 @@ import re
 import unicodedata
 from dataclasses import replace
 
+from passage_detection import extract_shared_passage_range
 from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit, Subject
 
 
@@ -152,20 +153,7 @@ SET_PROBLEM_KOREAN_SUFFIX_HEADER_RE = re.compile(
 
 
 def extract_set_problem_range(text: str | None) -> tuple[int, int] | None:
-    if not text:
-        return None
-    normalized_text = unicodedata.normalize("NFKC", text)
-    match = SET_PROBLEM_HEADER_RE.match(normalized_text) or SET_PROBLEM_KOREAN_SUFFIX_HEADER_RE.match(normalized_text)
-    if not match:
-        return None
-    try:
-        start_val = int(unicodedata.normalize("NFKC", match.group("start")))
-        end_val = int(unicodedata.normalize("NFKC", match.group("end")))
-        if start_val <= end_val:
-            return start_val, end_val
-    except (TypeError, ValueError):
-        pass
-    return None
+    return extract_shared_passage_range(text)
 
 
 def extract_problem_number(text: str | None) -> int | None:
@@ -828,6 +816,7 @@ def group_problem_units(page: PageModel) -> PageModel:
     shared_metadata_by_number: dict[int, dict[str, object]] = {}
     active_range: tuple[int, int] | None = None
     active_shared_blocks: list[str] = []
+    last_problem_number: int | None = None
 
     # PDF text-layer range blocks already carry an explicit range.  Build the
     # mapping from that metadata instead of relying on their position relative
@@ -857,12 +846,52 @@ def group_problem_units(page: PageModel) -> PageModel:
         )
         shared_ids = [block.block_id for block in ordered_range_blocks]
         explicit_range_block_ids.update(shared_ids)
+        detection_confidences = [
+            float(block.metadata.get("passage_detection_confidence"))
+            for block in ordered_range_blocks
+            if isinstance(block.metadata.get("passage_detection_confidence"), (int, float))
+        ]
+        child_marker_numbers = sorted(
+            {
+                int(number)
+                for block in ordered_range_blocks
+                for number in (block.metadata.get("passage_child_marker_numbers") or [])
+                if isinstance(number, int)
+            }
+        )
+        total_text_line_count = max(
+            (
+                int(block.metadata.get("passage_total_text_line_count") or 0)
+                for block in ordered_range_blocks
+            ),
+            default=0,
+        )
+        total_text_character_count = max(
+            (
+                int(block.metadata.get("passage_total_text_character_count") or 0)
+                for block in ordered_range_blocks
+            ),
+            default=0,
+        )
+        text_bounds_score = min(
+            (
+                float(block.metadata.get("passage_text_bounds_score"))
+                for block in ordered_range_blocks
+                if isinstance(block.metadata.get("passage_text_bounds_score"), (int, float))
+            ),
+            default=1.0,
+        )
         shared_metadata = {
             "passage_group_id": f"{page.page_id}-passage-{start}-{end}",
             "passage_range": {"start": start, "end": end},
             "passage_role": "child_question",
             "shared_passage_block_ids": shared_ids,
             "passage_child_problem_numbers": list(range(start, end + 1)),
+            "passage_detection_confidence": min(detection_confidences, default=0.9),
+            "passage_detected_child_marker_numbers": child_marker_numbers,
+            "passage_text_line_count": total_text_line_count,
+            "passage_text_character_count": total_text_character_count,
+            "passage_text_bounds_score": text_bounds_score,
         }
         for num in range(start, end + 1):
             shared_blocks_by_number[num] = list(shared_ids)
@@ -888,6 +917,12 @@ def group_problem_units(page: PageModel) -> PageModel:
             continue
         range_val = extract_set_problem_range(block.text)
         if range_val is not None:
+            # A shared range must be announced before its first child
+            # question. If the range has already started, this line belongs
+            # to the current problem (for example an in-question excerpt or
+            # numbered interval) and must never become a passage-only item.
+            if last_problem_number is not None and last_problem_number >= range_val[0]:
+                continue
             flush_active_shared_range()
             active_range = range_val
             active_shared_blocks = [block.block_id]
@@ -895,6 +930,7 @@ def group_problem_units(page: PageModel) -> PageModel:
 
         prob_num, _ = extract_problem_number_from_block(block)
         if prob_num is not None:
+            last_problem_number = prob_num
             if active_range is not None:
                 flush_active_shared_range()
                 active_range = None

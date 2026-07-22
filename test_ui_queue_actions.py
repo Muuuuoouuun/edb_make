@@ -22,6 +22,22 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
         self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
 
+    def test_page_as_is_upload_preserves_the_200_dpi_master(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        export_request = source.split("async function postExport(files", 1)[1]
+        export_request = export_request.split("function formatApiError", 1)[0]
+
+        self.assertIn("pills: ['2단계 원본 보존', '200 DPI'", source)
+        self.assertIn("pdfDpi: options.pdfDpi || 200", export_request)
+        self.assertIn(
+            "maxDimension: resolvedInputIntent === 'page-as-is' ? null : (options.maxDimension || 2400)",
+            export_request,
+        )
+        self.assertIn(
+            "pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off'",
+            export_request,
+        )
+
     def test_image_only_recognition_uses_fast_non_ai_path(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
@@ -38,6 +54,27 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("detectPerspective: !fastImageRecognition", queue_source)
         self.assertIn("skipDeskew: fastImageRecognition", queue_source)
         self.assertIn("이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다", queue_source)
+
+    def test_passage_only_review_surfaces_text_and_image_quality(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        summary_source = source.split("function summarizeRecognitionSession(session, pageIds){", 1)[1]
+        summary_source = summary_source.split("function aiModelFallbackToast(session){", 1)[0]
+
+        self.assertIn("problem?.passageQuality || problem?.passage_quality", summary_source)
+        self.assertIn("passageQualityScore", summary_source)
+        self.assertIn("passageQualityReviewCount", summary_source)
+        self.assertIn("텍스트·화질", source)
+
+    def test_passage_only_uses_deterministic_fast_path_without_ai_page_repair(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+
+        self.assertIn(
+            "isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition",
+            queue_source,
+        )
+        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", queue_source)
 
     def test_upload_queue_row_selects_pending_file_preview(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
