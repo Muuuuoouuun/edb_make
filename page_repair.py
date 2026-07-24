@@ -15,6 +15,7 @@ from urllib import error, request
 
 from PIL import Image
 
+from ai_usage import normalize_gemini_token_usage
 from assemble_page import detect_choice_block, detect_problem_start, group_problem_units
 from pipeline_cache import PipelineCache
 from pipeline_router import decide_page_route
@@ -261,7 +262,13 @@ def repair_page_model(
         if request_semaphore is not None:
             request_semaphore.acquire()
         try:
-            repair_payload, response_id, used_model, model_attempts = _request_ai_repair_with_model_fallback(
+            (
+                repair_payload,
+                response_id,
+                used_model,
+                model_attempts,
+                token_usage,
+            ) = _request_ai_repair_with_model_fallback(
                 prepared_page=prepared_page,
                 page=baseline,
                 config=resolved_config,
@@ -279,6 +286,10 @@ def repair_page_model(
             raise
         return _attach_ai_fallback_summary(baseline, summary)
 
+    # The provider has already billed a completed response even when the
+    # returned block IDs fail local validation. Record usage before validating
+    # so cost reports include unsuccessful AI repairs as well.
+    summary["token_usage"] = token_usage
     validation_error = _validate_repair_payload(repair_payload, baseline.blocks)
     if validation_error:
         summary["status"] = "invalid_response"
@@ -432,14 +443,14 @@ def _request_ai_repair_with_model_fallback(
     config: AIFallbackConfig,
     trigger_reasons: list[str],
     api_key: str,
-) -> tuple[dict[str, Any], str | None, str, list[dict[str, str]]]:
+) -> tuple[dict[str, Any], str | None, str, list[dict[str, str]], dict[str, int]]:
     """Call Gemini, falling back from preview/3.x models to stable Pro if needed."""
     attempts: list[dict[str, str]] = []
     last_exc: Exception | None = None
     for model in _repair_model_candidates(config):
         model_config = replace(config, model=model)
         try:
-            repair_payload, response_id = _request_ai_repair_with_retry(
+            repair_payload, response_id, token_usage = _request_ai_repair_with_retry(
                 prepared_page=prepared_page,
                 page=page,
                 config=model_config,
@@ -447,7 +458,7 @@ def _request_ai_repair_with_model_fallback(
                 api_key=api_key,
             )
             attempts.append({"model": model, "status": "ok"})
-            return repair_payload, response_id, model, attempts
+            return repair_payload, response_id, model, attempts, token_usage
         except Exception as exc:
             last_exc = exc
             attempts.append({"model": model, "status": "error", "error": str(exc)})
@@ -463,7 +474,7 @@ def _request_ai_repair_with_retry(
     config: AIFallbackConfig,
     trigger_reasons: list[str],
     api_key: str,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], str | None, dict[str, int]]:
     """Call Gemini for the repair. Retry once on transient failure."""
     last_exc: Exception | None = None
     for attempt in range(2):
@@ -524,7 +535,7 @@ def _request_gemini_repair(
     config: AIFallbackConfig,
     trigger_reasons: list[str],
     api_key: str,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], str | None, dict[str, int]]:
     """Call the Gemini generateContent API with a JSON response schema."""
     payload = {
         "contents": [
@@ -572,7 +583,11 @@ def _request_gemini_repair(
         raise RuntimeError(f"Gemini response JSON decode failed: {exc}") from exc
     if not isinstance(parsed, dict):
         raise RuntimeError("Gemini response was not a JSON object")
-    return parsed, raw_response.get("responseId") or raw_response.get("id")
+    return (
+        parsed,
+        raw_response.get("responseId") or raw_response.get("id"),
+        normalize_gemini_token_usage(raw_response),
+    )
 
 
 def _repair_schema() -> dict[str, Any]:

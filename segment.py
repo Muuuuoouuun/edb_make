@@ -1291,6 +1291,17 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
         return True
     if compact in {"고 1", "고 2", "고 3", "국어 영역", "영어 영역"}:
         return True
+    collapsed = re.sub(r"\s+", "", compact)
+    if collapsed in {
+        "고1",
+        "고2",
+        "고3",
+        "국어영역",
+        "수학영역",
+        "영어영역",
+        "영역",
+    }:
+        return True
     if re.fullmatch(r"[━─—\-_=·•\s]+", compact):
         return True
     if re.fullmatch(r"\d{1,2}\s+\d{1,2}", compact):

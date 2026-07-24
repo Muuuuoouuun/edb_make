@@ -12,8 +12,12 @@ from layout_template_schema import LayoutTemplate
 from page_repair import build_ai_fallback_config
 import preprocess as preprocess_module
 from preprocess import prepare_source_pages
-from segment import PDF_CHOICE_MARKERS, segment_page
-from structured_schema import Subject
+from segment import (
+    PDF_CHOICE_MARKERS,
+    _looks_like_pdf_page_header_text_line,
+    segment_page,
+)
+from structured_schema import Box, Subject
 
 
 def _problem_block_ids(problem):
@@ -26,6 +30,22 @@ def _problem_block_ids(problem):
 
 
 class TestPdfTextMarkerSegmentation(unittest.TestCase):
+    def test_compact_exam_page_headers_are_not_passage_text(self):
+        top_box = Box(left=330, top=10, width=220, height=30)
+
+        for text in ("고2", "고 2", "영역", "영어영역", "국어 영역"):
+            with self.subTest(text=text):
+                self.assertTrue(
+                    _looks_like_pdf_page_header_text_line(text, top_box, 1200)
+                )
+        self.assertFalse(
+            _looks_like_pdf_page_header_text_line(
+                "실제 지문 첫 문장입니다.",
+                top_box,
+                1200,
+            )
+        )
+
     def test_pdf_problem_markers_drive_problem_count_without_ocr(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "two_column_exam.pdf"

@@ -100,3 +100,55 @@ final result: passed
 5. Automated verification: 834 tests passed with 92 subtests; `git diff --check` passed.
 6. Bulk-completion follow-up: made completed bulk confirmation transition unconditionally to the board preview, including the local mock-session path, with a dedicated completion toast; 835 tests and 92 subtests passed.
 7. Review-toolbar refinement: grouped the center header into `문항 검수 / 배율` and the sticky action bar into reusable `상태 보기 / 일괄 작업` components. Verified 57px/58px stable heights, no horizontal overflow at the default viewport, working filter pressed states, clean browser logs, and 837 passing tests with 92 subtests. Final screenshot: `.audit/review-flow-2026-07-22/09-review-toolbar-final.png`.
+
+---
+
+# Design QA — 영역 다시 잡기 하이브리드 편집기
+
+final result: passed
+
+## Visual truth
+
+- Accepted source direction: `/Users/clmagi/.codex/generated_images/019f88d7-314c-7743-bc76-78f5f7a80d4b/exec-6c3f59be-3bf0-4d00-aeeb-965d41dc9688.png` (1487×1058).
+- Selection basis: option 2's right-side confirmation panel combined with option 1's inline border editing, as explicitly approved by the user.
+- Final implementation: `.audit/area-reset-2026-07-22/implementation-1440x1024.png` (1404×1024 capture).
+- Full side-by-side comparison: `.audit/area-reset-2026-07-22/comparison.png`.
+
+## Viewport and state
+
+- Browser viewport override: 1440×1024; captured tab content: 1404×1024.
+- URL: `http://127.0.0.1:8765/board.html?view=review`.
+- Session state: latest 16-page saved session, first detected problem selected.
+- Editor state: right edge moved left with the inline handle so the before/after previews and enabled apply state are visible.
+- The source visual uses a multi-problem page while the saved QA session contains one full-page problem per source page. This is expected data variance; the frame editor and confirmation panel use the same responsive layout.
+
+## Comparison evidence
+
+- The implementation matches the selected structure: editable blue frame and eight handles on the source page, contextual right inspector, before/after previews, explicit mode choice, edge warning, impact summary, and persistent cancel/apply footer.
+- The existing product chrome, typography, spacing, neutral surfaces, blue selection color, and compact desktop density are retained.
+- `이 영역 다시 인식` is visible but disabled until number/order preservation is validated; the active path is the safe `자르기만 적용` mode.
+- `2개로 나누기` and `두 문제로 나누기` are absent from the review flow.
+
+## Interaction evidence
+
+- Selecting one problem exposed `빠른 자르기` and the primary `영역 다시 잡기` action.
+- The selection toolbar now wraps into two rows when the center column is narrow; element hit testing no longer places `그대로 확인` over `영역 다시 잡기`.
+- Entering the editor exposed all eight frame handles and kept `적용` disabled while unchanged.
+- Dragging the right handle enabled `원래 영역으로` and `적용`, and refreshed the adjusted preview.
+- Pressing `Esc` closed the editor without a mutation, kept the problem selected, and reopening the editor restored the original frame with `적용` disabled.
+- A fresh final browser tab reported no warnings or errors.
+
+## Defect ledger
+
+- P0: none
+- P1: none
+- P2: none
+- P3: source and saved-session problem density differ; accepted as content variance rather than a component defect.
+
+## QA history
+
+1. Flow audit: confirmed that the existing eight-handle frame editor could support direct manipulation and that server-side crop preserves problem identity, number, and order.
+2. Implementation pass: added the right inspector, explicit apply/cancel semantics, before/after previews, edge and impact guidance, selection restoration, and the safe crop-only mode.
+3. Simplification pass: removed the review-stage two-way split state, controls, overlays, and styles; renamed the page-level entry to `새 영역 추가`.
+4. Browser fix: found and removed a real click-target overlap in the narrow center column by wrapping selection actions and preventing flex-group shrink.
+5. Automated verification: 799 tests passed; the 39 focused UI tests, 12 crop mutation tests, frontend package verification, bundle build, and `git diff --check` also passed.

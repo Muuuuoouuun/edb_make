@@ -18,6 +18,7 @@ from typing import Any
 
 from PIL import Image
 
+from ai_usage import normalize_gemini_token_usage
 from structured_schema import Box
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -842,6 +843,8 @@ class GeminiOCRBackend(OCRBackend):
                 ),
             )
 
+        token_usage = normalize_gemini_token_usage(response_data)
+
         # Gemini returns structured output as a JSON string inside the first
         # text part of candidate[0].
         json_text = _gemini_extract_text(response_data)
@@ -876,6 +879,7 @@ class GeminiOCRBackend(OCRBackend):
                         "circuit_open": False,
                         "retry_after_ms": cooldown_ms,
                         "cacheable": False,
+                        "token_usage": token_usage,
                     },
                 ),
             )
@@ -912,6 +916,7 @@ class GeminiOCRBackend(OCRBackend):
                         "circuit_open": False,
                         "retry_after_ms": cooldown_ms,
                         "cacheable": False,
+                        "token_usage": token_usage,
                     },
                 ),
             )
@@ -951,6 +956,7 @@ class GeminiOCRBackend(OCRBackend):
                         "circuit_open": False,
                         "retry_after_ms": cooldown_ms,
                         "cacheable": False,
+                        "token_usage": token_usage,
                     },
                 ),
             )
@@ -1000,6 +1006,7 @@ class GeminiOCRBackend(OCRBackend):
                     "model_attempts": model_attempts,
                     "request_attempt_count": request_attempt_count,
                     "thinking_level": thinking_levels_by_model.get(used_model, ""),
+                    "token_usage": token_usage,
                     "cacheable": True,
                 },
             ),

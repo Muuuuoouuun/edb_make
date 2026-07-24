@@ -798,12 +798,20 @@ function BoxEditPanel({
   displayNumber,
   originalBox,
   box,
+  mode,
   mutating,
+  aiAvailable,
+  aiBusy,
+  onModeChange,
   onReset,
   onCancel,
   onApply,
 }){
   const changed = !reviewBoxesEqual(originalBox, box);
+  const recognizeMode = mode === 'recognize';
+  const recognizeDisabled = !aiAvailable || aiBusy;
+  const busy = mutating || (recognizeMode && aiBusy);
+  const canApply = recognizeMode || changed;
   const nearPageEdge = finiteNumber(box?.left, 0) < 4
     || finiteNumber(box?.top, 0) < 4
     || finiteNumber(box?.left, 0) + finiteNumber(box?.width, 0) > finiteNumber(page?.width, 1) - 4
@@ -835,13 +843,37 @@ function BoxEditPanel({
       </div>
       <div className="box-edit-panel-section">
         <h4>적용 방식</h4>
-        <label className="box-edit-mode selected">
-          <input type="radio" checked readOnly />
+        <label className={`box-edit-mode ${recognizeMode ? '' : 'selected'}`}>
+          <input
+            type="radio"
+            name="box-edit-mode"
+            checked={!recognizeMode}
+            onChange={() => onModeChange?.('crop')}
+            disabled={busy}
+          />
           <span><strong>자르기만 적용</strong><small>영역의 크기와 위치만 조정합니다.</small></span>
         </label>
-        <label className="box-edit-mode disabled" title="부분 재인식의 번호 보존 검증 후 지원할 예정입니다">
-          <input type="radio" disabled />
-          <span><strong>이 영역 다시 인식</strong><small>준비 중 · 현재 문항을 자동 분할하지 않습니다.</small></span>
+        <label
+          className={`box-edit-mode ${recognizeMode ? 'selected' : ''} ${recognizeDisabled ? 'disabled' : ''}`}
+          title={!aiAvailable ? 'Gemini API 키를 먼저 저장해 주세요' : aiBusy ? '다른 AI 인식이 진행 중입니다' : '현재 문항의 ID, 번호, 순서를 유지하며 경계를 다시 찾습니다'}
+        >
+          <input
+            type="radio"
+            name="box-edit-mode"
+            checked={recognizeMode}
+            onChange={() => onModeChange?.('recognize')}
+            disabled={recognizeDisabled || mutating}
+          />
+          <span>
+            <strong>이 영역 다시 인식</strong>
+            <small>
+              {!aiAvailable
+                ? 'Gemini API 키 필요 · 현재 문항은 그대로 유지됩니다.'
+                : aiBusy
+                  ? '다른 AI 인식이 끝난 뒤 사용할 수 있습니다.'
+                  : '여러 후보가 나와도 하나의 경계로 합치며 번호와 순서를 유지합니다.'}
+            </small>
+          </span>
         </label>
       </div>
       {nearPageEdge && (
@@ -855,9 +887,18 @@ function BoxEditPanel({
         <strong>{displayNumber ? `${displayNumber}번 문항만 교체` : '선택 문항만 교체'} <small>· 번호와 순서 유지</small></strong>
       </div>
       <div className="box-edit-panel-footer">
-        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={mutating}>취소</button>
-        <button className="btn primary" type="button" aria-keyshortcuts="Enter" onClick={onApply} disabled={mutating || !changed}>
-          {Icon.check} {mutating ? '적용 중…' : '적용'}
+        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={busy}>취소</button>
+        <button
+          className="btn primary"
+          type="button"
+          aria-keyshortcuts="Enter"
+          onClick={onApply}
+          disabled={busy || !canApply || (recognizeMode && !aiAvailable)}
+        >
+          {recognizeMode ? Icon.wand : Icon.check}{' '}
+          {recognizeMode
+            ? (aiBusy ? '인식 중…' : '다시 인식')
+            : (mutating ? '적용 중…' : '적용')}
         </button>
       </div>
     </aside>
@@ -2380,6 +2421,7 @@ function ReviewStage({
       pageId: selectedSinglePage.id,
       originalBox: initialBox,
       box: initialBox,
+      mode: 'crop',
     });
   };
   const cancelBoxEdit = () => {
@@ -2391,19 +2433,44 @@ function ReviewStage({
     boxEditDragRef.current = null;
     setBoxEdit(prev => prev?.originalBox ? { ...prev, box: { ...prev.originalBox } } : prev);
   };
+  const setBoxEditMode = (mode) => {
+    setBoxEdit(prev => prev ? {
+      ...prev,
+      mode: mode === 'recognize' ? 'recognize' : 'crop',
+    } : prev);
+  };
   const applyBoxEdit = useCallback(async () => {
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
-    if (reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
+    const recognizeMode = boxEdit.mode === 'recognize';
+    if (!recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
+    if (recognizeMode && (!aiAvailable || aiBusy)) return;
     boxEditCommitRef.current = true;
-    pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;
     try {
-      const nextSession = await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
-      if (nextSession) setBoxEdit(null);
-      if (!nextSession) pendingReviewSelectionProblemIdRef.current = '';
+      if (recognizeMode) {
+        const result = await retryAiSession?.({
+          partial: true,
+          preserveProblemIdentity: true,
+          collapseToSingle: true,
+          problemIds: [boxEdit.problemId],
+          cropBox: boxEdit.box,
+        });
+        if (result) setBoxEdit(null);
+        return;
+      }
+      pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;
+      const nextSession = await mutateSession?.('crop', {
+        problemId: boxEdit.problemId,
+        cropBox: boxEdit.box,
+      });
+      if (nextSession) {
+        setBoxEdit(null);
+      } else {
+        pendingReviewSelectionProblemIdRef.current = '';
+      }
     } finally {
       boxEditCommitRef.current = false;
     }
-  }, [boxEdit, mutateSession]);
+  }, [boxEdit, mutateSession, retryAiSession, aiAvailable, aiBusy]);
   const applyExpandedCrop = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
     if (!problem?.id || !page?.id) return;
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
@@ -3460,7 +3527,11 @@ function ReviewStage({
                         displayNumber={orderMap.get(boxEdit.problemId)}
                         originalBox={boxEdit.originalBox}
                         box={boxEdit.box}
+                        mode={boxEdit.mode}
                         mutating={mutating}
+                        aiAvailable={aiAvailable}
+                        aiBusy={aiBusy}
+                        onModeChange={setBoxEditMode}
                         onReset={resetBoxEdit}
                         onCancel={cancelBoxEdit}
                         onApply={applyBoxEdit}
@@ -6380,18 +6451,23 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
 
   if (!review) return null;
   const title = review.title || (passageOnly ? '공통 지문 추출 결과 확인' : 'AI 인식 결과 확인');
-  const movesToReview = review?.kind === 'queue-recognition';
+  const partialRetry = review?.kind === 'retry-ai' && !!review?.partial;
+  const movesToReview = review?.kind === 'queue-recognition' || partialRetry;
   const subtitle = review.subtitle || (
     movesToReview
       ? `${resultLabel}로 분할했습니다. 맞으면 검수 화면에서 경계를 확인합니다.`
       : `${resultLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
   );
-  const confirmLabel = movesToReview
-    ? (passageOnly ? '지문 검수로 이동' : '맞아요, 검수로 이동')
-    : '맞아요, 칠판에 붙이기';
-  const confirmingLabel = movesToReview
-    ? (passageOnly ? '지문 검수로 이동 중...' : '검수로 이동 중...')
-    : '붙이는 중...';
+  const confirmLabel = partialRetry
+    ? '이 영역으로 적용'
+    : movesToReview
+      ? (passageOnly ? '지문 검수로 이동' : '맞아요, 검수로 이동')
+      : '맞아요, 칠판에 붙이기';
+  const confirmingLabel = partialRetry
+    ? '영역 적용 중...'
+    : movesToReview
+      ? (passageOnly ? '지문 검수로 이동 중...' : '검수로 이동 중...')
+      : '붙이는 중...';
   const cancelLabel = movesToReview ? '적용 안 함' : '취소';
 
   return (
@@ -9968,6 +10044,7 @@ function App(){
         snapshotBefore,
         retrySummary: result.retry || [],
       });
+      return result;
     } catch (e) {
       if (e?.name === 'AbortError') {
         settleBackgroundJob(job.id, {
@@ -10592,9 +10669,19 @@ function App(){
           applySession(restored);
         }
         refreshSessionHistory();
-        setView('board');
-        const summary = summarizeRecognitionSession(restored, review.pageIds);
-        showToast(`AI 인식 적용 · ${summary.problemLabel}`);
+        if (review.partial) {
+          setReviewFocus({
+            filter: 'all',
+            problemIds: review.problemIds || [],
+            source: 'partial-retry',
+          });
+          setView('review');
+          showToast('영역 재인식 적용 · 번호와 순서를 유지했어요');
+        } else {
+          setView('board');
+          const summary = summarizeRecognitionSession(restored, review.pageIds);
+          showToast(`AI 인식 적용 · ${summary.problemLabel}`);
+        }
       }
       setRecognitionReview(null);
     } catch (e) {

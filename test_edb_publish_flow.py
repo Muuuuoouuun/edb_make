@@ -39,6 +39,7 @@ from build_problem_board_edb import (
     _hwp_conversion_has_pdf_problem_markers,
     _trim_edge_vertical_guides,
     _trim_source_page_chrome,
+    _trim_text_priority_bottom_page_badge,
 )
 from edb_builder import CROP_FORMAT_V1
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
@@ -655,6 +656,7 @@ class TestEdbPublishFlow(unittest.TestCase):
         ImageDraw.Draw(first).text((24, 72), "left column ending", fill="black")
         second = Image.new("RGB", (240, 180), "white")
         draw = ImageDraw.Draw(second)
+        draw.text((10, 8), "DOMAIN", fill="black")
         draw.ellipse((150, 2, 220, 30), outline="black", width=2)
         draw.text((172, 8), "G2", fill="black")
         draw.line((8, 42, 232, 42), fill="black", width=3)
@@ -666,6 +668,93 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertLess(prepared[1].height, 140)
         self.assertGreater(prepared[1].height, 110)
         self.assertLess(prepared[1].convert("L").crop((0, 0, 240, 24)).getextrema()[0], 200)
+
+    def test_passage_stitch_removes_cropped_page_header_rule_without_header_text(self):
+        first = Image.new("RGB", (240, 120), "white")
+        ImageDraw.Draw(first).text((24, 72), "left column ending", fill="black")
+        second = Image.new("RGB", (240, 180), "white")
+        draw = ImageDraw.Draw(second)
+        draw.line((8, 12, 232, 12), fill="black", width=3)
+        draw.text((24, 44), "continued first glyph", fill="black")
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertLess(prepared[1].height, 165)
+        self.assertEqual(
+            (255, 255, 255),
+            prepared[1].getpixel((120, 0)),
+        )
+        self.assertLess(
+            prepared[1].convert("L").crop((20, 8, 180, 40)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_stitch_keeps_centered_section_label_above_box(self):
+        first = Image.new("RGB", (240, 120), "white")
+        ImageDraw.Draw(first).text((24, 72), "section A ending", fill="black")
+        second = Image.new("RGB", (240, 180), "white")
+        draw = ImageDraw.Draw(second)
+        draw.text((112, 8), "(B)", fill="black")
+        draw.rectangle((20, 42, 220, 160), outline="black", width=2)
+        draw.text((32, 64), "section B body", fill="black")
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertEqual(second.size, prepared[1].size)
+        self.assertLess(
+            prepared[1].convert("L").crop((96, 0, 144, 32)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_cleanup_erases_outer_guides_without_cropping_box_or_label(self):
+        image = Image.new("RGB", (240, 220), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((112, 8), "(B)", fill="black")
+        draw.rectangle((30, 42, 210, 160), outline="black", width=2)
+        draw.line((8, 0, 8, 219), fill="black", width=2)
+        draw.line((8, 168, 17, 168), fill="black", width=2)
+        draw.line((21, 168, 24, 168), fill="black", width=2)
+        draw.line((232, 0, 232, 219), fill="black", width=2)
+        draw.line((216, 32, 220, 32), fill="black", width=2)
+        draw.line((224, 32, 232, 32), fill="black", width=2)
+        draw.rectangle((180, 195, 181, 197), fill="black")
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual(image.size, cleaned.size)
+        self.assertEqual((255, 255, 255), cleaned.getpixel((8, 80)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((20, 168)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((232, 80)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((220, 32)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((180, 196)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((30, 80)))
+        self.assertLess(
+            cleaned.convert("L").crop((96, 0, 144, 32)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_cleanup_does_not_treat_repeated_underlines_as_box_edges(self):
+        image = Image.new("RGB", (500, 640), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((12, 0, 12, 639), fill="black", width=2)
+        draw.rectangle((36, 52, 478, 620), outline="black", width=2)
+        draw.text((52, 16), "[26 ~ 28] passage", fill="black")
+        draw.text((52, 84), "first glyph must stay", fill="black")
+        # Repeated answer underlines are long enough to be frame candidates,
+        # but their endpoints vary and must not displace the real box border.
+        draw.line((96, 150, 466, 150), fill="black", width=2)
+        draw.line((96, 214, 466, 214), fill="black", width=2)
+        draw.line((58, 278, 466, 278), fill="black", width=2)
+        draw.line((180, 342, 466, 342), fill="black", width=2)
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual((255, 255, 255), cleaned.getpixel((12, 300)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((36, 300)))
+        self.assertLess(
+            cleaned.convert("L").crop((48, 80, 90, 104)).getextrema()[0],
+            200,
+        )
 
     def test_passage_stitch_collapses_duplicate_edge_padding(self):
         first = Image.new("RGB", (240, 220), "white")
@@ -712,6 +801,133 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertEqual(0.0, expanded.top)
         self.assertEqual(248.0, expanded.width)
         self.assertEqual(400.0, expanded.height)
+
+    def test_text_priority_source_bounds_recover_only_crossing_glyphs(self):
+        image = Image.new("RGB", (600, 400), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((96, 120, 104, 136), fill="black")
+        draw.rectangle((236, 180, 244, 196), fill="black")
+        bounds = Box(100, 80, 140, 220)
+
+        expanded = problem_board._expand_text_priority_source_bounds_horizontally(
+            image,
+            bounds,
+        )
+
+        self.assertEqual(84.0, expanded.left)
+        self.assertEqual(172.0, expanded.width)
+        self.assertEqual(80.0, expanded.top)
+        self.assertEqual(220.0, expanded.height)
+
+    def test_text_priority_source_bounds_ignore_long_vertical_guide(self):
+        image = Image.new("RGB", (600, 400), "white")
+        ImageDraw.Draw(image).line((99, 80, 99, 299), fill="black", width=2)
+        bounds = Box(100, 80, 140, 220)
+
+        expanded = problem_board._expand_text_priority_source_bounds_horizontally(
+            image,
+            bounds,
+        )
+
+        self.assertEqual(bounds, expanded)
+
+    def test_horizontal_inner_edge_guard_finds_hidden_clip_but_keeps_frame(self):
+        clipped = Image.new("RGB", (320, 240), "white")
+        ImageDraw.Draw(clipped).rectangle((14, 80, 28, 96), fill="black")
+
+        clipped_stats = problem_board._problem_image_horizontal_inner_edge_risk_stats(
+            clipped,
+            expected_padding_px=16,
+        )
+
+        self.assertTrue(clipped_stats["hasRisk"])
+        self.assertEqual(["left"], clipped_stats["riskSides"])
+
+        framed = Image.new("RGB", (320, 240), "white")
+        ImageDraw.Draw(framed).rectangle((16, 30, 303, 210), outline="black", width=2)
+
+        framed_stats = problem_board._problem_image_horizontal_inner_edge_risk_stats(
+            framed,
+            expected_padding_px=16,
+        )
+
+        self.assertFalse(framed_stats["hasRisk"])
+        self.assertEqual([], framed_stats["riskSides"])
+
+    def test_classin_preflight_reports_hidden_horizontal_clip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "clipped.png"
+            clipped = Image.new("RGB", (320, 240), "white")
+            ImageDraw.Draw(clipped).rectangle((14, 80, 28, 96), fill="black")
+            clipped.save(image_path)
+
+            report = problem_board._classin_handoff_preflight(
+                {
+                    "contentTarget": "all",
+                    "problems": [
+                        {
+                            "id": "korean-problem-1",
+                            "title": "1.",
+                            "problemNumber": 1,
+                            "subject": "korean",
+                            "imagePath": image_path.resolve().as_uri(),
+                            "processingStep": "s2",
+                            "riskFlags": [],
+                            "reviewStatus": "passed",
+                        }
+                    ],
+                }
+            )
+
+        edge_issues = [
+            issue
+            for issue in report["issues"]
+            if issue.get("type") == "horizontal_crop_edge_risk"
+        ]
+        self.assertEqual(1, len(edge_issues))
+        self.assertEqual(["left"], edge_issues[0]["horizontalEdgeRiskStats"]["riskSides"])
+
+    def test_tiny_top_column_header_is_not_used_as_passage_continuation(self):
+        page = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+        )
+        header = ContentBlock(
+            block_id="header",
+            block_type=BlockType.IMAGE,
+            bbox=Box(470, 8, 420, 48),
+            reading_order=1,
+            metadata={
+                "segmenter": "pdf-passage-range",
+                "marker_kind": "passage_continuation",
+                "passage_text_line_count": 1,
+                "passage_text_character_count": 2,
+            },
+        )
+        real_continuation = ContentBlock(
+            block_id="continuation",
+            block_type=BlockType.IMAGE,
+            bbox=Box(470, 8, 420, 520),
+            reading_order=1,
+            metadata={
+                "segmenter": "pdf-passage-range",
+                "marker_kind": "passage_continuation",
+                "passage_text_line_count": 18,
+                "passage_text_character_count": 480,
+            },
+        )
+
+        self.assertTrue(
+            problem_board._is_probable_passage_continuation_page_header(page, header)
+        )
+        self.assertFalse(
+            problem_board._is_probable_passage_continuation_page_header(
+                page,
+                real_continuation,
+            )
+        )
 
     def test_passage_segments_are_centered_without_rescaling_at_the_join(self):
         narrow = Image.new("RGB", (100, 80), "white")
@@ -780,6 +996,20 @@ class TestEdbPublishFlow(unittest.TestCase):
 
         self.assertEqual((255, 255, 255), stitched.getpixel((10, 127)))
         self.assertEqual((255, 255, 255), stitched.getpixel((20, 127)))
+
+    def test_passage_segment_frame_bridge_skips_closed_section_boxes(self):
+        first = Image.new("RGB", (200, 120), "white")
+        ImageDraw.Draw(first).rectangle((10, 8, 190, 111), outline="black", width=2)
+        second = Image.new("RGB", (200, 120), "white")
+        ImageDraw.Draw(second).rectangle((10, 8, 190, 111), outline="black", width=2)
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=False,
+        )
+
+        self.assertEqual((255, 255, 255), stitched.getpixel((10, 126)))
+        self.assertEqual((255, 255, 255), stitched.getpixel((190, 126)))
 
     def test_continuous_full_width_records_keep_explicit_non_overlap_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1417,6 +1647,18 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["step3_page_chrome_artifact"], [issue["type"] for issue in preflight["issues"]])
             self.assertEqual(["edge_vertical_guide"], preflight["issues"][0]["artifactTypes"])
 
+    def test_page_chrome_detector_keeps_paired_inset_content_frame(self):
+        image = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((24, 40, 475, 390), outline="black", width=2)
+        draw.text((64, 80), "legitimate framed passage", fill="black")
+
+        stats = problem_board._problem_image_page_chrome_artifact_stats(image)
+
+        self.assertTrue(stats["pairedContentFrame"])
+        self.assertFalse(stats["hasArtifact"])
+        self.assertEqual(0, stats["edgeGuideColumnCount"])
+
     def test_publish_preflight_allows_page_chrome_for_page_as_is_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1495,6 +1737,34 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(2, preflight["issues"][0]["artifactProblemCount"])
             self.assertEqual(10, preflight["issues"][0]["checkedProblemCount"])
             self.assertGreater(preflight["issues"][0]["artifactRatio"], 0.10)
+
+    def test_publish_preflight_keeps_intentional_s2_passage_box(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = root / "passage.png"
+            image = Image.new("RGB", (320, 240), "white")
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((0, 20, 319, 239), outline="black", width=3)
+            draw.text((32, 48), "shared passage", fill="black")
+            image.save(passage)
+            problem = {
+                "id": "passage-1-3",
+                "title": "지문 1~3",
+                "imagePath": passage.resolve().as_uri(),
+                "processingStep": "s2",
+                "passageRole": "passage_fragment",
+                "riskFlags": [],
+            }
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                [problem],
+                session={"problems": [problem], "pages": []},
+            )
+
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual([], duplicate_groups)
+            self.assertEqual([], preflight["issues"])
 
     def test_problem_ui_session_keeps_duplicate_problem_numbers_nonblocking(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4196,6 +4466,44 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertGreaterEqual(overlap_issues[0]["overlapAreaRatio"], 0.8)
             self.assertIn("source_problem_bbox_overlap", markdown)
 
+    def test_classin_preflight_ignores_supplemental_passage_enclosing_bbox(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crop = root / "crop.png"
+            Image.new("RGB", (640, 320), "white").save(crop)
+            problems = [
+                {
+                    "id": "q10",
+                    "title": "10.",
+                    "imagePath": crop.resolve().as_uri(),
+                    "sourcePageId": "page-004",
+                    "bbox": {"left": 0, "top": 100, "width": 500, "height": 300},
+                    "riskFlags": [],
+                },
+                {
+                    "id": "passage-11-15",
+                    "title": "지문 11~15",
+                    "imagePath": crop.resolve().as_uri(),
+                    "sourcePageId": "page-004",
+                    "bbox": {"left": 0, "top": 0, "width": 1000, "height": 1200},
+                    "passageRole": "passage_fragment",
+                    "supplementalItem": True,
+                    "riskFlags": [],
+                },
+            ]
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                problems,
+                session={"problems": problems, "pages": []},
+            )
+
+            self.assertTrue(preflight["passed"])
+            self.assertEqual([], duplicate_groups)
+            self.assertNotIn(
+                "source_problem_bbox_overlap",
+                [issue["type"] for issue in preflight["issues"]],
+            )
+
     def test_classin_preflight_flags_passage_group_source_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -6852,6 +7160,103 @@ class TestEdbPublishFlow(unittest.TestCase):
         ]
         self.assertTrue(internal_dark_columns)
 
+    def test_passage_chrome_cleanup_preserves_lower_right_column_text(self):
+        image = Image.new("RGB", (320, 240), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 40), "shared passage", fill="black")
+        draw.rectangle((292, 212, 319, 239), fill="black")
+
+        cleaned = _trim_source_page_chrome(
+            image,
+            preserve_horizontal_bounds=True,
+        )
+
+        self.assertEqual(image.size, cleaned.size)
+        self.assertEqual(
+            image.crop((292, 212, 320, 240)).tobytes(),
+            cleaned.crop((292, 212, 320, 240)).tobytes(),
+        )
+
+    def test_text_priority_page_badge_is_trimmed_below_real_content(self):
+        image = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 60), "question", fill="black")
+        for index, y in enumerate(range(140, 280, 28), start=1):
+            draw.text((24, y), f"{index}. complete choice", fill="black")
+        draw.line((0, 352, 64, 352), fill="black", width=2)
+        draw.line((0, 378, 64, 378), fill="black", width=2)
+        draw.line((64, 352, 64, 378), fill="black", width=2)
+        draw.text((34, 358), "8", fill="black")
+
+        trimmed = _trim_text_priority_bottom_page_badge(image)
+
+        self.assertLess(trimmed.height, 352)
+        self.assertGreater(trimmed.height, 280)
+        self.assertLess(
+            trimmed.convert("L").crop((20, 246, 180, 276)).getextrema()[0],
+            200,
+        )
+
+    def test_tall_listening_page_badge_is_trimmed_after_choices(self):
+        image = Image.new("RGB", (960, 236), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((18, 16), "6. listening prompt", fill="black")
+        draw.text(
+            (42, 90),
+            "1  $14      2  $19      3  $24      4  $28      5  $33",
+            fill="black",
+        )
+        draw.rectangle((866, 160, 959, 223), outline="black", width=2)
+        draw.text((878, 172), "1", fill="black")
+        padded = problem_board._pad_problem_crop_edges(
+            image,
+            left_padding_px=problem_board.TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX,
+            right_padding_px=problem_board.TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX,
+        )
+
+        trimmed = _trim_text_priority_bottom_page_badge(padded)
+
+        self.assertEqual(992, trimmed.width)
+        self.assertGreater(trimmed.height, 140)
+        self.assertLess(trimmed.height, 196)
+        self.assertLess(
+            trimmed.convert("L").crop((0, 100, 850, trimmed.height)).getextrema()[0],
+            200,
+        )
+
+    def test_text_priority_lone_outer_guide_is_erased_without_cropping(self):
+        image = Image.new("RGB", (500, 360), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((12, 24, 12, 335), fill="black", width=2)
+        draw.text((48, 60), "16. complete question", fill="black")
+        draw.text((48, 140), "1. complete choice", fill="black")
+
+        cleaned = problem_board._erase_text_priority_unpaired_outer_vertical_guide(image)
+
+        self.assertEqual(image.size, cleaned.size)
+        self.assertEqual((255, 255, 255), cleaned.getpixel((12, 180)))
+        self.assertLess(cleaned.convert("L").crop((40, 40, 260, 180)).getextrema()[0], 200)
+
+    def test_text_priority_paired_outer_frame_is_preserved(self):
+        image = Image.new("RGB", (500, 360), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((12, 24, 487, 335), outline="black", width=2)
+        draw.text((48, 60), "boxed content", fill="black")
+
+        cleaned = problem_board._erase_text_priority_unpaired_outer_vertical_guide(image)
+
+        self.assertEqual(image.tobytes(), cleaned.tobytes())
+
+    def test_text_priority_final_choice_row_is_not_mistaken_for_page_badge(self):
+        image = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 60), "question", fill="black")
+        draw.text((0, 350), "5. final choice text extends across the row", fill="black")
+
+        trimmed = _trim_text_priority_bottom_page_badge(image)
+
+        self.assertEqual(image.size, trimmed.size)
+
     def test_slanted_edge_vertical_guides_are_trimmed(self):
         image = Image.new("RGB", (180, 180), "white")
         draw = ImageDraw.Draw(image)
@@ -6953,6 +7358,70 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, len(entries))
             self.assertLessEqual(entries[0].bounds.top, 78)
             self.assertGreaterEqual(entries[0].bounds.bottom, 174)
+
+    def test_pdf_passage_range_bounds_do_not_pull_in_page_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            page_image = Image.new("RGB", (600, 520), "white")
+            draw = ImageDraw.Draw(page_image)
+            draw.line((0, 70, 599, 70), fill="black", width=3)
+            draw.text((24, 24), "PAGE HEADER", fill="black")
+            draw.rectangle((40, 150, 440, 390), outline="black", width=2)
+            draw.text((60, 174), "[1~2] shared passage", fill="black")
+            page_image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=page_image,
+                original_size=page_image.size,
+            )
+            passage_block = ContentBlock(
+                block_id="passage",
+                block_type=BlockType.IMAGE,
+                bbox=Box(40, 150, 400, 240),
+                reading_order=0,
+                text="[1~2] shared passage",
+                metadata={
+                    "segmenter": "pdf-passage-range",
+                    "column_index": 0,
+                    "question_band_index": 0,
+                },
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=600,
+                height_px=520,
+                subject=Subject.ENGLISH,
+                source_path=str(source),
+                blocks=[passage_block],
+                problems=[
+                    ProblemUnit(
+                        unit_id="passage-1-2",
+                        subject=Subject.ENGLISH,
+                        title="지문 1~2",
+                        figure_block_ids=["passage"],
+                        metadata={
+                            "passage_role": "passage_fragment",
+                            "supplemental_item": True,
+                            "passage_range": {"start": 1, "end": 2},
+                        },
+                    )
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertAlmostEqual(150.0, entries[0].bounds.top)
+            with Image.open(entries[0].crop_path) as crop:
+                self.assertGreater(crop.convert("L").crop((0, 0, crop.width, 24)).getextrema()[0], 180)
 
     def test_problem_bounds_expand_when_edge_ink_would_be_clipped(self):
         with tempfile.TemporaryDirectory() as tmp:

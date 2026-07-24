@@ -5764,6 +5764,118 @@ def _offset_retry_problem_to_source_page(problem: dict[str, Any], crop_box: Box)
             pass
 
 
+def _partial_retry_identity_problem(
+    source_problem: dict[str, Any],
+    source_page: dict[str, Any],
+    source_path: Path,
+    retry_problems: list[dict[str, Any]],
+    *,
+    crop_box: Box,
+    retry_dir: Path,
+) -> dict[str, Any]:
+    """Collapse partial-retry detections into one problem without changing identity.
+
+    A partial retry is an edge-refinement operation, not a split operation.  AI
+    providers may still return multiple candidates for one cropped region; the
+    safe behavior is to use their union as the refined boundary while retaining
+    the original problem id, title, number, metadata, and position in page order.
+    """
+    detected_boxes = [_bbox_from_problem(problem) for problem in retry_problems]
+    left = min(box.left for box in detected_boxes)
+    top = min(box.top for box in detected_boxes)
+    right = max(box.right for box in detected_boxes)
+    bottom = max(box.bottom for box in detected_boxes)
+
+    from PIL import Image
+
+    with Image.open(source_path) as source_image:
+        refined_box = _coerce_crop_box(
+            {
+                "left": left,
+                "top": top,
+                "width": right - left,
+                "height": bottom - top,
+            },
+            image_width=source_image.width,
+            image_height=source_image.height,
+        )
+
+    problem_id = str(source_problem.get("id") or "")
+    raw_crop_path = retry_dir / _make_crop_filename(problem_id, "ai_partial_identity")
+    _crop_image_by_bbox(source_path, refined_box, raw_crop_path)
+    raw_uri = raw_crop_path.resolve().as_uri()
+    board_uri = raw_uri
+    if _crop_refreshes_board_render(source_problem):
+        board_crop_path = retry_dir / _make_crop_filename(problem_id, "ai_partial_identity_board")
+        _render_board_crop_from_raw(raw_crop_path, board_crop_path, source_problem)
+        board_uri = board_crop_path.resolve().as_uri()
+
+    risk_flags = list(dict.fromkeys(
+        str(flag)
+        for problem in retry_problems
+        for flag in (problem.get("riskFlags") or problem.get("risk_flags") or [])
+        if flag
+    ))
+    if len(retry_problems) > 1:
+        risk_flags.append("ai_partial_retry_multiple_candidates")
+    risk_flags = list(dict.fromkeys(risk_flags))
+
+    preserved = dict(source_problem)
+    for key in (
+        "manualCrop",
+        "manual_crop",
+        "cropBaseBbox",
+        "cropBaseImagePath",
+        "cropBaseBoardRenderPath",
+        "cropBasePreserveMediaRegions",
+    ):
+        preserved.pop(key, None)
+    preserved["id"] = problem_id
+    preserved["sourcePageId"] = str(source_page.get("id") or source_problem.get("sourcePageId") or "")
+    preserved["sourceImagePath"] = source_path.resolve().as_uri()
+    preserved["sourceFileName"] = str(source_problem.get("sourceFileName") or source_path.name)
+    preserved["bbox"] = {
+        "left": refined_box.left,
+        "top": refined_box.top,
+        "width": refined_box.width,
+        "height": refined_box.height,
+    }
+    preserved["imagePath"] = raw_uri
+    preserved["boardRenderPath"] = board_uri
+    preserved["cropBaseBbox"] = dict(preserved["bbox"])
+    preserved["cropBaseImagePath"] = raw_uri
+    preserved["cropBaseBoardRenderPath"] = board_uri
+    preserved["cropBasePreserveMediaRegions"] = []
+    preserved["preserveMediaRegions"] = []
+    preserved["preserve_media_regions"] = []
+    preserved["riskFlags"] = risk_flags
+    preserved["risk_flags"] = list(risk_flags)
+    preserved["reviewStatus"] = "check_needed" if risk_flags else "normal"
+    preserved["review_status"] = preserved["reviewStatus"]
+    preserved["parseFailed"] = False
+    preserved["parse_failed"] = False
+    preserved["replacesProblemId"] = problem_id
+    preserved["replaces_problem_id"] = problem_id
+    preserved["aiRetry"] = {
+        "status": "applied",
+        "partial": True,
+        "preservedProblemIdentity": True,
+        "replacesProblemId": problem_id,
+        "sourcePageId": preserved["sourcePageId"],
+        "detectedProblemCount": len(retry_problems),
+        "collapsedMultipleCandidates": len(retry_problems) > 1,
+        "cropBox": {
+            "left": crop_box.left,
+            "top": crop_box.top,
+            "width": crop_box.width,
+            "height": crop_box.height,
+        },
+        "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    _refresh_mutated_crop_layout(preserved, raw_crop_path)
+    return preserved
+
+
 def _retry_target_problem_ids(payload: dict[str, Any]) -> list[str]:
     raw_problem_ids = payload.get("problemIds") or payload.get("problem_ids") or []
     if payload.get("problemId") or payload.get("problem_id"):
@@ -5842,7 +5954,7 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
             if not retry_problems:
                 raise ValueError("partial AI retry produced no problems")
 
-            replacements: list[dict[str, Any]] = []
+            normalized_retry_problems: list[dict[str, Any]] = []
             for index, retry_problem in enumerate(retry_problems, start=1):
                 normalized = _normalized_retry_problem(
                     session,
@@ -5850,27 +5962,28 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                     retry_problem,
                     stamp=stamp,
                     index=(job_index * 1000) + index,
-                    replacements_so_far=replacements,
+                    replacements_so_far=normalized_retry_problems,
                 )
                 _offset_retry_problem_to_source_page(normalized, crop_box)
-                normalized["aiRetry"]["partial"] = True
-                normalized["aiRetry"]["replacesProblemId"] = problem_id
-                normalized["aiRetry"]["cropBox"] = {
-                    "left": crop_box.left,
-                    "top": crop_box.top,
-                    "width": crop_box.width,
-                    "height": crop_box.height,
-                }
-                normalized["replacesProblemId"] = problem_id
-                normalized["replaces_problem_id"] = problem_id
-                replacements.append(normalized)
-            _replace_single_problem(session, problem_id, replacements)
+                normalized_retry_problems.append(normalized)
+            replacement = _partial_retry_identity_problem(
+                problem,
+                page,
+                source_path,
+                normalized_retry_problems,
+                crop_box=crop_box,
+                retry_dir=retry_dir,
+            )
+            _replace_single_problem(session, problem_id, [replacement])
             summaries.append({
                 "problemId": problem_id,
                 "pageId": str(page.get("id") or ""),
                 "status": "applied",
                 "partial": True,
-                "replacedProblemCount": len(replacements),
+                "preservedProblemIdentity": True,
+                "detectedProblemCount": len(normalized_retry_problems),
+                "collapsedMultipleCandidates": len(normalized_retry_problems) > 1,
+                "replacedProblemCount": 1,
             })
         except Exception as exc:  # noqa: BLE001 - record per-problem retry failure
             try:

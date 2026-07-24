@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ai_usage import aggregate_token_usage
 from ocr_backend import (
     GeminiOCRBackend,
     create_ocr_backend,
@@ -64,6 +65,7 @@ def build_run_summary(
     ocr_cache_misses = 0
     route_counts: dict[str, int] = {}
     route_tier_counts: dict[str, int] = {}
+    token_usage_events: list[dict[str, Any]] = []
 
     for page in pages:
         ai_summary = page.metadata.get("ai_fallback")
@@ -74,6 +76,9 @@ def build_run_summary(
                 ai_applied_pages += 1
             if ai_summary.get("cache_hit"):
                 ai_cache_hits += 1
+            raw_token_usage = ai_summary.get("token_usage")
+            if isinstance(raw_token_usage, dict):
+                token_usage_events.append(dict(raw_token_usage))
         route_summary = page.metadata.get("route_decision")
         if isinstance(route_summary, dict):
             route = str(route_summary.get("route") or "unknown")
@@ -93,6 +98,11 @@ def build_run_summary(
                 ocr_cache_hits += 1
             if block.metadata.get("ocr_cache_miss"):
                 ocr_cache_misses += 1
+            raw_events = block.metadata.get("ai_token_usage_events")
+            if isinstance(raw_events, list):
+                token_usage_events.extend(
+                    dict(event) for event in raw_events if isinstance(event, dict)
+                )
 
     return {
         "source": str(source),
@@ -112,6 +122,7 @@ def build_run_summary(
         "ocr_cache_miss_count": ocr_cache_misses,
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
+        "token_usage": aggregate_token_usage(token_usage_events),
         "pages_json_path": str(Path(output_dir) / "pages.json"),
     }
 
@@ -604,6 +615,19 @@ def build_page_model(
         return escalation_backend
 
     def _process_block(block):
+        token_usage_events: list[dict[str, Any]] = []
+
+        def _record_live_token_usage(result: Any, *, stage: str) -> None:
+            raw_usage = result.metadata.get("token_usage")
+            if not isinstance(raw_usage, dict):
+                return
+            event = dict(raw_usage)
+            event["stage"] = stage
+            model = str(result.metadata.get("model") or "").strip()
+            if model:
+                event["model"] = model
+            token_usage_events.append(event)
+
         if _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter):
             block.metadata["ocr_backend"] = "pdf_text_marker"
             block.metadata["ocr_skipped"] = True
@@ -644,6 +668,7 @@ def build_page_model(
             finally:
                 call_semaphore.release()
             ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
+            _record_live_token_usage(ocr_result, stage="ocr")
             if ocr_result.metadata.get("cacheable", True):
                 pipeline_cache.save_ocr_result(
                     crop,
@@ -694,6 +719,10 @@ def build_page_model(
                 escalated_result.metadata.setdefault(
                     "backend_latency_ms", escalation_elapsed_ms
                 )
+                _record_live_token_usage(
+                    escalated_result,
+                    stage="ocr_escalation",
+                )
                 if escalated_result.metadata.get("cacheable", True):
                     pipeline_cache.save_ocr_result(
                         crop,
@@ -725,6 +754,8 @@ def build_page_model(
             else:
                 block.metadata["ocr_escalated"] = False
 
+        if token_usage_events:
+            block.metadata["ai_token_usage_events"] = token_usage_events
         block.metadata["ocr_backend"] = ocr_result.backend_name
         if isinstance(ocr_result.metadata.get("backend_latency_ms"), (int, float)):
             block.metadata["ocr_latency_ms"] = int(ocr_result.metadata["backend_latency_ms"])

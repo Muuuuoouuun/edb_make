@@ -341,10 +341,12 @@ class TestUiQueueActions(unittest.TestCase):
         box_edit_panel = source.split('className="box-edit-panel"', 1)[1]
         box_edit_panel = box_edit_panel.split("function ManualSplitEditor", 1)[0]
         cancel_index = box_edit_panel.index("취소")
-        apply_index = box_edit_panel.index("{mutating ? '적용 중…' : '적용'}")
+        apply_index = box_edit_panel.index("(mutating ? '적용 중…' : '적용')")
 
         self.assertLess(cancel_index, apply_index)
-        self.assertIn('className="btn primary" type="button" aria-keyshortcuts="Enter" onClick={onApply}', box_edit_panel)
+        self.assertIn('className="btn primary"', box_edit_panel)
+        self.assertIn('aria-keyshortcuts="Enter"', box_edit_panel)
+        self.assertIn("onClick={onApply}", box_edit_panel)
 
         mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
@@ -363,8 +365,19 @@ class TestUiQueueActions(unittest.TestCase):
 
         self.assertIn("originalBox: initialBox", review_stage)
         self.assertIn("box: initialBox", review_stage)
-        self.assertIn("if (reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;", review_stage)
+        self.assertIn("mode: 'crop'", review_stage)
+        self.assertIn("if (!recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;", review_stage)
         self.assertIn("pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;", review_stage)
+        self.assertIn("preserveProblemIdentity: true", review_stage)
+        self.assertIn("collapseToSingle: true", review_stage)
+        self.assertIn("partial: true", review_stage)
+        self.assertIn("problemIds: [boxEdit.problemId]", review_stage)
+        self.assertIn("cropBox: boxEdit.box", review_stage)
+        self.assertIn("mode={boxEdit.mode}", review_stage)
+        self.assertIn("onModeChange={setBoxEditMode}", review_stage)
+        self.assertIn("여러 후보가 나와도 하나의 경계로 합치며 번호와 순서를 유지합니다.", source)
+        self.assertIn("이 영역으로 적용", source)
+        self.assertIn("영역 재인식 적용 · 번호와 순서를 유지했어요", source)
         self.assertNotIn("onManualCropOutsideMouseDown", review_stage)
         self.assertNotIn("continueWithProblemId", review_stage)
         self.assertNotIn("const [splitTarget", review_stage)
@@ -375,6 +388,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("새 영역 추가", review_stage)
         self.assertIn(".box-edit-layout.is-open", html)
         self.assertIn(".box-edit-panel", html)
+        self.assertIn(".review-actionbar.is-selection{\n    align-items: flex-start;\n    flex-wrap: wrap;", html)
+        self.assertIn(".review-actionbar.is-selection .review-actionbar-actions{\n    flex: 1 1 100%;", html)
         self.assertNotIn(".split-guide", html)
 
     def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:

@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import base64
@@ -1449,7 +1450,7 @@ class TestRetryAiResilience(unittest.TestCase):
             for page in session["pages"]:
                 self.assertNotIn("aiRetry", page)
 
-    def test_partial_retry_replaces_only_selected_problem_and_offsets_bbox(self):
+    def test_partial_retry_preserves_selected_problem_identity_order_and_offsets_bbox(self):
         from PIL import Image
 
         with TemporaryDirectory() as raw_tmp:
@@ -1466,6 +1467,8 @@ class TestRetryAiResilience(unittest.TestCase):
                 "problems": [
                     {
                         "id": "p1",
+                        "title": "기존 1번",
+                        "problemNumber": "1",
                         "sourcePageId": "page-1",
                         "bbox": {"left": 20, "top": 30, "width": 80, "height": 90},
                         "riskFlags": ["needs_review"],
@@ -1506,18 +1509,100 @@ class TestRetryAiResilience(unittest.TestCase):
                 )
 
             problem_ids = [problem["id"] for problem in new_session["problems"]]
-            self.assertNotIn("p1", problem_ids)
-            self.assertIn("p2", problem_ids)
-            replacement = next(problem for problem in new_session["problems"] if problem["id"] != "p2")
+            self.assertEqual(["p1", "p2"], problem_ids)
+            replacement = next(problem for problem in new_session["problems"] if problem["id"] == "p1")
+            self.assertEqual("기존 1번", replacement["title"])
+            self.assertEqual("1", replacement["problemNumber"])
             self.assertEqual("page-1", replacement["sourcePageId"])
             self.assertEqual(12.0, replacement["bbox"]["left"])
             self.assertEqual(23.0, replacement["bbox"]["top"])
             self.assertEqual(40.0, replacement["bbox"]["width"])
             self.assertEqual(50.0, replacement["bbox"]["height"])
             self.assertTrue(replacement["aiRetry"]["partial"])
-            self.assertEqual([replacement["id"], "p2"], new_session["pages"][0]["problemIds"])
+            self.assertTrue(replacement["aiRetry"]["preservedProblemIdentity"])
+            self.assertEqual(["p1", "p2"], new_session["pages"][0]["problemIds"])
             self.assertEqual("applied", new_session["ai_retry_summary"][0]["status"])
             self.assertTrue(new_session["ai_retry_summary"][0]["partial"])
+            self.assertTrue(new_session["ai_retry_summary"][0]["preservedProblemIdentity"])
+
+    def test_partial_retry_collapses_multiple_candidates_into_one_preserved_problem(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page-1.png"
+            Image.new("RGB", (240, 180), "white").save(page_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1", "p2"],
+                }],
+                "problems": [
+                    {
+                        "id": "p1",
+                        "title": "기존 1번",
+                        "problemNumber": "1",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 20, "top": 30, "width": 80, "height": 90},
+                        "riskFlags": ["needs_review"],
+                    },
+                    {
+                        "id": "p2",
+                        "title": "기존 2번",
+                        "problemNumber": "2",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 120, "top": 30, "width": 80, "height": 90},
+                        "riskFlags": [],
+                    },
+                ],
+                "ai_fallback": {"provider": "gemini"},
+            }
+
+            def fake_partial_export(_source_path, **_kwargs):
+                return {
+                    "ui_session": {
+                        "pages": [{"id": "partial", "riskFlags": []}],
+                        "problems": [
+                            {
+                                "id": "partial-p1",
+                                "sourcePageId": "partial",
+                                "bbox": {"left": 2, "top": 3, "width": 40, "height": 50},
+                                "riskFlags": [],
+                            },
+                            {
+                                "id": "partial-p2",
+                                "sourcePageId": "partial",
+                                "bbox": {"left": 44, "top": 6, "width": 20, "height": 30},
+                                "riskFlags": [],
+                            },
+                        ],
+                    }
+                }
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_partial_export):
+                new_session = app_server._mutate_retry_ai(
+                    session,
+                    {
+                        "partial": True,
+                        "problemIds": ["p1"],
+                        "cropBox": {"left": 10, "top": 20, "width": 80, "height": 90},
+                    },
+                )
+
+            self.assertEqual(["p1", "p2"], [problem["id"] for problem in new_session["problems"]])
+            self.assertEqual(["p1", "p2"], new_session["pages"][0]["problemIds"])
+            replacement = new_session["problems"][0]
+            self.assertEqual({"left": 12.0, "top": 23.0, "width": 62.0, "height": 50.0}, replacement["bbox"])
+            self.assertEqual("기존 1번", replacement["title"])
+            self.assertEqual("1", replacement["problemNumber"])
+            self.assertEqual(2, replacement["aiRetry"]["detectedProblemCount"])
+            self.assertTrue(replacement["aiRetry"]["collapsedMultipleCandidates"])
+            self.assertIn("ai_partial_retry_multiple_candidates", replacement["riskFlags"])
+            self.assertEqual("check_needed", replacement["reviewStatus"])
+            self.assertEqual(1, new_session["ai_retry_summary"][0]["replacedProblemCount"])
+            self.assertEqual(2, new_session["ai_retry_summary"][0]["detectedProblemCount"])
 
 
 class TestSessionExcludeMutation(unittest.TestCase):
@@ -1826,6 +1911,63 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertIsNotNone(crop_path)
             with Image.open(crop_path) as crop_image:
                 self.assertEqual((150, 120), crop_image.size)
+
+    def test_absolute_crop_preserves_problem_identity_number_order_and_neighbor(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            first_path = tmpdir / "problem-1.png"
+            second_path = tmpdir / "problem-2.png"
+            Image.new("RGB", (400, 300), "white").save(page_path)
+            Image.new("RGB", (120, 90), "white").save(first_path)
+            Image.new("RGB", (100, 70), "white").save(second_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1", "p2"],
+                }],
+                "problems": [
+                    {
+                        "id": "p1",
+                        "problemNumber": 12,
+                        "sourcePageId": "page-1",
+                        "imagePath": first_path.resolve().as_uri(),
+                        "boardRenderPath": first_path.resolve().as_uri(),
+                        "bbox": {"left": 40, "top": 30, "width": 120, "height": 90},
+                        "placementXRatio": 0.25,
+                        "placementYRatio": 0.1,
+                        "placementScaleRatio": 1.15,
+                    },
+                    {
+                        "id": "p2",
+                        "problemNumber": 13,
+                        "sourcePageId": "page-1",
+                        "imagePath": second_path.resolve().as_uri(),
+                        "boardRenderPath": second_path.resolve().as_uri(),
+                        "bbox": {"left": 200, "top": 160, "width": 100, "height": 70},
+                    },
+                ],
+            }
+            neighbor_before = copy.deepcopy(session["problems"][1])
+
+            result = app_server._mutate_crop(
+                session,
+                "p1",
+                {"cropBox": {"left": 25, "top": 20, "width": 160, "height": 110}},
+            )
+
+            self.assertEqual(["p1", "p2"], [problem["id"] for problem in result["problems"]])
+            self.assertEqual(["p1", "p2"], result["pages"][0]["problemIds"])
+            edited = result["problems"][0]
+            self.assertEqual(12, edited["problemNumber"])
+            self.assertEqual(0.25, edited["placementXRatio"])
+            self.assertEqual(0.1, edited["placementYRatio"])
+            self.assertEqual(1.15, edited["placementScaleRatio"])
+            self.assertEqual(neighbor_before, result["problems"][1])
 
     def test_manual_crop_materializes_missing_problem_image_from_source_page(self):
         from PIL import Image

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 import io
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
@@ -13,6 +14,7 @@ from build_problem_board_edb import (
     _build_image_only_record_image,
     _problem_allows_selective_media_preservation,
     _render_problem_asset,
+    _stage2_prefers_chalk_math_media,
 )
 from edb_builder import CROP_FORMAT_V1
 from preprocess import _extract_pdf_media_regions, _transform_pdf_text_geometry
@@ -160,6 +162,176 @@ def test_default_stage2_asset_restores_pdf_media(tmp_path: Path) -> None:
         assert rendered.convert("RGBA").getpixel((500, 250)) == (188, 52, 74, 255)
         assert rendered.convert("RGBA").getpixel((150, 60))[:3] == (238, 238, 226)
     assert len(task.rendered_media_regions) == 1
+
+
+def test_math_stage2_asset_keeps_figures_as_chalk_cutouts(tmp_path: Path) -> None:
+    source = Image.new("RGB", (1100, 500), "white")
+    draw = ImageDraw.Draw(source)
+    draw.ellipse((350, 100, 749, 399), outline="black", width=8)
+    task = _ProblemAssetTask(
+        source_image=source,
+        bounds=Box(left=0.0, top=0.0, width=1100.0, height=500.0),
+        crop_path=tmp_path / "math-crop.png",
+        board_render_path=tmp_path / "math-stage2.png",
+        chalk_color=(238, 238, 226),
+        trim_edge_guides=False,
+        pad_edges=False,
+        subject=Subject.MATH,
+        source_media_regions=(
+            {
+                "kind": "image",
+                "source": "pdf_image_block",
+                "confidence": 0.99,
+                "bbox": {
+                    "left": 300.0,
+                    "top": 50.0,
+                    "right": 800.0,
+                    "bottom": 450.0,
+                    "width": 500.0,
+                    "height": 400.0,
+                },
+            },
+        ),
+    )
+
+    assert _stage2_prefers_chalk_math_media(Subject.MATH, "s2")
+    assert not _stage2_prefers_chalk_math_media(Subject.MATH, "raw")
+    assert not _stage2_prefers_chalk_math_media(Subject.KOREAN, "s2")
+    assert _render_problem_asset(task) == (1100, 500)
+
+    with Image.open(task.board_render_path) as rendered:
+        rgba = rendered.convert("RGBA")
+        assert rgba.getpixel((550, 250))[3] == 0
+        assert rgba.getpixel((550, 100))[:3] == (238, 238, 226)
+        assert rgba.getpixel((550, 100))[3] > 0
+    assert len(task.rendered_media_regions) == 1
+
+
+def test_math_stage2_edb_export_does_not_restore_white_figure_box(tmp_path: Path) -> None:
+    crop_path = tmp_path / "math-crop.png"
+    board_path = tmp_path / "math-board.png"
+    source = Image.new("RGB", (240, 140), "white")
+    draw = ImageDraw.Draw(source)
+    draw.line((110, 70, 209, 70), fill="black", width=5)
+    source.save(crop_path)
+    board = Image.new("RGBA", source.size, (238, 238, 226, 0))
+    ImageDraw.Draw(board).line((110, 70, 209, 70), fill=(238, 238, 226, 255), width=5)
+    board.save(board_path)
+    regions = [
+        {
+            "kind": "image",
+            "confidence": 0.99,
+            "bbox": {"left": 100.0, "top": 30.0, "right": 220.0, "bottom": 110.0},
+        }
+    ]
+    entry = ProblemEntry(
+        problem_id="math-1",
+        title="수학 1번",
+        problem_number=1,
+        subject=Subject.MATH,
+        source_page_id="page-1",
+        source_path="math.pdf",
+        prepared_page=None,
+        bounds=Box(left=0.0, top=0.0, width=240.0, height=140.0),
+        crop_path=crop_path,
+        board_render_path=board_path,
+        blocks=[],
+        actual_height_pages=1.0,
+        overflow_allowed=False,
+        reading_heavy=False,
+        risk_flags=[],
+        processing_step="s2",
+        preserve_media_regions=regions,
+    )
+    placement = SimpleNamespace(
+        metadata={
+            "crop_path": str(crop_path),
+            "board_render_path": str(board_path),
+            "processing_step": "s2",
+        }
+    )
+
+    payload = _build_image_only_record_image(
+        placement,
+        entry,
+        dark_board=True,
+        board_theme="charcoal",
+        crop_format=CROP_FORMAT_V1,
+        target_image_width_px=0.0,
+        continuous_flow=False,
+    )
+
+    with Image.open(io.BytesIO(payload.image_bytes)) as exported:
+        rgba = exported.convert("RGBA")
+        assert rgba.getpixel((160, 50))[3] == 0
+        assert rgba.getpixel((160, 70)) == (238, 238, 226, 255)
+
+
+def test_text_priority_asset_does_not_run_horizontal_page_chrome_trimmers(
+    tmp_path: Path,
+) -> None:
+    source = Image.new("RGB", (940, 600), "white")
+    draw = ImageDraw.Draw(source)
+    for index, y in enumerate(range(80, 500, 80), start=1):
+        draw.text((0, y), f"{index}. left choice", fill="black")
+        draw.text((720, y), "right edge text", fill="black")
+    task = _ProblemAssetTask(
+        source_image=source,
+        bounds=Box(left=0.0, top=0.0, width=940.0, height=600.0),
+        crop_path=tmp_path / "korean-crop.png",
+        board_render_path=tmp_path / "korean-stage2.png",
+        chalk_color=(238, 238, 226),
+        trim_edge_guides=True,
+        pad_edges=False,
+        text_priority=True,
+        subject=Subject.KOREAN,
+    )
+
+    with patch(
+        "build_problem_board_edb._trim_edge_vertical_guides",
+        side_effect=AssertionError("text-priority crop must keep its left/right bounds"),
+    ), patch(
+        "build_problem_board_edb._trim_edge_attached_page_chrome",
+        side_effect=AssertionError("text-priority crop must keep edge glyphs"),
+    ), patch(
+        "build_problem_board_edb._erase_corner_page_badges",
+        side_effect=AssertionError("text-priority crop must keep corner choices"),
+    ):
+        assert _render_problem_asset(task) == (940, 600)
+
+    with Image.open(task.crop_path) as crop:
+        assert crop.size == source.size
+        assert crop.crop((0, 0, 80, 600)).getbbox() is not None
+
+
+def test_text_priority_asset_adds_safe_side_padding_without_changing_source_bounds(
+    tmp_path: Path,
+) -> None:
+    source = Image.new("RGB", (900, 500), "white")
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((100, 120, 106, 138), fill="black")
+    draw.rectangle((793, 220, 799, 238), fill="black")
+    task = _ProblemAssetTask(
+        source_image=source,
+        bounds=Box(left=100.0, top=50.0, width=700.0, height=360.0),
+        crop_path=tmp_path / "english-safe-crop.png",
+        board_render_path=tmp_path / "english-safe-stage2.png",
+        chalk_color=(238, 238, 226),
+        trim_edge_guides=False,
+        pad_edges=True,
+        text_priority=True,
+        subject=Subject.ENGLISH,
+    )
+
+    assert _render_problem_asset(task) == (732, 448)
+
+    with Image.open(task.crop_path) as crop:
+        gray = crop.convert("L")
+        assert crop.size == (732, 448)
+        assert gray.getpixel((16, 106)) < 200
+        assert gray.getpixel((709, 206)) < 200
+        assert gray.crop((0, 0, 16, crop.height)).getextrema() == (255, 255)
+        assert gray.crop((716, 0, 732, crop.height)).getextrema() == (255, 255)
 
 
 def test_text_priority_edb_export_restores_media_after_final_normalization(tmp_path: Path) -> None:
