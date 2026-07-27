@@ -9031,24 +9031,9 @@ function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
 }
 
-function sessionRiskCount(session){
-  const problemRiskCount = (session?.problems || []).filter(p => Array.isArray(p?.riskFlags) && p.riskFlags.length > 0).length;
-  const pageRiskCount = (session?.pages || []).filter(page => {
-    const flags = page?.riskFlags || page?.risk_flags || [];
-    return Array.isArray(flags) && flags.length > 0;
-  }).length;
-  const warningCount = Array.isArray(session?.warning_messages)
-    ? session.warning_messages.length
-    : Array.isArray(session?.warningMessages)
-      ? session.warningMessages.length
-      : 0;
-  return problemRiskCount + pageRiskCount + warningCount;
-}
-
 function shouldOpenReview(session){
   if (!hasReviewPages(session)) return false;
-  const problemCount = Array.isArray(session?.problems) ? session.problems.length : 0;
-  return problemCount > 1 || sessionRiskCount(session) > 0;
+  return reviewFlowState(sessionReviewSummary(session)).remaining > 0;
 }
 
 function summarizeRecognitionSession(session, pageIds){

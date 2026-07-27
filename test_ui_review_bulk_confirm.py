@@ -59,6 +59,24 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertIn("if (allItemsConfirmedByBulk)", on_confirm)
         self.assertIn("setReviewFocus(null);", on_confirm)
 
+    def test_completed_restored_session_opens_on_board_preview(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        should_open_review = source.split("function shouldOpenReview(session){", 1)[1]
+        should_open_review = should_open_review.split("\n}", 1)[0]
+
+        self.assertIn(
+            "return reviewFlowState(sessionReviewSummary(session)).remaining > 0;",
+            should_open_review,
+        )
+        self.assertNotIn("problemCount > 1", should_open_review)
+
+    def test_board_image_columns_default_to_one_in_source_and_bundle(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")
+
+        self.assertIn('"boardColumns": 1', source)
+        self.assertIn('"boardColumns":1', bundle)
+
     def test_review_stage_exposes_persistent_completion_bar(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
