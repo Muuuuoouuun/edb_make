@@ -516,6 +516,7 @@ add_data() {
 
 add_data "ui_prototype/index.html" "ui_prototype"
 add_data "ui_prototype/board.html" "ui_prototype"
+add_data "ui_prototype/favicon.png" "ui_prototype"
 add_data "ui_prototype/reorder.js" "ui_prototype"
 add_data "ui_prototype/review_filters.js" "ui_prototype"
 add_data "ui_prototype/publish_summary.js" "ui_prototype"

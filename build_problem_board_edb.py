@@ -185,6 +185,9 @@ PASSAGE_JOIN_EXCESS_BLANK_MIN_PX = 24
 # level keeps them pixel-identical while avoiding Pillow's slower default
 # encoder setting on long Korean passage images.
 INTERMEDIATE_PNG_COMPRESSION_LEVEL = 3
+PASSAGE_JOIN_TOP_RULE_MAX_RATIO = 0.32
+PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO = 0.45
+PASSAGE_JOIN_FOOTER_CONTENT_MIN_WIDTH_RATIO = 0.25
 CONTINUOUS_RECORD_GAP_PX = 20.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
@@ -3651,6 +3654,187 @@ def _seed_cross_page_passage_group(
     return group
 
 
+def _infer_pdf_cross_page_passage_continuation(
+    pages: Sequence[PageModel],
+    page_index: int,
+    active_groups: dict[str, dict[str, Any]],
+) -> ProblemUnit | None:
+    """Recover passage text at the top of the page following a range marker.
+
+    KICE Korean PDFs frequently place ``[10~13]`` near the bottom of one page,
+    continue the passage from the top of the next page, and only then print
+    question 10.  Per-page segmentation can see the range marker and question
+    markers but cannot associate the unmarked middle fragment.  This narrow
+    structural inference fills that gap only when the prior range reaches the
+    lower page body and the next page has substantive text before that range's
+    first question.
+    """
+    if page_index <= 0 or not active_groups:
+        return None
+    page = pages[page_index]
+    previous_page = pages[page_index - 1]
+    if page.subject not in {Subject.KOREAN, Subject.ENGLISH}:
+        return None
+    if str(page.metadata.get("source_type") or "") != "pdf":
+        return None
+    if str(page.metadata.get("segmenter") or "") != "pdf-text-markers":
+        return None
+
+    block_by_id = {block.block_id: block for block in page.blocks}
+    numbered = [
+        (number, problem)
+        for problem in page.problems
+        if (number := _problem_metadata_number(problem)) is not None
+    ]
+    if not numbered:
+        return None
+    numbered.sort(key=lambda item: (item[0], item[1].unit_id))
+
+    selected_group: dict[str, Any] | None = None
+    first_problem: ProblemUnit | None = None
+    for number, problem in numbered:
+        for group in active_groups.values():
+            source_page_ids = [str(value) for value in group.get("source_page_ids", [])]
+            if (
+                number == int(group["start"])
+                and source_page_ids
+                and source_page_ids[-1] == previous_page.page_id
+                and page.page_id not in source_page_ids
+            ):
+                selected_group = group
+                first_problem = problem
+                break
+        if selected_group is not None:
+            break
+    if selected_group is None or first_problem is None:
+        return None
+
+    group_id = str(selected_group["group_id"])
+    if any(
+        _problem_is_passage_fragment_unit(problem)
+        and str(problem.metadata.get("passage_group_id") or "") == group_id
+        for problem in page.problems
+    ):
+        return None
+
+    previous_block_by_id = {block.block_id: block for block in previous_page.blocks}
+    previous_shared_blocks = [
+        previous_block_by_id[block_id]
+        for block_id in selected_group.get("shared_block_ids", [])
+        if block_id in previous_block_by_id
+    ]
+    if not previous_shared_blocks:
+        return None
+    if max(block.bbox.bottom for block in previous_shared_blocks) < float(previous_page.height_px) * 0.60:
+        return None
+
+    first_block = _problem_first_block(first_problem, block_by_id)
+    if first_block is None:
+        return None
+    min_fragment_height = max(36.0, float(page.height_px) * 0.025)
+    fragment_specs: list[tuple[int, float, float, float, float]] = []
+    raw_regions = page.metadata.get("pdf_pre_question_text_regions")
+    if isinstance(raw_regions, list):
+        for raw_region in raw_regions:
+            if not isinstance(raw_region, dict):
+                continue
+            if _coerce_int(raw_region.get("before_problem_number")) != int(selected_group["start"]):
+                continue
+            raw_bbox = raw_region.get("bbox")
+            if not isinstance(raw_bbox, dict):
+                continue
+            column_index = _coerce_int(raw_region.get("column_index")) or 1
+            left = _coerce_float(raw_bbox.get("left"))
+            top = _coerce_float(raw_bbox.get("top"))
+            right = _coerce_float(raw_bbox.get("right"))
+            bottom = _coerce_float(raw_bbox.get("bottom"))
+            if None in {left, top, right, bottom}:
+                continue
+            assert left is not None and top is not None and right is not None and bottom is not None
+            left = max(0.0, left)
+            top = max(0.0, top)
+            right = min(float(page.width_px), right)
+            bottom = min(float(page.height_px), bottom)
+            if right - left < float(page.width_px) * 0.20 or bottom - top < min_fragment_height:
+                continue
+            fragment_specs.append((column_index, left, top, right, bottom))
+    if not fragment_specs:
+        return None
+
+    existing_blocks_by_id = {
+        block.block_id: block
+        for candidate_page in pages[:page_index]
+        for block in candidate_page.blocks
+    }
+    previous_fragment_index = max(
+        (
+            _coerce_int(existing_blocks_by_id[block_id].metadata.get("passage_fragment_index")) or 0
+            for block_id in selected_group.get("shared_block_ids", [])
+            if block_id in existing_blocks_by_id
+        ),
+        default=0,
+    )
+    start = int(selected_group["start"])
+    end = int(selected_group["end"])
+    continuation_blocks: list[ContentBlock] = []
+    for offset, (column_index, left, top, right, bottom) in enumerate(fragment_specs, start=1):
+        block_id = f"{page.page_id}-cross-page-passage-{start}-{end}-{offset:02d}"
+        continuation_blocks.append(
+            ContentBlock(
+                block_id=block_id,
+                block_type=BlockType.IMAGE,
+                bbox=Box.from_points(left, top, right, bottom),
+                reading_order=len(page.blocks) + len(continuation_blocks),
+                text=None,
+                confidence=1.0,
+                metadata={
+                    "segmenter": "pdf-cross-page-passage-continuation",
+                    "column_index": column_index,
+                    "marker_kind": "passage_continuation",
+                    "passage_range": {"start": start, "end": end},
+                    "passage_fragment_index": previous_fragment_index + offset,
+                    "shared_passage": True,
+                    "cross_page_passage_inferred": True,
+                    "force_image_record": True,
+                },
+            )
+        )
+    if not continuation_blocks:
+        return None
+
+    page.blocks.extend(continuation_blocks)
+    for block in continuation_blocks:
+        _append_unique_string(selected_group["shared_block_ids"], block.block_id)
+    continuation = ProblemUnit(
+        unit_id=f"{group_id}-continuation-{page.page_id}",
+        subject=page.subject,
+        title=f"지문 {start}~{end}",
+        figure_block_ids=[block.block_id for block in continuation_blocks],
+        metadata={
+            "passage_group_id": group_id,
+            "passage_range": {"start": start, "end": end},
+            "passage_role": "passage_fragment",
+            "supplemental_item": True,
+            "shared_passage_block_ids": list(selected_group["shared_block_ids"]),
+            "passage_child_problem_numbers": list(selected_group["child_numbers"]),
+            "passage_grouping_source": "pdf_cross_page_structure",
+            "passage_fragment_source": "pdf_cross_page_structure",
+            "cross_page_passage_inferred": True,
+        },
+    )
+    page.problems.append(continuation)
+    page.metadata["pdf_cross_page_passage_continuation_count"] = (
+        (_coerce_int(page.metadata.get("pdf_cross_page_passage_continuation_count")) or 0)
+        + len(continuation_blocks)
+    )
+    _seed_cross_page_passage_group(
+        active_groups,
+        page_id=page.page_id,
+        problem=continuation,
+    )
+    return continuation
+
+
 def _hwp_preview_text_values(metadata: dict[str, Any]) -> list[str]:
     values: list[str] = []
     raw = metadata.get("hwp_preview_text")
@@ -3884,7 +4068,8 @@ def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
     _annotate_hwp_preview_passage_ranges(pages)
     _annotate_marker_continuation_pages_to_following_groups(pages)
     active_groups: dict[str, dict[str, Any]] = {}
-    for page in pages:
+    for page_index, page in enumerate(pages):
+        _infer_pdf_cross_page_passage_continuation(pages, page_index, active_groups)
         ordered_problems = sorted(
             page.problems,
             key=lambda problem: (_problem_metadata_number(problem) or 10**9, problem.unit_id),
@@ -4243,6 +4428,66 @@ def _passage_foreground_x_span(
     return visible_columns[-1] - visible_columns[0] + 1
 
 
+def _foreground_row_runs(
+    row_counts: Sequence[int],
+    *,
+    start: int,
+    end: int,
+) -> list[tuple[int, int]]:
+    runs: list[tuple[int, int]] = []
+    run_start: int | None = None
+    lower = max(0, min(len(row_counts), start))
+    upper = max(lower, min(len(row_counts), end))
+    for index in range(lower, upper):
+        is_foreground = row_counts[index] > 3
+        if is_foreground and run_start is None:
+            run_start = index
+        elif not is_foreground and run_start is not None:
+            runs.append((run_start, index))
+            run_start = None
+    if run_start is not None:
+        runs.append((run_start, upper))
+    return runs
+
+
+def _has_substantial_content_below_footer_rule(
+    row_counts: Sequence[int],
+    *,
+    rule_end: int,
+    image_width: int,
+) -> bool:
+    """Keep likely footnotes/captions below a rule instead of deleting them.
+
+    Page numbers normally form one narrow ink run. Two separate text lines or
+    a single line spanning at least a quarter of the crop width are treated as
+    document content. This deliberately prefers leaving uncertain chrome over
+    deleting a real passage footnote.
+    """
+
+    raw_runs = [
+        (start, end)
+        for start, end in _foreground_row_runs(
+            row_counts,
+            start=rule_end,
+            end=len(row_counts),
+        )
+        if end - start >= 2
+    ]
+    runs: list[tuple[int, int]] = []
+    for start, end in raw_runs:
+        if runs and start - runs[-1][1] <= 5:
+            runs[-1] = (runs[-1][0], end)
+        else:
+            runs.append((start, end))
+    if len(runs) >= 2:
+        return True
+    below_rule = row_counts[max(0, rule_end) :]
+    return bool(
+        below_rule
+        and max(below_rule) >= int(round(image_width * PASSAGE_JOIN_FOOTER_CONTENT_MIN_WIDTH_RATIO))
+    )
+
+
 def _trim_passage_segment_for_join(
     image: Image.Image,
     *,
@@ -4272,7 +4517,8 @@ def _trim_passage_segment_for_join(
         top_rule_rows = [
             index
             for index in range(upper_end)
-            if row_counts[index] >= long_rule_threshold
+            if index <= int(round(image.height * PASSAGE_JOIN_TOP_RULE_MAX_RATIO))
+            and row_counts[index] >= long_rule_threshold
         ]
         if top_rule_rows:
             first_rule = top_rule_rows[0]
@@ -4290,8 +4536,7 @@ def _trim_passage_segment_for_join(
             )
             rule_width = max(row_counts[first_rule:rule_end], default=0)
             cropped_page_header_rule = (
-                header_span == 0
-                and first_rule <= 64
+                first_rule <= max(64, int(round(image.height * 0.08)))
                 and rule_width >= int(round(image.width * 0.93))
             )
             if (
@@ -4316,15 +4561,34 @@ def _trim_passage_segment_for_join(
             if row_counts[index] >= long_rule_threshold
         ]
         if long_rule_rows:
-            footer_rule_start = long_rule_rows[-1]
-            candidates = [
+            blank_candidates = [
                 (start, end)
-                for start, end in _blank_row_runs(row_counts, end=footer_rule_start)
-                if start >= int(round(image.height * 0.50))
+                for start, end in _blank_row_runs(row_counts, end=image.height)
+                if start >= int(round(image.height * PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO))
                 and end - start >= PASSAGE_JOIN_BLANK_RUN_MIN_PX
+                and any(rule_row >= end for rule_row in long_rule_rows)
             ]
-            if candidates:
-                blank_start, _blank_end = candidates[-1]
+            if blank_candidates:
+                blank_start, blank_end = blank_candidates[-1]
+                footer_rule_start = next(
+                    rule_row for rule_row in long_rule_rows if rule_row >= blank_end
+                )
+                footer_rule_end = footer_rule_start + 1
+                long_rule_row_set = set(long_rule_rows)
+                while footer_rule_end in long_rule_row_set:
+                    footer_rule_end += 1
+            else:
+                footer_rule_start = -1
+                footer_rule_end = -1
+        else:
+            footer_rule_start = -1
+            footer_rule_end = -1
+        if footer_rule_start >= 0:
+            if not _has_substantial_content_below_footer_rule(
+                row_counts,
+                rule_end=footer_rule_end,
+                image_width=image.width,
+            ):
                 candidate_bottom = min(
                     image.height,
                     blank_start + PASSAGE_JOIN_EDGE_PADDING_PX,
@@ -5070,11 +5334,60 @@ def _coalesce_cross_page_passage_drafts(
     removed_indices: set[int] = set()
     updated_crop_sizes = list(crop_sizes)
     for group_id, fragment_indices in fragment_indices_by_group.items():
-        ordered_indices = sorted(fragment_indices)
+        ordered_candidates = sorted(
+            fragment_indices,
+            key=lambda index: (
+                int(drafts[index].prepared_page.page_number),
+                index,
+            ),
+        )
+        ordered_indices: list[int] = []
+        seen_fragment_ids: set[str] = set()
+        for index in ordered_candidates:
+            fragment_id = drafts[index].problem_id
+            if fragment_id in seen_fragment_ids:
+                removed_indices.add(index)
+                continue
+            seen_fragment_ids.add(fragment_id)
+            ordered_indices.append(index)
         source_page_ids = list(
             dict.fromkeys(drafts[index].source_page_id for index in ordered_indices)
         )
         if len(ordered_indices) < 2 or len(source_page_ids) < 2:
+            continue
+
+        group_problems = [
+            problem
+            for problem in problem_units_by_id.values()
+            if str(problem.metadata.get("passage_group_id") or "").strip() == group_id
+        ]
+        expected_source_page_ids: list[str] = []
+        expected_fragment_count = 0
+        for problem in group_problems:
+            raw_source_page_ids = problem.metadata.get("passage_source_page_ids")
+            if isinstance(raw_source_page_ids, list):
+                for page_id in raw_source_page_ids:
+                    normalized_page_id = str(page_id or "").strip()
+                    if normalized_page_id and normalized_page_id not in expected_source_page_ids:
+                        expected_source_page_ids.append(normalized_page_id)
+            expected_fragment_count = max(
+                expected_fragment_count,
+                _coerce_int(problem.metadata.get("passage_fragment_count")) or 0,
+            )
+        missing_source_page_ids = [
+            page_id for page_id in expected_source_page_ids if page_id not in source_page_ids
+        ]
+        coverage_incomplete = bool(
+            missing_source_page_ids
+            or (expected_fragment_count > 0 and len(source_page_ids) < expected_fragment_count)
+        )
+        if coverage_incomplete:
+            for problem in group_problems:
+                problem.metadata["passage_merge_incomplete"] = True
+                problem.metadata["passage_merge_missing_source_page_ids"] = list(
+                    missing_source_page_ids
+                )
+                problem.metadata["passage_merge_detected_source_page_ids"] = list(source_page_ids)
             continue
 
         primary_index = ordered_indices[0]
@@ -5142,10 +5455,11 @@ def _coalesce_cross_page_passage_drafts(
         primary.risk_flags = merged_risk_flags
         removed_indices.update(ordered_indices[1:])
 
-        for problem in problem_units_by_id.values():
+        for problem in group_problems:
             metadata = problem.metadata
-            if str(metadata.get("passage_group_id") or "").strip() != group_id:
-                continue
+            metadata.pop("passage_merge_incomplete", None)
+            metadata.pop("passage_merge_missing_source_page_ids", None)
+            metadata.pop("passage_merge_detected_source_page_ids", None)
             metadata["passage_fragments_merged"] = True
             metadata["passage_merged_fragment_ids"] = list(fragment_ids)
             metadata["passage_merged_source_page_ids"] = list(source_page_ids)
@@ -5296,7 +5610,8 @@ def build_problem_entries(
                 (
                     block
                     for block in own_blocks
-                    if block.metadata.get("segmenter") == "pdf-passage-range"
+                    if block.metadata.get("segmenter")
+                    in {"pdf-passage-range", "pdf-cross-page-passage-continuation"}
                     and not _is_probable_passage_continuation_page_header(page, block)
                 ),
                 key=lambda block: (

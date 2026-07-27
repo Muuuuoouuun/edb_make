@@ -1,0 +1,658 @@
+{
+  "schema_version": 1,
+  "experiment": "work3-real-kice-korean-corpus",
+  "document_count": 5,
+  "expected_cross_page_range_count": 26,
+  "matched_cross_page_range_count": 26,
+  "average_score": 100.0,
+  "minimum_score": 100.0,
+  "gate": {
+    "target": 94.0,
+    "average_pass": true,
+    "minimum_pass": true,
+    "all_documents_pass": true,
+    "all_cross_page_ranges_recovered": true
+  },
+  "documents": [
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak-work3/tmp/pdfs/real_kice/2025_06_korean.pdf",
+      "benchmark": "tmp/work3_korean_corpus_release/2025_06_korean/benchmark.json",
+      "score": 100.0,
+      "pass_94": true,
+      "components": {
+        "cross_page_recall": 40.0,
+        "cross_page_precision": 10.0,
+        "character_completeness": 20.0,
+        "visual_fidelity": 10.0,
+        "right_margin_safety": 5.0,
+        "s2_visual_cleanliness": 10.0,
+        "fragment_integrity": 5.0
+      },
+      "cross_page_ground_truth_count": 5,
+      "cross_page_matched_count": 5,
+      "inferred_group_count": 5,
+      "cross_page_coverage": 1.0,
+      "cross_page_precision": 1.0,
+      "expected_cross_page_ranges": [
+        {
+          "label": "12-17",
+          "start": 12,
+          "end": 17,
+          "marker_page": 4,
+          "continuation_page": 5,
+          "matched": true,
+          "detected_group_id": "2025_06_korean-page-004-passage-12-17"
+        },
+        {
+          "label": "18-21",
+          "start": 18,
+          "end": 21,
+          "marker_page": 6,
+          "continuation_page": 7,
+          "matched": true,
+          "detected_group_id": "2025_06_korean-page-006-passage-18-21"
+        },
+        {
+          "label": "27-30",
+          "start": 27,
+          "end": 30,
+          "marker_page": 9,
+          "continuation_page": 10,
+          "matched": true,
+          "detected_group_id": "2025_06_korean-page-009-passage-27-30"
+        },
+        {
+          "label": "43-45",
+          "start": 43,
+          "end": 45,
+          "marker_page": 15,
+          "continuation_page": 16,
+          "matched": true,
+          "detected_group_id": "2025_06_korean-page-015-passage-43-45"
+        },
+        {
+          "label": "40-43",
+          "start": 40,
+          "end": 43,
+          "marker_page": 18,
+          "continuation_page": 19,
+          "matched": true,
+          "detected_group_id": "2025_06_korean-page-018-passage-40-43"
+        }
+      ],
+      "quality_summary": {
+        "median_pixel_similarity": 1.0,
+        "minimum_pixel_similarity": 1.0,
+        "median_ink_f1": 1.0,
+        "minimum_ink_f1": 1.0,
+        "size_match_group_count": 14,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 53,
+        "minimum_horizontal_char_margin_px": 39.388,
+        "page_chrome_fragment_count": 0
+      },
+      "fragment_integrity": {
+        "duplicate_fragment_count": 0,
+        "out_of_order_group_count": 0,
+        "overlap_count": 0,
+        "pass": true
+      },
+      "page_chrome_fragment_count": 0,
+      "s2": {
+        "label": "22-26",
+        "source_size": [
+          1086,
+          5256
+        ],
+        "preview_size": [
+          1086,
+          5256
+        ],
+        "board_theme": "charcoal",
+        "processing": "s2-dense-text-priority",
+        "alpha_bbox": [
+          36,
+          56,
+          1012,
+          5073
+        ],
+        "ink_margins_px": {
+          "left": 36,
+          "top": 56,
+          "right": 74,
+          "bottom": 183
+        },
+        "low_alpha_halo_pixel_count": 0,
+        "foreground_rgb_color_count": 1,
+        "right_edge_ink_row_ratio": 0.0,
+        "longest_right_edge_ink_run_ratio": 0.0,
+        "right_edge_vertical_rule": false,
+        "quality_checks": {
+          "nonempty_ink": true,
+          "transparent_background": true,
+          "zero_low_alpha_halo_pixels": true,
+          "single_chalk_rgb_tone": true,
+          "left_safe_margin": true,
+          "right_safe_margin_or_vertical_rule": true
+        },
+        "pass": true,
+        "artifact": "2025_06_korean-s2.png"
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak-work3/tmp/pdfs/real_kice/2025_csat_korean.pdf",
+      "benchmark": "tmp/work3_korean_corpus_release/2025_csat_korean/benchmark.json",
+      "score": 100.0,
+      "pass_94": true,
+      "components": {
+        "cross_page_recall": 40.0,
+        "cross_page_precision": 10.0,
+        "character_completeness": 20.0,
+        "visual_fidelity": 10.0,
+        "right_margin_safety": 5.0,
+        "s2_visual_cleanliness": 10.0,
+        "fragment_integrity": 5.0
+      },
+      "cross_page_ground_truth_count": 8,
+      "cross_page_matched_count": 8,
+      "inferred_group_count": 8,
+      "cross_page_coverage": 1.0,
+      "cross_page_precision": 1.0,
+      "expected_cross_page_ranges": [
+        {
+          "label": "18-21",
+          "start": 18,
+          "end": 21,
+          "marker_page": 6,
+          "continuation_page": 7,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-006-passage-18-21"
+        },
+        {
+          "label": "32-34",
+          "start": 32,
+          "end": 34,
+          "marker_page": 11,
+          "continuation_page": 12,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-011-passage-32-34"
+        },
+        {
+          "label": "43-45",
+          "start": 43,
+          "end": 45,
+          "marker_page": 15,
+          "continuation_page": 16,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-015-passage-43-45"
+        },
+        {
+          "label": "40-43",
+          "start": 40,
+          "end": 43,
+          "marker_page": 18,
+          "continuation_page": 19,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-018-passage-40-43"
+        },
+        {
+          "label": "18-21",
+          "start": 18,
+          "end": 21,
+          "marker_page": 26,
+          "continuation_page": 27,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-026-passage-18-21"
+        },
+        {
+          "label": "32-34",
+          "start": 32,
+          "end": 34,
+          "marker_page": 31,
+          "continuation_page": 32,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-031-passage-32-34"
+        },
+        {
+          "label": "43-45",
+          "start": 43,
+          "end": 45,
+          "marker_page": 35,
+          "continuation_page": 36,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-035-passage-43-45"
+        },
+        {
+          "label": "40-43",
+          "start": 40,
+          "end": 43,
+          "marker_page": 38,
+          "continuation_page": 39,
+          "matched": true,
+          "detected_group_id": "2025_csat_korean-page-038-passage-40-43"
+        }
+      ],
+      "quality_summary": {
+        "median_pixel_similarity": 1.0,
+        "minimum_pixel_similarity": 1.0,
+        "median_ink_f1": 1.0,
+        "minimum_ink_f1": 1.0,
+        "size_match_group_count": 28,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 54,
+        "minimum_horizontal_char_margin_px": 41.223,
+        "page_chrome_fragment_count": 0
+      },
+      "fragment_integrity": {
+        "duplicate_fragment_count": 0,
+        "out_of_order_group_count": 0,
+        "overlap_count": 0,
+        "pass": true
+      },
+      "page_chrome_fragment_count": 0,
+      "s2": {
+        "label": "38-42",
+        "source_size": [
+          1086,
+          4755
+        ],
+        "preview_size": [
+          1086,
+          4755
+        ],
+        "board_theme": "charcoal",
+        "processing": "s2-dense-text-priority",
+        "alpha_bbox": [
+          36,
+          56,
+          1012,
+          4668
+        ],
+        "ink_margins_px": {
+          "left": 36,
+          "top": 56,
+          "right": 74,
+          "bottom": 87
+        },
+        "low_alpha_halo_pixel_count": 0,
+        "foreground_rgb_color_count": 1,
+        "right_edge_ink_row_ratio": 0.0,
+        "longest_right_edge_ink_run_ratio": 0.0,
+        "right_edge_vertical_rule": false,
+        "quality_checks": {
+          "nonempty_ink": true,
+          "transparent_background": true,
+          "zero_low_alpha_halo_pixels": true,
+          "single_chalk_rgb_tone": true,
+          "left_safe_margin": true,
+          "right_safe_margin_or_vertical_rule": true
+        },
+        "pass": true,
+        "artifact": "2025_csat_korean-s2.png"
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak-work3/tmp/pdfs/real_kice/2026_06_korean.pdf",
+      "benchmark": "tmp/work3_korean_corpus_release/2026_06_korean/benchmark.json",
+      "score": 100.0,
+      "pass_94": true,
+      "components": {
+        "cross_page_recall": 40.0,
+        "cross_page_precision": 10.0,
+        "character_completeness": 20.0,
+        "visual_fidelity": 10.0,
+        "right_margin_safety": 5.0,
+        "s2_visual_cleanliness": 10.0,
+        "fragment_integrity": 5.0
+      },
+      "cross_page_ground_truth_count": 5,
+      "cross_page_matched_count": 5,
+      "inferred_group_count": 5,
+      "cross_page_coverage": 1.0,
+      "cross_page_precision": 1.0,
+      "expected_cross_page_ranges": [
+        {
+          "label": "10-13",
+          "start": 10,
+          "end": 13,
+          "marker_page": 3,
+          "continuation_page": 4,
+          "matched": true,
+          "detected_group_id": "2026_06_korean-page-003-passage-10-13"
+        },
+        {
+          "label": "18-21",
+          "start": 18,
+          "end": 21,
+          "marker_page": 6,
+          "continuation_page": 7,
+          "matched": true,
+          "detected_group_id": "2026_06_korean-page-006-passage-18-21"
+        },
+        {
+          "label": "27-30",
+          "start": 27,
+          "end": 30,
+          "marker_page": 9,
+          "continuation_page": 10,
+          "matched": true,
+          "detected_group_id": "2026_06_korean-page-009-passage-27-30"
+        },
+        {
+          "label": "31-34",
+          "start": 31,
+          "end": 34,
+          "marker_page": 11,
+          "continuation_page": 12,
+          "matched": true,
+          "detected_group_id": "2026_06_korean-page-011-passage-31-34"
+        },
+        {
+          "label": "43-45",
+          "start": 43,
+          "end": 45,
+          "marker_page": 15,
+          "continuation_page": 16,
+          "matched": true,
+          "detected_group_id": "2026_06_korean-page-015-passage-43-45"
+        }
+      ],
+      "quality_summary": {
+        "median_pixel_similarity": 1.0,
+        "minimum_pixel_similarity": 1.0,
+        "median_ink_f1": 1.0,
+        "minimum_ink_f1": 1.0,
+        "size_match_group_count": 14,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 37,
+        "minimum_horizontal_char_margin_px": 37.722,
+        "page_chrome_fragment_count": 0
+      },
+      "fragment_integrity": {
+        "duplicate_fragment_count": 0,
+        "out_of_order_group_count": 0,
+        "overlap_count": 0,
+        "pass": true
+      },
+      "page_chrome_fragment_count": 0,
+      "s2": {
+        "label": "18-21",
+        "source_size": [
+          1059,
+          5395
+        ],
+        "preview_size": [
+          1059,
+          5395
+        ],
+        "board_theme": "charcoal",
+        "processing": "s2-dense-text-priority",
+        "alpha_bbox": [
+          54,
+          36,
+          1012,
+          5298
+        ],
+        "ink_margins_px": {
+          "left": 54,
+          "top": 36,
+          "right": 47,
+          "bottom": 97
+        },
+        "low_alpha_halo_pixel_count": 0,
+        "foreground_rgb_color_count": 1,
+        "right_edge_ink_row_ratio": 0.0,
+        "longest_right_edge_ink_run_ratio": 0.0,
+        "right_edge_vertical_rule": false,
+        "quality_checks": {
+          "nonempty_ink": true,
+          "transparent_background": true,
+          "zero_low_alpha_halo_pixels": true,
+          "single_chalk_rgb_tone": true,
+          "left_safe_margin": true,
+          "right_safe_margin_or_vertical_rule": true
+        },
+        "pass": true,
+        "artifact": "2026_06_korean-s2.png"
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak-work3/tmp/pdfs/real_kice/2026_09_korean.pdf",
+      "benchmark": "tmp/work3_korean_corpus_release/2026_09_korean/benchmark.json",
+      "score": 100.0,
+      "pass_94": true,
+      "components": {
+        "cross_page_recall": 40.0,
+        "cross_page_precision": 10.0,
+        "character_completeness": 20.0,
+        "visual_fidelity": 10.0,
+        "right_margin_safety": 5.0,
+        "s2_visual_cleanliness": 10.0,
+        "fragment_integrity": 5.0
+      },
+      "cross_page_ground_truth_count": 5,
+      "cross_page_matched_count": 5,
+      "inferred_group_count": 5,
+      "cross_page_coverage": 1.0,
+      "cross_page_precision": 1.0,
+      "expected_cross_page_ranges": [
+        {
+          "label": "22-26",
+          "start": 22,
+          "end": 26,
+          "marker_page": 7,
+          "continuation_page": 8,
+          "matched": true,
+          "detected_group_id": "2026_09_korean-page-007-passage-22-26"
+        },
+        {
+          "label": "27-30",
+          "start": 27,
+          "end": 30,
+          "marker_page": 9,
+          "continuation_page": 10,
+          "matched": true,
+          "detected_group_id": "2026_09_korean-page-009-passage-27-30"
+        },
+        {
+          "label": "31-34",
+          "start": 31,
+          "end": 34,
+          "marker_page": 11,
+          "continuation_page": 12,
+          "matched": true,
+          "detected_group_id": "2026_09_korean-page-011-passage-31-34"
+        },
+        {
+          "label": "43-45",
+          "start": 43,
+          "end": 45,
+          "marker_page": 15,
+          "continuation_page": 16,
+          "matched": true,
+          "detected_group_id": "2026_09_korean-page-015-passage-43-45"
+        },
+        {
+          "label": "40-43",
+          "start": 40,
+          "end": 43,
+          "marker_page": 18,
+          "continuation_page": 19,
+          "matched": true,
+          "detected_group_id": "2026_09_korean-page-018-passage-40-43"
+        }
+      ],
+      "quality_summary": {
+        "median_pixel_similarity": 1.0,
+        "minimum_pixel_similarity": 1.0,
+        "median_ink_f1": 1.0,
+        "minimum_ink_f1": 1.0,
+        "size_match_group_count": 14,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 74,
+        "minimum_horizontal_char_margin_px": 37.723,
+        "page_chrome_fragment_count": 0
+      },
+      "fragment_integrity": {
+        "duplicate_fragment_count": 0,
+        "out_of_order_group_count": 0,
+        "overlap_count": 0,
+        "pass": true
+      },
+      "page_chrome_fragment_count": 0,
+      "s2": {
+        "label": "31-34",
+        "source_size": [
+          1059,
+          4997
+        ],
+        "preview_size": [
+          1059,
+          4997
+        ],
+        "board_theme": "charcoal",
+        "processing": "s2-dense-text-priority",
+        "alpha_bbox": [
+          54,
+          36,
+          1012,
+          4945
+        ],
+        "ink_margins_px": {
+          "left": 54,
+          "top": 36,
+          "right": 47,
+          "bottom": 52
+        },
+        "low_alpha_halo_pixel_count": 0,
+        "foreground_rgb_color_count": 1,
+        "right_edge_ink_row_ratio": 0.0,
+        "longest_right_edge_ink_run_ratio": 0.0,
+        "right_edge_vertical_rule": false,
+        "quality_checks": {
+          "nonempty_ink": true,
+          "transparent_background": true,
+          "zero_low_alpha_halo_pixels": true,
+          "single_chalk_rgb_tone": true,
+          "left_safe_margin": true,
+          "right_safe_margin_or_vertical_rule": true
+        },
+        "pass": true,
+        "artifact": "2026_09_korean-s2.png"
+      }
+    },
+    {
+      "source": "/Users/clmagi/Desktop/Projects/edb_mak-work3/tmp/pdfs/real_kice/2027_06_korean.pdf",
+      "benchmark": "tmp/work3_korean_corpus_release/2027_06_korean/benchmark.json",
+      "score": 100.0,
+      "pass_94": true,
+      "components": {
+        "cross_page_recall": 40.0,
+        "cross_page_precision": 10.0,
+        "character_completeness": 20.0,
+        "visual_fidelity": 10.0,
+        "right_margin_safety": 5.0,
+        "s2_visual_cleanliness": 10.0,
+        "fragment_integrity": 5.0
+      },
+      "cross_page_ground_truth_count": 3,
+      "cross_page_matched_count": 3,
+      "inferred_group_count": 3,
+      "cross_page_coverage": 1.0,
+      "cross_page_precision": 1.0,
+      "expected_cross_page_ranges": [
+        {
+          "label": "18-21",
+          "start": 18,
+          "end": 21,
+          "marker_page": 6,
+          "continuation_page": 7,
+          "matched": true,
+          "detected_group_id": "2027_06_korean-page-006-passage-18-21"
+        },
+        {
+          "label": "43-45",
+          "start": 43,
+          "end": 45,
+          "marker_page": 15,
+          "continuation_page": 16,
+          "matched": true,
+          "detected_group_id": "2027_06_korean-page-015-passage-43-45"
+        },
+        {
+          "label": "40-43",
+          "start": 40,
+          "end": 43,
+          "marker_page": 18,
+          "continuation_page": 19,
+          "matched": true,
+          "detected_group_id": "2027_06_korean-page-018-passage-40-43"
+        }
+      ],
+      "quality_summary": {
+        "median_pixel_similarity": 1.0,
+        "minimum_pixel_similarity": 1.0,
+        "median_ink_f1": 1.0,
+        "minimum_ink_f1": 1.0,
+        "size_match_group_count": 14,
+        "minimum_char_bbox_recall": 1.0,
+        "clipped_char_bbox_count": 0,
+        "recovered_outside_block_char_count": 0,
+        "minimum_horizontal_char_margin_px": 43.047,
+        "page_chrome_fragment_count": 0
+      },
+      "fragment_integrity": {
+        "duplicate_fragment_count": 0,
+        "out_of_order_group_count": 0,
+        "overlap_count": 0,
+        "pass": true
+      },
+      "page_chrome_fragment_count": 0,
+      "s2": {
+        "label": "28-31",
+        "source_size": [
+          1084,
+          5286
+        ],
+        "preview_size": [
+          1084,
+          5286
+        ],
+        "board_theme": "charcoal",
+        "processing": "s2-dense-text-priority",
+        "alpha_bbox": [
+          36,
+          56,
+          1012,
+          5046
+        ],
+        "ink_margins_px": {
+          "left": 36,
+          "top": 56,
+          "right": 72,
+          "bottom": 240
+        },
+        "low_alpha_halo_pixel_count": 0,
+        "foreground_rgb_color_count": 1,
+        "right_edge_ink_row_ratio": 0.0,
+        "longest_right_edge_ink_run_ratio": 0.0,
+        "right_edge_vertical_rule": false,
+        "quality_checks": {
+          "nonempty_ink": true,
+          "transparent_background": true,
+          "zero_low_alpha_halo_pixels": true,
+          "single_chalk_rgb_tone": true,
+          "left_safe_margin": true,
+          "right_safe_margin_or_vertical_rule": true
+        },
+        "pass": true,
+        "artifact": "2027_06_korean-s2.png"
+      }
+    }
+  ],
+  "pass": true
+}

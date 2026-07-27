@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "experiment": "work3-pdf-path-comparison-summary",
+  "date": "2026-07-16",
+  "source_label": "2026_06_high2_korean.pdf",
+  "subject": "korean",
+  "dpi": 200,
+  "run_count": 3,
+  "passage_group_count": 11,
+  "passage_fragment_count": 15,
+  "involved_page_count": 11,
+  "page_route_counts": {
+    "pdf-structure": 11
+  },
+  "median": {
+    "v0_render_seconds": 0.166951,
+    "v1_render_seconds": 0.084223,
+    "v0_end_to_end_seconds": 1.203712,
+    "v1_end_to_end_seconds": 1.121878,
+    "v1_render_speedup_over_v0": 1.9816,
+    "v1_end_to_end_speedup_over_v0": 1.0746
+  },
+  "quality": {
+    "minimum_pixel_similarity": 1.0,
+    "minimum_ink_f1": 1.0,
+    "size_match_group_count": 11,
+    "v0_output_bytes": 8243743,
+    "v1_output_bytes": 8243743,
+    "minimum_char_bbox_recall": 1.0,
+    "clipped_char_bbox_count": 0,
+    "recovered_outside_block_char_count": 138,
+    "minimum_horizontal_char_margin_px": 22.624
+  },
+  "cost": {
+    "external_api_cost_usd": 0.0,
+    "machine_hour_rate_usd": null,
+    "reviewer_hour_rate_usd": null
+  },
+  "decision": {
+    "direct_clip_quality_gate": "pass",
+    "end_to_end_speed_target": "not_yet_met",
+    "next_performance_target": "shared passage detection and page preparation",
+    "next_quality_target": "character-bbox boundary validation"
+  }
+}

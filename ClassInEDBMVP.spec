@@ -83,6 +83,7 @@ generated_release_metadata = build_compliance_metadata()
 UI_DATAS = [
     ("ui_prototype/index.html", "ui_prototype"),
     ("ui_prototype/board.html", "ui_prototype"),
+    ("ui_prototype/favicon.png", "ui_prototype"),
     ("ui_prototype/reorder.js", "ui_prototype"),
     ("ui_prototype/review_filters.js", "ui_prototype"),
     ("ui_prototype/publish_summary.js", "ui_prototype"),
