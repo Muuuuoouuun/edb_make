@@ -46,6 +46,11 @@ EXPECTED_QUESTION_MAX = {
     "math": 30,
     "english": 45,
 }
+KICE_FORM_PAGE_COUNT = {
+    "korean": 20,
+    "math": 20,
+    "english": 8,
+}
 HORAENG_POST_RE = re.compile(
     r"(?P<year>20\d{2})년\s+(?P<month>\d{1,2})월\s+"
     r"고(?P<grade>[12])\s+모의고사\s+문제"
@@ -354,6 +359,39 @@ def extract_printed_ranges(text: str, *, question_max: int) -> list[list[int]]:
     return [[start, end] for start, end in sorted(ranges)]
 
 
+def expected_question_numbers(asset: ExamAsset, *, page_count: int) -> tuple[list[int], int]:
+    if asset.provider != "kice":
+        return list(range(1, asset.expected_question_max + 1)), 1
+
+    form_page_count = KICE_FORM_PAGE_COUNT[asset.subject]
+    if page_count <= 0 or page_count % form_page_count:
+        raise CorpusBootstrapError(
+            f"{asset.case_id} has unexpected KICE page count {page_count}; "
+            f"expected a multiple of {form_page_count}"
+        )
+    form_count = page_count // form_page_count
+    if asset.subject == "korean":
+        # One official form contains the 34 common questions followed by both
+        # 11-question electives (화법과 작문, 언어와 매체).
+        one_form = (
+            list(range(1, 35))
+            + list(range(35, 46))
+            + list(range(35, 46))
+        )
+    elif asset.subject == "math":
+        # One official form contains the 22 common questions followed by all
+        # three 8-question electives (확률과 통계, 미적분, 기하).
+        one_form = (
+            list(range(1, 23))
+            + list(range(23, 31))
+            + list(range(23, 31))
+            + list(range(23, 31))
+        )
+    else:
+        one_form = list(range(1, 46))
+    return one_form * form_count, form_count
+
+
 def _inspect_pdf(payload: bytes, *, subject: str) -> tuple[int, list[list[int]]]:
     if not payload.startswith(b"%PDF"):
         raise CorpusBootstrapError("downloaded payload is not a PDF")
@@ -386,6 +424,10 @@ def _download_asset(asset: ExamAsset, output_root: Path) -> dict[str, Any]:
     destination = sources_dir / f"{asset.case_id}.pdf"
     payload = _request(asset.download_url, timeout=120.0)
     page_count, passage_ranges = _inspect_pdf(payload, subject=asset.subject)
+    question_numbers, official_form_count = expected_question_numbers(
+        asset,
+        page_count=page_count,
+    )
     digest = hashlib.sha256(payload).hexdigest()
     if not destination.exists() or hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
         temporary = destination.with_suffix(".pdf.part")
@@ -398,8 +440,9 @@ def _download_asset(asset: ExamAsset, output_root: Path) -> dict[str, Any]:
             "sha256": digest,
             "size_bytes": len(payload),
             "page_count": page_count,
+            "official_form_count": official_form_count,
             "expected": {
-                "question_numbers": list(range(1, asset.expected_question_max + 1)),
+                "question_numbers": question_numbers,
                 "passage_ranges": passage_ranges,
             },
             "tags": [

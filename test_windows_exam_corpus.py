@@ -4,10 +4,12 @@ import unittest
 
 from scripts.evaluate_quality_corpus import Observation, ProblemSignature
 from scripts.bootstrap_windows_exam_corpus import (
+    ExamAsset,
     extract_horaeng_post_links,
     extract_horaeng_problem_pdfs,
     extract_kice_assets,
     extract_printed_ranges,
+    expected_question_numbers,
 )
 from scripts.run_windows_exam_benchmark import score_observation
 
@@ -109,6 +111,37 @@ class TestWindowsExamCorpus(unittest.TestCase):
             [[16, 17], [41, 42]],
             extract_printed_ranges(text, question_max=45),
         )
+
+    def test_kice_expected_questions_include_forms_and_electives(self) -> None:
+        def asset(subject: str, question_max: int) -> ExamAsset:
+            return ExamAsset(
+                case_id=f"kice-2026-{subject}",
+                provider="kice",
+                source_page_url="https://example.test",
+                download_url="https://example.test/file.pdf",
+                subject=subject,
+                level="csat",
+                year=2026,
+                month=None,
+                expected_question_max=question_max,
+            )
+
+        korean, korean_forms = expected_question_numbers(
+            asset("korean", 45),
+            page_count=40,
+        )
+        math, math_forms = expected_question_numbers(
+            asset("math", 30),
+            page_count=40,
+        )
+        english, english_forms = expected_question_numbers(
+            asset("english", 45),
+            page_count=16,
+        )
+
+        self.assertEqual((112, 2, 4), (len(korean), korean_forms, korean.count(45)))
+        self.assertEqual((92, 2, 6), (len(math), math_forms, math.count(30)))
+        self.assertEqual((90, 2, 2), (len(english), english_forms, english.count(45)))
 
     def test_scores_complete_observation_at_100(self) -> None:
         signatures = tuple(
