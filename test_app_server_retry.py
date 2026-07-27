@@ -2548,6 +2548,52 @@ class TestExportSourceResolution(unittest.TestCase):
             self.assertEqual("off", captured_kwargs["page_tile_mode"])
             self.assertTrue(responses[0][0]["ok"])
 
+    def test_recognition_export_defaults_to_source_first_safety_cap(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.png"
+            source.write_bytes(b"png")
+            captured_kwargs = {}
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                captured_kwargs.update(kwargs)
+                output_dir = Path(kwargs["output_dir"])
+                return {
+                    "ok": True,
+                    "ui_session": {"pages": [], "problems": []},
+                    "output_dir": str(output_dir),
+                    "ui_session_path": str(output_dir / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: {
+                "files": [str(source)],
+                "outputDir": str(tmpdir / "out"),
+                "inputIntent": "multi-problem",
+                "preview": True,
+                "exportEdb": False,
+            }
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            self.assertEqual(
+                app_server.DEFAULT_RECOGNITION_MAX_DIMENSION,
+                captured_kwargs["max_dimension"],
+            )
+            self.assertTrue(responses[0][0]["ok"])
+
     def test_export_passes_sanitized_requested_edb_name(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

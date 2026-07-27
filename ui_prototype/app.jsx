@@ -7269,6 +7269,7 @@ const AI_MODEL_LABELS = {
 };
 const DEFAULT_INPUT_INTENT = 'multi-problem';
 const DEFAULT_CONTENT_TARGET = 'all';
+const DEFAULT_RECOGNITION_MAX_DIMENSION = 4096;
 const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);
 const INPUT_INTENT_OPTIONS = [
   {
@@ -7293,7 +7294,7 @@ const INPUT_INTENT_OPTIONS = [
     description: '페이지를 나누지 않고 1열로, 보드 너비에 맞춰 이어 배치',
     icon: 'rows3',
     badgeLabel: '원본 이어붙임',
-    pills: ['2단계 원본 보존', '200 DPI', '1열 기본', '너비 맞춤'],
+    pills: ['원본 해상도 우선', '200 DPI', '1열 기본', '너비 맞춤'],
     exportMode: 'question',
   },
 ];
@@ -9319,9 +9320,11 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       skipDeskew: !!options.skipDeskew,
       skipCrop: !!options.skipCrop,
       pdfDpi: options.pdfDpi || 200,
-      // Full-page exports are the display master. Keep every pixel rendered at
-      // 200 DPI; recognition modes retain the 2400px performance ceiling.
-      maxDimension: resolvedInputIntent === 'page-as-is' ? null : (options.maxDimension || 2400),
+      // Full-page exports are the display master. Recognition keeps ordinary
+      // 200/300-DPI sources intact and only bounds unusually large scans.
+      maxDimension: resolvedInputIntent === 'page-as-is'
+        ? null
+        : (options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION),
       // Full-page input stays as one page/one column by default. Column tiling
       // remains an explicit API option, never an implicit page-as-is behavior.
       pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off',

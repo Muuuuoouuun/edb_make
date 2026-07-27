@@ -5174,16 +5174,81 @@ class TestEdbPublishFlow(unittest.TestCase):
             placement = placements[0]
             expected_display_width = problem_board.V2_TARGET_IMAGE_WIDTH_PX * entry.placement_scale_ratio
             self.assertAlmostEqual(expected_display_width, placement["rendered_width_px"], places=3)
-            self.assertGreaterEqual(placement["image_pixel_width"], 1500)
+            self.assertEqual(1697, placement["image_pixel_width"])
+            self.assertEqual(2400, placement["image_pixel_height"])
+            self.assertEqual("source-preserving", placement["image_resolution_policy"])
             self.assertLessEqual(
                 placement["image_pixel_width"],
                 problem_board.V2_ENCODED_IMAGE_MAX_WIDTH_PX,
             )
-            self.assertGreater(placement["image_pixel_width"], placement["rendered_width_px"] * 2.4)
+            self.assertGreater(placement["image_pixel_width"], placement["rendered_width_px"] * 2.6)
             self.assertAlmostEqual(
                 2400 / 1697,
                 placement["image_pixel_height"] / placement["image_pixel_width"],
                 places=3,
+            )
+
+    def test_v2_preserves_safe_300_dpi_page_and_bounds_oversized_scan(self):
+        self.assertEqual(
+            (2480, 3508),
+            problem_board._v2_encoded_image_size((2480, 3508), (760.0, 1075.0)),
+        )
+        self.assertEqual(
+            (3508, 2480),
+            problem_board._v2_encoded_image_size((3508, 2480), (1075.0, 760.0)),
+        )
+
+        encoded_width, encoded_height = problem_board._v2_encoded_image_size(
+            (5000, 7000),
+            (900.0, 1260.0),
+        )
+
+        self.assertLessEqual(encoded_width, problem_board.V2_ENCODED_IMAGE_MAX_WIDTH_PX)
+        self.assertLessEqual(
+            max(encoded_width, encoded_height),
+            problem_board.V2_ENCODED_IMAGE_MAX_EDGE_PX,
+        )
+        self.assertLessEqual(
+            encoded_width * encoded_height,
+            problem_board.V2_ENCODED_IMAGE_MAX_PIXELS,
+        )
+
+    def test_page_as_is_and_formula_subjects_use_high_fidelity_jpeg_quality(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            entry.input_intent = "page-as-is"
+            math_entry = self._make_problem_entry(root, "math-1", Box(0, 0, 800, 600))
+            math_entry.subject = Subject.MATH
+            captured_qualities: list[int] = []
+
+            def fake_encode(_image, quality=92):
+                captured_qualities.append(quality)
+                return b"jpeg", "JPEG"
+
+            with (
+                mock.patch.object(problem_board, "_encode_image_bytes", side_effect=fake_encode),
+                mock.patch.object(problem_board, "build_v1_secondary_image_bytes", return_value=b"preview"),
+            ):
+                build_image_only_records(
+                    [entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=problem_board.CROP_FORMAT_V1,
+                    dark_board=False,
+                )
+                build_image_only_records(
+                    [math_entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=problem_board.CROP_FORMAT_V1,
+                    dark_board=False,
+                )
+
+            self.assertEqual(
+                [
+                    problem_board.TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY,
+                    problem_board.TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY,
+                ],
+                captured_qualities,
             )
 
     def test_v1_page_as_is_export_uses_fit_width_continuous_flow(self):

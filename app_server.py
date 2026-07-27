@@ -268,6 +268,7 @@ APP_UPDATE_CONFIG_ERROR_KEY = "_configError"
 # normal PDFs/photos before parsing or AI recognition can start.
 MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
 MAX_UPDATE_FEED_BYTES = 262_144
+DEFAULT_RECOGNITION_MAX_DIMENSION = 4096
 UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
 RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -8172,7 +8173,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if payload.get("maxDimension")
                 else int(payload["max_dimension"])
                 if payload.get("max_dimension")
-                else None
+                else DEFAULT_RECOGNITION_MAX_DIMENSION
             )
             requested_pdf_dpi = int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200)
             # A page-as-is record is itself the display master. Never shrink it

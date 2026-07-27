@@ -27,12 +27,14 @@ class TestUiQueueActions(unittest.TestCase):
         export_request = source.split("async function postExport(files", 1)[1]
         export_request = export_request.split("function formatApiError", 1)[0]
 
-        self.assertIn("pills: ['2단계 원본 보존', '200 DPI'", source)
+        self.assertIn("pills: ['원본 해상도 우선', '200 DPI'", source)
         self.assertIn("pdfDpi: options.pdfDpi || 200", export_request)
+        self.assertIn("const DEFAULT_RECOGNITION_MAX_DIMENSION = 4096;", source)
         self.assertIn(
-            "maxDimension: resolvedInputIntent === 'page-as-is' ? null : (options.maxDimension || 2400)",
+            "maxDimension: resolvedInputIntent === 'page-as-is'",
             export_request,
         )
+        self.assertIn("(options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION)", export_request)
         self.assertIn(
             "pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off'",
             export_request,

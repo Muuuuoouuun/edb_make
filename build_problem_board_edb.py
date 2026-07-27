@@ -200,17 +200,21 @@ PASSAGE_REVIEW_REASON_LABELS = {
 RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
 TEXT_PRIORITY_SUBJECTS = {"korean", "english", "social"}
+HIGH_FIDELITY_IMAGE_SUBJECTS = TEXT_PRIORITY_SUBJECTS | {"math", "science"}
 TEXT_DEHALO_ALPHA_CUTOFF = 12
 TEXT_PRIORITY_UNSHARP_RADIUS = 0.6
 TEXT_PRIORITY_UNSHARP_PERCENT = 70
 TEXT_PRIORITY_UNSHARP_THRESHOLD = 3
 V2_ENCODED_IMAGE_MIN_WIDTH_PX = 1024
-# 2K+ high-resolution packaging is temporarily disabled to keep large exports
-# responsive. The logical board geometry is unchanged; only bitmap oversampling
-# is capped below the 2K tier.
-V2_ENCODED_IMAGE_MAX_WIDTH_PX = 1600
+# Preserve ordinary 200/300-DPI source pages instead of shrinking them to a
+# fixed export tier. Very large scans are still bounded so ClassIn remains
+# responsive on tablets.
+V2_ENCODED_IMAGE_MAX_WIDTH_PX = 4096
+V2_ENCODED_IMAGE_MAX_EDGE_PX = 4096
 V2_ENCODED_IMAGE_OVERSAMPLE = 2.5
-V2_ENCODED_IMAGE_MAX_PIXELS = 8_000_000
+V2_ENCODED_IMAGE_MAX_PIXELS = 12_000_000
+DEFAULT_IMAGE_RECORD_JPEG_QUALITY = 92
+TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY = 95
 # Brightness above this value (0-255) is treated as a light background that
 # should be removed from the exported problem image.
 DARK_BOARD_BRIGHTNESS_THRESHOLD = 160
@@ -1800,6 +1804,9 @@ class _ImageOnlyRecordImage:
     scale_ratio: float | None = None
     display_width_px: float | None = None
     display_height_px: float | None = None
+    source_width_px: int = 0
+    source_height_px: int = 0
+    resolution_policy: str = "source-preserving"
 
 
 def _resolve_problem_asset_worker_count(task_count: int) -> int:
@@ -9083,15 +9090,31 @@ def _v2_encoded_image_size(
     display_width, _display_height = display_size
     if source_width <= 0 or source_height <= 0:
         return 1, 1
-    target_width = int(round(max(
-        V2_ENCODED_IMAGE_MIN_WIDTH_PX,
-        min(V2_ENCODED_IMAGE_MAX_WIDTH_PX, display_width * V2_ENCODED_IMAGE_OVERSAMPLE),
-    )))
+    source_pixels = source_width * source_height
+    source_is_export_safe = (
+        source_width >= V2_ENCODED_IMAGE_MIN_WIDTH_PX
+        and source_width <= V2_ENCODED_IMAGE_MAX_WIDTH_PX
+        and max(source_width, source_height) <= V2_ENCODED_IMAGE_MAX_EDGE_PX
+        and source_pixels <= V2_ENCODED_IMAGE_MAX_PIXELS
+    )
+    if source_is_export_safe:
+        # Keeping the exact source dimensions avoids an unnecessary Lanczos
+        # pass and preserves small glyph strokes for later ClassIn zooming.
+        return source_width, source_height
+
+    target_width = int(round(
+        max(
+            V2_ENCODED_IMAGE_MIN_WIDTH_PX,
+            min(V2_ENCODED_IMAGE_MAX_WIDTH_PX, display_width * V2_ENCODED_IMAGE_OVERSAMPLE),
+        )
+    ))
     aspect = source_height / max(source_width, 1)
     target_height = max(1, int(round(target_width * aspect)))
     pixel_count = target_width * target_height
-    if pixel_count > V2_ENCODED_IMAGE_MAX_PIXELS:
-        scale = math.sqrt(V2_ENCODED_IMAGE_MAX_PIXELS / float(pixel_count))
+    edge_scale = V2_ENCODED_IMAGE_MAX_EDGE_PX / max(target_width, target_height, 1)
+    pixel_scale = math.sqrt(V2_ENCODED_IMAGE_MAX_PIXELS / float(max(pixel_count, 1)))
+    scale = min(1.0, edge_scale, pixel_scale)
+    if scale < 1.0:
         target_width = max(1, int(math.floor(target_width * scale)))
         target_height = max(1, int(math.floor(target_height * scale)))
     return target_width, target_height
@@ -9182,8 +9205,16 @@ def _build_image_only_record_image(
                 scale_ratio=scale_ratio,
                 display_width_px=display_width,
                 display_height_px=display_height,
+                source_width_px=source_width,
+                source_height_px=source_height,
+                resolution_policy=(
+                    "source-preserving"
+                    if (encoded_width, encoded_height) == (source_width, source_height)
+                    else "adaptive"
+                ),
             )
         crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
+        source_width, source_height = loaded_crop.size
     if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
         board_image = _build_transparent_reconstruction_image(
             crop_image,
@@ -9245,7 +9276,16 @@ def _build_image_only_record_image(
             entry.preserve_media_regions,
         )
 
-    image_bytes, image_format = _encode_image_bytes(board_image, quality=92)
+    jpeg_quality = (
+        TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY
+        if (
+            text_priority
+            or continuous_flow
+            or str(entry.subject or "").strip().lower() in HIGH_FIDELITY_IMAGE_SUBJECTS
+        )
+        else DEFAULT_IMAGE_RECORD_JPEG_QUALITY
+    )
+    image_bytes, image_format = _encode_image_bytes(board_image, quality=jpeg_quality)
     if crop_format == CROP_FORMAT_V2:
         secondary_bytes = build_tight_crop_image_bytes(
             image_bytes, format_hint=image_format, quality=88
@@ -9266,6 +9306,13 @@ def _build_image_only_record_image(
         scale_ratio=scale_ratio,
         display_width_px=display_width,
         display_height_px=display_height,
+        source_width_px=source_width,
+        source_height_px=source_height,
+        resolution_policy=(
+            "source-preserving"
+            if board_image.size == (source_width, source_height)
+            else "adaptive"
+        ),
     )
 
 
@@ -9490,6 +9537,9 @@ def build_image_only_records(
                 "crop_format": crop_format,
                 "image_pixel_width": int(image_payload.width_px),
                 "image_pixel_height": int(image_payload.height_px),
+                "source_image_pixel_width": int(image_payload.source_width_px or image_payload.width_px),
+                "source_image_pixel_height": int(image_payload.source_height_px or image_payload.height_px),
+                "image_resolution_policy": image_payload.resolution_policy,
                 "rendered_width_px": float(rendered_width_px),
                 "rendered_height_px": float(rendered_height_px),
                 "recordPageCountHint": int(template.board_page_count),
