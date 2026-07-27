@@ -553,6 +553,45 @@ class TestQualityCorpusEvaluator(unittest.TestCase):
         self.assertEqual("0" * 64, invalid.visual_sha256)
         self.assertNotIn("private-file", valid.source_page_id)
 
+    def test_session_signature_validates_transparent_chalk_from_alpha_channel(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            crop = root / "crop.png"
+            render = root / "render.png"
+            blank_render = root / "blank-render.png"
+            crop_image = Image.new("RGB", (80, 50), "white")
+            ImageDraw.Draw(crop_image).rectangle((8, 8, 70, 40), fill="black")
+            crop_image.save(crop)
+            render_image = Image.new("RGBA", (80, 50), (245, 245, 235, 0))
+            ImageDraw.Draw(render_image).line((8, 25, 70, 25), fill=(245, 245, 235, 255), width=3)
+            render_image.save(render)
+            Image.new("RGBA", (80, 50), (245, 245, 235, 0)).save(blank_render)
+            base_problem = {
+                "problemNumber": 1,
+                "sourcePageId": "page-001",
+                "bbox": {"left": 1, "top": 2, "width": 30, "height": 40},
+                "originalImagePath": crop.resolve().as_uri(),
+                "boardRenderPath": render.resolve().as_uri(),
+            }
+            valid = extract_observation(
+                {"problems": [base_problem]},
+                "session",
+                processing_ms_override=1,
+                preflight_issue_count_override=0,
+            ).problem_signatures[0]
+            blank_problem = dict(base_problem)
+            blank_problem["boardRenderPath"] = blank_render.resolve().as_uri()
+            invalid = extract_observation(
+                {"problems": [blank_problem]},
+                "session",
+                processing_ms_override=1,
+                preflight_issue_count_override=0,
+            ).problem_signatures[0]
+
+        self.assertTrue(valid.artifact_valid)
+        self.assertFalse(invalid.artifact_valid)
+        self.assertNotEqual(valid.visual_sha256, invalid.visual_sha256)
+
     def test_private_manifest_scaffold_label_approve_and_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)

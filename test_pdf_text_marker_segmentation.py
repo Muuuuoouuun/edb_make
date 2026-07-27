@@ -82,6 +82,46 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             )
             self.assertEqual(4, len(page_model.problems))
 
+    def test_pdf_problem_markers_keep_leading_sequence_before_question_ten(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "leading_sequence_exam.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            for number in range(1, 13):
+                column = 0 if number <= 6 else 1
+                row = number - 1 if column == 0 else number - 7
+                page.insert_text(
+                    (48 + (column * 282), 90 + (row * 105)),
+                    f"{number}. problem stem",
+                    fontsize=12,
+                )
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.ENGLISH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertEqual(
+                list(range(1, 13)),
+                [
+                    problem.metadata.get("problem_number")
+                    for problem in page_model.problems
+                    if problem.metadata.get("problem_number") is not None
+                ],
+            )
+            self.assertEqual(0, page_model.metadata.get("pdf_nested_enumeration_marker_count"))
+
     def test_pdf_passage_range_block_attaches_to_child_problems_without_ocr(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "passage_range_exam.pdf"

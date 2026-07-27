@@ -10939,10 +10939,52 @@ def main() -> int:
         prototype_path.parent.mkdir(parents=True, exist_ok=True)
         write_ui_prototype_data(prototype_path, placements)
 
+    ui_session = build_ui_session(
+        prepared_pages,
+        placements,
+        output_dir,
+        edb_path,
+        [Path(args.source).resolve()],
+        record_mode=resolved_record_mode,
+        ai_fallback_config=ai_fallback_config,
+        ai_summary=ai_summary,
+        ocr_summary=ocr_summary,
+        token_usage=token_usage,
+        pages=pages,
+        template=template,
+        input_intent=resolved_input_intent,
+        board_theme=resolved_board_theme,
+        crop_format=resolved_crop_format,
+    )
+    classin_handoff_path, classin_handoff_markdown_path = write_classin_handoff_manifest(
+        output_dir,
+        source_paths=[Path(args.source).resolve()],
+        edb_path=edb_path,
+        ui_session=ui_session,
+        summary=summary,
+        template=template,
+    )
+    handoff_session_fields = _classin_handoff_session_fields(classin_handoff_path)
+    summary["classin_handoff_path"] = str(classin_handoff_path)
+    summary["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
+    summary.update(handoff_session_fields)
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    ui_session["classin_handoff_path"] = str(classin_handoff_path)
+    ui_session["classinHandoffPath"] = str(classin_handoff_path)
+    ui_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
+    ui_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
+    ui_session.update(handoff_session_fields)
+    ui_session_path, _synced_ui_path = write_ui_session_bundle(
+        output_dir,
+        ui_session,
+        sync_ui=False,
+    )
+
     result = {
         "edb_path": str(edb_path),
         "pages_json_path": str(output_dir / "pages.json"),
         "board_run_summary_path": str(summary_path),
+        "ui_session_path": str(ui_session_path),
         "problem_count": len(placements),
         "record_mode": resolved_record_mode,
         "text_record_count": summary["placement_summary"]["text_record_count"],

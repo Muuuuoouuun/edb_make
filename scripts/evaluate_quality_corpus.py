@@ -460,21 +460,35 @@ def _inspect_artifact(raw_path: Any) -> tuple[str, str, bool, int]:
             with Image.open(path) as image:
                 image.verify()
             with Image.open(path) as image:
-                rgb = image.convert("RGB")
-                if rgb.width > 0 and rgb.height > 0:
-                    preview = rgb.copy()
+                rgba = image.convert("RGBA")
+                if rgba.width > 0 and rgba.height > 0:
+                    preview = rgba.copy()
                     preview.thumbnail((256, 256))
-                    gray = preview.convert("L")
-                    histogram = gray.histogram()
-                    total = sum(histogram)
-                    non_dominant = total - max(histogram, default=0)
-                    artifact_valid = non_dominant >= max(2, int(total * 0.001))
+                    alpha = preview.getchannel("A")
+                    alpha_min, alpha_max = alpha.getextrema()
+                    if alpha_min < 255:
+                        alpha_histogram = alpha.histogram()
+                        total = sum(alpha_histogram)
+                        visible = sum(alpha_histogram[9:])
+                        non_dominant = total - max(alpha_histogram, default=0)
+                        required_signal = max(2, int(total * 0.001))
+                        artifact_valid = (
+                            alpha_max > 8
+                            and visible >= required_signal
+                            and non_dominant >= required_signal
+                        )
+                    else:
+                        gray = preview.convert("RGB").convert("L")
+                        histogram = gray.histogram()
+                        total = sum(histogram)
+                        non_dominant = total - max(histogram, default=0)
+                        artifact_valid = non_dominant >= max(2, int(total * 0.001))
                     visual_sha256 = _sha256_bytes(
                         json.dumps(
-                            {"width": rgb.width, "height": rgb.height},
+                            {"width": rgba.width, "height": rgba.height, "mode": "RGBA"},
                             sort_keys=True,
                         ).encode("ascii")
-                        + rgb.tobytes()
+                        + rgba.tobytes()
                     )
         except (ImportError, OSError, ValueError):
             artifact_valid = False

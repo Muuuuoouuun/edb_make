@@ -2143,11 +2143,27 @@ def _segment_pdf_problem_markers(
         )
         if isinstance(marker.get("number"), int)
     ]
+    leading_main_sequence_ids: set[int] = set()
+    expected_leading_number = 1
+    for marker in ordered_numbered_markers:
+        number = int(marker["number"])
+        if number != expected_leading_number:
+            break
+        leading_main_sequence_ids.add(id(marker))
+        expected_leading_number += 1
+    # A real exam commonly starts at question 1 and reaches double digits on
+    # the same page. The old nested-list guard discarded 1-3 as soon as it saw
+    # question 10 later in the page. Only protect a sufficiently long leading
+    # 1,2,3,4... run; short 1,2 procedure lists before a higher question remain
+    # eligible for the nested-enumeration filter below.
+    if expected_leading_number <= 4:
+        leading_main_sequence_ids.clear()
+
     nested_enumeration_marker_ids: set[int] = set()
     highest_number = 0
     for marker_index, marker in enumerate(ordered_numbered_markers):
         number = int(marker["number"])
-        if number <= 3:
+        if number <= 3 and id(marker) not in leading_main_sequence_ids:
             later_numbers = [
                 int(candidate["number"])
                 for candidate in ordered_numbered_markers[marker_index + 1 :]

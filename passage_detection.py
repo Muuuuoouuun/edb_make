@@ -45,6 +45,19 @@ _ENGLISH_TASK_RE = re.compile(
     r"\bquestions?\b",
     re.IGNORECASE,
 )
+_KOREAN_LISTENING_SHARED_RE = re.compile(
+    r"(?:\ub2e4\uc74c|\uc544\ub798).{0,24}\ub4e3\uace0.{0,28}"
+    r"(?:\ubb3c\uc74c|\ubb38\ud56d|\ubb38\uc81c).{0,16}\ub2f5",
+    re.IGNORECASE,
+)
+_KOREAN_INDEPENDENT_GROUP_TASK_RE = re.compile(
+    r"(?:"
+    r"\ube48\uce78.{0,24}\ub4e4\uc5b4\uac08|"
+    r"\uc8fc\uc5b4\uc9c4\s*\uae00.{0,24}\uae00\uc758\s*\uc21c\uc11c|"
+    r"\uae00\uc758\s*\ud750\ub984.{0,36}\uc8fc\uc5b4\uc9c4\s*\ubb38\uc7a5.{0,24}\ub4e4\uc5b4\uac00"
+    r")",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +77,10 @@ def normalize_passage_header_text(value: Any) -> str:
 def shared_passage_cue_language(value: Any) -> str | None:
     text = normalize_passage_header_text(value)
     if not text:
+        return None
+    if _KOREAN_LISTENING_SHARED_RE.search(text):
+        return "ko"
+    if _KOREAN_INDEPENDENT_GROUP_TASK_RE.search(text):
         return None
     if _KOREAN_MATERIAL_RE.search(text) and _KOREAN_TASK_RE.search(text):
         return "ko"

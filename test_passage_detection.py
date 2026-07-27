@@ -49,6 +49,21 @@ class TestPassageDetection(unittest.TestCase):
             "[4-6] Read the following text and answer the questions."
         ))
 
+    def test_accepts_shared_listening_but_rejects_grouped_independent_tasks(self) -> None:
+        self.assertEqual(
+            (16, 17),
+            extract_shared_passage_range(
+                "[16 ~ 17] \ub2e4\uc74c\uc744 \ub4e3\uace0, \ubb3c\uc74c\uc5d0 \ub2f5\ud558\uc2dc\uc624."
+            ),
+        )
+        for text in (
+            "[31 ~ 34] \ub2e4\uc74c \ube48\uce78\uc5d0 \ub4e4\uc5b4\uac08 \ub9d0\ub85c \uac00\uc7a5 \uc801\uc808\ud55c \uac83\uc744 \uace0\ub974\uc2dc\uc624.",
+            "[36 ~ 37] \uc8fc\uc5b4\uc9c4 \uae00 \ub2e4\uc74c\uc5d0 \uc774\uc5b4\uc9c8 \uae00\uc758 \uc21c\uc11c\ub85c \uac00\uc7a5 \uc801\uc808\ud55c \uac83\uc744 \uace0\ub974\uc2dc\uc624.",
+            "[38 ~ 39] \uae00\uc758 \ud750\ub984\uc73c\ub85c \ubcf4\uc544, \uc8fc\uc5b4\uc9c4 \ubb38\uc7a5\uc774 \ub4e4\uc5b4\uac00\uae30\uc5d0 \uac00\uc7a5 \uc801\uc808\ud55c \uacf3\uc744 \uace0\ub974\uc2dc\uc624.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_shared_passage_range(text))
+
 
 if __name__ == "__main__":
     unittest.main()
