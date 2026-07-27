@@ -1966,6 +1966,18 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _print_console_safe(content: str, *, stream: Any | None = None) -> None:
+    """Print without letting a legacy Windows console encoding fail the gate."""
+
+    output = stream if stream is not None else sys.stdout
+    encoding = getattr(output, "encoding", None) or "utf-8"
+    try:
+        printable = content.encode(encoding, errors="backslashreplace").decode(encoding)
+    except LookupError:
+        printable = content
+    print(printable, file=output)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Evaluate an EDB quality corpus. Exit 0=pass, 1=gate failure, 2=invalid input."
@@ -2005,10 +2017,10 @@ def main(argv: list[str] | None = None) -> int:
             _write_text(args.json_report, json_text)
         if args.markdown_report:
             _write_text(args.markdown_report, render_markdown(report))
-        print(render_markdown(report))
+        _print_console_safe(render_markdown(report))
         return EXIT_OK if report["status"] == "passed" else EXIT_GATE_FAILED
     except (CorpusError, OSError) as exc:
-        print(f"[quality-gate] INVALID: {exc}", file=sys.stderr)
+        _print_console_safe(f"[quality-gate] INVALID: {exc}", stream=sys.stderr)
         return EXIT_INVALID_INPUT
 
 

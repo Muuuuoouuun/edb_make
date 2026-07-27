@@ -1114,6 +1114,27 @@ class TestQualityCorpusEvaluator(unittest.TestCase):
         self.assertEqual("passed", written_status)
         self.assertIn("**PASS**", written_markdown)
 
+    def test_cli_prints_safely_to_windows_cp949_console(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            manifest_path = root / "manifest.json"
+            result_path = root / "result.json"
+            manifest_path.write_text(json.dumps(_manifest()), encoding="utf-8")
+            result_path.write_text(
+                json.dumps(_observation([1, 2, 3], [[1, 3]])),
+                encoding="utf-8",
+            )
+            stdout_bytes = io.BytesIO()
+            cp949_stdout = io.TextIOWrapper(stdout_bytes, encoding="cp949")
+            with contextlib.redirect_stdout(cp949_stdout):
+                exit_code = main([str(manifest_path)])
+            cp949_stdout.flush()
+            console_output = stdout_bytes.getvalue().decode("cp949")
+
+        self.assertEqual(EXIT_OK, exit_code)
+        self.assertIn("**PASS**", console_output)
+        self.assertIn("\\u2014", console_output)
+
 
 if __name__ == "__main__":
     unittest.main()
