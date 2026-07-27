@@ -757,6 +757,7 @@ const Icon = {
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
   more:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>,
+  bug:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 8.5h8V15a4 4 0 0 1-8 0V8.5zM9.5 5.5h5M12 5.5V3M5 10h3M16 10h3M5 15h3M16 15h3M8.5 19.5L6.5 22M15.5 19.5l2 2.5"/></svg>,
   close:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
@@ -5525,6 +5526,12 @@ function SidePanel({
   const [movePassageGroupTogether, setMovePassageGroupTogether] = useState(true);
   const [breakGroupOnOverflow, setBreakGroupOnOverflow] = useState(true);
   const [placementApplied, setPlacementApplied] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [bugReportDescription, setBugReportDescription] = useState('');
+  const [bugReportIncludeDiagnostics, setBugReportIncludeDiagnostics] = useState(true);
+  const [bugReportBusy, setBugReportBusy] = useState(false);
+  const [bugReportResult, setBugReportResult] = useState(null);
+  const [bugReportError, setBugReportError] = useState('');
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
@@ -5670,6 +5677,39 @@ function SidePanel({
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
+  const canSubmitBugReport = bugReportDescription.trim().length >= 5 && !bugReportBusy;
+  const handleBugReportSubmit = async event => {
+    event?.preventDefault?.();
+    if (!canSubmitBugReport) return;
+    setBugReportBusy(true);
+    setBugReportError('');
+    setBugReportResult(null);
+    try {
+      const receipt = await submitBugReport({
+        description: bugReportDescription.trim(),
+        includeDiagnostics: bugReportIncludeDiagnostics,
+        context: {
+          view,
+          settingsTab: tab,
+          inputIntent: normalizeInputIntent(inputIntent),
+          reviewStatus: published ? 'published' : session ? 'session' : 'empty',
+          itemCount: items.length,
+          pendingCount: pendingFile ? 1 : 0,
+          hangul: {
+            status: hangulDiagnostics?.status || 'unknown',
+            summary: hangulRuntimeSummary(hangulDiagnostics),
+          },
+          runtimeErrors: runtimeErrorsForBugReport(),
+        },
+      });
+      setBugReportDescription('');
+      setBugReportResult(receipt);
+    } catch (error) {
+      setBugReportError(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setBugReportBusy(false);
+    }
+  };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
@@ -6646,6 +6686,90 @@ function SidePanel({
                 {Icon.download} 다운로드 열기
               </button>
             </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>문제 신고 <span className="line" /></div>
+
+            <section className={`bug-report-card ${bugReportOpen ? 'open' : ''}`} aria-label="버그 리포트">
+              <div className="bug-report-summary">
+                <span className="bug-report-icon" aria-hidden="true">{Icon.bug}</span>
+                <span>
+                  <strong>사용 중 문제가 있었나요?</strong>
+                  <small>설명과 선택한 진단 정보만 안전하게 전송합니다.</small>
+                </span>
+                <button
+                  className="btn"
+                  type="button"
+                  aria-expanded={bugReportOpen ? 'true' : 'false'}
+                  onClick={() => {
+                    setBugReportOpen(open => !open);
+                    setBugReportError('');
+                  }}
+                >
+                  {bugReportOpen ? '닫기' : '버그 리포트'}
+                </button>
+              </div>
+
+              {bugReportOpen && (
+                <form className="bug-report-form" onSubmit={handleBugReportSubmit}>
+                  <label htmlFor="bug-report-description">무슨 일이 있었나요?</label>
+                  <textarea
+                    id="bug-report-description"
+                    value={bugReportDescription}
+                    maxLength={4000}
+                    rows={5}
+                    placeholder="문제가 생기기 직전에 한 작업과 화면에 보인 현상을 적어 주세요."
+                    onChange={event => {
+                      setBugReportDescription(event.target.value);
+                      setBugReportError('');
+                      setBugReportResult(null);
+                    }}
+                  />
+                  <div className="bug-report-counter">{bugReportDescription.length.toLocaleString()} / 4,000</div>
+
+                  <label className="bug-report-diagnostics">
+                    <input
+                      type="checkbox"
+                      checked={bugReportIncludeDiagnostics}
+                      onChange={event => setBugReportIncludeDiagnostics(event.target.checked)}
+                    />
+                    <span>
+                      <strong>진단 정보 포함</strong>
+                      <small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small>
+                    </span>
+                  </label>
+
+                  <p className="bug-report-privacy">
+                    원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.
+                  </p>
+
+                  {bugReportError && (
+                    <div className="bug-report-status error" role="alert">{bugReportError}</div>
+                  )}
+                  {bugReportResult?.reportId && (
+                    <div className="bug-report-status success" role="status" aria-live="polite">
+                      접수됐습니다. 번호 <strong>{bugReportResult.reportId}</strong>
+                    </div>
+                  )}
+
+                  <div className="bug-report-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={bugReportBusy}
+                      onClick={() => {
+                        setBugReportOpen(false);
+                        setBugReportError('');
+                      }}
+                    >
+                      취소
+                    </button>
+                    <button className="btn primary" type="submit" disabled={!canSubmitBugReport}>
+                      {bugReportBusy ? '보내는 중...' : '리포트 보내기'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
           </div>
         </>
       )}
@@ -9746,6 +9870,33 @@ async function fetchRuntimeDiagnostics(){
   const resp = await fetch('/api/runtime-diagnostics');
   const json = await expectOkJson(resp, '진단 로드 실패');
   return json;
+}
+
+function runtimeErrorsForBugReport(entries = window.EDB_RUNTIME_DIAGNOSTICS){
+  if (!Array.isArray(entries)) return [];
+  return entries.slice(-10).map(entry => {
+    const detail = entry && typeof entry === 'object' ? entry : {};
+    const rawError = detail.error || detail.reason;
+    const message = detail.message || rawError?.message || rawError || '알 수 없는 오류';
+    const safe = {
+      type: String(detail.type || 'runtime').slice(0, 80),
+      message: String(message).slice(0, 1500),
+    };
+    if (detail.filename) safe.filename = String(detail.filename).slice(0, 240);
+    if (detail.componentStack) safe.componentStack = String(detail.componentStack).slice(0, 4000);
+    if (Number.isFinite(Number(detail.lineno))) safe.lineno = Number(detail.lineno);
+    if (Number.isFinite(Number(detail.colno))) safe.colno = Number(detail.colno);
+    return safe;
+  });
+}
+
+async function submitBugReport(payload){
+  const resp = await fetch('/api/bug-report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return expectOkJson(resp, '리포트 전송 실패');
 }
 
 async function fetchAppUpdateStatus(){

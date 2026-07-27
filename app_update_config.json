@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "updateFeedUrl": "",
   "downloadUrl": "",
-  "releaseNotesUrl": ""
+  "releaseNotesUrl": "",
+  "bugReportUrl": "https://reports.classin.cloud/v1/edb-reports"
 }
