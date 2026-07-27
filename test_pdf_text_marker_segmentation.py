@@ -207,20 +207,19 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             pdf_path = Path(temp_dir) / "multiline_passage_header.pdf"
             doc = fitz.open()
             page = doc.new_page(width=600, height=800)
-            font_name = "KoreanPassageTest"
-            page.insert_font(
-                fontname=font_name,
-                fontfile="/System/Library/Fonts/AppleSDGothicNeo.ttc",
-            )
+            # PyMuPDF's built-in CJK font is platform-independent. A macOS
+            # system font path made this fixture fail on Linux CI before the
+            # segmentation code was exercised.
+            font_name = "korea"
             page.insert_text(
                 (48, 82),
-                "[24~27] (가)와 (나)는 학생이 읽은 글이고, (다)는 이를 바탕",
+                "[24~27] (가)와 (나)는 학생이 읽은 글이고,",
                 fontname=font_name,
                 fontsize=11,
             )
             page.insert_text(
                 (48, 104),
-                "으로 쓴 건의문의 초고이다. 물음에 답하시오.",
+                "(다)는 이를 바탕으로 쓴 건의문의 초고이다. 물음에 답하시오.",
                 fontname=font_name,
                 fontsize=11,
             )
@@ -574,6 +573,41 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 ],
             )
             self.assertEqual(2, page_model.metadata.get("pdf_nested_enumeration_marker_count"))
+
+    def test_pdf_passage_range_block_stops_before_cross_column_child_questions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "passage_range_cross_column_children.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 92), "[1~2] 다음 글을 읽고 물음에 답하시오.", fontsize=14)
+            page.insert_text((48, 138), "shared passage first line", fontsize=12)
+            page.insert_text((48, 170), "shared passage second line", fontsize=12)
+            page.insert_text((330, 220), "1. first question in right column", fontsize=14)
+            page.insert_text((330, 360), "2. second question in right column", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.ENGLISH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            shared_block = next(
+                block for block in page_model.blocks if block.metadata.get("segmenter") == "pdf-passage-range"
+            )
+            first_problem_block = next(
+                block for block in page_model.blocks if block.metadata.get("problem_number") == 1
+            )
+            self.assertLess(shared_block.bbox.bottom, first_problem_block.bbox.top)
 
     def test_pdf_workbook_example_markers_ignore_section_headings_and_footer(self):
         with tempfile.TemporaryDirectory() as temp_dir:

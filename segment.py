@@ -1289,7 +1289,16 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
     compact = re.sub(r"\s+", " ", compact).strip()
     if not compact:
         return True
-    if compact in {"고 1", "고 2", "고 3", "국어 영역", "영어 영역"}:
+    no_space = re.sub(r"\s+", "", compact)
+    if no_space in {"국어", "영어", "화법과작문", "언어와매체"}:
+        return True
+    if compact in {
+        "고 1",
+        "고 2",
+        "고 3",
+        "국어 영역",
+        "영어 영역",
+    }:
         return True
     collapsed = re.sub(r"\s+", "", compact)
     if collapsed in {
@@ -1306,7 +1315,90 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
         return True
     if re.fullmatch(r"\d{1,2}\s+\d{1,2}", compact):
         return True
+    if re.fullmatch(r"\d{1,2}", compact):
+        return True
     return False
+
+
+def _pdf_pre_question_text_regions(
+    image: Image.Image,
+    text_lines: list[dict[str, Any]],
+    column_entries: list[tuple[int, list[dict[str, Any]], tuple[float, float]]],
+    numbered_markers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Summarize substantive PDF text before the page's first question."""
+    candidates = [
+        marker
+        for marker in numbered_markers
+        if isinstance(marker.get("number"), int) and _marker_bbox(marker) is not None
+    ]
+    if not candidates:
+        return []
+    first_marker = min(
+        candidates,
+        key=lambda marker: (int(marker["number"]), _marker_bbox(marker).top),
+    )
+    first_box = _marker_bbox(first_marker)
+    if first_box is None:
+        return []
+    first_column, _first_left, _first_right = _pdf_column_bounds_for_x(
+        column_entries,
+        (first_box.left + first_box.right) / 2.0,
+        image,
+    )
+    padding = max(8.0, float(image.height) * 0.004)
+    regions: list[dict[str, Any]] = []
+    for column_index, _markers, (left_bound, right_bound) in sorted(
+        column_entries,
+        key=lambda entry: entry[0],
+    ):
+        if column_index > first_column:
+            continue
+        boundary = first_box.top if column_index == first_column else float(image.height)
+        region_lines: list[tuple[Box, str]] = []
+        for line in text_lines:
+            line_box = _marker_bbox(line)
+            if line_box is None or line_box.top >= boundary:
+                continue
+            center_x = (line_box.left + line_box.right) / 2.0
+            if not left_bound - 8.0 <= center_x <= right_bound + 8.0:
+                continue
+            if _looks_like_pdf_page_header_text_line(line.get("text"), line_box, image.height):
+                continue
+            if _looks_like_pdf_footer_text_line(line.get("text"), line_box, image.height):
+                continue
+            text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(line.get("text") or "")))
+            if not text:
+                continue
+            region_lines.append((line_box, text))
+        char_count = sum(len(text) for _box, text in region_lines)
+        if len(region_lines) < 2 or char_count < 16:
+            continue
+        top = max(0.0, min(box.top for box, _text in region_lines) - padding)
+        if column_index == first_column:
+            bottom = max(top + 1.0, first_box.top - max(8.0, float(image.height) * 0.004))
+        else:
+            bottom = min(
+                float(image.height),
+                max(box.bottom for box, _text in region_lines) + max(18.0, float(image.height) * 0.012),
+            )
+        if bottom - top < max(36.0, float(image.height) * 0.025):
+            continue
+        regions.append(
+            {
+                "column_index": column_index,
+                "before_problem_number": int(first_marker["number"]),
+                "line_count": len(region_lines),
+                "char_count": char_count,
+                "bbox": {
+                    "left": left_bound,
+                    "top": top,
+                    "right": right_bound,
+                    "bottom": bottom,
+                },
+            }
+        )
+    return regions
 
 
 def _pdf_passage_column_text_top(
@@ -1820,6 +1912,24 @@ def _build_pdf_passage_range_blocks(
                     bottom=float(image.height),
                 )
                 fragment_bottom = max(text_bottom, ink_bottom) if text_bottom is not None else ink_bottom
+                fragment_footer_tops = [
+                    line_box.top
+                    for candidate in sorted_lines
+                    if (line_box := _marker_bbox(candidate)) is not None
+                    and fragment_left - max(44.0, float(image.width) * 0.02)
+                    <= (line_box.left + line_box.right) / 2.0
+                    <= fragment_right + max(44.0, float(image.width) * 0.02)
+                    and _looks_like_pdf_footer_text_line(
+                        candidate.get("text"),
+                        line_box,
+                        image.height,
+                    )
+                ]
+                if fragment_footer_tops:
+                    fragment_bottom = min(
+                        fragment_bottom,
+                        min(fragment_footer_tops) - max(12.0, float(image.height) * 0.006),
+                    )
 
             if fragment_bottom - fragment_top < max(40.0, float(image.height) * 0.02):
                 if stopped_at_problem:
@@ -2037,13 +2147,17 @@ def _segment_pdf_problem_markers(
     highest_number = 0
     for marker_index, marker in enumerate(ordered_numbered_markers):
         number = int(marker["number"])
-        if highest_number >= 4 and number <= 3:
+        if number <= 3:
             later_numbers = [
                 int(candidate["number"])
                 for candidate in ordered_numbered_markers[marker_index + 1 :]
                 if isinstance(candidate.get("number"), int)
             ]
-            if any(candidate > highest_number for candidate in later_numbers):
+            high_sequence_follows = any(candidate >= 10 for candidate in later_numbers)
+            resumed_sequence_follows = highest_number >= 4 and any(
+                candidate > highest_number for candidate in later_numbers
+            )
+            if high_sequence_follows or resumed_sequence_follows:
                 nested_enumeration_marker_ids.add(id(marker))
                 continue
         highest_number = max(highest_number, number)
@@ -2190,6 +2304,17 @@ def _segment_pdf_problem_markers(
     for index, block in enumerate(blocks):
         block.reading_order = index
 
+    pre_question_text_regions = _pdf_pre_question_text_regions(
+        image,
+        usable_text_lines,
+        column_entries,
+        [
+            marker
+            for marker in ordered_numbered_markers
+            if id(marker) not in nested_enumeration_marker_ids
+        ],
+    )
+
     metadata: dict[str, Any] = {
         "segmenter": "pdf-text-markers",
         "pdf_text_marker_count": len(cleaned_markers),
@@ -2200,6 +2325,7 @@ def _segment_pdf_problem_markers(
         "pdf_choice_visual_tail_count": choice_visual_tail_count,
         "pdf_nested_enumeration_marker_count": len(nested_enumeration_marker_ids),
         "pdf_passage_range_block_count": len(passage_range_blocks),
+        "pdf_pre_question_text_regions": pre_question_text_regions,
         "document_split_block_count": len(blocks),
         "document_split_applied": True,
         "content_box_area_ratio": 1.0,

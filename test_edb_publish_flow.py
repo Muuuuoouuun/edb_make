@@ -767,6 +767,40 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertLess(prepared[0].height, 175)
         self.assertLess(prepared[1].height, 155)
 
+    def test_passage_stitch_preserves_substantial_footnote_below_rule(self):
+        first = Image.new("RGB", (240, 300), "white")
+        draw = ImageDraw.Draw(first)
+        draw.rectangle((24, 32, 214, 136), outline="black", width=2)
+        draw.line((12, 236, 228, 236), fill="black", width=3)
+        footnote_color = (30, 90, 210)
+        for y in (252, 270, 288):
+            draw.rectangle((22, y, 205, y + 2), fill=footnote_color)
+        second = Image.new("RGB", (240, 100), "white")
+        ImageDraw.Draw(second).text((24, 24), "continued body", fill="black")
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertEqual(first.size, prepared[0].size)
+        self.assertEqual(footnote_color, prepared[0].getpixel((40, 270)))
+
+    def test_passage_stitch_preserves_midbody_box_rule_on_continuation(self):
+        first = Image.new("RGB", (240, 100), "white")
+        ImageDraw.Draw(first).text((24, 24), "first page", fill="black")
+        second = Image.new("RGB", (240, 300), "white")
+        draw = ImageDraw.Draw(second)
+        marker_color = (210, 45, 45)
+        draw.rectangle((24, 30, 60, 58), fill=marker_color)
+        draw.line((8, 120, 232, 120), fill="black", width=3)
+        draw.rectangle((24, 145, 215, 272), outline="black", width=2)
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertGreaterEqual(prepared[1].height, 280)
+        self.assertEqual(
+            sum(pixel == marker_color for pixel in second.get_flattened_data()),
+            sum(pixel == marker_color for pixel in prepared[1].get_flattened_data()),
+        )
+
     def test_passage_source_bounds_recover_edge_glyphs(self):
         expanded = problem_board._expand_passage_source_bounds_horizontally(
             Box(100, 40, 200, 320),
@@ -940,7 +974,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             transparent=False,
         )
 
-        self.assertEqual((140, 172), stitched.size)
+        self.assertEqual((140, 176), stitched.size)
         self.assertEqual((255, 255, 255), stitched.getpixel((0, 10)))
         self.assertEqual((0, 0, 0), stitched.getpixel((20, 10)))
         self.assertEqual((0, 0, 0), stitched.getpixel((0, 106)))

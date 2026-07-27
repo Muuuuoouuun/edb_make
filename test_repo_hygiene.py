@@ -44,15 +44,14 @@ class TestGeneratedArtifactIgnores(unittest.TestCase):
         ]
         result = subprocess.run(
             ["git", "check-ignore", "--stdin"],
-            input="\n".join(samples) + "\n",
+            input=("\n".join(samples) + "\n").encode("utf-8"),
             cwd=PROJECT_ROOT,
-            text=True,
             capture_output=True,
             check=False,
         )
 
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(set(samples), set(result.stdout.splitlines()))
+        self.assertEqual(0, result.returncode, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(set(samples), set(result.stdout.decode("utf-8").splitlines()))
 
     def test_local_cleanup_defaults_target_stale_package_outputs_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:

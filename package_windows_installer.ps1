@@ -100,7 +100,11 @@ function Find-InnoSetupCompiler {
         return $Requested
     }
 
-    $Candidates = @(
+    $Candidates = @()
+    if ($env:LOCALAPPDATA) {
+        $Candidates += (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+    }
+    $Candidates += @(
         (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
         (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
     )
@@ -169,7 +173,7 @@ function Write-EDBArtifactSummary {
     }
     $Item = Get-Item -LiteralPath $Path
     $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-    Write-Host "$Label: $Path"
+    Write-Host "${Label}: $Path"
     Write-Host "$Label size: $($Item.Length) bytes"
     Write-Host "$Label sha256: $Hash"
 }

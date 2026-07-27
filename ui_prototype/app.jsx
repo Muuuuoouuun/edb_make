@@ -1295,18 +1295,7 @@ function ManualSplitEditor({
 function BrandMark(){
   return (
     <span className="logo" aria-hidden="true">
-      <svg viewBox="0 0 192 128" focusable="false">
-        <text x="78" y="83" textAnchor="middle" fontFamily="Arial Black, Arial, Helvetica, sans-serif" fontSize="63" fontWeight="900" letterSpacing="1.5" fill="#101923">EDB</text>
-        <g fill="none" strokeLinecap="round">
-          <path d="M124 95 164 55" stroke="#101923" strokeWidth="9" />
-          <path d="M160 59 171 48" stroke="#22c9bd" strokeWidth="9" />
-        </g>
-        <g fill="#22c9bd">
-          <path d="M174 34 177 42 185 45 177 48 174 56 171 48 163 45 171 42z" />
-          <path d="M184 58 186 63 191 65 186 67 184 72 182 67 177 65 182 63z" />
-          <path d="M177 77 180 84 187 87 180 90 177 97 174 90 167 87 174 84z" />
-        </g>
-      </svg>
+      <img src="./favicon.png" alt="" draggable="false" />
     </span>
   );
 }
@@ -1375,7 +1364,7 @@ function TooltipLayer(){
       const target = tooltipTarget(event.target);
       if (target && target !== activeRef.current) {
         showTooltipFor(target);
-      } else if (!target && activeRef.current) {
+      } else if (!target && activeRef.current && !activeRef.current.contains?.(event.target)) {
         hideTooltip();
       }
     };
@@ -2040,10 +2029,12 @@ function ReviewStage({
   }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
+    if (!manualSplit) return;
     if (!evt.ctrlKey && !evt.metaKey) return;
+    if (!evt.target?.closest?.('.review-canvas-scroll')) return;
     evt.preventDefault();
     adjustReviewZoom(evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
-  }, [adjustReviewZoom]);
+  }, [adjustReviewZoom, manualSplit]);
 
   const cancelManualPageSplit = () => {
     manualSplitDragRef.current = null;
@@ -4131,8 +4122,8 @@ function ItemsRail({
               >
                 <span className="queue-action-icon">{Icon.pagePng}</span>
                 <span className="queue-action-copy">
-                  <strong>페이지 PNG</strong>
-                  <small>문제 파싱 없음</small>
+                  <strong>페이지 전체 넣기</strong>
+                  <small>한 페이지를 그대로 칠판에 배치</small>
                 </span>
               </button>
               <button
@@ -4171,7 +4162,7 @@ function ItemsRail({
                 <span className="queue-action-icon">{Icon.pen}</span>
                 <span className="queue-action-copy">
                   <strong>수동 쪼개기</strong>
-                  <small>인식 없이 직접 분할</small>
+                  <small>가운데 미리보기에서 Ctrl+휠 확대</small>
                 </span>
               </button>
               {!aiAvailable && (
