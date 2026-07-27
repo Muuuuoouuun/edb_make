@@ -16,25 +16,40 @@
     return item && item.id != null ? String(item.id) : "";
   }
 
-  function reorderItemsForDrop(items, fromId, toId, position) {
+  function orderedItemIds(items, ids) {
+    if (!Array.isArray(items)) return [];
+    const requested = new Set((Array.isArray(ids) ? ids : [ids])
+      .map(value => value == null ? "" : String(value))
+      .filter(Boolean));
+    return items.map(itemId).filter(id => requested.has(id));
+  }
+
+  function reorderItemGroupForDrop(items, fromIds, toId, position) {
     if (!Array.isArray(items)) return items;
-    const sourceId = fromId == null ? "" : String(fromId);
+    const sourceIds = orderedItemIds(items, fromIds);
     const targetId = toId == null ? "" : String(toId);
-    if (!sourceId || !targetId || sourceId === targetId) return items;
+    if (!sourceIds.length || !targetId) return items;
 
-    const fromIndex = items.findIndex(item => itemId(item) === sourceId);
-    const targetIndex = items.findIndex(item => itemId(item) === targetId);
-    if (fromIndex < 0 || targetIndex < 0) return items;
+    const sourceIdSet = new Set(sourceIds);
+    if (sourceIdSet.has(targetId)) return items;
 
-    const next = items.slice();
-    const moved = next.splice(fromIndex, 1)[0];
-    const withoutSourceTargetIndex = next.findIndex(item => itemId(item) === targetId);
-    if (withoutSourceTargetIndex < 0) return items;
+    const moved = items.filter(item => sourceIdSet.has(itemId(item)));
+    const remaining = items.filter(item => !sourceIdSet.has(itemId(item)));
+    const targetIndex = remaining.findIndex(item => itemId(item) === targetId);
+    if (targetIndex < 0) return items;
 
     const insertAfterTarget = normalizeDropPosition(position) === AFTER;
-    const insertIndex = withoutSourceTargetIndex + (insertAfterTarget ? 1 : 0);
-    next.splice(insertIndex, 0, moved);
-    return next;
+    const insertIndex = targetIndex + (insertAfterTarget ? 1 : 0);
+    const next = remaining.slice();
+    next.splice(insertIndex, 0, ...moved);
+
+    const unchanged = next.length === items.length
+      && next.every((item, index) => itemId(item) === itemId(items[index]));
+    return unchanged ? items : next;
+  }
+
+  function reorderItemsForDrop(items, fromId, toId, position) {
+    return reorderItemGroupForDrop(items, [fromId], toId, position);
   }
 
   function dropPositionFromClientY(rect, clientY) {
@@ -110,6 +125,39 @@
     };
   }
 
+  function adjacentGroupReorderCommand(items, itemIds, direction) {
+    if (!Array.isArray(items) || !items.length) return null;
+    const sourceIds = orderedItemIds(items, itemIds);
+    if (!sourceIds.length) return null;
+
+    const sourceIdSet = new Set(sourceIds);
+    const selectedIndexes = items
+      .map((item, index) => sourceIdSet.has(itemId(item)) ? index : -1)
+      .filter(index => index >= 0);
+    const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+    if (!delta) return null;
+
+    const edgeIndex = delta < 0
+      ? Math.min(...selectedIndexes)
+      : Math.max(...selectedIndexes);
+    const targetIndex = edgeIndex + delta;
+    if (targetIndex < 0 || targetIndex >= items.length) return null;
+
+    const targetId = itemId(items[targetIndex]);
+    if (!targetId || sourceIdSet.has(targetId)) return null;
+    const position = delta < 0 ? BEFORE : AFTER;
+    const reordered = reorderItemGroupForDrop(items, sourceIds, targetId, position);
+    if (reordered === items) return null;
+
+    return {
+      sourceId: sourceIds[0],
+      sourceIds,
+      targetId,
+      position,
+      nextIndex: reordered.findIndex(item => itemId(item) === sourceIds[0]),
+    };
+  }
+
   function problemDisplayName(item, index) {
     const raw = String(item?.name ?? item?.title ?? '').trim();
     const order = Math.max(1, Number(index) + 1 || 1);
@@ -140,6 +188,7 @@
   return {
     AFTER,
     BEFORE,
+    adjacentGroupReorderCommand,
     adjacentReorderCommand,
     appendBoundedHistory,
     dropPositionFromClientY,
@@ -148,6 +197,7 @@
     normalizeDropPosition,
     problemDisplayName,
     problemSourceLabel,
+    reorderItemGroupForDrop,
     reorderItemsForDrop,
   };
 });

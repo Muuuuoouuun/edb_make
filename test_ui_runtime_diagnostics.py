@@ -273,6 +273,27 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("공통 지문 ${summary.problems}개", source)
         self.assertIn(".material-filter", board)
 
+    def test_left_sidebar_supports_modifier_multiselect_group_move_and_bulk_delete(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
+        remove_flow = source.split("const removeItem = (id, options = {}) =>", 1)[1]
+        remove_flow = remove_flow.split("const addMockSample", 1)[0]
+
+        self.assertIn("const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());", items_rail)
+        self.assertIn("const primaryModifier = Boolean(event.ctrlKey || event.metaKey);", items_rail)
+        self.assertIn("if (event.shiftKey)", items_rail)
+        self.assertIn("visibleIds.slice(Math.min(anchorIndex, targetIndex), Math.max(anchorIndex, targetIndex) + 1)", items_rail)
+        self.assertIn("sourceIds: drag.ids", items_rail)
+        self.assertIn("adjacentGroupReorderCommand(items, sourceIds, direction)", items_rail)
+        self.assertIn("removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });", items_rail)
+        self.assertIn("선택 삭제", items_rail)
+        self.assertIn("reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)", reorder_flow)
+        self.assertIn("void mutateSession('exclude', { problemIds });", remove_flow)
+        self.assertIn(".item.is-selected", board)
+        self.assertIn(".problem-order-status.is-selection", board)
+
     def test_item_editor_can_correct_question_and_shared_passage_classification(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
@@ -310,7 +331,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         apply_state = apply_state.split("function confirmedItemState", 1)[0]
         reorder_flow = source.split("const reorder = (fromId, toId", 1)[1]
         reorder_flow = reorder_flow.split("const removeItem", 1)[0]
-        remove_flow = source.split("const removeItem = (id) =>", 1)[1]
+        remove_flow = source.split("const removeItem = (id, options = {}) =>", 1)[1]
         remove_flow = remove_flow.split("const addMockSample", 1)[0]
 
         self.assertIn("const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", materialize)
@@ -358,7 +379,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')", items_rail)
         self.assertIn('aria-describedby="problem-order-help"', items_rail)
         self.assertIn("filterActive ? '필터된 문제' : '순서 변경 가능한 문제'", items_rail)
-        self.assertIn("filterActive ? 'Enter Space' : 'Alt+ArrowUp Alt+ArrowDown Enter Space'", items_rail)
+        self.assertIn(
+            "filterActive ? 'Enter Space Delete Backspace' : 'Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'",
+            items_rail,
+        )
         self.assertIn('role="status" aria-live="polite"', items_rail)
         self.assertIn("pendingKeyboardFocusRef.current = item.id", items_rail)
         self.assertIn("setItems(rollbackItems)", reorder_flow)

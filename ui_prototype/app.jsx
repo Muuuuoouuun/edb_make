@@ -109,6 +109,18 @@ const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, from
   next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, moved);
   return next;
 });
+const reorderItemGroupForDrop = REORDER_HELPERS.reorderItemGroupForDrop || ((items, fromIds, toId, position = 'before') => {
+  const sourceIdSet = new Set((fromIds || []).map(String));
+  const targetId = String(toId || '');
+  if (!Array.isArray(items) || !sourceIdSet.size || !targetId || sourceIdSet.has(targetId)) return items;
+  const moved = items.filter(item => sourceIdSet.has(String(item.id)));
+  const remaining = items.filter(item => !sourceIdSet.has(String(item.id)));
+  const targetIndex = remaining.findIndex(item => String(item.id) === targetId);
+  if (!moved.length || targetIndex < 0) return items;
+  const next = remaining.slice();
+  next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, ...moved);
+  return next.every((item, index) => String(item.id) === String(items[index]?.id)) ? items : next;
+});
 const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
   clientY > rect.top + rect.height / 2 ? 'after' : 'before'
 ));
@@ -134,6 +146,30 @@ const adjacentReorderCommand = REORDER_HELPERS.adjacentReorderCommand || ((items
     targetId: String(items[targetIndex].id),
     position: targetIndex < sourceIndex ? 'before' : 'after',
     nextIndex: targetIndex,
+  };
+});
+const adjacentGroupReorderCommand = REORDER_HELPERS.adjacentGroupReorderCommand || ((items, itemIds, direction) => {
+  const sourceIdSet = new Set((itemIds || []).map(String));
+  const sourceIds = items.map(item => String(item.id)).filter(id => sourceIdSet.has(id));
+  if (!sourceIds.length) return null;
+  const indexes = items
+    .map((item, index) => sourceIdSet.has(String(item.id)) ? index : -1)
+    .filter(index => index >= 0);
+  const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+  const edgeIndex = delta < 0 ? Math.min(...indexes) : Math.max(...indexes);
+  const targetIndex = edgeIndex + delta;
+  if (!delta || targetIndex < 0 || targetIndex >= items.length) return null;
+  const targetId = String(items[targetIndex].id);
+  if (sourceIdSet.has(targetId)) return null;
+  const position = delta < 0 ? 'before' : 'after';
+  const reordered = reorderItemGroupForDrop(items, sourceIds, targetId, position);
+  if (reordered === items) return null;
+  return {
+    sourceId: sourceIds[0],
+    sourceIds,
+    targetId,
+    position,
+    nextIndex: reordered.findIndex(item => String(item.id) === sourceIds[0]),
   };
 });
 const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positions, targetTop) => {
@@ -3591,10 +3627,13 @@ function ItemsRail({
   onDownloadItemImage, downloadingItemId, reorderBusy,
 }){
   const dragId = useRef(null);
-  const [draggingId, setDraggingId] = useState(null);
+  const dragIdsRef = useRef([]);
+  const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
   const [materialFilter, setMaterialFilter] = useState('all');
+  const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
+  const selectionAnchorRef = useRef(null);
   const railRef = useRef(null);
   const itemRefs = useRef({});
   const previousItemRects = useRef(new Map());
@@ -3625,6 +3664,22 @@ function ItemsRail({
       || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter]);
   const filterActive = materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
+  const orderedSelectedIds = useMemo(
+    () => items.map(item => String(item.id)).filter(id => selectedItemIds.has(id)),
+    [items, selectedItemIds]
+  );
+  const selectedItemCount = orderedSelectedIds.length;
+
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedItemIds(prev => {
+      const filtered = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return filtered.size === prev.size ? prev : filtered;
+    });
+    if (selectionAnchorRef.current && !validIds.has(String(selectionAnchorRef.current))) {
+      selectionAnchorRef.current = null;
+    }
+  }, [itemOrderSignature]);
 
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
@@ -3657,9 +3712,60 @@ function ItemsRail({
     }
   }, [itemOrderSignature]);
 
+  const selectRailItem = (itemId, event = {}) => {
+    const id = String(itemId);
+    const visibleIds = visibleItemRows.map(({ item }) => String(item.id));
+    const primaryModifier = Boolean(event.ctrlKey || event.metaKey);
+    const anchorId = selectionAnchorRef.current && visibleIds.includes(String(selectionAnchorRef.current))
+      ? String(selectionAnchorRef.current)
+      : (activeId && visibleIds.includes(String(activeId)) ? String(activeId) : id);
+    let next;
+
+    if (event.shiftKey) {
+      const anchorIndex = visibleIds.indexOf(anchorId);
+      const targetIndex = visibleIds.indexOf(id);
+      const rangeIds = anchorIndex >= 0 && targetIndex >= 0
+        ? visibleIds.slice(Math.min(anchorIndex, targetIndex), Math.max(anchorIndex, targetIndex) + 1)
+        : [id];
+      next = primaryModifier ? new Set(selectedItemIds) : new Set();
+      rangeIds.forEach(rangeId => next.add(rangeId));
+    } else if (primaryModifier) {
+      next = new Set(selectedItemIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      selectionAnchorRef.current = id;
+    } else {
+      next = new Set([id]);
+      selectionAnchorRef.current = id;
+    }
+
+    setSelectedItemIds(next);
+    if (next.has(id)) {
+      setActive(id);
+    } else if (next.size) {
+      const remainingIds = Array.from(next);
+      setActive(remainingIds[remainingIds.length - 1]);
+    } else {
+      setActive(id);
+    }
+  };
+
+  const clearRailSelection = () => {
+    selectionAnchorRef.current = null;
+    setSelectedItemIds(new Set());
+  };
+
+  const removeSelectedItems = () => {
+    if (!orderedSelectedIds.length || reorderBusy) return;
+    removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });
+    clearRailSelection();
+    setReorderAnnouncement(`${orderedSelectedIds.length}개 문제를 삭제했습니다.`);
+  };
+
   const clearDragState = () => {
     dragId.current = null;
-    setDraggingId(null);
+    dragIdsRef.current = [];
+    setDraggingIds(new Set());
     dropTargetRef.current = null;
     setDropTarget(null);
   };
@@ -3672,7 +3778,8 @@ function ItemsRail({
   };
 
   const updateDropTarget = (event, targetId) => {
-    if (!dragId.current || dragId.current === targetId) {
+    const sourceIds = dragIdsRef.current.length ? dragIdsRef.current : [dragId.current].filter(Boolean);
+    if (!sourceIds.length || sourceIds.includes(String(targetId))) {
       setCurrentDropTarget(null);
       return;
     }
@@ -3682,28 +3789,29 @@ function ItemsRail({
     setCurrentDropTarget({ id: targetId, position });
   };
 
-  const findPointerDropTarget = (_clientX, clientY, sourceId) => {
+  const findPointerDropTarget = (_clientX, clientY, sourceIds) => {
     const rail = railRef.current;
     if (!rail) return null;
     const drag = pointerDragRef.current;
-    const rows = drag?.id === sourceId ? drag.rows : [];
+    const sourceIdSet = new Set((sourceIds || []).map(String));
+    const rows = drag?.rows?.filter(row => !sourceIdSet.has(String(row.id))) || [];
     if (!rows.length) return null;
     const railRect = rail.getBoundingClientRect();
     const contentY = clientY - railRect.top + rail.scrollTop;
     const first = rows[0];
     if (contentY < first.top) {
       const id = first.id;
-      return id && id !== sourceId ? { id, position: 'before' } : null;
+      return id ? { id, position: 'before' } : null;
     }
     for (const candidate of rows) {
       const id = candidate.id;
       if (contentY < candidate.top + candidate.height / 2) {
-        return id && id !== sourceId ? { id, position: 'before' } : null;
+        return id ? { id, position: 'before' } : null;
       }
     }
     const last = rows[rows.length - 1];
     const id = last.id;
-    return id && id !== sourceId ? { id, position: 'after' } : null;
+    return id ? { id, position: 'after' } : null;
   };
 
   const stopRailAutoScroll = () => {
@@ -3715,9 +3823,9 @@ function ItemsRail({
 
   const stepRailAutoScroll = () => {
     const rail = railRef.current;
-    const sourceId = dragId.current;
+    const sourceIds = dragIdsRef.current;
     const { clientX, clientY } = railAutoScrollRef.current;
-    if (!rail || !sourceId || clientY == null) {
+    if (!rail || !sourceIds.length || clientY == null) {
       stopRailAutoScroll();
       return;
     }
@@ -3733,7 +3841,7 @@ function ItemsRail({
     }
     const previousTop = rail.scrollTop;
     rail.scrollTop = Math.max(0, Math.min(rail.scrollHeight - rail.clientHeight, previousTop + delta));
-    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceId);
+    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceIds);
     setCurrentDropTarget(target);
     if (rail.scrollTop === previousTop) {
       railAutoScrollRef.current.raf = null;
@@ -3754,19 +3862,25 @@ function ItemsRail({
 
   const startPointerDrag = (event, itemId) => {
     if (reorderBusy || filterActive || event.button !== 0 || event.target.closest?.('button')) return;
+    const id = String(itemId);
+    const sourceIds = selectedItemIds.has(id) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [id];
     const rows = items.map(item => {
       const el = itemRefs.current[item.id];
       return el ? { id: item.id, top: el.offsetTop, height: el.offsetHeight } : null;
     }).filter(Boolean);
     pointerDragRef.current = {
-      id: itemId,
+      id,
+      ids: sourceIds,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
       rows,
     };
-    dragId.current = itemId;
+    dragId.current = id;
+    dragIdsRef.current = sourceIds;
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
@@ -3778,11 +3892,15 @@ function ItemsRail({
     if (!drag.moved) {
       if (Math.hypot(dx, dy) < 5) return;
       drag.moved = true;
-      setDraggingId(drag.id);
+      if (!selectedItemIds.has(drag.id)) {
+        selectionAnchorRef.current = drag.id;
+        setSelectedItemIds(new Set([drag.id]));
+      }
+      setDraggingIds(new Set(drag.ids));
     }
     event.preventDefault();
     applyRailAutoScroll(event.clientX, event.clientY);
-    const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
+    const target = findPointerDropTarget(event.clientX, event.clientY, drag.ids);
     setCurrentDropTarget(target);
   };
 
@@ -3790,7 +3908,7 @@ function ItemsRail({
     const drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const target = drag.moved
-      ? findPointerDropTarget(event.clientX, event.clientY, drag.id) || dropTargetRef.current
+      ? findPointerDropTarget(event.clientX, event.clientY, drag.ids) || dropTargetRef.current
       : null;
     if (drag.moved) {
       event.preventDefault();
@@ -3798,7 +3916,10 @@ function ItemsRail({
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
       if (target) {
         setActive(drag.id);
-        reorder(drag.id, target.id, target.position, { resetPlacement: true });
+        reorder(drag.id, target.id, target.position, {
+          resetPlacement: true,
+          sourceIds: drag.ids,
+        });
       }
     }
     event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -3809,16 +3930,27 @@ function ItemsRail({
 
   const moveItemByKeyboard = (item, direction) => {
     if (reorderBusy || filterActive) return;
-    const command = adjacentReorderCommand(items, item.id, direction);
+    const itemId = String(item.id);
+    const sourceIds = selectedItemIds.has(itemId) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [itemId];
+    const command = sourceIds.length > 1
+      ? adjacentGroupReorderCommand(items, sourceIds, direction)
+      : adjacentReorderCommand(items, item.id, direction);
     if (!command) {
-      setReorderAnnouncement(direction === 'up' ? '이미 첫 번째 문제입니다.' : '이미 마지막 문제입니다.');
+      setReorderAnnouncement(direction === 'up' ? '선택 묶음이 이미 맨 위입니다.' : '선택 묶음이 이미 맨 아래입니다.');
       return;
     }
     pendingKeyboardFocusRef.current = item.id;
     setActive(item.id);
-    const moved = reorder(command.sourceId, command.targetId, command.position, { resetPlacement: true });
+    const moved = reorder(item.id, command.targetId, command.position, {
+      resetPlacement: true,
+      sourceIds,
+    });
     if (moved !== false) {
-      setReorderAnnouncement(`${command.nextIndex + 1}번으로 이동했습니다: ${problemDisplayName(item, command.nextIndex)}.`);
+      setReorderAnnouncement(sourceIds.length > 1
+        ? `${sourceIds.length}개 문제를 ${command.nextIndex + 1}번부터 함께 이동했습니다.`
+        : `${command.nextIndex + 1}번으로 이동했습니다: ${problemDisplayName(item, command.nextIndex)}.`);
     }
   };
 
@@ -3884,7 +4016,13 @@ function ItemsRail({
                 const firstMatch = items.find(item => value === 'all'
                   || (value === 'questions' && !isPassageFragmentProblem(item))
                   || (value === 'passages' && isPassageFragmentProblem(item)));
-                if (firstMatch) setActive(firstMatch.id);
+                if (firstMatch) {
+                  selectionAnchorRef.current = String(firstMatch.id);
+                  setSelectedItemIds(new Set([String(firstMatch.id)]));
+                  setActive(firstMatch.id);
+                } else {
+                  clearRailSelection();
+                }
               }}
             >
               <span>{label}</span><b>{count}</b>
@@ -4176,14 +4314,35 @@ function ItemsRail({
         )}
 
         {!!items.length && (
-          <div className="problem-order-status" id="problem-order-help">
-            {filterActive ? (
+          <div className={`problem-order-status ${selectedItemCount > 1 ? 'is-selection' : ''}`} id="problem-order-help">
+            {selectedItemCount > 1 ? (
+              <>
+                <strong>{selectedItemCount}개 선택</strong>
+                <span>드래그 또는 <kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd>로 함께 이동</span>
+                <button
+                  className="btn rail-selection-clear"
+                  type="button"
+                  onClick={clearRailSelection}
+                  disabled={reorderBusy}
+                >
+                  선택 해제
+                </button>
+                <button
+                  className="btn danger rail-selection-delete"
+                  type="button"
+                  onClick={removeSelectedItems}
+                  disabled={reorderBusy}
+                >
+                  {Icon.trash} 선택 삭제
+                </button>
+              </>
+            ) : filterActive ? (
               <span>모아보기 중 · 순서 변경은 전체 보기에서</span>
             ) : (
               <>
-                <span>드래그로 순서 이동</span>
+                <span><kbd>Shift</kbd> 범위 · <kbd>Ctrl/Cmd</kbd> 개별 선택</span>
                 <span aria-hidden="true">·</span>
-                <span><kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd></span>
+                <span>드래그 또는 <kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd> 이동</span>
               </>
             )}
             {reorderBusy && <strong role="status">순서 저장 중…</strong>}
@@ -4194,6 +4353,8 @@ function ItemsRail({
         </span>
 
         {visibleItemRows.map(({ item: it, index: i }) => {
+          const itemId = String(it.id);
+          const isSelected = selectedItemIds.has(itemId);
           const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
@@ -4210,21 +4371,21 @@ function ItemsRail({
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${draggingIds.has(itemId) ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
             role="group"
             tabIndex={0}
             aria-current={activeId === it.id ? 'true' : undefined}
             aria-busy={reorderBusy ? 'true' : undefined}
             aria-roledescription={filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
-            aria-keyshortcuts={filterActive ? 'Enter Space' : 'Alt+ArrowUp Alt+ArrowDown Enter Space'}
+            aria-keyshortcuts={filterActive ? 'Enter Space Delete Backspace' : 'Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
             aria-posinset={i + 1}
             aria-setsize={items.length}
             aria-describedby="problem-order-help"
-            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. Alt와 위아래 방향키로 순서 이동`}
-            onClick={() => {
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, Ctrl 또는 Command 개별 선택, Alt와 위아래 방향키로 순서 이동`}
+            onClick={e => {
               if (suppressClickRef.current) return;
-              setActive(it.id);
+              selectRailItem(it.id, e);
             }}
             onKeyDown={e => {
               if (e.target !== e.currentTarget) return;
@@ -4233,9 +4394,19 @@ function ItemsRail({
                 moveItemByKeyboard(it, e.key === 'ArrowUp' ? 'up' : 'down');
                 return;
               }
+              if ((e.key === 'Delete' || e.key === 'Backspace') && selectedItemCount > 0) {
+                e.preventDefault();
+                removeSelectedItems();
+                return;
+              }
+              if (e.key === 'Escape' && selectedItemCount > 0) {
+                e.preventDefault();
+                clearRailSelection();
+                return;
+              }
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                setActive(it.id);
+                selectRailItem(it.id, e);
               }
             }}
             onPointerDown={e => startPointerDrag(e, it.id)}
@@ -4247,10 +4418,14 @@ function ItemsRail({
                 e.preventDefault();
                 return;
               }
-              dragId.current = it.id;
-              setDraggingId(it.id);
+              const sourceIds = isSelected && orderedSelectedIds.length > 1
+                ? orderedSelectedIds
+                : [itemId];
+              dragId.current = itemId;
+              dragIdsRef.current = sourceIds;
+              setDraggingIds(new Set(sourceIds));
               e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', it.id);
+              e.dataTransfer.setData('text/plain', itemId);
             }}
             onDragEnter={e => updateDropTarget(e, it.id)}
             onDragOver={e => {
@@ -4269,10 +4444,14 @@ function ItemsRail({
                 return;
               }
               const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
+              const sourceIds = dragIdsRef.current.length ? dragIdsRef.current : [sourceId];
               const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && sourceId !== it.id) {
+              if (sourceId && !sourceIds.includes(itemId)) {
                 setActive(sourceId);
-                reorder(sourceId, it.id, position, { resetPlacement: true });
+                reorder(sourceId, it.id, position, {
+                  resetPlacement: true,
+                  sourceIds,
+                });
               }
               stopRailAutoScroll();
               clearDragState();
@@ -4321,7 +4500,22 @@ function ItemsRail({
               >
                 {Icon.download}
               </button>
-              <button className="icon-btn" title="삭제" onClick={e => { e.stopPropagation(); removeItem(it.id); }}>
+              <button
+                className="icon-btn"
+                title={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '삭제'}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (isSelected && selectedItemCount > 1) removeSelectedItems();
+                  else {
+                    removeItem(it.id);
+                    setSelectedItemIds(prev => {
+                      const next = new Set(prev);
+                      next.delete(itemId);
+                      return next;
+                    });
+                  }
+                }}
+              >
                 {Icon.trash}
               </button>
             </div>
@@ -10751,12 +10945,21 @@ function App(){
       showToast('이전 변경을 적용하는 중입니다');
       return false;
     }
-    const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
+    const requestedSourceIds = Array.isArray(options?.sourceIds) && options.sourceIds.length
+      ? options.sourceIds
+      : [fromId];
+    const sourceIdSet = new Set(requestedSourceIds.map(id => String(id)));
+    const sourceIds = items
+      .map(item => String(item.id))
+      .filter(id => sourceIdSet.has(id));
+    const reordered = sourceIds.length > 1
+      ? reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)
+      : reorderItemsForDrop(items, fromId, toId, dropPosition);
     if (reordered === items) return false;
     const snapshotBefore = session
       ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
       : null;
-    const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
+    const resetItems = reordered.map(item => sourceIdSet.has(String(item.id)) ? resetItemPlacement(item) : item);
     const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     const nextIndex = nextItems.findIndex(item => String(item.id) === String(fromId));
     setItems(nextItems);
@@ -10791,28 +10994,46 @@ function App(){
         });
     }
     setPublished(false);
-    showToast(`문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`);
+    showToast(sourceIds.length > 1
+      ? `${sourceIds.length}개 문제를 ${Math.max(0, nextIndex) + 1}번부터 함께 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`
+      : `문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`);
     return true;
   };
-  const removeItem = (id) => {
+  const removeItem = (id, options = {}) => {
+    const requestedIds = Array.isArray(options?.problemIds) && options.problemIds.length
+      ? options.problemIds
+      : [id];
+    const existingIdSet = new Set(items.map(item => String(item.id)));
+    const problemIds = listUnique(requestedIds.map(value => String(value)).filter(value => existingIdSet.has(value)));
+    if (!problemIds.length) return;
     if (session) {
       if (mutating) {
         showToast('이전 변경을 적용하는 중입니다');
         return;
       }
-      void mutateSession('exclude', { problemId: id });
+      if (problemIds.length === 1) {
+        void mutateSession('exclude', { problemId: id });
+      } else {
+        void mutateSession('exclude', { problemIds });
+      }
       return;
     }
-    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const problemIdSet = new Set(problemIds);
+    const firstRemovedIndex = items.findIndex(item => problemIdSet.has(String(item.id)));
+    const nextItems = reflowItemsForBoardOrder(items.filter(
+      x => !problemIdSet.has(String(x.id))
+    ), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
-    if (activeId === id) {
-      setActiveId(nextItems[0]?.id || null);
+    if (problemIdSet.has(String(activeId))) {
+      const fallbackIndex = Math.max(0, Math.min(firstRemovedIndex, nextItems.length - 1));
+      setActiveId(nextItems[fallbackIndex]?.id || null);
     }
     if (!session && usingMock && nextItems.length === 0) {
       setUsingMock(false);
       setFileName('새 세션');
     }
     setPublished(false);
+    if (problemIds.length > 1) showToast(`${problemIds.length}개 문제를 삭제했어요`);
   };
   const addMockSample = () => {
     if (session) {

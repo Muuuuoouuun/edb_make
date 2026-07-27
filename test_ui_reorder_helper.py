@@ -85,6 +85,58 @@ class TestUiReorderHelper(unittest.TestCase):
             """
         )
 
+    def test_group_reorder_preserves_selected_relative_order(self) -> None:
+        run_node(
+            """
+            const { reorderItemGroupForDrop } = require('./ui_prototype/reorder.js');
+            const ids = xs => xs.map(x => x.id).join(',');
+            const items = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id }));
+
+            if (ids(reorderItemGroupForDrop(items, ['b', 'd'], 'e', 'after')) !== 'a,c,e,b,d') {
+              throw new Error('non-contiguous selection should move as one ordered group');
+            }
+            if (ids(reorderItemGroupForDrop(items, ['d', 'b'], 'a', 'before')) !== 'b,d,a,c,e') {
+              throw new Error('group order should follow the board, not selection click order');
+            }
+            if (reorderItemGroupForDrop(items, ['b', 'c'], 'c', 'after') !== items) {
+              throw new Error('dropping onto a selected row should be a no-op');
+            }
+            if (ids(items) !== 'a,b,c,d,e') {
+              throw new Error('group reorder mutated the original items');
+            }
+            """
+        )
+
+    def test_adjacent_group_reorder_supports_keyboard_moves(self) -> None:
+        run_node(
+            """
+            const { adjacentGroupReorderCommand, reorderItemGroupForDrop } = require('./ui_prototype/reorder.js');
+            const items = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id }));
+            const down = adjacentGroupReorderCommand(items, ['b', 'c'], 'down');
+            const up = adjacentGroupReorderCommand(items, ['c', 'd'], 'up');
+            if (JSON.stringify(down) !== JSON.stringify({
+              sourceId: 'b', sourceIds: ['b', 'c'], targetId: 'd', position: 'after', nextIndex: 2
+            })) {
+              throw new Error(`unexpected group down command: ${JSON.stringify(down)}`);
+            }
+            if (JSON.stringify(up) !== JSON.stringify({
+              sourceId: 'c', sourceIds: ['c', 'd'], targetId: 'b', position: 'before', nextIndex: 1
+            })) {
+              throw new Error(`unexpected group up command: ${JSON.stringify(up)}`);
+            }
+            const moved = reorderItemGroupForDrop(items, down.sourceIds, down.targetId, down.position);
+            if (moved.map(item => item.id).join(',') !== 'a,d,b,c,e') {
+              throw new Error(`group keyboard command did not move together: ${JSON.stringify(moved)}`);
+            }
+            if (adjacentGroupReorderCommand(items, ['a', 'b'], 'up') !== null) {
+              throw new Error('top group cannot move up');
+            }
+            if (adjacentGroupReorderCommand(items, ['d', 'e'], 'down') !== null) {
+              throw new Error('bottom group cannot move down');
+            }
+            """
+        )
+
     def test_reorder_helper_keeps_invalid_or_same_drop_as_noop(self) -> None:
         run_node(
             """
