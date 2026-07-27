@@ -76,6 +76,8 @@ Expected installer:
 dist\ClassInEDBMVP-Setup.exe
 ```
 
+This `ClassInEDBMVP-Setup.exe` is the canonical Windows download artifact for each release and is the only Windows file that needs to be delivered to installer users. Do not distribute `dist\ClassInEDBMVP\ClassInEDBMVP.exe` by itself, or a zip containing only that executable: the folder-style launcher depends on the adjacent `_internal` directory. The setup file is rebuilt for every release, so its version, size, checksum, and binary contents will change even when the download filename stays the same.
+
 That installer creates a Start menu shortcut and can create a desktop shortcut. Clicking the installed app opens the browser at the local app.
 
 For external Windows testing, sign both the packaged app binaries and the final installer with an Authenticode code-signing certificate:
