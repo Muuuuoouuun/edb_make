@@ -1,6 +1,6 @@
 {
   "rubric_version": "ai-capability-v1",
-  "generated_at": "2026-07-27T09:13:23.070114+00:00",
+  "generated_at": "2026-07-27T09:53:50.393952+00:00",
   "scope": "AI OCR, page repair, image reconstruction, runtime efficiency, cost observability, and user AI controls",
   "targets": {
     "weighted_average": 8.0,

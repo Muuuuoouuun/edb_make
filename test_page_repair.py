@@ -1,6 +1,8 @@
 import json
 import unittest
 from unittest.mock import patch
+import base64
+from io import BytesIO
 
 from PIL import Image
 
@@ -87,7 +89,33 @@ class TestPageRepairConfig(unittest.TestCase):
         self.assertEqual(250, token_usage["total_token_count"])
         self.assertEqual(1, token_usage["request_count"])
         self.assertEqual(captured["timeout_ms"], 12345)
-        self.assertEqual(captured["payload"]["generationConfig"]["maxOutputTokens"], 6789)
+        generation_config = captured["payload"]["generationConfig"]
+        self.assertEqual(generation_config["maxOutputTokens"], 536)
+        self.assertEqual(
+            generation_config["thinkingConfig"],
+            {"thinkingLevel": "low"},
+        )
+        self.assertNotIn(
+            "problem_units",
+            generation_config["responseSchema"]["properties"],
+        )
+        self.assertNotIn(
+            "notes",
+            generation_config["responseSchema"]["properties"],
+        )
+        self.assertEqual(token_usage["configured_max_output_tokens"], 6789)
+        self.assertEqual(token_usage["effective_max_output_tokens"], 536)
+
+    def test_repair_context_image_caps_long_edge(self):
+        encoded = page_repair._image_to_base64(
+            Image.new("RGB", (4200, 2800), "white")
+        )
+
+        with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+            self.assertEqual(
+                max(decoded.size),
+                page_repair.AI_REPAIR_IMAGE_MAX_DIMENSION,
+            )
 
     def test_31_pro_falls_back_to_stable_pro_on_call_error(self):
         urls = []
@@ -168,7 +196,9 @@ class TestPageRepairConfig(unittest.TestCase):
         self.assertEqual(response_id, "fallback-response")
         self.assertEqual(payload["problem_start_block_ids"], ["block-1"])
         self.assertEqual(used_model, "gemini-3.6-flash")
-        self.assertEqual({}, token_usage)
+        self.assertEqual(4096, token_usage["configured_max_output_tokens"])
+        self.assertEqual(536, token_usage["effective_max_output_tokens"])
+        self.assertEqual(0, token_usage["problem_units_requested"])
         self.assertEqual(["error", "ok"], [attempt["status"] for attempt in attempts])
         self.assertEqual([], sleep_calls)
         self.assertEqual(1, sum("gemini-3.1-pro-preview" in url for url in urls))
@@ -401,9 +431,15 @@ class TestPageRepairConfig(unittest.TestCase):
 
         prompt = page_repair._build_repair_prompt(page, ["forced"])
 
-        self.assertIn("5 or more numbered questions", prompt)
-        self.assertIn("Do not stop after the first 2 or 3", prompt)
-        self.assertIn("omit problem_units before omitting any problem_start_block_ids", prompt)
+        self.assertIn("For 5+ questions include all", prompt)
+        self.assertIn("not only the first 2–3", prompt)
+        self.assertIn("Do not return problem_units or notes", prompt)
+
+        complex_prompt = page_repair._build_repair_prompt(
+            page,
+            ["merged_problem_block"],
+        )
+        self.assertIn("Return problem_units only", complex_prompt)
 
 
 if __name__ == "__main__":

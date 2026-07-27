@@ -1193,7 +1193,6 @@ def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
                     "text": "빠른 인식",
                     "block_type": "stem",
                     "confidence": 0.91,
-                    "lines": ["빠른 인식"],
                 },
                 ensure_ascii=False,
             )
@@ -1223,17 +1222,19 @@ def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
 
     assert backend.model == "gemini-3.5-flash"
     assert result.text == "빠른 인식"
+    assert [line.text for line in result.lines] == ["빠른 인식"]
     assert result.metadata["model"] == "gemini-3.5-flash"
-    assert result.metadata["thinking_level"] == "low"
+    assert result.metadata["thinking_level"] == "minimal"
     assert any("gemini-3.5-flash" in url for url in urls)
     assert not any("gemini-2.5-pro" in url for url in urls)
-    assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
     prompt = payloads[0]["contents"][0]["parts"][1]["text"]
-    assert "Return visible Unicode/plain text, not LaTeX source" in prompt
+    assert "Use visible Unicode/plain text only" in prompt
     assert "keep π as π and sin as sin" in prompt
+    assert "lines" not in payloads[0]["generationConfig"]["responseSchema"]["properties"]
 
 
-def test_default_gemini_ocr_model_is_flash_with_low_thinking(monkeypatch):
+def test_default_gemini_ocr_model_is_flash_with_minimal_thinking(monkeypatch):
     import ocr_backend
 
     monkeypatch.delenv(ocr_backend.GEMINI_OCR_MODEL_ENV, raising=False)
@@ -1241,7 +1242,7 @@ def test_default_gemini_ocr_model_is_flash_with_low_thinking(monkeypatch):
     backend = ocr_backend.GeminiOCRBackend(api_key="test-key")
 
     assert backend.model == "gemini-3.5-flash"
-    assert backend.thinking_level == "low"
+    assert backend.thinking_level == "minimal"
 
 
 def test_gemini_ocr_flash_fallback_uses_current_flash_contract(monkeypatch):
@@ -1304,9 +1305,11 @@ def test_gemini_ocr_flash_fallback_uses_current_flash_contract(monkeypatch):
     assert result.metadata["thinking_level"] == "low"
     assert any("gemini-3.5-flash" in url for url in urls)
     assert any("gemini-3.6-flash" in url for url in urls)
-    assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
     assert payloads[1]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
     assert "temperature" not in payloads[1]["generationConfig"]
+    fallback_prompt = payloads[1]["contents"][0]["parts"][1]["text"]
+    assert "Return exactly one schema JSON object" in fallback_prompt
 
 
 def test_explicit_gemini_model_name_builds_matching_backend(monkeypatch):
@@ -1317,7 +1320,7 @@ def test_explicit_gemini_model_name_builds_matching_backend(monkeypatch):
 
     assert isinstance(backend, ocr_backend.GeminiOCRBackend)
     assert backend.model == "gemini-3.5-flash"
-    assert backend.thinking_level == "low"
+    assert backend.thinking_level == "minimal"
 
 
 def test_page_model_records_recognition_timing_metadata_before_repair(

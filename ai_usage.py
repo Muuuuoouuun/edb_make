@@ -115,6 +115,85 @@ def aggregate_token_usage(
     return totals
 
 
+def summarize_token_efficiency(
+    events: Iterable[Mapping[str, Any] | None],
+) -> dict[str, Any]:
+    """Summarize token mix without retaining prompts or model responses."""
+    rows = [event for event in events if isinstance(event, Mapping)]
+
+    def _summarize(rows_for_bucket: list[Mapping[str, Any]]) -> dict[str, Any]:
+        request_count = sum(
+            max(1, _nonnegative_int(event.get("request_count")))
+            for event in rows_for_bucket
+        )
+        prompt_tokens = sum(
+            _nonnegative_int(event.get("prompt_token_count"))
+            for event in rows_for_bucket
+        )
+        candidate_tokens = sum(
+            _nonnegative_int(event.get("candidates_token_count"))
+            for event in rows_for_bucket
+        )
+        thought_tokens = sum(
+            _nonnegative_int(event.get("thoughts_token_count"))
+            for event in rows_for_bucket
+        )
+        cached_tokens = sum(
+            min(
+                _nonnegative_int(event.get("prompt_token_count")),
+                _nonnegative_int(event.get("cached_content_token_count")),
+            )
+            for event in rows_for_bucket
+        )
+        total_tokens = sum(
+            _nonnegative_int(event.get("total_token_count"))
+            for event in rows_for_bucket
+        )
+        if total_tokens <= 0:
+            total_tokens = prompt_tokens + candidate_tokens + thought_tokens
+        generated_tokens = candidate_tokens + thought_tokens
+        return {
+            "request_count": request_count,
+            "prompt_token_count": prompt_tokens,
+            "candidate_token_count": candidate_tokens,
+            "thought_token_count": thought_tokens,
+            "cached_prompt_token_count": cached_tokens,
+            "generated_token_count": generated_tokens,
+            "total_token_count": total_tokens,
+            "avg_total_tokens_per_request": (
+                round(total_tokens / request_count, 2) if request_count else 0.0
+            ),
+            "cache_hit_token_ratio": (
+                round(cached_tokens / prompt_tokens, 4) if prompt_tokens else 0.0
+            ),
+            "thought_share_of_generated": (
+                round(thought_tokens / generated_tokens, 4)
+                if generated_tokens
+                else 0.0
+            ),
+        }
+
+    by_stage_rows: dict[str, list[Mapping[str, Any]]] = {}
+    by_model_rows: dict[str, list[Mapping[str, Any]]] = {}
+    for event in rows:
+        stage = str(event.get("stage") or "unknown")
+        model = _normalized_model(event.get("model")) or "unknown"
+        by_stage_rows.setdefault(stage, []).append(event)
+        by_model_rows.setdefault(model, []).append(event)
+
+    return {
+        **_summarize(rows),
+        "by_stage": {
+            key: _summarize(bucket)
+            for key, bucket in sorted(by_stage_rows.items())
+        },
+        "by_model": {
+            key: _summarize(bucket)
+            for key, bucket in sorted(by_model_rows.items())
+        },
+    }
+
+
 def _normalized_model(value: Any) -> str:
     return str(value or "").strip().lower()
 

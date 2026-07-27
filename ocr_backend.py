@@ -27,15 +27,16 @@ ECONOMY_GEMINI_OCR_MODEL = "gemini-3.5-flash-lite"
 GEMINI_OCR_PROFILE_ENV = "EDB_GEMINI_OCR_PROFILE"
 GEMINI_OCR_MODEL_ENV = "EDB_GEMINI_OCR_MODEL"
 GEMINI_OCR_THINKING_LEVEL_ENV = "EDB_GEMINI_OCR_THINKING_LEVEL"
-DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL = "low"
+DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL = "minimal"
+DEFAULT_GEMINI_FALLBACK_OCR_THINKING_LEVEL = "low"
 FALLBACK_GEMINI_OCR_MODEL = "gemini-3.6-flash"
 DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview", "gemini-3.1-pro-preview"}
 DEFAULT_GEMINI_FAILURE_BACKOFF_SECONDS = 8.0
 DEFAULT_GEMINI_FATAL_BACKOFF_SECONDS = 120.0
 MAX_GEMINI_FAILURE_BACKOFF_SECONDS = 300.0
 DEFAULT_OCR_NEGATIVE_CAPABILITY_TTL_SECONDS = 30.0
-OCR_CACHE_SCHEMA_VERSION = "ocr_result_v3"
-GEMINI_OCR_PROMPT_VERSION = "korean_exam_exact_text_v3"
+OCR_CACHE_SCHEMA_VERSION = "ocr_result_v4"
+GEMINI_OCR_PROMPT_VERSION = "korean_exam_exact_text_v4_compact"
 
 _OCR_CAPABILITY_LOCK = threading.RLock()
 _GEMINI_FAILURE_LOCK = threading.RLock()
@@ -56,33 +57,38 @@ _TESSERACT_NEGATIVE_PROBE_AT: dict[tuple[str, str], float] = {}
 _OCR_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "text": {
-            "type": "string",
-            "description": "Full extracted text from the image, preserving line breaks with \\n.",
-        },
+        "text": {"type": "string"},
         "block_type": {
             "type": "string",
             "enum": ["stem", "choice", "figure", "formula", "title", "explanation", "unknown"],
-            "description": (
-                "Classification of the block. 'stem' for problem body text, "
-                "'choice' for answer options (①②③④⑤ or ㄱㄴㄷ lists), "
-                "'figure' for diagrams/tables/images with little text, "
-                "'formula' for math equations, 'title' for problem-number headings, "
-                "'explanation' for solution/commentary text."
-            ),
         },
-        "confidence": {
-            "type": "number",
-            "description": "Confidence in the OCR result, 0.0 to 1.0.",
-        },
-        "lines": {
-            "type": "array",
-            "description": "Individual text lines recognized, in reading order.",
-            "items": {"type": "string"},
-        },
+        "confidence": {"type": "number"},
     },
-    "required": ["text", "block_type", "confidence", "lines"],
+    "required": ["text", "block_type", "confidence"],
 }
+
+GEMINI_OCR_PROMPT = (
+    "Transcribe this Korean exam crop exactly. Return every visible character in reading order "
+    "and preserve visual line breaks. Include all numbered questions/options and text above or "
+    "below figures. Preserve Korean, Latin, digits, punctuation, math symbols, ①–⑤, and ㄱ/ㄴ/ㄷ. "
+    "Use visible Unicode/plain text only: keep π as π and sin as sin; never emit LaTeX or "
+    "backslash commands. Do not summarize, solve, correct, infer, or omit. Classify block_type "
+    "as title, stem, choice, formula, figure, explanation, or unknown; use figure only when "
+    "there is no useful text. Set confidence from 0 to 1 by legibility."
+)
+GEMINI_OCR_FALLBACK_PROMPT = (
+    "This is a cropped block from a Korean exam paper. Extract ALL visible text exactly as "
+    "written; do not summarize, paraphrase, solve, correct, repeat, or skip anything. Read the "
+    "entire crop from top to bottom, including text above and below tables, diagrams, and "
+    "figures. Include every visible problem number and all following answer choices. Preserve "
+    "Korean characters, line breaks, math symbols, circled numbers ①②③④⑤, ㄱ/ㄴ/ㄷ markers, "
+    "digits, parentheses, and punctuation. Return visible Unicode/plain text, never LaTeX or "
+    "backslash commands: π stays π and sin stays sin. Classify block_type as title for a problem "
+    "heading, stem for the question body, choice for standalone final options, formula for an "
+    "equation, figure for a diagram/table/photo with no useful text, explanation for solution "
+    "text, or unknown. Set confidence from 0 to 1 by legibility. Return exactly one schema JSON "
+    "object and stop immediately after it."
+)
 
 try:
     from paddleocr import PaddleOCR  # type: ignore
@@ -126,8 +132,10 @@ def resolve_gemini_ocr_thinking_level(model: str, thinking_level: str | None = N
     normalized_model = (model or "").strip().lower()
     if normalized_model == ECONOMY_GEMINI_OCR_MODEL:
         return "minimal"
-    if normalized_model in {"gemini-3.5-flash", "gemini-3.6-flash"}:
+    if normalized_model == "gemini-3.5-flash":
         return DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL
+    if normalized_model == "gemini-3.6-flash":
+        return DEFAULT_GEMINI_FALLBACK_OCR_THINKING_LEVEL
     return ""
 
 
@@ -696,27 +704,6 @@ class GeminiOCRBackend(OCRBackend):
                         },
                     ),
                 )
-        prompt = (
-            "This is a cropped block from a Korean exam paper. "
-            "Extract ALL visible text exactly as written — do not summarize, paraphrase, or skip anything. "
-            "Read the entire crop from top to bottom, including text above and below tables, diagrams, and figures. "
-            "If a table or diagram is followed by numbered questions or answer choices, include those lines too. "
-            "If multiple problem numbers are visible in one crop, include every problem number on its own line. "
-            "Preserve Korean characters, math symbols, circled numbers ①②③④⑤, and ㄱ/ㄴ/ㄷ markers. "
-            "Return visible Unicode/plain text, not LaTeX source: keep π as π and sin as sin; "
-            "never rewrite them as \\pi, \\sin, or other backslash commands. "
-            "Use \\n between visual lines. Keep digits, parentheses, and punctuation as-is. "
-            "Classify the block by content:\n"
-            "  - 'title' : a problem-number heading like '1.', '문제 3', '[4]'\n"
-            "  - 'stem'  : main question body text\n"
-            "  - 'choice': stand-alone answer-option block (① ② ③ ④ ⑤ or A–E)\n"
-            "  - 'formula': a math equation or expression line\n"
-            "  - 'figure': diagram/table/photo with little or no text\n"
-            "  - 'explanation': solution or commentary text\n"
-            "Set confidence based on how legible the text is (0.0–1.0). "
-            "If the block is mostly figure with no useful text, return text='' and block_type='figure'."
-        )
-
         prepped = _prep_crop_for_ocr(image)
         media_type, image_data = self._encode_image(prepped)
         payload = {
@@ -725,7 +712,7 @@ class GeminiOCRBackend(OCRBackend):
                     "role": "user",
                     "parts": [
                         {"inline_data": {"mime_type": media_type, "data": image_data}},
-                        {"text": prompt},
+                        {"text": GEMINI_OCR_PROMPT},
                     ],
                 }
             ],
@@ -761,6 +748,21 @@ class GeminiOCRBackend(OCRBackend):
             else:
                 thinking_levels_by_model[model] = ""
             model_payload = dict(payload)
+            if model == FALLBACK_GEMINI_OCR_MODEL:
+                model_payload["contents"] = [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "inline_data": {
+                                    "mime_type": media_type,
+                                    "data": image_data,
+                                }
+                            },
+                            {"text": GEMINI_OCR_FALLBACK_PROMPT},
+                        ],
+                    }
+                ]
             model_payload["generationConfig"] = generation_config
             return json.dumps(model_payload).encode("utf-8")
 
@@ -938,8 +940,9 @@ class GeminiOCRBackend(OCRBackend):
         if not isinstance(parsed, dict):
             parsed = {}
         raw_text = str(parsed.get("text", "")).strip()
-        raw_lines_value = parsed.get("lines") or []
-        raw_lines = raw_lines_value if isinstance(raw_lines_value, list) else []
+        # The API returns text once. Derive line objects locally instead of
+        # paying output tokens for a duplicate `lines` array.
+        raw_lines = raw_text.splitlines()
         if not raw_text:
             failure_reason = "empty_response"
             cooldown_ms = 0

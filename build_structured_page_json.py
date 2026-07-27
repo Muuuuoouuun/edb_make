@@ -12,7 +12,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ai_usage import aggregate_token_usage, summarize_ai_cost
+from ai_usage import (
+    aggregate_token_usage,
+    summarize_ai_cost,
+    summarize_token_efficiency,
+)
 from ocr_backend import (
     DEFAULT_GEMINI_OCR_MODEL,
     ECONOMY_GEMINI_OCR_MODEL,
@@ -139,6 +143,7 @@ def build_run_summary(
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
         "token_usage": aggregate_token_usage(token_usage_events),
+        "ai_token_efficiency": summarize_token_efficiency(token_usage_events),
         "ai_cost_summary": summarize_ai_cost(token_usage_events),
         "pages_json_path": str(Path(output_dir) / "pages.json"),
     }

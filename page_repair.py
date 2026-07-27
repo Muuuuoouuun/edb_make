@@ -27,6 +27,16 @@ GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_REPAIR_MODEL = "gemini-3.1-pro-preview"
 FALLBACK_GEMINI_REPAIR_MODEL = "gemini-3.6-flash"
 DEPRECATED_GEMINI_REPAIR_MODELS = {"gemini-3-pro-preview"}
+AI_REPAIR_PROMPT_VERSION = "page_repair_v3_compact"
+AI_REPAIR_IMAGE_MAX_DIMENSION = 2048
+AI_REPAIR_IMAGE_JPEG_QUALITY = 78
+_PROBLEM_UNIT_TRIGGER_REASONS = {
+    "fallback_grouping",
+    "full_page_image",
+    "marker_conflicts",
+    "merged_problem_block",
+    "problem_per_block",
+}
 
 _SUPPORTED_PROVIDER_ALIASES = {"gemini", "google", "claude", "anthropic", "openai"}
 
@@ -533,6 +543,35 @@ def _is_fatal_ai_repair_error(exc: Exception) -> bool:
     return False
 
 
+def _repair_thinking_level(model: str) -> str:
+    normalized = str(model or "").strip().lower()
+    if normalized.startswith("gemini-3"):
+        # Page grouping needs light spatial reasoning; `low` avoids the default
+        # medium/high token spend without reducing it to extraction-only mode.
+        return "low"
+    return ""
+
+
+def _should_request_problem_units(trigger_reasons: list[str]) -> bool:
+    normalized = {str(reason or "").strip() for reason in trigger_reasons}
+    return bool(normalized.intersection(_PROBLEM_UNIT_TRIGGER_REASONS))
+
+
+def _repair_output_token_budget(
+    page: PageModel,
+    *,
+    configured_max_tokens: int,
+    include_problem_units: bool,
+) -> int:
+    """Bound structured repair output without truncating normal block arrays."""
+    block_count = max(1, len(page.blocks))
+    estimated = 512 + 24 * block_count
+    if include_problem_units:
+        estimated += 32 * min(block_count, 24)
+    hard_cap = 3072 if include_problem_units else 2048
+    return max(512, min(int(configured_max_tokens), hard_cap, estimated))
+
+
 def _request_gemini_repair(
     *,
     prepared_page: PreparedPage,
@@ -542,6 +581,18 @@ def _request_gemini_repair(
     api_key: str,
 ) -> tuple[dict[str, Any], str | None, dict[str, int]]:
     """Call the Gemini generateContent API with a JSON response schema."""
+    include_problem_units = _should_request_problem_units(trigger_reasons)
+    output_token_limit = _repair_output_token_budget(
+        page,
+        configured_max_tokens=config.max_tokens,
+        include_problem_units=include_problem_units,
+    )
+    prompt = _build_repair_prompt(
+        page,
+        trigger_reasons,
+        include_problem_units=include_problem_units,
+    )
+    thinking_level = _repair_thinking_level(config.resolved_model)
     payload = {
         "contents": [
             {
@@ -553,18 +604,24 @@ def _request_gemini_repair(
                             "data": _image_to_base64(prepared_page.image),
                         }
                     },
-                    {"text": _build_repair_prompt(page, trigger_reasons)},
+                    {"text": prompt},
                 ],
             }
         ],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "responseSchema": _repair_schema(),
-            "maxOutputTokens": config.max_tokens,
+            "responseSchema": _repair_schema(
+                include_problem_units=include_problem_units,
+            ),
+            "maxOutputTokens": output_token_limit,
             "temperature": 0.0,
         },
     }
-    if config.resolved_model == "gemini-3.6-flash":
+    if thinking_level:
+        payload["generationConfig"]["thinkingConfig"] = {
+            "thinkingLevel": thinking_level,
+        }
+    if config.resolved_model in {"gemini-3.5-flash", "gemini-3.6-flash"}:
         payload["generationConfig"].pop("temperature", None)
     url = f"{GEMINI_API_BASE}/{config.resolved_model}:generateContent?key={api_key}"
     raw_response = _post_json(
@@ -590,16 +647,23 @@ def _request_gemini_repair(
         raise RuntimeError(f"Gemini response JSON decode failed: {exc}") from exc
     if not isinstance(parsed, dict):
         raise RuntimeError("Gemini response was not a JSON object")
-    return (
-        parsed,
-        raw_response.get("responseId") or raw_response.get("id"),
-        normalize_gemini_token_usage(raw_response),
+    token_usage = normalize_gemini_token_usage(raw_response)
+    token_usage.update(
+        {
+            "configured_max_output_tokens": int(config.max_tokens),
+            "effective_max_output_tokens": output_token_limit,
+            "prompt_char_count": len(prompt),
+            "input_block_count": len(page.blocks),
+            "problem_units_requested": int(include_problem_units),
+            "image_max_dimension": AI_REPAIR_IMAGE_MAX_DIMENSION,
+        }
     )
+    return parsed, raw_response.get("responseId") or raw_response.get("id"), token_usage
 
 
-def _repair_schema() -> dict[str, Any]:
+def _repair_schema(*, include_problem_units: bool = True) -> dict[str, Any]:
     # Schema follows Gemini's OpenAPI 3.0 subset — no additionalProperties.
-    return {
+    schema = {
         "type": "object",
         "properties": {
             "problem_start_block_ids": {
@@ -680,85 +744,118 @@ def _repair_schema() -> dict[str, Any]:
             "notes",
         ],
     }
+    # Notes are diagnostic prose, not required to repair page structure.
+    # Omitting them saves schema and response tokens on every request.
+    schema["properties"].pop("notes", None)
+    schema["required"] = [
+        key for key in schema["required"] if key != "notes"
+    ]
+    if not include_problem_units:
+        schema["properties"].pop("problem_units", None)
+    return schema
 
 
-def _build_repair_prompt(page: PageModel, trigger_reasons: list[str]) -> str:
-    block_lines = []
+def _build_repair_prompt(
+    page: PageModel,
+    trigger_reasons: list[str],
+    *,
+    include_problem_units: bool | None = None,
+) -> str:
+    include_units = (
+        _should_request_problem_units(trigger_reasons)
+        if include_problem_units is None
+        else bool(include_problem_units)
+    )
+    block_lines: list[str] = []
+    meta_key_map = {
+        "column_index": "col",
+        "question_band_index": "band",
+        "fallback_reason": "fallback",
+        "split_from_band": "split",
+    }
     for index, block in enumerate(page.blocks, start=1):
-        # Include up to 3 top OCR lines for richer spatial context
-        ocr_preview: list[str] = []
-        for line in (block.ocr_lines or [])[:3]:
-            if line.text and line.text.strip():
-                ocr_preview.append(line.text.strip()[:80])
-
+        text = (block.text or "").strip()
+        if not text:
+            # OCR lines are a fallback only. Sending them alongside `text`
+            # duplicates the largest text field on every normal block.
+            text = "\n".join(
+                line.text.strip()
+                for line in (block.ocr_lines or [])[:3]
+                if line.text and line.text.strip()
+            )
         entry: dict[str, Any] = {
-            "order": index,
-            "block_id": block.block_id,
-            "block_type": block.block_type.value,
-            "text": (block.text or "")[:300],
-            "confidence": round(block.confidence, 3) if block.confidence is not None else None,
-            "bbox": {
-                "left": round(block.bbox.left, 1),
-                "top": round(block.bbox.top, 1),
-                "width": round(block.bbox.width, 1),
-                "height": round(block.bbox.height, 1),
-            },
+            "i": index,
+            "id": block.block_id,
+            "k": block.block_type.value,
+            "t": text[:240],
+            "b": [
+                round(block.bbox.left, 1),
+                round(block.bbox.top, 1),
+                round(block.bbox.width, 1),
+                round(block.bbox.height, 1),
+            ],
         }
-        if ocr_preview:
-            entry["ocr_lines"] = ocr_preview
-        meta_keys = ("segmenter", "column_index", "question_band_index", "fallback_reason", "split_from_band")
-        meta = {k: block.metadata[k] for k in meta_keys if k in block.metadata}
-        if meta:
-            entry["meta"] = meta
-        block_lines.append(json.dumps(entry, ensure_ascii=False))
+        if block.confidence is not None:
+            entry["c"] = round(block.confidence, 2)
+        compact_meta = {
+            short_key: block.metadata[source_key]
+            for source_key, short_key in meta_key_map.items()
+            if source_key in block.metadata
+        }
+        if compact_meta:
+            entry["m"] = compact_meta
+        block_lines.append(
+            json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+        )
 
+    unit_rule = (
+        "Return problem_units only for confident complex grouping. Each unit uses a listed "
+        "problem_start_block_id, page-pixel bbox_px covering title through choices, and short "
+        "review_flags. Stop before the next problem in the same column."
+        if include_units
+        else "Do not return problem_units or notes."
+    )
     return "\n".join(
         [
-            "You analyze a scanned Korean exam page and classify its text blocks.",
-            f"Page size: {page.width_px}×{page.height_px}px  |  Subject: {page.subject.value}",
-            "",
-            "Korean exam conventions:",
-            "  - Problems are numbered: '1.', '2)', '문제 3', '[4]', '문항5' etc.",
-            "  - Boxed texts like <보기> or [조건] are NEVER the start of a problem.",
-            "  - A ㄱ/ㄴ/ㄷ enumerated list inside the stem is NOT a choice block—",
-            "    it is part of the question. Choice blocks are the final ①–⑤ options.",
-            "  - Answer choices MUST BE final options like ① ② ③ ④ ⑤  or  (1) (2) …",
-            "  - Figures / diagrams / physics–chemistry drawings appear below the stem.",
-            "  - Never mix the choices of Problem 1 with Problem 2.",
-            "  - On two-column pages, group blocks by their visual column first.",
-            "    Do not attach a block from the left column to a right-column problem, or vice versa.",
-            "",
-            "Output rules (STRICT):",
-            "  - Use ONLY the block_ids listed below. Do NOT invent IDs.",
-            "  - problem_start_block_ids: first block of each NUMBERED question, reading order.",
-            "  - choice_block_ids: standalone ①–⑤ (or A–E) answer-option blocks.",
-            "  - figure_block_ids: image, diagram, graph, or table content blocks.",
-            "  - If the page contains a single question, return only its first block as a problem start.",
-            "  - If the page contains 5 or more numbered questions, return EVERY visible numbered",
-            "    question start. Do not stop after the first 2 or 3.",
-            "  - Prefer minimal reassignment—only reclassify when clearly wrong.",
-            "  - Optional problem_units: include only when confident. This is advisory metadata;",
-            "    if there are many questions, omit problem_units before omitting any problem_start_block_ids.",
-            "    keep the block-id arrays above authoritative. Each unit must use a problem_start_block_id",
-            "    from problem_start_block_ids, bbox_px in page pixels covering that full problem, and",
-            "    review_flags such as needs_human_review, uncertain_bbox, split_choice_block, or merged_problem.",
-            "    bbox_px must include the problem number/title, stem, figures, and all answer choices.",
-            "    bbox_px must stop before the next numbered problem in the same column.",
-            "    If the next title is visible at the bottom edge, exclude it from the previous problem.",
-            f"  - Trigger reasons: {', '.join(trigger_reasons)}",
-            "",
-            "Blocks (JSON, reading order top→bottom):",
+            f"Korean exam block repair. page={page.width_px}x{page.height_px}; "
+            f"subject={page.subject.value}; triggers={','.join(trigger_reasons)}.",
+            "Return schema JSON only. Use listed ids exactly; never invent an id.",
+            "problem_start_block_ids = every visible NUMBERED question start in reading order. "
+            "For 5+ questions include all, not only the first 2–3.",
+            "choice_block_ids = final answer options ①–⑤ or A–E, not a ㄱ/ㄴ/ㄷ stem list. "
+            "figure_block_ids = image/diagram/graph/table blocks.",
+            "<보기> and [조건] are not question starts. Keep each choice with its own question. "
+            "On two-column pages group within a column. Reclassify only clear errors.",
+            unit_rule,
+            "Block keys: i=order,id=block id,k=current type,t=OCR text,"
+            "c=confidence,b=[left,top,width,height],m=layout hints.",
             *block_lines,
         ]
     )
 
 
 def _image_to_base64(image: Image.Image) -> str:
-    """Return a base64-encoded JPEG string (no data-URL prefix)."""
+    """Return a compact layout-reference JPEG (no data-URL prefix).
+
+    OCR text and exact source-space boxes are already in the prompt, so the
+    model only needs a page-level visual reference. Capping the long edge
+    avoids paying multimodal tokens for print-resolution pixels.
+    """
     from io import BytesIO
 
+    prepared = image.convert("RGB")
+    if max(prepared.size) > AI_REPAIR_IMAGE_MAX_DIMENSION:
+        prepared.thumbnail(
+            (AI_REPAIR_IMAGE_MAX_DIMENSION, AI_REPAIR_IMAGE_MAX_DIMENSION),
+            Image.Resampling.LANCZOS,
+        )
     buffer = BytesIO()
-    image.convert("RGB").save(buffer, format="JPEG", quality=86, optimize=True)
+    prepared.save(
+        buffer,
+        format="JPEG",
+        quality=AI_REPAIR_IMAGE_JPEG_QUALITY,
+        optimize=True,
+    )
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 

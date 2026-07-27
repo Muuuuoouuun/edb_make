@@ -158,7 +158,7 @@ def build_metrics(root: Path, benchmark_path: Path) -> dict[str, list[Metric]]:
             evidence.has(
                 "ocr_backend.py",
                 "_OCR_RESPONSE_SCHEMA",
-                "Extract ALL visible text exactly as written",
+                "Transcribe this Korean exam crop exactly",
                 '"temperature": 0.0',
             ),
             "ocr_backend.py: structured Gemini OCR contract",

@@ -231,6 +231,17 @@ def _summarize(
             for row in model_rows
             if isinstance(row.get("similarity_to_expected"), (int, float))
         ]
+        token_usage_rows = [
+            row.get("token_usage")
+            for row in model_rows
+            if isinstance(row.get("token_usage"), dict)
+        ]
+
+        def _token_total(field: str) -> int:
+            return sum(int(usage.get(field) or 0) for usage in token_usage_rows)
+
+        request_count = _token_total("request_count")
+        total_tokens = _token_total("total_token_count")
         summary[model] = {
             "call_count": len(model_rows),
             "error_count": len(errors),
@@ -244,6 +255,17 @@ def _summarize(
             "minimum_similarity_to_expected": round(min(similarities), 4) if similarities else None,
             "avg_text_length": round(statistics.mean(len(str(row.get("text") or "")) for row in model_rows), 1) if model_rows else None,
             "avg_line_count": round(statistics.mean(int(row.get("line_count") or 0) for row in model_rows), 1) if model_rows else None,
+            "token_usage": {
+                "request_count": request_count,
+                "prompt_token_count": _token_total("prompt_token_count"),
+                "candidates_token_count": _token_total("candidates_token_count"),
+                "thoughts_token_count": _token_total("thoughts_token_count"),
+                "cached_content_token_count": _token_total("cached_content_token_count"),
+                "total_token_count": total_tokens,
+                "avg_total_tokens_per_request": (
+                    round(total_tokens / request_count, 1) if request_count else None
+                ),
+            },
         }
     return summary
 
@@ -387,6 +409,11 @@ def main() -> int:
                     "block_type_hint": result.metadata.get("block_type_hint"),
                     "model_used": result.metadata.get("model"),
                     "error": result.metadata.get("error"),
+                    "token_usage": (
+                        dict(result.metadata.get("token_usage"))
+                        if isinstance(result.metadata.get("token_usage"), dict)
+                        else {}
+                    ),
                 }
             except Exception as exc:  # noqa: BLE001 - benchmark should keep going
                 latency_ms = int(round((time.perf_counter() - started_at) * 1000.0))
@@ -407,6 +434,7 @@ def main() -> int:
                     "block_type_hint": "",
                     "model_used": model,
                     "error": str(exc),
+                    "token_usage": {},
                 }
             row["quality_score"] = _quality_score(row)
             row["expected_text"] = sample.get("expected_text", "")

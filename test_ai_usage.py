@@ -3,6 +3,7 @@ from ai_usage import (
     image_generation_usage_event,
     normalize_gemini_token_usage,
     summarize_ai_cost,
+    summarize_token_efficiency,
 )
 
 
@@ -95,3 +96,37 @@ def test_image_generation_event_uses_fixed_gemini_image_price() -> None:
     assert summary["estimated_usd"] == 0.067
     assert summary["estimated_krw"] == 93.8
     assert summary["by_stage"]["image_reconstruction"]["request_count"] == 1
+
+
+def test_summarize_token_efficiency_exposes_cache_and_thinking_waste() -> None:
+    summary = summarize_token_efficiency(
+        [
+            {
+                "model": "gemini-3.5-flash-lite",
+                "stage": "ocr",
+                "request_count": 1,
+                "prompt_token_count": 1000,
+                "cached_content_token_count": 200,
+                "candidates_token_count": 80,
+                "thoughts_token_count": 20,
+                "total_token_count": 1100,
+            },
+            {
+                "model": "gemini-3.5-flash",
+                "stage": "ocr_escalation",
+                "request_count": 1,
+                "prompt_token_count": 500,
+                "candidates_token_count": 50,
+                "thoughts_token_count": 0,
+                "total_token_count": 550,
+            },
+        ]
+    )
+
+    assert summary["request_count"] == 2
+    assert summary["total_token_count"] == 1650
+    assert summary["avg_total_tokens_per_request"] == 825.0
+    assert summary["cache_hit_token_ratio"] == 0.1333
+    assert summary["thought_share_of_generated"] == 0.1333
+    assert summary["by_stage"]["ocr"]["thought_token_count"] == 20
+    assert summary["by_model"]["gemini-3.5-flash-lite"]["cached_prompt_token_count"] == 200
