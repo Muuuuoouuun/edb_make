@@ -25,7 +25,7 @@ from structured_schema import BlockType, ContentBlock, PageModel, ProblemUnit
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_REPAIR_MODEL = "gemini-3.1-pro-preview"
-FALLBACK_GEMINI_REPAIR_MODEL = "gemini-2.5-pro"
+FALLBACK_GEMINI_REPAIR_MODEL = "gemini-3.6-flash"
 DEPRECATED_GEMINI_REPAIR_MODELS = {"gemini-3-pro-preview"}
 
 _SUPPORTED_PROVIDER_ALIASES = {"gemini", "google", "claude", "anthropic", "openai"}
@@ -289,7 +289,12 @@ def repair_page_model(
     # The provider has already billed a completed response even when the
     # returned block IDs fail local validation. Record usage before validating
     # so cost reports include unsuccessful AI repairs as well.
-    summary["token_usage"] = token_usage
+    summary["token_usage"] = {
+        **(token_usage if isinstance(token_usage, dict) else {}),
+        "provider": resolved_config.provider,
+        "model": used_model,
+        "stage": "page_repair",
+    }
     validation_error = _validate_repair_payload(repair_payload, baseline.blocks)
     if validation_error:
         summary["status"] = "invalid_response"
@@ -559,6 +564,8 @@ def _request_gemini_repair(
             "temperature": 0.0,
         },
     }
+    if config.resolved_model == "gemini-3.6-flash":
+        payload["generationConfig"].pop("temperature", None)
     url = f"{GEMINI_API_BASE}/{config.resolved_model}:generateContent?key={api_key}"
     raw_response = _post_json(
         url,

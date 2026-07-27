@@ -15,14 +15,18 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ocr_backend import GeminiOCRBackend
+from ocr_backend import ECONOMY_GEMINI_OCR_MODEL, DEFAULT_GEMINI_OCR_MODEL, GeminiOCRBackend, OCRResult
 from preprocess import prepare_source_pages
 from segment import crop_block_image, segment_page
 from structured_schema import BlockType, Subject
 from user_settings import apply_to_env, load_user_settings
 
 
-MODELS = ("gemini-3.1-pro-preview", "gemini-3.5-flash")
+DEFAULT_MODELS = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+)
 
 
 def _apply_saved_keys() -> dict[str, str]:
@@ -54,6 +58,8 @@ def _source_candidates() -> list[Path]:
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for path in (
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/malgunbd.ttf",
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
         "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
         "/Library/Fonts/Arial Unicode.ttf",
@@ -208,9 +214,13 @@ def _text_similarity(expected: str, actual: str) -> float | None:
     return round(SequenceMatcher(None, expected, actual).ratio(), 4)
 
 
-def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _summarize(
+    rows: list[dict[str, Any]],
+    *,
+    models: tuple[str, ...],
+) -> dict[str, Any]:
     summary: dict[str, Any] = {}
-    for model in MODELS:
+    for model in models:
         model_rows = [row for row in rows if row["model"] == model]
         latencies = [float(row["latency_ms"]) for row in model_rows if isinstance(row.get("latency_ms"), (int, float))]
         nonempty = [row for row in model_rows if str(row.get("text") or "").strip()]
@@ -231,10 +241,78 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "p95_latency_ms": round(sorted(latencies)[min(len(latencies) - 1, int(len(latencies) * 0.95))], 1) if latencies else None,
             "avg_quality_score": round(statistics.mean(scores), 4) if scores else None,
             "avg_similarity_to_expected": round(statistics.mean(similarities), 4) if similarities else None,
+            "minimum_similarity_to_expected": round(min(similarities), 4) if similarities else None,
             "avg_text_length": round(statistics.mean(len(str(row.get("text") or "")) for row in model_rows), 1) if model_rows else None,
             "avg_line_count": round(statistics.mean(int(row.get("line_count") or 0) for row in model_rows), 1) if model_rows else None,
         }
     return summary
+
+
+def _summarize_economy_routing(
+    rows: list[dict[str, Any]],
+    *,
+    threshold: float = 0.72,
+) -> dict[str, Any]:
+    """Replay the economy-first routing decision over already measured calls."""
+    # Import after _apply_saved_keys() has populated the process environment.
+    # build_structured_page_json loads .env.local at import time using setdefault,
+    # so importing it at module load could otherwise shadow the saved user key.
+    from build_structured_page_json import _ocr_escalation_reason
+
+    by_sample_model = {
+        (int(row["sample_index"]), str(row["model"])): row
+        for row in rows
+    }
+    routed_rows: list[dict[str, Any]] = []
+    economy_rows = [
+        row for row in rows if str(row.get("model")) == ECONOMY_GEMINI_OCR_MODEL
+    ]
+    for economy_row in economy_rows:
+        sample_index = int(economy_row["sample_index"])
+        primary = OCRResult(
+            text=str(economy_row.get("text") or ""),
+            confidence=economy_row.get("confidence"),
+            backend_name="gemini",
+            metadata={
+                "model": ECONOMY_GEMINI_OCR_MODEL,
+                "block_type_hint": economy_row.get("block_type_hint"),
+            },
+        )
+        reason = _ocr_escalation_reason(primary, threshold=threshold)
+        selected = economy_row
+        if reason:
+            balanced = by_sample_model.get((sample_index, DEFAULT_GEMINI_OCR_MODEL))
+            if balanced and not balanced.get("error") and str(balanced.get("text") or "").strip():
+                selected = balanced
+        routed_rows.append(
+            {
+                "sample_index": sample_index,
+                "escalation_reason": reason,
+                "selected_model": selected.get("model"),
+                "similarity_to_expected": selected.get("similarity_to_expected"),
+            }
+        )
+
+    similarities = [
+        float(row["similarity_to_expected"])
+        for row in routed_rows
+        if isinstance(row.get("similarity_to_expected"), (int, float))
+    ]
+    escalation_count = sum(1 for row in routed_rows if row.get("escalation_reason"))
+    return {
+        "profile": "economy_with_quality_escalation",
+        "threshold": threshold,
+        "sample_count": len(routed_rows),
+        "escalation_count": escalation_count,
+        "estimated_request_count": len(routed_rows) + escalation_count,
+        "avg_similarity_to_expected": (
+            round(statistics.mean(similarities), 4) if similarities else None
+        ),
+        "minimum_similarity_to_expected": (
+            round(min(similarities), 4) if similarities else None
+        ),
+        "rows": routed_rows,
+    }
 
 
 def main() -> int:
@@ -244,9 +322,16 @@ def main() -> int:
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--timeout-ms", type=int, default=30000)
     parser.add_argument("--sleep-ms", type=int, default=250)
+    parser.add_argument(
+        "--model",
+        action="append",
+        default=[],
+        help="Gemini model to benchmark; repeat to compare models.",
+    )
     parser.add_argument("--out", default="tmp/gemini_ocr_model_benchmark.json")
     parser.add_argument("--synthetic", action="store_true", help="Use generated non-private test crops instead of local files")
     args = parser.parse_args()
+    models = tuple(dict.fromkeys(args.model or DEFAULT_MODELS))
 
     applied = _apply_saved_keys()
     if not os.environ.get("GEMINI_API_KEY", "").strip():
@@ -272,7 +357,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for sample_index, sample in enumerate(samples, start=1):
         crop: Image.Image = sample["crop"]
-        for model in MODELS:
+        for model in models:
             backend = GeminiOCRBackend(
                 model=model,
                 timeout_ms=args.timeout_ms,
@@ -335,12 +420,13 @@ def main() -> int:
                 time.sleep(args.sleep_ms / 1000.0)
 
     payload = {
-        "models": list(MODELS),
+        "models": list(models),
         "source_count": len(sources),
         "synthetic": bool(args.synthetic),
         "sample_count": len(samples),
         "env_key_source": applied.get("GEMINI_API_KEY") or "env",
-        "summary": _summarize(rows),
+        "summary": _summarize(rows, models=models),
+        "economy_routing_summary": _summarize_economy_routing(rows),
         "samples": [
             {k: v for k, v in sample.items() if k != "crop"}
             for sample in samples
@@ -350,7 +436,18 @@ def main() -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"out": str(out_path), "summary": payload["summary"], "sample_count": len(samples)}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "out": str(out_path),
+                "summary": payload["summary"],
+                "economy_routing_summary": payload["economy_routing_summary"],
+                "sample_count": len(samples),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 

@@ -39,11 +39,11 @@ from urllib.request import Request, url2pathname, urlopen
 from layout_template_schema import LayoutTemplate
 from structured_schema import Box, Subject
 from user_settings import (
+    ai_enabled_from_settings,
     apply_to_env as apply_user_settings_to_env,
     load_user_settings,
     summarize_for_response as summarize_user_settings,
     update_api_keys,
-    update_gemini_api_key,
 )
 
 
@@ -320,6 +320,11 @@ LEGACY_UI_ASSET_ALIASES = {
     "/app.js": "/app.bundle.js",
 }
 RUNTIME_DIR = BASE_DIR / ".app_runtime"
+
+
+def _global_ai_enabled() -> bool:
+    """Authoritative user preference for every provider-backed AI path."""
+    return ai_enabled_from_settings(load_user_settings(RUNTIME_DIR))
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
@@ -5198,7 +5203,16 @@ _AI_IMAGE_REVIEW_FLAGS = {
 }
 
 _IMAGE_ENHANCE_MODES = {"auto", "preserve", "ai"}
-_TEXT_PRESERVATION_SUBJECTS = {"korean", "english"}
+_TEXT_PRESERVATION_SUBJECTS = {
+    "korean",
+    "english",
+    "math",
+    "science",
+    "physics",
+    "chemistry",
+    "biology",
+    "earth_science",
+}
 
 
 def _normalize_image_enhance_mode(value: Any) -> str:
@@ -5255,7 +5269,10 @@ def _problem_image_subject(session: dict[str, Any], problem: dict[str, Any]) -> 
 def _resolved_image_enhance_mode(requested_mode: str, subject: str) -> str:
     if requested_mode != "auto":
         return requested_mode
-    return "preserve" if subject in _TEXT_PRESERVATION_SUBJECTS else "ai"
+    # Auto mode must be both economical and semantically safe. Generative
+    # reconstruction remains an explicit opt-in because pixel similarity
+    # cannot prove that formulae, labels, or answer choices were preserved.
+    return "preserve"
 
 
 def _original_problem_image_path(
@@ -5306,17 +5323,18 @@ def _semantic_text_preservation_gate(
     source/output OCR or PDF text-layer comparison is available, generated
     text-priority pages must remain reviewable instead of becoming a false pass.
     """
-    if subject not in _TEXT_PRESERVATION_SUBJECTS:
-        return {
-            "status": "not_applicable",
-            "review_required": False,
-            "method": "subject_not_text_priority",
-        }
     if resolved_mode != "ai" or delivery_mode in {"content_safe_primary", "content_safe_fallback"}:
         return {
             "status": "pass",
             "review_required": False,
             "method": "pixel_preserving_resize",
+        }
+    if subject not in _TEXT_PRESERVATION_SUBJECTS:
+        return {
+            "status": "unverified",
+            "review_required": True,
+            "method": "semantic_visual_comparison_unavailable",
+            "reason": "generated_diagram_or_label_identity_not_verified",
         }
     return {
         "status": "unverified",
@@ -5451,6 +5469,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     requested_mode = _normalize_image_enhance_mode(
         payload.get("mode") or payload.get("enhanceMode") or payload.get("enhance_mode") or "auto"
     )
+    ai_enabled = _global_ai_enabled()
+    if not ai_enabled and requested_mode == "ai":
+        raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
+    if not ai_enabled and requested_mode == "auto":
+        requested_mode = "preserve"
     provider = normalize_image_provider(
         payload.get("provider")
         or payload.get("imageProvider")
@@ -6102,6 +6125,8 @@ def _mutate_classify(session: dict[str, Any], problem_id: str, classification: s
 
 
 def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if not _global_ai_enabled():
+        raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
 
@@ -8020,17 +8045,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        has_gemini_key = "geminiApiKey" in payload or "gemini_api_key" in payload
         raw_key = payload.get("geminiApiKey") if "geminiApiKey" in payload else payload.get("gemini_api_key")
+        has_openai_key = "openAiApiKey" in payload or "openai_api_key" in payload
         raw_openai_key = payload.get("openAiApiKey") if "openAiApiKey" in payload else payload.get("openai_api_key")
+        has_ai_enabled = "aiEnabled" in payload or "ai_enabled" in payload
+        raw_ai_enabled = payload.get("aiEnabled") if "aiEnabled" in payload else payload.get("ai_enabled")
         try:
-            if raw_openai_key is None:
-                summary = update_gemini_api_key(RUNTIME_DIR, raw_key if isinstance(raw_key, str) else "")
-            else:
-                summary = update_api_keys(
-                    RUNTIME_DIR,
-                    gemini_api_key=raw_key if isinstance(raw_key, str) else None,
-                    openai_api_key=raw_openai_key if isinstance(raw_openai_key, str) else "",
-                )
+            summary = update_api_keys(
+                RUNTIME_DIR,
+                gemini_api_key=(raw_key if isinstance(raw_key, str) else "") if has_gemini_key else None,
+                openai_api_key=(raw_openai_key if isinstance(raw_openai_key, str) else "") if has_openai_key else None,
+                ai_enabled=_coerce_bool(raw_ai_enabled) if has_ai_enabled else None,
+            )
         except OSError as exc:
             self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -8299,6 +8326,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "sync_ui": False,
             }
             common_kwargs.update(_extract_ai_fallback_kwargs(payload))
+            ai_enabled = _global_ai_enabled()
+            if not ai_enabled:
+                requested_ocr = str(common_kwargs.get("ocr") or "auto").strip().lower()
+                if requested_ocr not in {"none", "off", "disabled"}:
+                    common_kwargs["ocr"] = "local"
+                common_kwargs["ai_fallback_enabled"] = False
+                common_kwargs["ai_fallback"] = "off"
             if export_mode == "page":
                 result = run_export(
                     source_paths[0] if len(source_paths) == 1 else source_paths,
@@ -8320,6 +8354,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     input_notes=input_notes,
                     **common_kwargs,
                 )
+            if isinstance(result, dict):
+                result["ai_enabled"] = ai_enabled
+                result["aiEnabled"] = ai_enabled
         except RequestPayloadTooLarge:
             raise
         except Exception as exc:
@@ -8327,6 +8364,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         session = result["ui_session"]
+        session["ai_enabled"] = ai_enabled
+        session["aiEnabled"] = ai_enabled
         session.setdefault("input_intent", input_intent)
         session.setdefault("content_target", content_target)
         session.setdefault("contentTarget", content_target)

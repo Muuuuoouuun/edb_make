@@ -167,13 +167,13 @@ class TestPageRepairConfig(unittest.TestCase):
 
         self.assertEqual(response_id, "fallback-response")
         self.assertEqual(payload["problem_start_block_ids"], ["block-1"])
-        self.assertEqual(used_model, "gemini-2.5-pro")
+        self.assertEqual(used_model, "gemini-3.6-flash")
         self.assertEqual({}, token_usage)
         self.assertEqual(["error", "ok"], [attempt["status"] for attempt in attempts])
         self.assertEqual([], sleep_calls)
         self.assertEqual(1, sum("gemini-3.1-pro-preview" in url for url in urls))
         self.assertTrue(any("gemini-3.1-pro-preview" in url for url in urls))
-        self.assertTrue(any("gemini-2.5-pro" in url for url in urls))
+        self.assertTrue(any("gemini-3.6-flash" in url for url in urls))
 
     def test_invalid_repair_response_still_records_provider_token_usage(self):
         prepared_page = PreparedPage(

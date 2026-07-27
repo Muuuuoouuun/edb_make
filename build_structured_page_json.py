@@ -6,13 +6,16 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from ai_usage import aggregate_token_usage
+from ai_usage import aggregate_token_usage, summarize_ai_cost
 from ocr_backend import (
+    DEFAULT_GEMINI_OCR_MODEL,
+    ECONOMY_GEMINI_OCR_MODEL,
     GeminiOCRBackend,
     create_ocr_backend,
     ocr_cache_fingerprint,
@@ -36,6 +39,19 @@ def load_env_local() -> None:
                 os.environ.setdefault(key.strip(), val.strip())
 
 load_env_local()
+
+_LATEX_COMMAND_PATTERN = re.compile(
+    r"\\(?:"
+    r"alpha|beta|gamma|delta|theta|lambda|mu|pi|rho|sigma|phi|omega|"
+    r"sin|cos|tan|log|ln|sqrt|frac|sum|prod|int|lim|"
+    r"times|div|pm|cdot|leq|geq|neq|infty"
+    r")\b",
+    re.IGNORECASE,
+)
+_UNPUNCTUATED_OR_MALFORMED_STEM_END_PATTERN = re.compile(
+    r"(?:구하|고르|쓰|설명하|서술하|계산하|선택하|판단하|확인하|작성하|나타내|말하)"
+    r"[가-힣]{0,3}$"
+)
 
 
 def _resolve_subject(name: str | None) -> Subject:
@@ -123,39 +139,104 @@ def build_run_summary(
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
         "token_usage": aggregate_token_usage(token_usage_events),
+        "ai_cost_summary": summarize_ai_cost(token_usage_events),
         "pages_json_path": str(Path(output_dir) / "pages.json"),
     }
 
 
 def _maybe_build_gemini_escalation(
-    *, ai_config: AIFallbackConfig | None, primary_backend_name: str
+    *,
+    ai_config: AIFallbackConfig | None,
+    primary_backend_name: str,
+    primary_model: str | None = None,
 ) -> GeminiOCRBackend | None:
-    """Build a Gemini OCR backend for per-block escalation when AI fallback is
-    enabled and the primary backend isn't already Gemini. Returns None when
-    escalation is unavailable (no API key) or unnecessary."""
+    """Build a quality OCR backend for low-confidence blocks.
+
+    Local OCR escalates to the balanced Gemini model. Economy Gemini OCR can
+    likewise escalate only uncertain blocks to the current quality model.
+    """
     if ai_config is None or not ai_config.enabled:
         return None
-    if primary_backend_name == "gemini":
+    if (
+        primary_backend_name == "gemini"
+        and str(primary_model or "").strip().lower() != ECONOMY_GEMINI_OCR_MODEL
+    ):
         return None
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         return None
     try:
-        return GeminiOCRBackend()
+        return GeminiOCRBackend(
+            model=(
+                DEFAULT_GEMINI_OCR_MODEL
+                if primary_backend_name == "gemini"
+                else None
+            )
+        )
     except Exception:
         return None
 
 
-def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
-    """A block should be re-OCRed by Claude when the primary engine returned
-    empty text or low confidence — both strong signals the local engine
-    struggled with this crop."""
+def _ocr_exactness_risk(ocr_result) -> bool:
+    r"""Detect economy-model output that likely rewrote visible exam notation.
+
+    OCR output is displayed as plain text. A Lite-model LaTeX command such as
+    ``\pi`` or ``\sin`` therefore indicates semantic normalization rather than
+    exact transcription and must be checked by the balanced quality model.
+    """
+    model = str(ocr_result.metadata.get("model") or "").strip().lower()
+    if model != ECONOMY_GEMINI_OCR_MODEL:
+        return False
+    text = str(ocr_result.text or "").strip()
+    if _LATEX_COMMAND_PATTERN.search(text):
+        return True
+    block_type = str(ocr_result.metadata.get("block_type_hint") or "").strip().lower()
+    return block_type == "stem" and bool(
+        _UNPUNCTUATED_OR_MALFORMED_STEM_END_PATTERN.search(text)
+    )
+
+
+def _ocr_escalation_reason(ocr_result, *, threshold: float) -> str | None:
+    """Return the reason a primary OCR result needs a quality-model check."""
     text = (ocr_result.text or "").strip()
     if not text:
-        return True
+        return "empty_primary"
+    if _ocr_exactness_risk(ocr_result):
+        return "exactness_risk"
     confidence = ocr_result.confidence
     if confidence is None:
+        return None
+    if float(confidence) < float(threshold):
+        return "low_confidence_primary"
+    return None
+
+
+def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
+    return _ocr_escalation_reason(ocr_result, threshold=threshold) is not None
+
+
+def _should_accept_ocr_escalation(
+    primary_result,
+    escalated_result,
+    *,
+    reason: str,
+) -> bool:
+    escalated_text = (escalated_result.text or "").strip()
+    if not escalated_text:
         return False
-    return float(confidence) < float(threshold)
+    if reason == "exactness_risk":
+        return True
+    primary_text = (primary_result.text or "").strip()
+    if not primary_text:
+        return True
+    primary_conf = (
+        primary_result.confidence if primary_result.confidence is not None else 0.0
+    )
+    escalated_conf = (
+        escalated_result.confidence
+        if escalated_result.confidence is not None
+        else 0.0
+    )
+    return float(escalated_conf) >= float(primary_conf)
 
 
 def _should_skip_ocr_for_trusted_block(
@@ -587,21 +668,19 @@ def build_page_model(
     )
 
     def _get_backend():
-        nonlocal backend, backend_name, escalation_backend, escalation_backend_checked
+        nonlocal backend, backend_name
         if backend is not None:
             return backend
         with backend_lock:
             if backend is None:
                 backend = create_ocr_backend(ocr_mode)
                 backend_name = backend.engine_name
-                escalation_backend = _maybe_build_gemini_escalation(
-                    ai_config=ai_config,
-                    primary_backend_name=backend_name,
-                )
-                escalation_backend_checked = True
         return backend
 
-    def _get_escalation_backend(primary_backend_name: str | None):
+    def _get_escalation_backend(
+        primary_backend_name: str | None,
+        primary_model: str | None = None,
+    ):
         nonlocal escalation_backend, escalation_backend_checked
         if escalation_backend_checked:
             return escalation_backend
@@ -610,6 +689,7 @@ def build_page_model(
                 escalation_backend = _maybe_build_gemini_escalation(
                     ai_config=ai_config,
                     primary_backend_name=primary_backend_name or backend_name,
+                    primary_model=primary_model,
                 )
                 escalation_backend_checked = True
         return escalation_backend
@@ -683,11 +763,17 @@ def build_page_model(
             block.metadata["ocr_cache_hit"] = False
             block.metadata["ocr_cache_miss"] = True
 
-        active_escalation_backend = _get_escalation_backend(ocr_result.backend_name)
-        if active_escalation_backend is not None and _ocr_needs_escalation(
-            ocr_result, threshold=escalation_threshold
-        ):
+        active_escalation_backend = _get_escalation_backend(
+            ocr_result.backend_name,
+            str(ocr_result.metadata.get("model") or ""),
+        )
+        escalation_reason = _ocr_escalation_reason(
+            ocr_result,
+            threshold=escalation_threshold,
+        )
+        if active_escalation_backend is not None and escalation_reason is not None:
             block.metadata["ocr_escalation_attempted"] = True
+            block.metadata["ocr_escalation_trigger"] = escalation_reason
             block.metadata["ocr_escalation_backend"] = active_escalation_backend.engine_name
             escalation_cache_identity = _build_ocr_cache_identity(
                 prepared_page,
@@ -737,20 +823,18 @@ def build_page_model(
                     )
                 block.metadata["ocr_escalation_cache_hit"] = False
 
-            primary_text = (ocr_result.text or "").strip()
-            escalated_text = (escalated_result.text or "").strip()
-            primary_conf = ocr_result.confidence if ocr_result.confidence is not None else 0.0
-            escalated_conf = (
-                escalated_result.confidence if escalated_result.confidence is not None else 0.0
+            # Self-reported confidence did not catch the Lite model changing
+            # visible notation (for example π -> \pi). For that evidence-backed
+            # risk, prefer any non-empty balanced-model transcription.
+            should_accept_escalation = _should_accept_ocr_escalation(
+                ocr_result,
+                escalated_result,
+                reason=escalation_reason,
             )
-            # Accept escalation when it produced text and either the primary
-            # produced nothing, or the escalation is at least as confident.
-            if escalated_text and (not primary_text or escalated_conf >= primary_conf):
+            if should_accept_escalation:
                 ocr_result = escalated_result
                 block.metadata["ocr_escalated"] = True
-                block.metadata["ocr_escalation_reason"] = (
-                    "empty_primary" if not primary_text else "low_confidence_primary"
-                )
+                block.metadata["ocr_escalation_reason"] = escalation_reason
             else:
                 block.metadata["ocr_escalated"] = False
 

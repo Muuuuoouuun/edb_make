@@ -1,4 +1,9 @@
-from ai_usage import aggregate_token_usage, normalize_gemini_token_usage
+from ai_usage import (
+    aggregate_token_usage,
+    image_generation_usage_event,
+    normalize_gemini_token_usage,
+    summarize_ai_cost,
+)
 
 
 def test_normalize_gemini_token_usage_keeps_provider_totals() -> None:
@@ -53,3 +58,40 @@ def test_aggregate_token_usage_sums_requests_without_deriving_total() -> None:
     assert total["candidates_token_count"] == 30
     assert total["thoughts_token_count"] == 7
     assert total["total_token_count"] == 177
+
+
+def test_summarize_ai_cost_prices_cached_input_output_and_thoughts() -> None:
+    summary = summarize_ai_cost(
+        [
+            {
+                "model": "gemini-3.5-flash-lite",
+                "stage": "ocr",
+                "request_count": 1,
+                "prompt_token_count": 1_000_000,
+                "cached_content_token_count": 200_000,
+                "candidates_token_count": 100_000,
+                "thoughts_token_count": 20_000,
+            }
+        ],
+        usd_krw_rate=1400,
+    )
+
+    # 0.8M regular input + 0.2M cached input + 0.12M output.
+    assert summary["estimated_usd"] == 0.546
+    assert summary["estimated_krw"] == 764.4
+    assert summary["priced_request_count"] == 1
+    assert summary["by_model"]["gemini-3.5-flash-lite"]["request_count"] == 1
+
+
+def test_image_generation_event_uses_fixed_gemini_image_price() -> None:
+    event = image_generation_usage_event(
+        provider="gemini",
+        model="gemini-3.1-flash-image",
+        usage={},
+        image_size="1k",
+    )
+    summary = summarize_ai_cost([event], usd_krw_rate=1400)
+
+    assert summary["estimated_usd"] == 0.067
+    assert summary["estimated_krw"] == 93.8
+    assert summary["by_stage"]["image_reconstruction"]["request_count"] == 1

@@ -558,6 +558,78 @@ def test_build_page_model_passes_stable_cache_identity_to_primary_and_escalated_
     assert page.metadata["ai_stages"]["ocr_escalation"]["applied_block_count"] == 1
 
 
+def test_economy_ocr_latex_normalization_triggers_exactness_escalation():
+    import build_structured_page_json as pipeline
+    from ocr_backend import ECONOMY_GEMINI_OCR_MODEL, OCRResult
+
+    result = OCRResult(
+        text=r"3. 0<x<\pi에서 \sin x = 1/2",
+        confidence=0.99,
+        backend_name="gemini",
+        metadata={"model": ECONOMY_GEMINI_OCR_MODEL},
+    )
+
+    assert pipeline._ocr_escalation_reason(result, threshold=0.72) == "exactness_risk"
+    assert pipeline._ocr_needs_escalation(result, threshold=0.72) is True
+
+
+def test_economy_ocr_truncated_stem_triggers_exactness_escalation():
+    import build_structured_page_json as pipeline
+    from ocr_backend import ECONOMY_GEMINI_OCR_MODEL, OCRResult
+
+    result = OCRResult(
+        text="3. 모든 x의 값을 구하시으",
+        confidence=0.98,
+        backend_name="gemini",
+        metadata={
+            "model": ECONOMY_GEMINI_OCR_MODEL,
+            "block_type_hint": "stem",
+        },
+    )
+
+    assert pipeline._ocr_escalation_reason(result, threshold=0.72) == "exactness_risk"
+
+
+def test_exactness_escalation_accepts_balanced_text_despite_lower_self_confidence():
+    import build_structured_page_json as pipeline
+    from ocr_backend import ECONOMY_GEMINI_OCR_MODEL, OCRResult
+
+    primary = OCRResult(
+        text=r"3. 0<x<\pi에서 \sin x = 1/2",
+        confidence=0.99,
+        backend_name="gemini",
+        metadata={"model": ECONOMY_GEMINI_OCR_MODEL},
+    )
+    balanced = OCRResult(
+        text="3. 0<x<π에서 sin x = 1/2",
+        confidence=0.98,
+        backend_name="gemini",
+        metadata={"model": "gemini-3.5-flash"},
+    )
+
+    assert pipeline._should_accept_ocr_escalation(
+        primary,
+        balanced,
+        reason="exactness_risk",
+    ) is True
+
+
+def test_economy_ocr_escalates_to_balanced_quality_model(monkeypatch):
+    import build_structured_page_json as pipeline
+    from ocr_backend import DEFAULT_GEMINI_OCR_MODEL, ECONOMY_GEMINI_OCR_MODEL
+    from page_repair import build_ai_fallback_config
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    backend = pipeline._maybe_build_gemini_escalation(
+        ai_config=build_ai_fallback_config(mode="auto"),
+        primary_backend_name="gemini",
+        primary_model=ECONOMY_GEMINI_OCR_MODEL,
+    )
+
+    assert backend is not None
+    assert backend.model == DEFAULT_GEMINI_OCR_MODEL
+
+
 def test_explicit_backend_cache_hit_defers_backend_creation(monkeypatch, tmp_path):
     from PIL import Image
 
@@ -1042,8 +1114,8 @@ def test_gemini_ocr_model_not_found_falls_back_without_retry_sleep(monkeypatch):
     assert result.text == "recognized"
     assert sleep_calls == []
     assert sum("gemini-3.1-pro-preview" in url for url in urls) == 1
-    assert any("gemini-2.5-pro" in url for url in urls)
-    assert result.metadata["model"] == "gemini-2.5-pro"
+    assert any("gemini-3.6-flash" in url for url in urls)
+    assert result.metadata["model"] == "gemini-3.6-flash"
 
 
 def test_gemini_ocr_quota_error_does_not_retry_or_fallback(monkeypatch):
@@ -1156,6 +1228,9 @@ def test_gemini_ocr_model_can_be_overridden_with_flash(monkeypatch):
     assert any("gemini-3.5-flash" in url for url in urls)
     assert not any("gemini-2.5-pro" in url for url in urls)
     assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    prompt = payloads[0]["contents"][0]["parts"][1]["text"]
+    assert "Return visible Unicode/plain text, not LaTeX source" in prompt
+    assert "keep π as π and sin as sin" in prompt
 
 
 def test_default_gemini_ocr_model_is_flash_with_low_thinking(monkeypatch):
@@ -1169,7 +1244,7 @@ def test_default_gemini_ocr_model_is_flash_with_low_thinking(monkeypatch):
     assert backend.thinking_level == "low"
 
 
-def test_gemini_ocr_flash_fallback_does_not_send_thinking_level_to_25(monkeypatch):
+def test_gemini_ocr_flash_fallback_uses_current_flash_contract(monkeypatch):
     import json
     from io import BytesIO
     from urllib.error import HTTPError
@@ -1225,12 +1300,13 @@ def test_gemini_ocr_flash_fallback_does_not_send_thinking_level_to_25(monkeypatc
     result = backend.recognize(Image.new("RGB", (240, 120), "white"))
 
     assert result.text == "fallback ok"
-    assert result.metadata["model"] == "gemini-2.5-pro"
-    assert result.metadata["thinking_level"] == ""
+    assert result.metadata["model"] == "gemini-3.6-flash"
+    assert result.metadata["thinking_level"] == "low"
     assert any("gemini-3.5-flash" in url for url in urls)
-    assert any("gemini-2.5-pro" in url for url in urls)
+    assert any("gemini-3.6-flash" in url for url in urls)
     assert payloads[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
-    assert "thinkingConfig" not in payloads[1]["generationConfig"]
+    assert payloads[1]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert "temperature" not in payloads[1]["generationConfig"]
 
 
 def test_explicit_gemini_model_name_builds_matching_backend(monkeypatch):

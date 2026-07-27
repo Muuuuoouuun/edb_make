@@ -23,17 +23,19 @@ from structured_schema import Box
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_OCR_MODEL = "gemini-3.5-flash"
+ECONOMY_GEMINI_OCR_MODEL = "gemini-3.5-flash-lite"
+GEMINI_OCR_PROFILE_ENV = "EDB_GEMINI_OCR_PROFILE"
 GEMINI_OCR_MODEL_ENV = "EDB_GEMINI_OCR_MODEL"
 GEMINI_OCR_THINKING_LEVEL_ENV = "EDB_GEMINI_OCR_THINKING_LEVEL"
 DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL = "low"
-FALLBACK_GEMINI_OCR_MODEL = "gemini-2.5-pro"
+FALLBACK_GEMINI_OCR_MODEL = "gemini-3.6-flash"
 DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview", "gemini-3.1-pro-preview"}
 DEFAULT_GEMINI_FAILURE_BACKOFF_SECONDS = 8.0
 DEFAULT_GEMINI_FATAL_BACKOFF_SECONDS = 120.0
 MAX_GEMINI_FAILURE_BACKOFF_SECONDS = 300.0
 DEFAULT_OCR_NEGATIVE_CAPABILITY_TTL_SECONDS = 30.0
 OCR_CACHE_SCHEMA_VERSION = "ocr_result_v3"
-GEMINI_OCR_PROMPT_VERSION = "korean_exam_exact_text_v2"
+GEMINI_OCR_PROMPT_VERSION = "korean_exam_exact_text_v3"
 
 _OCR_CAPABILITY_LOCK = threading.RLock()
 _GEMINI_FAILURE_LOCK = threading.RLock()
@@ -106,7 +108,12 @@ def resolve_gemini_ocr_model(model: str | None = None) -> str:
     if requested:
         return requested
     env_model = os.environ.get(GEMINI_OCR_MODEL_ENV, "").strip()
-    return env_model or DEFAULT_GEMINI_OCR_MODEL
+    if env_model:
+        return env_model
+    profile = os.environ.get(GEMINI_OCR_PROFILE_ENV, "balanced").strip().lower()
+    if profile in {"economy", "economic", "low-cost", "lite"}:
+        return ECONOMY_GEMINI_OCR_MODEL
+    return DEFAULT_GEMINI_OCR_MODEL
 
 
 def resolve_gemini_ocr_thinking_level(model: str, thinking_level: str | None = None) -> str:
@@ -117,7 +124,9 @@ def resolve_gemini_ocr_thinking_level(model: str, thinking_level: str | None = N
     if env_level:
         return env_level
     normalized_model = (model or "").strip().lower()
-    if normalized_model == "gemini-3.5-flash":
+    if normalized_model == ECONOMY_GEMINI_OCR_MODEL:
+        return "minimal"
+    if normalized_model in {"gemini-3.5-flash", "gemini-3.6-flash"}:
         return DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL
     return ""
 
@@ -694,6 +703,8 @@ class GeminiOCRBackend(OCRBackend):
             "If a table or diagram is followed by numbered questions or answer choices, include those lines too. "
             "If multiple problem numbers are visible in one crop, include every problem number on its own line. "
             "Preserve Korean characters, math symbols, circled numbers ①②③④⑤, and ㄱ/ㄴ/ㄷ markers. "
+            "Return visible Unicode/plain text, not LaTeX source: keep π as π and sin as sin; "
+            "never rewrite them as \\pi, \\sin, or other backslash commands. "
             "Use \\n between visual lines. Keep digits, parentheses, and punctuation as-is. "
             "Classify the block by content:\n"
             "  - 'title' : a problem-number heading like '1.', '문제 3', '[4]'\n"
@@ -734,6 +745,9 @@ class GeminiOCRBackend(OCRBackend):
         def _body_for_model(model: str) -> bytes:
             generation_config = dict(payload["generationConfig"])
             generation_config.pop("thinkingConfig", None)
+            if model in {ECONOMY_GEMINI_OCR_MODEL, "gemini-3.6-flash"}:
+                # Newer Gemini models reject or ignore legacy sampling controls.
+                generation_config.pop("temperature", None)
             thinking_level = (
                 self.thinking_level
                 if model == self.model
@@ -1180,6 +1194,12 @@ def preferred_ocr_backend_name(name: str = "auto") -> str:
     normalized = str(name or "auto").strip().lower()
     if normalized in {"none", "noop"}:
         return "none"
+    if normalized in {"local", "offline"}:
+        if PaddleOCR is not None:
+            return "paddleocr"
+        if _tesseract_binary_available():
+            return "tesseract"
+        return "none"
     if normalized in {"paddle", "paddleocr"}:
         return "paddleocr"
     if normalized == "tesseract":
@@ -1199,6 +1219,23 @@ def build_ocr_backend(name: str = "auto", *, refresh_capabilities: bool = False)
     raw_name = (name or "auto").strip()
     normalized = raw_name.lower()
     if normalized in {"none", "noop"}:
+        return NoOcrBackend()
+    if normalized in {"local", "offline"}:
+        if PaddleOCR is not None:
+            try:
+                return PaddleOCRBackend()
+            except Exception:
+                pass
+        if _tesseract_binary_available(refresh=refresh_capabilities):
+            try:
+                return TesseractOCRBackend()
+            except Exception:
+                pass
+        print(
+            "[ocr_backend] WARNING: local OCR requested but no PaddleOCR or "
+            "Tesseract engine is available; using NoOcrBackend.",
+            flush=True,
+        )
         return NoOcrBackend()
     if normalized in {"paddle", "paddleocr"}:
         return PaddleOCRBackend()

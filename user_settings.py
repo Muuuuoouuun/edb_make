@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 _SETTINGS_FILENAME = "user_settings.json"
+_AI_ENABLED_KEY = "ai_enabled"
 
 
 def settings_path(runtime_dir: Path) -> Path:
@@ -29,6 +30,31 @@ def load_user_settings(runtime_dir: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8")) or {}
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def ai_enabled_from_settings(
+    settings: dict[str, Any] | None,
+    *,
+    default: bool = True,
+) -> bool:
+    """Return the persisted global AI preference.
+
+    Existing installations predate the switch, so a missing value keeps the
+    historical behavior (AI available when a provider key exists).
+    """
+    if not isinstance(settings, dict) or _AI_ENABLED_KEY not in settings:
+        return default
+    value = settings.get(_AI_ENABLED_KEY)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value or "").strip().lower()
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    return default
 
 
 def save_user_settings(runtime_dir: Path, settings: dict[str, Any]) -> Path:
@@ -122,6 +148,7 @@ def summarize_for_response(
     )
 
     return {
+        "aiEnabled": ai_enabled_from_settings(settings),
         "geminiApiKey": "",  # never echoed
         "geminiApiKeyPreview": gemini["preview"],
         "hasGeminiApiKey": gemini["has_key"],
@@ -151,6 +178,7 @@ def update_api_keys(
     *,
     gemini_api_key: str | None = None,
     openai_api_key: str | None = None,
+    ai_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """Persist supplied API keys and apply them to ``os.environ``.
 
@@ -167,6 +195,8 @@ def update_api_keys(
         _store_key(settings, "openai_api_key", openai_api_key)
         _sync_env_key("OPENAI_API_KEY", openai_api_key)
         env_overwrites = True
+    if ai_enabled is not None:
+        settings[_AI_ENABLED_KEY] = bool(ai_enabled)
     save_user_settings(runtime_dir, settings)
 
     return summarize_for_response(runtime_dir, env_overwrites=env_overwrites)
@@ -174,6 +204,10 @@ def update_api_keys(
 
 def update_openai_api_key(runtime_dir: Path, raw_key: str | None) -> dict[str, Any]:
     return update_api_keys(runtime_dir, openai_api_key=raw_key)
+
+
+def update_ai_enabled(runtime_dir: Path, enabled: bool) -> dict[str, Any]:
+    return update_api_keys(runtime_dir, ai_enabled=enabled)
 
 
 def _store_key(settings: dict[str, Any], key_name: str, raw_key: str | None) -> None:
