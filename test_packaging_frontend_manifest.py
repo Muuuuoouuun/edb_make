@@ -165,6 +165,9 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         )
         (vendor_root / "react.production.min.js").write_text("// react\n", encoding="utf-8")
         (vendor_root / "react-dom.production.min.js").write_text("// react-dom\n", encoding="utf-8")
+        if resource_rel == "_internal":
+            (package_root / f"{package_root.name}.exe").write_bytes(b"launcher")
+            (resource_root / "python312.dll").write_bytes(b"python runtime")
         return resource_root
 
     def _write_macos_info_plist(
@@ -314,6 +317,43 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             errors = collect_package_errors(package_root)
 
         self.assertTrue(any("release metadata" in error for error in errors))
+
+    def test_packaged_app_layout_accepts_custom_install_directory(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "custom-install-location"
+            self._write_packaged_runtime(package_root)
+            (package_root / "custom-install-location.exe").rename(package_root / "ClassInEDBMVP.exe")
+            (package_root / "unins000.exe").write_bytes(b"uninstaller")
+
+            errors = collect_package_errors(
+                package_root,
+                expected_app_name="ClassInEDBMVP",
+            )
+
+        self.assertEqual([], errors)
+
+    def test_packaged_app_layout_rejects_incomplete_windows_onedir_runtime(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (package_root / "ClassInEDBMVP.exe").unlink()
+            (resource_root / "python312.dll").unlink()
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("missing Windows packaged launcher" in error for error in errors))
+        self.assertTrue(any("missing Windows packaged Python runtime DLL" in error for error in errors))
+
+    def test_packaged_app_layout_rejects_nested_distribution_artifacts(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            self._write_packaged_runtime(package_root)
+            (package_root / "ClassInEDBMVP.zip").write_bytes(b"stale archive")
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("forbidden nested distribution artifact" in error for error in errors))
+        self.assertTrue(any("ClassInEDBMVP.zip" in error for error in errors))
 
     def test_packaged_app_layout_accepts_app_name_alias(self) -> None:
         with TemporaryDirectory() as raw_tmp:
@@ -895,7 +935,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("$PackageDirPath = Join-Path $ResolvedOutputDir $AppName", ps_source)
         self.assertIn('$SourcePackagePath = Join-Path $ResolvedOutputDir "source-package"', ps_source)
         self.assertIn('$WorkPath = Join-Path $ResolvedOutputDir "_pyinstaller_build"', ps_source)
-        cleanup_index = ps_source.index("foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath))")
+        cleanup_index = ps_source.index("foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath, $PortableReadmePath))")
         self.assertLess(cleanup_index, ps_source.index("$HasPyInstaller = $true"))
         self.assertIn("Remove-EDBPathIfExists $StalePath", ps_source)
         pyinstaller_index = ps_source.index("if ($HasPyInstaller)")
@@ -977,13 +1017,16 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         ps_source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
         self.assertIn("function Assert-EDBNonEmptyFile", ps_source)
         self.assertIn("function Assert-EDBZipContainsEntry", ps_source)
+        self.assertIn('$ZipPath = Join-Path $ResolvedOutputDir "$AppName-Portable.zip"', ps_source)
+        self.assertIn('$PortableReadmeName = "EXTRACT_BEFORE_RUNNING.txt"', ps_source)
         self.assertIn('Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"', ps_source)
         self.assertIn('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"', ps_source)
+        self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName $PortableReadmeName', ps_source)
         self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName.exe"', ps_source)
         self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName/$AppName.exe"', ps_source)
         self.assertIn('Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "source-package/app_update_config.json"', ps_source)
         self.assertLess(
-            ps_source.index("Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath"),
+            ps_source.index("Compress-Archive -Path @($PackageRoot, $PortableReadmePath) -DestinationPath $ZipPath"),
             ps_source.index('Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"'),
         )
         self.assertLess(

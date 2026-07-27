@@ -4926,6 +4926,38 @@ def _write_session_image_export_zip(
     }
 
 
+def _write_edb_export_zip(edb_paths: list[Path], bundle_name: str | None = None) -> dict[str, Any]:
+    resolved_paths = [Path(path).resolve() for path in edb_paths]
+    if len(resolved_paths) < 2:
+        raise ValueError("at least two EDB files are required for a bundle")
+    if any(path.suffix.lower() != ".edb" or not path.is_file() for path in resolved_paths):
+        raise ValueError("EDB bundle contains a missing or invalid file")
+
+    requested_name = sanitize_edb_file_name(bundle_name, fallback_stem=resolved_paths[0].stem)
+    safe_stem = sanitize_output_dir_name(Path(requested_name).stem or "classin").strip(" ._") or "classin"
+    export_dir = RUNTIME_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    digest_source = "|".join(str(path) for path in resolved_paths)
+    digest = hashlib.sha1(f"{digest_source}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
+    zip_path = (export_dir / f"{safe_stem}_files_{stamp}_{digest}.zip").resolve()
+
+    used_names: set[str] = set()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        for index, path in enumerate(resolved_paths, start=1):
+            arcname = path.name
+            if arcname.casefold() in used_names:
+                arcname = f"{Path(path.name).stem}_part{index:02d}.edb"
+            used_names.add(arcname.casefold())
+            archive.write(path, arcname)
+
+    return {
+        "zipPath": str(zip_path),
+        "fileName": zip_path.name,
+        "count": len(resolved_paths),
+    }
+
+
 def _mutate_exclude_many(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]:
     ids = _coerce_problem_ids(problem_ids)
     if not ids:
@@ -6781,6 +6813,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/export-images":
             self._run_artifact_job(self._handle_session_export_images)
             return
+        if parsed.path == "/api/session/export-edb":
+            self._handle_session_export_edb()
+            return
         if parsed.path == "/api/session/problem-image":
             self._handle_session_problem_image_post()
             return
@@ -7389,6 +7424,67 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "count": result["count"],
             "missing": result["missing"],
             "mode": result["mode"],
+        })
+
+    def _handle_session_export_edb(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        raw_paths = payload.get("edbPaths", payload.get("edb_paths"))
+        if not isinstance(raw_paths, list) or not raw_paths:
+            self._send_json({"ok": False, "error": "edbPaths is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        resolved_paths: list[Path] = []
+        seen_paths: set[str] = set()
+        for raw_path in raw_paths:
+            path = decode_file_reference(str(raw_path or ""))
+            if path is None or path.suffix.lower() != ".edb":
+                self._send_json({"ok": False, "error": "invalid EDB file path"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            normalized = str(path.resolve())
+            if normalized not in self.app_server.allowed_files:
+                self._send_json({"ok": False, "error": "EDB file not allowed"}, status=HTTPStatus.FORBIDDEN)
+                return
+            if not path.is_file():
+                self._send_json({"ok": False, "error": "EDB file not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if normalized not in seen_paths:
+                resolved_paths.append(path.resolve())
+                seen_paths.add(normalized)
+
+        if len(resolved_paths) == 1:
+            path = resolved_paths[0]
+            self._send_json({
+                "ok": True,
+                "downloadUrl": path_to_api_url(path),
+                "fileName": path.name,
+                "count": 1,
+                "bundled": False,
+            })
+            return
+
+        try:
+            result = _write_edb_export_zip(resolved_paths, payload.get("fileName") or payload.get("file_name"))
+        except (OSError, ValueError) as exc:
+            self._send_json(
+                {"ok": False, "error": f"failed to export EDB files: {exc}"},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        zip_path = Path(result["zipPath"]).resolve()
+        self.app_server.allowed_files.add(str(zip_path))
+        self._send_json({
+            "ok": True,
+            "downloadUrl": path_to_api_url(zip_path),
+            "zipPath": str(zip_path),
+            "fileName": result["fileName"],
+            "count": result["count"],
+            "bundled": True,
         })
 
     def _send_session_problem_image_response(self, session: dict[str, Any], problem_id: str, variant: str) -> None:
@@ -8029,14 +8125,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         mime_type, _ = mimetypes.guess_type(path.name)
+        attachment_suffixes = {".edb", ".zip"}
         if path.suffix.lower() == ".edb":
             mime_type = "application/octet-stream"
+        elif path.suffix.lower() == ".zip":
+            mime_type = "application/zip"
 
         file_size = path.stat().st_size
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("Content-Length", str(file_size))
-        if path.suffix.lower() == ".edb":
+        if path.suffix.lower() in attachment_suffixes:
             self.send_header("Content-Disposition", content_disposition_attachment(path.name))
         self.end_headers()
         with path.open("rb") as source:

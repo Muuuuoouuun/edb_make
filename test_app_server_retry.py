@@ -1192,6 +1192,31 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertIn(("Content-Length", str(len(payload))), headers)
             self.assertEqual(payload, handler.wfile.getvalue())
 
+    def test_file_download_marks_zip_as_attachment(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            artifact = tmpdir / "수업_EDB_파일.zip"
+            artifact.write_bytes(b"zip-payload")
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "allowed_files": {str(artifact.resolve())},
+            })()
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            handler._handle_file(app_server.urlparse(app_server.path_to_api_url(artifact)))
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            self.assertEqual("application/zip", dict(headers)["Content-Type"])
+            disposition = dict(headers)["Content-Disposition"]
+            self.assertIn("attachment", disposition)
+            self.assertIn("filename*=UTF-8''", disposition)
+
     def test_problem_image_download_streams_named_png_attachment(self):
         from PIL import Image
 
@@ -2321,6 +2346,53 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertTrue(body["downloadUrl"].startswith("/api/file?path="))
             self.assertIn(body["zipPath"], fake_server.allowed_files)
             self.assertTrue(Path(body["zipPath"]).exists())
+
+    def test_session_export_edb_handler_bundles_multiple_allowed_files(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            first = tmpdir / "수업_part01.edb"
+            second = tmpdir / "수업_part02.edb"
+            first.write_bytes(b"first-edb")
+            second.write_bytes(b"second-edb")
+            fake_server = type("FakeServer", (), {
+                "allowed_files": {str(first.resolve()), str(second.resolve())},
+            })()
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = fake_server
+            handler._read_json_body = lambda: {
+                "edbPaths": [str(first), str(second)],
+                "fileName": "수업.edb",
+            }
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            with patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"):
+                handler._handle_session_export_edb()
+
+            body = responses[0][0]
+            self.assertTrue(body["ok"])
+            self.assertTrue(body["bundled"])
+            self.assertEqual(2, body["count"])
+            self.assertTrue(body["downloadUrl"].startswith("/api/file?path="))
+            self.assertIn(body["zipPath"], fake_server.allowed_files)
+            with zipfile.ZipFile(body["zipPath"]) as archive:
+                self.assertEqual(b"first-edb", archive.read(first.name))
+                self.assertEqual(b"second-edb", archive.read(second.name))
+
+    def test_session_export_edb_handler_rejects_unregistered_file(self):
+        with TemporaryDirectory() as raw_tmp:
+            edb_path = Path(raw_tmp) / "blocked.edb"
+            edb_path.write_bytes(b"blocked")
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {"allowed_files": set()})()
+            handler._read_json_body = lambda: {"edbPaths": [str(edb_path)]}
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            handler._handle_session_export_edb()
+
+            self.assertFalse(responses[0][0]["ok"])
+            self.assertEqual(app_server.HTTPStatus.FORBIDDEN, responses[0][1]["status"])
 
 
 class TestExportErrorPayload(unittest.TestCase):

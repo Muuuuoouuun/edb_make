@@ -337,6 +337,45 @@ def _looks_like_source_package(package_root: Path) -> bool:
     )
 
 
+def _collect_windows_onedir_errors(
+    package_root: Path,
+    resource_root: Path,
+    *,
+    expected_app_name: str = "",
+) -> list[str]:
+    if resource_root != package_root / "_internal":
+        return []
+
+    errors: list[str] = []
+    expected_launcher = package_root / f"{expected_app_name}.exe" if expected_app_name else None
+    launcher_candidates = [
+        path
+        for path in package_root.glob("*.exe")
+        if path.is_file()
+        and not path.name.lower().startswith("unins")
+        and not path.name.lower().endswith("-setup.exe")
+    ]
+    if expected_launcher is not None and not expected_launcher.is_file():
+        errors.append(f"missing Windows packaged launcher: {expected_launcher.name}")
+    elif expected_launcher is None and not launcher_candidates:
+        errors.append("missing Windows packaged launcher executable")
+
+    python_dlls = [path for path in resource_root.glob("python3*.dll") if path.is_file()]
+    if not python_dlls:
+        errors.append("missing Windows packaged Python runtime DLL under _internal")
+
+    for candidate in package_root.iterdir():
+        if not candidate.is_file():
+            continue
+        lowered_name = candidate.name.lower()
+        if lowered_name.endswith((".zip", ".dmg")) or lowered_name.endswith("-setup.exe"):
+            errors.append(
+                "forbidden nested distribution artifact exists at package root: "
+                f"{candidate.name}"
+            )
+    return errors
+
+
 def collect_package_errors(
     package_root: Path,
     *,
@@ -381,6 +420,14 @@ def collect_package_errors(
         for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
             if not (root / rel_path).is_file():
                 errors.append(f"missing source-package runtime file: {rel_path}")
+    else:
+        errors.extend(
+            _collect_windows_onedir_errors(
+                root,
+                resource_root,
+                expected_app_name=expected_app_name,
+            )
+        )
 
     update_config_payloads: dict[str, list[str]] = {}
     for config_path in _packaged_update_config_paths(root, resource_roots):

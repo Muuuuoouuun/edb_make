@@ -4947,23 +4947,49 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   );
 }
 
-function downloadPublishSummary(target){
+async function downloadPublishSummary(target){
   if (!target?.canDownload) return;
   const parts = Array.isArray(target.edbParts) && target.edbParts.length
     ? target.edbParts
     : [target];
-  parts
-    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false)
-    .forEach((part, index) => {
-      window.setTimeout(() => {
-        const a = document.createElement('a');
-        a.href = part.edbFileUri || part.edb_file_uri;
-        a.download = part.edbFileName || part.edb_file_name || target.edbFileName || 'classin.edb';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, index * 150);
-    });
+  const downloadableParts = parts
+    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false);
+  if (!downloadableParts.length) return;
+
+  const edbPaths = downloadableParts
+    .map(part => part.edbPath || part.edb_path)
+    .filter(Boolean);
+  if (edbPaths.length === downloadableParts.length) {
+    try {
+      const resp = await fetch('/api/session/export-edb', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          edbPaths,
+          fileName: target.edbFileName || target.edb_file_name || downloadableParts[0]?.edbFileName || 'classin.edb',
+        }),
+      });
+      const json = await expectOkJson(resp, 'EDB 다운로드 준비 실패');
+      triggerServerFileDownload(json.downloadUrl);
+      return;
+    } catch (error) {
+      console.warn('[board] EDB bundle download failed:', error);
+      return;
+    }
+  }
+
+  const firstUri = downloadableParts[0]?.edbFileUri || downloadableParts[0]?.edb_file_uri;
+  if (firstUri) {
+    triggerServerFileDownload(firstUri);
+  }
+}
+
+function triggerServerFileDownload(downloadUrl){
+  const url = String(downloadUrl || '').trim();
+  if (!url) {
+    throw new Error('다운로드 URL이 없습니다');
+  }
+  window.location.assign(url);
 }
 
 async function openPublishedEdb(target){
@@ -10090,12 +10116,7 @@ function App(){
       if (!result?.downloadUrl) {
         throw new Error('다운로드 URL이 없습니다');
       }
-      const a = document.createElement('a');
-      a.href = result.downloadUrl;
-      a.download = result.fileName || `${(session.session_name || fileName || 'classin').trim() || 'classin'}_images.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      triggerServerFileDownload(result.downloadUrl);
       const missingCount = Array.isArray(result.missing) ? result.missing.length : 0;
       showToast(missingCount
         ? `PNG 묶음을 준비했어요 · 누락 ${missingCount}개는 manifest에서 확인`

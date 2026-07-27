@@ -207,9 +207,11 @@ Set-Content -LiteralPath (Join-Path $ResolvedOutputDir ".edb-packaging-output") 
 $PackageDirPath = Join-Path $ResolvedOutputDir $AppName
 $PackageExePath = Join-Path $ResolvedOutputDir "$AppName.exe"
 $SourcePackagePath = Join-Path $ResolvedOutputDir "source-package"
-$ZipPath = Join-Path $ResolvedOutputDir "$AppName.zip"
+$ZipPath = Join-Path $ResolvedOutputDir "$AppName-Portable.zip"
+$PortableReadmeName = "EXTRACT_BEFORE_RUNNING.txt"
+$PortableReadmePath = Join-Path $ResolvedOutputDir $PortableReadmeName
 $WorkPath = Join-Path $ResolvedOutputDir "_pyinstaller_build"
-foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath)) {
+foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePackagePath, $ZipPath, $PortableReadmePath)) {
     Remove-EDBPathIfExists $StalePath
 }
 $SpecDir = Join-Path $ResolvedOutputDir "_pyinstaller_spec"
@@ -478,8 +480,22 @@ if ($Zip) {
     }
 
     if (Test-Path $PackageRoot) {
-        Compress-Archive -Path $PackageRoot -DestinationPath $ZipPath
+        $PortableReadme = @"
+ClassIn EDB portable package
+
+IMPORTANT: Extract this zip completely before running the app.
+Do not double-click ClassInEDBMVP.exe while browsing inside the zip. Windows may copy only the launcher to a temporary folder, which prevents _internal\python*.dll from loading.
+
+Recommended distribution: use ClassInEDBMVP-Setup.exe instead of this portable archive.
+"@
+        Set-Content -LiteralPath $PortableReadmePath -Value $PortableReadme -Encoding UTF8
+        try {
+            Compress-Archive -Path @($PackageRoot, $PortableReadmePath) -DestinationPath $ZipPath
+        } finally {
+            Remove-EDBPathIfExists $PortableReadmePath
+        }
         Assert-EDBNonEmptyFile -Path $ZipPath -Label "Zip archive"
+        Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName $PortableReadmeName
         if ($BuiltWithPyInstaller -and $OneFile) {
             Assert-EDBZipContainsEntry -ZipPath $ZipPath -EntryName "$AppName.exe"
         } elseif ($BuiltWithPyInstaller) {
