@@ -1759,6 +1759,30 @@ class TestSessionClassifyMutation(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "classification must be"):
             app_server._mutate_classify({"problems": [{"id": "p1"}]}, "p1", "table")
 
+    def test_classify_many_updates_each_selected_problem(self):
+        session = {
+            "pages": [{"id": "page-1", "problemIds": ["p1", "p2", "p3"]}],
+            "problems": [
+                {"id": "p1", "sourcePageId": "page-1", "metadata": {}},
+                {"id": "p2", "sourcePageId": "page-1", "metadata": {}},
+                {"id": "p3", "sourcePageId": "page-1", "metadata": {}},
+            ],
+        }
+
+        updated = app_server._mutate_classify_many(
+            session,
+            ["p1", "p2", "p1"],
+            "shared-passage",
+        )
+        by_id = {problem["id"]: problem for problem in updated["problems"]}
+        self.assertEqual("passage_fragment", by_id["p1"]["passageRole"])
+        self.assertEqual("passage_fragment", by_id["p2"]["passageRole"])
+        self.assertNotIn("passageRole", by_id["p3"])
+
+    def test_classify_many_rejects_empty_ids(self):
+        with self.assertRaisesRegex(ValueError, "non-empty list"):
+            app_server._mutate_classify_many({"problems": [{"id": "p1"}]}, [], "question")
+
 
 class TestSessionCropMutation(unittest.TestCase):
     def test_bbox_crop_wraps_fractional_edges_outward(self):

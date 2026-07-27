@@ -24,6 +24,142 @@
     return items.map(itemId).filter(id => requested.has(id));
   }
 
+  function normalizeSelectionId(value) {
+    return value == null ? "" : String(value);
+  }
+
+  function orderedSelectionIds(orderedIds, selectedIds) {
+    if (!Array.isArray(orderedIds)) return [];
+    const requested = new Set((Array.isArray(selectedIds) ? selectedIds : [selectedIds])
+      .map(normalizeSelectionId)
+      .filter(Boolean));
+    const seen = new Set();
+    return orderedIds
+      .map(normalizeSelectionId)
+      .filter(id => id && requested.has(id) && !seen.has(id) && seen.add(id));
+  }
+
+  function selectionRange(orderedIds, anchorId, targetId) {
+    if (!Array.isArray(orderedIds)) return [];
+    const ids = orderedSelectionIds(orderedIds, orderedIds);
+    const anchor = normalizeSelectionId(anchorId);
+    const target = normalizeSelectionId(targetId);
+    const anchorIndex = ids.indexOf(anchor);
+    const targetIndex = ids.indexOf(target);
+    if (targetIndex < 0) return [];
+    if (anchorIndex < 0) return [target];
+    const start = Math.min(anchorIndex, targetIndex);
+    const end = Math.max(anchorIndex, targetIndex);
+    return ids.slice(start, end + 1);
+  }
+
+  function selectAllItems(orderedIds) {
+    return orderedSelectionIds(orderedIds, orderedIds);
+  }
+
+  function clearItemSelection() {
+    return [];
+  }
+
+  function applySelectionClick(orderedIds, selectedIds, anchorId, targetId, modifiers = {}) {
+    const ids = selectAllItems(orderedIds);
+    const current = orderedSelectionIds(ids, selectedIds);
+    const target = normalizeSelectionId(targetId);
+    const previousAnchor = normalizeSelectionId(anchorId);
+    const hasTarget = ids.includes(target);
+    if (!hasTarget) {
+      return {
+        selectedIds: current,
+        anchorId: ids.includes(previousAnchor) ? previousAnchor : null,
+      };
+    }
+
+    const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
+    const extending = Boolean(modifiers.shiftKey);
+    if (extending) {
+      const rangeAnchor = ids.includes(previousAnchor) ? previousAnchor : target;
+      const rangeIds = selectionRange(ids, rangeAnchor, target);
+      const nextIds = additive
+        ? orderedSelectionIds(ids, [...current, ...rangeIds])
+        : rangeIds;
+      return { selectedIds: nextIds, anchorId: rangeAnchor };
+    }
+
+    if (additive) {
+      const selected = new Set(current);
+      if (selected.has(target)) selected.delete(target);
+      else selected.add(target);
+      return {
+        selectedIds: orderedSelectionIds(ids, [...selected]),
+        anchorId: target,
+      };
+    }
+
+    return { selectedIds: [target], anchorId: target };
+  }
+
+  function selectionKeyboardCommand(
+    orderedIds,
+    selectedIds,
+    anchorId,
+    focusId,
+    key,
+    modifiers = {},
+  ) {
+    const ids = selectAllItems(orderedIds);
+    const current = orderedSelectionIds(ids, selectedIds);
+    const previousAnchor = normalizeSelectionId(anchorId);
+    const previousFocus = normalizeSelectionId(focusId);
+    const commandKey = String(key || "");
+    const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
+    const extending = Boolean(modifiers.shiftKey);
+    const validAnchor = ids.includes(previousAnchor) ? previousAnchor : "";
+    const validFocus = ids.includes(previousFocus)
+      ? previousFocus
+      : current[current.length - 1] || ids[0] || "";
+
+    if (commandKey.toLowerCase() === "a" && additive) {
+      if (extending) {
+        return { selectedIds: [], anchorId: null, focusId: validFocus || null };
+      }
+      return {
+        selectedIds: ids,
+        anchorId: validAnchor || validFocus || null,
+        focusId: validFocus || null,
+      };
+    }
+
+    if (commandKey === "Escape") {
+      return { selectedIds: [], anchorId: null, focusId: validFocus || null };
+    }
+
+    const delta = commandKey === "ArrowUp" ? -1 : commandKey === "ArrowDown" ? 1 : 0;
+    if (!delta || !ids.length) {
+      return {
+        selectedIds: current,
+        anchorId: validAnchor || null,
+        focusId: validFocus || null,
+      };
+    }
+
+    const currentIndex = Math.max(0, ids.indexOf(validFocus));
+    const targetIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + delta));
+    const target = ids[targetIndex];
+    if (extending) {
+      const rangeAnchor = validAnchor || validFocus || target;
+      const rangeIds = selectionRange(ids, rangeAnchor, target);
+      return {
+        selectedIds: additive
+          ? orderedSelectionIds(ids, [...current, ...rangeIds])
+          : rangeIds,
+        anchorId: rangeAnchor,
+        focusId: target,
+      };
+    }
+
+    return { selectedIds: [target], anchorId: target, focusId: target };
+  }
+
   function reorderItemGroupForDrop(items, fromIds, toId, position) {
     if (!Array.isArray(items)) return items;
     const sourceIds = orderedItemIds(items, fromIds);
@@ -190,14 +326,20 @@
     BEFORE,
     adjacentGroupReorderCommand,
     adjacentReorderCommand,
+    applySelectionClick,
     appendBoundedHistory,
+    clearItemSelection,
     dropPositionFromClientY,
     edgeAutoScrollDelta,
     nearestPlacementIndex,
     normalizeDropPosition,
+    orderedSelectionIds,
     problemDisplayName,
     problemSourceLabel,
     reorderItemGroupForDrop,
     reorderItemsForDrop,
+    selectAllItems,
+    selectionKeyboardCommand,
+    selectionRange,
   };
 });

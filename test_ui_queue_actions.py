@@ -425,7 +425,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("clampManualSplitStampBox", source)
         self.assertIn("const nextSession = await mutateSession?.('bulk-crop', payload);", source)
         self.assertIn("if (!nextSession) return;", source)
-        self.assertIn("const [reviewZoom, setReviewZoom] = useState(1)", source)
+        self.assertIn("const reviewZoom = clampReviewZoom(reviewUi?.zoom || 1)", source)
+        self.assertIn("updateReviewUiField('zoom', value)", source)
         self.assertIn("onWheel={handleReviewWheel}", source)
         self.assertIn("review-zoom-controls", source)
         key_handler = source.split("const onKeyDown = (evt) => {", 1)[1]

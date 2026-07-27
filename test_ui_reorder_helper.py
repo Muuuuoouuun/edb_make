@@ -13,6 +13,136 @@ def run_node(script: str) -> None:
 
 
 class TestUiReorderHelper(unittest.TestCase):
+    def test_selection_click_supports_shift_range_and_plain_reset(self) -> None:
+        run_node(
+            """
+            const { applySelectionClick } = require('./ui_prototype/reorder.js');
+            const ids = ['a', 'b', 'c', 'd', 'e'];
+            const ranged = applySelectionClick(ids, ['b'], 'b', 'd', { shiftKey: true });
+            if (JSON.stringify(ranged) !== JSON.stringify({ selectedIds: ['b', 'c', 'd'], anchorId: 'b' })) {
+              throw new Error(`shift range failed: ${JSON.stringify(ranged)}`);
+            }
+            const reversed = applySelectionClick(ids, ranged.selectedIds, ranged.anchorId, 'a', { shiftKey: true });
+            if (JSON.stringify(reversed) !== JSON.stringify({ selectedIds: ['a', 'b'], anchorId: 'b' })) {
+              throw new Error(`reverse shift range failed: ${JSON.stringify(reversed)}`);
+            }
+            const reset = applySelectionClick(ids, reversed.selectedIds, reversed.anchorId, 'e');
+            if (JSON.stringify(reset) !== JSON.stringify({ selectedIds: ['e'], anchorId: 'e' })) {
+              throw new Error(`plain click should reset selection: ${JSON.stringify(reset)}`);
+            }
+            """
+        )
+
+    def test_selection_click_supports_ctrl_and_command_toggle(self) -> None:
+        run_node(
+            """
+            const { applySelectionClick } = require('./ui_prototype/reorder.js');
+            const ids = ['a', 'b', 'c', 'd'];
+            const added = applySelectionClick(ids, ['b'], 'b', 'd', { ctrlKey: true });
+            if (JSON.stringify(added) !== JSON.stringify({ selectedIds: ['b', 'd'], anchorId: 'd' })) {
+              throw new Error(`ctrl add failed: ${JSON.stringify(added)}`);
+            }
+            const removed = applySelectionClick(ids, added.selectedIds, added.anchorId, 'b', { metaKey: true });
+            if (JSON.stringify(removed) !== JSON.stringify({ selectedIds: ['d'], anchorId: 'b' })) {
+              throw new Error(`command remove failed: ${JSON.stringify(removed)}`);
+            }
+            """
+        )
+
+    def test_selection_click_supports_additive_modifier_range(self) -> None:
+        run_node(
+            """
+            const { applySelectionClick } = require('./ui_prototype/reorder.js');
+            const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+            const result = applySelectionClick(
+              ids,
+              ['a', 'd'],
+              'd',
+              'f',
+              { ctrlKey: true, shiftKey: true },
+            );
+            if (JSON.stringify(result) !== JSON.stringify({
+              selectedIds: ['a', 'd', 'e', 'f'],
+              anchorId: 'd',
+            })) {
+              throw new Error(`additive range failed: ${JSON.stringify(result)}`);
+            }
+            """
+        )
+
+    def test_selection_helpers_select_all_and_clear_in_board_order(self) -> None:
+        run_node(
+            """
+            const {
+              clearItemSelection,
+              orderedSelectionIds,
+              selectAllItems,
+              selectionKeyboardCommand,
+            } = require('./ui_prototype/reorder.js');
+            const ids = ['a', 'b', 'b', null, 'c'];
+            if (JSON.stringify(selectAllItems(ids)) !== JSON.stringify(['a', 'b', 'c'])) {
+              throw new Error(`select all should normalize ids: ${JSON.stringify(selectAllItems(ids))}`);
+            }
+            if (JSON.stringify(orderedSelectionIds(ids, ['c', 'missing', 'a'])) !== JSON.stringify(['a', 'c'])) {
+              throw new Error('selected ids should follow board order');
+            }
+            if (JSON.stringify(clearItemSelection()) !== '[]') throw new Error('clear failed');
+            const all = selectionKeyboardCommand(ids, ['b'], 'b', 'b', 'a', { metaKey: true });
+            if (JSON.stringify(all.selectedIds) !== JSON.stringify(['a', 'b', 'c'])) {
+              throw new Error(`command+a failed: ${JSON.stringify(all)}`);
+            }
+            const cleared = selectionKeyboardCommand(ids, all.selectedIds, all.anchorId, all.focusId, 'A', {
+              ctrlKey: true,
+              shiftKey: true,
+            });
+            if (cleared.selectedIds.length || cleared.anchorId !== null) {
+              throw new Error(`ctrl+shift+a failed: ${JSON.stringify(cleared)}`);
+            }
+            """
+        )
+
+    def test_selection_keyboard_command_extends_and_contracts_range(self) -> None:
+        run_node(
+            """
+            const { selectionKeyboardCommand } = require('./ui_prototype/reorder.js');
+            const ids = ['a', 'b', 'c', 'd', 'e'];
+            const down = selectionKeyboardCommand(ids, ['b'], 'b', 'b', 'ArrowDown', { shiftKey: true });
+            if (JSON.stringify(down) !== JSON.stringify({
+              selectedIds: ['b', 'c'],
+              anchorId: 'b',
+              focusId: 'c',
+            })) {
+              throw new Error(`shift+down failed: ${JSON.stringify(down)}`);
+            }
+            const downAgain = selectionKeyboardCommand(
+              ids,
+              down.selectedIds,
+              down.anchorId,
+              down.focusId,
+              'ArrowDown',
+              { shiftKey: true },
+            );
+            if (JSON.stringify(downAgain.selectedIds) !== JSON.stringify(['b', 'c', 'd'])) {
+              throw new Error(`second shift+down failed: ${JSON.stringify(downAgain)}`);
+            }
+            const up = selectionKeyboardCommand(
+              ids,
+              downAgain.selectedIds,
+              downAgain.anchorId,
+              downAgain.focusId,
+              'ArrowUp',
+              { shiftKey: true },
+            );
+            if (JSON.stringify(up) !== JSON.stringify({
+              selectedIds: ['b', 'c'],
+              anchorId: 'b',
+              focusId: 'c',
+            })) {
+              throw new Error(`shift+up should contract range: ${JSON.stringify(up)}`);
+            }
+            """
+        )
+
     def test_adjacent_reorder_command_supports_keyboard_moves(self) -> None:
         run_node(
             """

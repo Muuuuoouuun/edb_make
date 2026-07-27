@@ -6069,6 +6069,23 @@ def _mutate_classify(session: dict[str, Any], problem_id: str, classification: s
     return session
 
 
+def _mutate_classify_many(
+    session: dict[str, Any],
+    problem_ids: Any,
+    classification: str,
+) -> dict[str, Any]:
+    if not isinstance(problem_ids, list) or not problem_ids:
+        raise ValueError("problemIds must be a non-empty list")
+    ordered_ids = list(dict.fromkeys(str(value or "").strip() for value in problem_ids))
+    ordered_ids = [problem_id for problem_id in ordered_ids if problem_id]
+    if not ordered_ids:
+        raise ValueError("problemIds must contain at least one id")
+    for problem_id in ordered_ids:
+        _mutate_classify(session, problem_id, classification)
+    _refresh_session_problem_counts(session)
+    return session
+
+
 def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
@@ -7316,9 +7333,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     ids_raw = [payload.get("problemId", payload.get("problem_id"))]
                 new_session = _mutate_confirm(session, ids_raw)
             elif action == "classify":
-                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                 classification = str(payload.get("classification") or "")
-                new_session = _mutate_classify(session, problem_id, classification)
+                ids_raw = payload.get("problemIds", payload.get("problem_ids"))
+                if ids_raw is not None:
+                    new_session = _mutate_classify_many(session, ids_raw, classification)
+                else:
+                    problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                    new_session = _mutate_classify(session, problem_id, classification)
             elif action in {"retry-ai", "retry_ai"}:
                 new_session = _mutate_retry_ai(session, payload)
             elif action in {"enhance-image", "enhance_image"}:
