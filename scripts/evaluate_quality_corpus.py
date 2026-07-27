@@ -16,6 +16,7 @@ import re
 import sys
 import zipfile
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -426,7 +427,12 @@ def _path_from_session_uri(raw: Any) -> Path | None:
     value = raw.strip()
     if value.startswith("file:"):
         parsed = urlparse(value)
-        return Path(unquote(parsed.path))
+        if parsed.scheme != "file":
+            return None
+        path = Path(url2pathname(unquote(parsed.path)))
+        if parsed.netloc and parsed.netloc.lower() != "localhost":
+            path = Path(f"//{parsed.netloc}{path}")
+        return path
     if "://" in value:
         return None
     return Path(value)

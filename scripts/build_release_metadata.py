@@ -258,7 +258,14 @@ def collect_release_policy_errors(project_root: Path) -> list[str]:
     except (OSError, ValueError) as exc:
         errors.append(str(exc))
         ci_entries = []
-    expected_ci_names = {"pytest", "iniconfig", "packaging", "pluggy", "pygments"}
+    expected_ci_names = {
+        "pytest",
+        "iniconfig",
+        "packaging",
+        "pluggy",
+        "pygments",
+        "colorama",
+    }
     ci_names = {canonicalize_name(requirement.name) for requirement, _hashes in ci_entries}
     if ci_names != expected_ci_names:
         errors.append(f"CI lock dependency set mismatch: expected {sorted(expected_ci_names)}, found {sorted(ci_names)}")
