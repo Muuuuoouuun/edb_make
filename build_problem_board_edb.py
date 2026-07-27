@@ -20,7 +20,7 @@ from urllib.request import url2pathname
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
-from ai_usage import aggregate_token_usage
+from ai_usage import aggregate_token_usage, summarize_ai_cost
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
@@ -184,6 +184,9 @@ PASSAGE_JOIN_EXCESS_BLANK_MIN_PX = 24
 # Crop and cutout PNGs are temporary export assets. A moderate compression
 # level keeps them pixel-identical while avoiding Pillow's slower default
 # encoder setting on long Korean passage images.
+# Runtime artifacts are short-lived and wrapped by the final EDB container.
+# Level 3 keeps their encode cost moderate without the large file-size
+# inflation observed at level 1 on dense, high-resolution exam pages.
 INTERMEDIATE_PNG_COMPRESSION_LEVEL = 3
 PASSAGE_JOIN_TOP_RULE_MAX_RATIO = 0.32
 PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO = 0.45
@@ -204,6 +207,20 @@ RECONSTRUCT_TARGET_MIN_WIDTH_PX = 1600
 RECONSTRUCT_MAX_UPSCALE = 3.5
 TEXT_PRIORITY_SUBJECTS = {"korean", "english", "social"}
 HIGH_FIDELITY_IMAGE_SUBJECTS = TEXT_PRIORITY_SUBJECTS | {"math", "science"}
+UNKNOWN_SUBJECT_VALUES = {"", "unknown", "none", "auto"}
+MATH_SOURCE_HINT_MARKERS = (
+    "\uc218\ud559",
+    "\uc218\ub9ac",
+    "\ubbf8\uc801\ubd84",
+    "\ud655\ub960\uacfc\ud1b5\uacc4",
+    "\ud655\ub960\uacfc \ud1b5\uacc4",
+    "\uae30\ud558",
+    "\ub300\uc218",
+    "calculus",
+    "geometry",
+    "algebra",
+)
+MATH_SOURCE_HINT_RE = re.compile(r"(?<![a-z])math(?:ematics)?(?![a-z])", re.IGNORECASE)
 TEXT_DEHALO_ALPHA_CUTOFF = 12
 TEXT_PRIORITY_UNSHARP_RADIUS = 0.6
 TEXT_PRIORITY_UNSHARP_PERCENT = 70
@@ -1608,11 +1625,36 @@ def _load_board_export_image(
     board_theme: str = DEFAULT_BOARD_THEME,
     target_size: tuple[int, int] | None = None,
     text_priority: bool = False,
+    trusted_preprocessed_render: bool = False,
 ) -> Image.Image:
     chalk_color = _resolve_chalk_color(board_theme)
+    rendered: Image.Image | None = None
+    if trusted_preprocessed_render:
+        try:
+            with Image.open(board_render_path) as loaded_render:
+                rendered = loaded_render.convert(
+                    "RGBA" if "A" in loaded_render.getbands() else "RGB"
+                )
+        except OSError:
+            rendered = None
+        if (
+            rendered is not None
+            and "A" in rendered.getbands()
+            and rendered.getchannel("A").getextrema()[0] < 245
+        ):
+            if target_size is not None and rendered.size != target_size:
+                rendered = rendered.resize(target_size, Image.Resampling.LANCZOS)
+            # Fresh pipeline renders have already completed the expensive
+            # extraction/finalization pass. The record builder performs the
+            # one final normalization after any required resize.
+            return rendered
+
     if text_priority:
         # Rebuild dense text from the raw crop instead of reusing the generic
-        # board render, which may already contain diagram-oriented dilation.
+        # or external board render, which may already contain
+        # diagram-oriented dilation. Fresh renders produced in this same
+        # pipeline are explicitly trusted above because they already used the
+        # identical text-priority extraction path.
         cutout = _extract_problem_cutout(
             _enhance_problem_crop(crop_image, text_priority=True),
             chalk_color=chalk_color,
@@ -1622,10 +1664,11 @@ def _load_board_export_image(
             cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
         return _finalize_text_cutout(cutout, chalk_color=chalk_color)
 
-    try:
-        rendered = Image.open(board_render_path)
-    except OSError:
-        rendered = None
+    if rendered is None:
+        try:
+            rendered = Image.open(board_render_path)
+        except OSError:
+            rendered = None
 
     if rendered is not None:
         if target_size is not None and rendered.size != target_size:
@@ -1703,6 +1746,8 @@ def _encode_image_bytes(image: Image.Image, quality: int = 92) -> tuple[bytes, s
     buf = io.BytesIO()
     has_alpha = "A" in image.getbands()
     if has_alpha:
+        # Final EDB payloads keep Pillow's normal compression level. Temporary
+        # pipeline images use the faster intermediate setting above.
         image.save(buf, format="PNG")
         return buf.getvalue(), "PNG"
     image.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
@@ -1750,6 +1795,7 @@ class ProblemEntry:
     input_intent: str | None = None
     force_full_page_bounds: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    board_render_preprocessed: bool = False
 
 
 @dataclass(slots=True)
@@ -1764,10 +1810,12 @@ class _ProblemAssetTask:
     text_title: str | None = None
     trim_edge_guides: bool = True
     preserve_horizontal_bounds: bool = False
+    protect_horizontal_bounds: bool = False
     horizontal_safe_padding_px: int = 0
     text_priority: bool = False
     pad_edges: bool = True
     subject: Subject = Subject.UNKNOWN
+    source_hints: tuple[str, ...] = ()
     source_media_regions: tuple[dict[str, Any], ...] = ()
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
 
@@ -2084,16 +2132,33 @@ def _apply_selective_media_preservation(
     return output
 
 
+def _source_hints_suggest_math(*source_hints: Any) -> bool:
+    """Infer a math document locally without rewriting its subject metadata."""
+    hint_text = unquote(" ".join(str(value or "") for value in source_hints)).lower()
+    return any(marker in hint_text for marker in MATH_SOURCE_HINT_MARKERS) or bool(
+        MATH_SOURCE_HINT_RE.search(hint_text)
+    )
+
+
 def _stage2_prefers_chalk_math_media(
     subject: Subject | str,
     processing_step: str,
+    *source_hints: Any,
 ) -> bool:
-    """Keep math figures in the legacy Stage-2 chalk treatment."""
+    """Keep math figures in the Stage-2 chalk treatment.
+
+    Recognition intentionally leaves the subject open-ended. When it is
+    unknown, use source-local evidence only for this rendering decision; do
+    not persist or otherwise coerce the problem subject.
+    """
     subject_value = subject.value if isinstance(subject, Subject) else str(subject).strip().lower()
-    return (
-        subject_value == Subject.MATH.value
-        and _normalize_processing_step(processing_step) == PROCESSING_STEP_CHALK
-    )
+    if _normalize_processing_step(processing_step) != PROCESSING_STEP_CHALK:
+        return False
+    if subject_value == Subject.MATH.value:
+        return True
+    if subject_value not in UNKNOWN_SUBJECT_VALUES:
+        return False
+    return _source_hints_suggest_math(*source_hints)
 
 
 def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> None:
@@ -2109,10 +2174,14 @@ def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> N
             enhanced_crop,
             chalk_color=task.chalk_color,
         )
-    if not _stage2_prefers_chalk_math_media(task.subject, PROCESSING_STEP_CHALK):
-        # Math diagrams are usually dark line art on white. The Stage-2
-        # cutout above turns them into bright chalk strokes on transparency;
-        # restoring their source pixels would reintroduce an opaque white box.
+    # Math diagrams are usually dark line art on white. The Stage-2 cutout
+    # above turns them into bright chalk strokes on transparency, so restoring
+    # their source pixels would reintroduce an opaque white box.
+    if not _stage2_prefers_chalk_math_media(
+        task.subject,
+        PROCESSING_STEP_CHALK,
+        *task.source_hints,
+    ):
         cutout_image = _apply_selective_media_preservation(
             cutout_image,
             crop,
@@ -2168,9 +2237,17 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             segment, horizontal_trim_px = _trim_source_page_chrome_with_offset(
                 segment,
                 preserve_horizontal_bounds=(
-                    task.preserve_horizontal_bounds or task.text_priority
+                    task.preserve_horizontal_bounds
+                    or task.protect_horizontal_bounds
+                    or task.text_priority
                 ),
             )
+            if (
+                task.protect_horizontal_bounds
+                and not task.preserve_horizontal_bounds
+                and not task.text_priority
+            ):
+                segment = _erase_corner_page_badges(segment)
             if task.text_priority and not task.preserve_horizontal_bounds:
                 segment = _trim_text_priority_bottom_page_badge(segment)
         left_padding_px = 0
@@ -2180,7 +2257,7 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
                 task.horizontal_safe_padding_px,
                 (
                     TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX
-                    if task.text_priority
+                    if task.text_priority or task.protect_horizontal_bounds
                     else 0
                 ),
             )
@@ -2197,6 +2274,10 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             # the same corner, width, and isolation requirements.
             if task.text_priority and not task.preserve_horizontal_bounds:
                 segment = _trim_text_priority_bottom_page_badge(segment)
+            if (
+                (task.text_priority or task.protect_horizontal_bounds)
+                and not task.preserve_horizontal_bounds
+            ):
                 segment = _erase_text_priority_unpaired_outer_vertical_guide(segment)
         flattened = _flatten_passage_segment_on_white(segment)
         mapped_regions = _map_source_media_regions_to_crop(
@@ -4185,6 +4266,24 @@ def _materialize_pdf_pre_question_passage_continuations(
             if first_top <= float(page.height_px) * 0.08:
                 continue
             column_index = _problem_column_value(first_child, block_by_id)
+            # A real numbered question before the first passage child means
+            # the upper column is occupied by that question, not by a
+            # cross-page passage continuation. Without this guard, Korean
+            # elective pages such as Q42 followed by the 43~45 passage can
+            # materialize Q42 as a supplemental passage and clamp its own
+            # crop to a one-pixel strip.
+            intervening_problem = any(
+                problem.unit_id != first_child.unit_id
+                and not _problem_is_passage_fragment_unit(problem)
+                and _problem_metadata_number(problem) is not None
+                and _problem_column_value(problem, block_by_id) == column_index
+                and float(page.height_px) * 0.04
+                <= _problem_top_y(problem, block_by_id)
+                < first_top
+                for problem in page.problems
+            )
+            if intervening_problem:
+                continue
             column_blocks = [
                 block
                 for block in page.blocks
@@ -5809,6 +5908,7 @@ def build_problem_entries(
                         text_title=problem_title if text_fallback_payload else None,
                         trim_edge_guides=not preserve_page_as_is,
                         preserve_horizontal_bounds=passage_fragment_problem,
+                        protect_horizontal_bounds=trusted_pdf_marker_problem,
                         horizontal_safe_padding_px=(
                             PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX
                             if passage_fragment_problem
@@ -5821,6 +5921,11 @@ def build_problem_entries(
                         ),
                         pad_edges=not preserve_page_as_is,
                         subject=problem.subject,
+                        source_hints=(
+                            prepared_page.source_path,
+                            page.page_id,
+                            problem_title,
+                        ),
                         source_media_regions=(
                             tuple(
                                 region
@@ -5875,6 +5980,7 @@ def build_problem_entries(
                 input_intent=draft.input_intent,
                 force_full_page_bounds=draft.force_full_page_bounds,
                 preserve_media_regions=list(draft.preserve_media_regions),
+                board_render_preprocessed=draft.asset_task is not None,
             )
         )
     return entries
@@ -5990,6 +6096,7 @@ def _summarize_ocr_usage(pages: list[PageModel]) -> dict[str, Any]:
         "populated_text_block_count": populated_text_count,
         "no_ocr_fallback_active": primary_backend == "none",
         "token_usage": aggregate_token_usage(token_usage_events),
+        "token_usage_events": token_usage_events,
     }
 
 
@@ -6119,11 +6226,26 @@ def _summarize_ai_fallback_usage(pages: list[PageModel], ai_fallback_config: dic
         "route_tier_counts": route_tier_counts,
         "model_fallbacks": model_fallbacks,
         "token_usage": aggregate_token_usage(token_usage_events),
+        "token_usage_events": token_usage_events,
         "stages": sorted(
             stage_totals.values(),
             key=lambda item: (int(item.get("order") or 999), str(item.get("stage") or "")),
         ),
     }
+
+
+def _combined_ai_usage_events(
+    ocr_summary: dict[str, Any] | None,
+    ai_summary: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for summary in (ocr_summary, ai_summary):
+        if not isinstance(summary, dict):
+            continue
+        raw_events = summary.get("token_usage_events")
+        if isinstance(raw_events, list):
+            events.extend(dict(event) for event in raw_events if isinstance(event, dict))
+    return events
 
 
 def _template_to_dict(template: LayoutTemplate) -> dict[str, Any]:
@@ -7192,6 +7314,17 @@ def _problem_payload_image_path(problem: dict[str, Any]) -> Path | None:
 
 
 def _problem_payload_uses_text_edge_guard(problem: dict[str, Any]) -> bool:
+    input_intent = _normalize_input_intent(
+        str(problem.get("inputIntent") or problem.get("input_intent") or "")
+    )
+    force_full_page_bounds = bool(
+        problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")
+    )
+    if input_intent == "page-as-is" and force_full_page_bounds:
+        # A full-page export has no synthetic horizontal crop seam. Scanning
+        # every page for seam-adjacent glyphs cannot detect a real clipping
+        # risk here and becomes noticeable on long exam documents.
+        return False
     subject = str(problem.get("subject") or "").strip().lower()
     return subject in {
         Subject.KOREAN.value,
@@ -8503,6 +8636,7 @@ def build_ui_session(
     ai_summary: dict[str, Any] | None = None,
     ocr_summary: dict[str, Any] | None = None,
     token_usage: dict[str, Any] | None = None,
+    ai_cost_summary: dict[str, Any] | None = None,
     pages: list[PageModel] | None = None,
     template: LayoutTemplate | None = None,
     input_intent: str = "auto",
@@ -8805,6 +8939,8 @@ def build_ui_session(
         "ai_summary": ai_summary,
         "ocr_summary": ocr_summary,
         "token_usage": token_usage,
+        "ai_cost_summary": ai_cost_summary,
+        "aiCostSummary": ai_cost_summary,
         "warning_messages": warning_messages,
         "problems": problems,
         "pages": pages_payload,
@@ -9484,9 +9620,23 @@ def _build_image_only_record_image(
         entry.title,
     )
     chalk_color = _resolve_chalk_color(board_theme)
+    chalk_math_media = _stage2_prefers_chalk_math_media(
+        entry.subject,
+        processing_step,
+        entry.source_path,
+        entry.source_page_id,
+        entry.title,
+    )
     crop_path = Path(str(placement.metadata["crop_path"]))
     board_render_path = Path(str(placement.metadata["board_render_path"]))
+    reuse_raw_page_bytes = (
+        continuous_flow
+        and entry.force_full_page_bounds
+        and processing_step == PROCESSING_STEP_RAW
+        and crop_format == CROP_FORMAT_V1
+    )
     with Image.open(crop_path) as loaded_crop:
+        source_format = str(loaded_crop.format or "").upper()
         if not generate_record:
             source_width, source_height = loaded_crop.size
             scale_ratio: float | None = None
@@ -9530,12 +9680,32 @@ def _build_image_only_record_image(
             )
         crop_image = loaded_crop.convert("RGBA" if "A" in loaded_crop.getbands() else "RGB")
         source_width, source_height = loaded_crop.size
-    if dark_board and processing_step == PROCESSING_STEP_RECONSTRUCT:
+    if reuse_raw_page_bytes:
+        # "Page as-is" is both a layout and fidelity contract. Reusing the
+        # normalized source avoids a redundant background-removal pass and a
+        # lossy or CPU-heavy re-encode while keeping every source pixel.
+        board_image = crop_image
+    elif (
+        dark_board
+        and processing_step == PROCESSING_STEP_RECONSTRUCT
+        and not entry.board_render_preprocessed
+    ):
         board_image = _build_transparent_reconstruction_image(
             crop_image,
             board_theme=board_theme,
             text_priority=text_priority,
         )
+    elif dark_board and chalk_math_media and not entry.board_render_preprocessed:
+        # Older sessions may already contain a Stage-2 board render whose
+        # detected figure was restored as an opaque source patch. Rebuild the
+        # chalk cutout from the immutable crop so those legacy white boxes do
+        # not survive a fresh EDB export.
+        board_image = _extract_problem_cutout(
+            _enhance_problem_crop(crop_image),
+            chalk_color=chalk_color,
+        )
+        if crop_format == CROP_FORMAT_V1 and board_image.size != crop_image.size:
+            board_image = board_image.resize(crop_image.size, Image.Resampling.LANCZOS)
     elif dark_board:
         board_image = _load_board_export_image(
             board_render_path,
@@ -9543,6 +9713,7 @@ def _build_image_only_record_image(
             board_theme=board_theme,
             target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
             text_priority=text_priority,
+            trusted_preprocessed_render=entry.board_render_preprocessed,
         )
     else:
         board_image = crop_image
@@ -9570,17 +9741,18 @@ def _build_image_only_record_image(
         display_width = float(board_image.width)
         display_height = float(board_image.height)
 
-    if dark_board and text_priority:
+    if dark_board and (text_priority or chalk_math_media):
         # Resizing can create fresh subpixel alpha dust. Normalize once at the
         # final encoded size so the EDB itself, not only the preview asset, is
-        # guaranteed to be halo-free and single-tone.
+        # guaranteed to be halo-free and single-tone. This also prevents math
+        # figure strokes from drifting toward white after legacy-render repair.
         board_image = _finalize_text_cutout(board_image, chalk_color=chalk_color)
 
     if (
         dark_board
         and processing_step != PROCESSING_STEP_RECONSTRUCT
         and entry.preserve_media_regions
-        and not _stage2_prefers_chalk_math_media(entry.subject, processing_step)
+        and not chalk_math_media
     ):
         # Text-priority exports rebuild and normalize the cutout at final size.
         # Restore media last so photos, table shading, legends, and colors can
@@ -9600,7 +9772,15 @@ def _build_image_only_record_image(
         )
         else DEFAULT_IMAGE_RECORD_JPEG_QUALITY
     )
-    image_bytes, image_format = _encode_image_bytes(board_image, quality=jpeg_quality)
+    if (
+        reuse_raw_page_bytes
+        and source_format in {"PNG", "JPEG", "JPG"}
+        and board_image.size == (source_width, source_height)
+    ):
+        image_bytes = crop_path.read_bytes()
+        image_format = "JPEG" if source_format == "JPG" else source_format
+    else:
+        image_bytes, image_format = _encode_image_bytes(board_image, quality=jpeg_quality)
     if crop_format == CROP_FORMAT_V2:
         secondary_bytes = build_tight_crop_image_bytes(
             image_bytes, format_hint=image_format, quality=88
@@ -10526,6 +10706,9 @@ def run_problem_export(
             ai_summary.get("token_usage") if isinstance(ai_summary, dict) else None,
         ]
     )
+    ai_cost_summary = summarize_ai_cost(
+        _combined_ai_usage_events(ocr_summary, ai_summary)
+    )
     if resolved_input_intent != "page-as-is" and ocr_summary["no_ocr_fallback_active"]:
         print(
             "[run_problem_export] WARNING: OCR resolved to 'none' for every block - "
@@ -10601,6 +10784,7 @@ def run_problem_export(
         "ocr_backend_requested": ocr,
         "ocr_summary": ocr_summary,
         "token_usage": token_usage,
+        "ai_cost_summary": ai_cost_summary,
         "input_intent": resolved_input_intent,
         "processing_step_override": processing_step,
         "page_tile_mode": _normalize_page_tile_mode(page_tile_mode),
@@ -10654,6 +10838,7 @@ def run_problem_export(
         ai_summary=ai_summary,
         ocr_summary=ocr_summary,
         token_usage=token_usage,
+        ai_cost_summary=ai_cost_summary,
         pages=pages,
         template=template,
         input_intent=resolved_input_intent,
@@ -10903,6 +11088,9 @@ def main() -> int:
             ai_summary.get("token_usage") if isinstance(ai_summary, dict) else None,
         ]
     )
+    ai_cost_summary = summarize_ai_cost(
+        _combined_ai_usage_events(ocr_summary, ai_summary)
+    )
 
     summary = {
         "source": str(args.source),
@@ -10925,6 +11113,7 @@ def main() -> int:
         "ocr_backend_requested": args.ocr,
         "ocr_summary": ocr_summary,
         "token_usage": token_usage,
+        "ai_cost_summary": ai_cost_summary,
         "input_intent": resolved_input_intent,
         "passages_only": bool(args.passages_only),
         "processing_step_override": args.processing_step or None,
@@ -10950,6 +11139,7 @@ def main() -> int:
         ai_summary=ai_summary,
         ocr_summary=ocr_summary,
         token_usage=token_usage,
+        ai_cost_summary=ai_cost_summary,
         pages=pages,
         template=template,
         input_intent=resolved_input_intent,

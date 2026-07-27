@@ -44,6 +44,14 @@
     return Number(clientY) > top + height / 2 ? AFTER : BEFORE;
   }
 
+  function scrollContainerContentTop(itemRect, containerRect, scrollTop = 0) {
+    if (!itemRect || !containerRect) return 0;
+    const itemTop = Number(itemRect.top) || 0;
+    const containerTop = Number(containerRect.top) || 0;
+    const containerScrollTop = Number(scrollTop) || 0;
+    return itemTop - containerTop + containerScrollTop;
+  }
+
   function edgeAutoScrollDelta(rect, clientY, edgePx = 64, maxPx = 22) {
     if (!rect || !Number.isFinite(Number(clientY))) return 0;
     const top = Number(rect.top) || 0;
@@ -64,6 +72,25 @@
     if (!direction || strength <= 0 || safeMax <= 0) return 0;
     const accelerated = Math.min(1, strength) ** 2;
     return direction * Math.max(1, Math.ceil(accelerated * safeMax));
+  }
+
+  function acceleratedEdgeAutoScrollDelta(
+    rect,
+    clientY,
+    edgePx = 64,
+    maxPx = 22,
+    holdDurationMs = 0,
+    frameDurationMs = 1000 / 60
+  ) {
+    const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
+    if (!baseDelta) return 0;
+    const safeHoldMs = Math.max(0, Number(holdDurationMs) || 0);
+    const holdProgress = Math.min(1, safeHoldMs / 900);
+    const holdMultiplier = 1 + holdProgress;
+    const safeFrameMs = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60)));
+    const frameMultiplier = safeFrameMs / (1000 / 60);
+    const magnitude = Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));
+    return Math.sign(baseDelta) * magnitude;
   }
 
   function appendBoundedHistory(history, entry, limit = 20) {
@@ -140,6 +167,7 @@
   return {
     AFTER,
     BEFORE,
+    acceleratedEdgeAutoScrollDelta,
     adjacentReorderCommand,
     appendBoundedHistory,
     dropPositionFromClientY,
@@ -149,5 +177,6 @@
     problemDisplayName,
     problemSourceLabel,
     reorderItemsForDrop,
+    scrollContainerContentTop,
   };
 });

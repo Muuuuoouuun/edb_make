@@ -51,7 +51,10 @@ class TestUiQueueActions(unittest.TestCase):
             queue_source,
         )
         self.assertIn("!fastImageRecognition", queue_source)
-        self.assertIn("const recognitionOcr = fastImageRecognition ? 'none' : 'auto';", queue_source)
+        self.assertIn(
+            "const recognitionOcr = fastImageRecognition ? 'none' : (aiEnabled ? 'auto' : 'local');",
+            queue_source,
+        )
         self.assertIn("ocr: recognitionOcr", queue_source)
         self.assertIn("detectPerspective: !fastImageRecognition", queue_source)
         self.assertIn("skipDeskew: fastImageRecognition", queue_source)
@@ -174,6 +177,12 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("flex-wrap: nowrap", actionbar_css)
         self.assertIn(".review-actionbar-actions", actionbar_css)
         self.assertIn("overflow-x: auto", actionbar_css)
+        self.assertIn(".review-toolbar-group-content", actionbar_css)
+        self.assertIn("flex: 0 0 auto", actionbar_css)
+        filters_css = actionbar_css.split(".review-filters button{", 1)[1]
+        filters_css = filters_css.split(".review-filters button span", 1)[0]
+        self.assertIn("flex: 0 0 auto", filters_css)
+        self.assertIn("white-space: nowrap", filters_css)
         self.assertIn("flex-wrap: nowrap", manual_css)
         self.assertIn(".manual-split-toolbar-actions", manual_css)
 

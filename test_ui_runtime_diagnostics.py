@@ -346,7 +346,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("nearestPlacementIndex(layout.positions, c.scrollTop + 24)", board_stage)
         self.assertNotIn("setScrollTop(scroll.scrollTop)", board_stage)
         self.assertNotIn("layout.positions\n      .map", board_stage)
-        self.assertIn("top: el.offsetTop, height: el.offsetHeight", items_rail)
+        self.assertIn("const railRect = rail.getBoundingClientRect();", items_rail)
+        self.assertIn("top: scrollContainerContentTop(rect, railRect, rail.scrollTop)", items_rail)
+        self.assertIn("height: rect.height", items_rail)
         self.assertNotIn("rail.querySelectorAll('.item[data-item-id]')", items_rail)
 
     def test_reorder_has_keyboard_accessibility_and_failed_save_rollback(self) -> None:

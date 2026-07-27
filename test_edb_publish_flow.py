@@ -418,8 +418,11 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(110.0, entries[0].bounds.top)
             self.assertEqual(80.0 - problem_board.PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX, entries[0].bounds.left)
             crop_width = Image.open(entries[0].crop_path).size[0]
-            self.assertLessEqual(crop_width, round(entries[0].bounds.width))
-            self.assertGreater(crop_width, round(entries[0].bounds.width) - 32)
+            self.assertEqual(
+                round(entries[0].bounds.width)
+                + problem_board.TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX * 2,
+                crop_width,
+            )
 
     def test_build_problem_entries_restores_ignored_hwp_marker_from_text_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -627,6 +630,61 @@ class TestEdbPublishFlow(unittest.TestCase):
                     for value in alpha.get_flattened_data()
                 )
             )
+
+    def test_fresh_preprocessed_board_render_skips_duplicate_transparency_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            board_render_path = root / "fresh-board.png"
+            rendered = Image.new("RGBA", (80, 48), (238, 238, 226, 0))
+            ImageDraw.Draw(rendered).rectangle(
+                (20, 8, 27, 39),
+                fill=(238, 238, 226, 255),
+            )
+            rendered.save(board_render_path)
+            crop = Image.new("RGB", rendered.size, "white")
+
+            with mock.patch.object(
+                problem_board,
+                "clean_problem_image_transparency",
+                side_effect=AssertionError("fresh render must not be cleaned twice"),
+            ), mock.patch.object(
+                problem_board,
+                "_extract_problem_cutout",
+                side_effect=AssertionError("fresh render must not be extracted twice"),
+            ):
+                exported = problem_board._load_board_export_image(
+                    board_render_path,
+                    crop,
+                    trusted_preprocessed_render=True,
+                )
+
+            self.assertEqual(rendered.tobytes(), exported.tobytes())
+
+    def test_fresh_text_board_render_defers_single_finalization_to_record_builder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            board_render_path = root / "fresh-text-board.png"
+            rendered = Image.new("RGBA", (80, 48), (238, 238, 226, 0))
+            ImageDraw.Draw(rendered).rectangle(
+                (20, 8, 27, 39),
+                fill=(238, 238, 226, 255),
+            )
+            rendered.save(board_render_path)
+            crop = Image.new("RGB", rendered.size, "white")
+
+            with mock.patch.object(
+                problem_board,
+                "_finalize_text_cutout",
+                side_effect=AssertionError("trusted loader must not finalize before record sizing"),
+            ):
+                exported = problem_board._load_board_export_image(
+                    board_render_path,
+                    crop,
+                    text_priority=True,
+                    trusted_preprocessed_render=True,
+                )
+
+            self.assertEqual(rendered.tobytes(), exported.tobytes())
 
     def test_passage_stitch_removes_footer_badge_and_collapses_join(self):
         first = Image.new("RGB", (240, 300), "white")
@@ -920,6 +978,40 @@ class TestEdbPublishFlow(unittest.TestCase):
         ]
         self.assertEqual(1, len(edge_issues))
         self.assertEqual(["left"], edge_issues[0]["horizontalEdgeRiskStats"]["riskSides"])
+
+    def test_classin_preflight_skips_crop_edge_scan_for_full_page_as_is(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "full-page.png"
+            Image.new("RGB", (320, 240), "white").save(image_path)
+
+            with mock.patch.object(
+                problem_board,
+                "_problem_image_horizontal_inner_edge_risk_stats",
+                side_effect=AssertionError("full-page export must not scan a nonexistent crop seam"),
+            ):
+                report = problem_board._classin_handoff_preflight(
+                    {
+                        "contentTarget": "all",
+                        "problems": [
+                            {
+                                "id": "korean-page-1",
+                                "title": "1.",
+                                "problemNumber": 1,
+                                "subject": "korean",
+                                "imagePath": image_path.resolve().as_uri(),
+                                "processingStep": problem_board.PROCESSING_STEP_RAW,
+                                "inputIntent": "page-as-is",
+                                "forceFullPageBounds": True,
+                                "riskFlags": [],
+                                "reviewStatus": "passed",
+                            }
+                        ],
+                    }
+                )
+
+        self.assertFalse(
+            any(issue.get("type") == "horizontal_crop_edge_risk" for issue in report["issues"])
+        )
 
     def test_tiny_top_column_header_is_not_used_as_passage_continuation(self):
         page = PageModel(
@@ -3694,6 +3786,93 @@ class TestEdbPublishFlow(unittest.TestCase):
             for problem in page_2.problems
         ))
 
+    def test_numbered_question_before_first_passage_child_is_not_swallowed(self):
+        page = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="q42",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=80, width=400, height=440),
+                    reading_order=0,
+                    text="42. 앞에 있는 독립 문항",
+                    metadata={"column_index": 1},
+                ),
+                ContentBlock(
+                    block_id="q43",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=650, width=400, height=400),
+                    reading_order=1,
+                    text="43. 지문의 첫 번째 문항",
+                    metadata={"column_index": 1},
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="page-2-problem-42",
+                    subject=Subject.KOREAN,
+                    title="42.",
+                    stem_block_ids=["q42"],
+                    metadata={"problem_number": 42},
+                ),
+                ProblemUnit(
+                    unit_id="page-2-problem-43",
+                    subject=Subject.KOREAN,
+                    title="43.",
+                    stem_block_ids=["q43"],
+                    metadata={
+                        "problem_number": 43,
+                        "passage_group_id": "passage-43-45",
+                        "passage_range": {"start": 43, "end": 45},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [43, 44, 45],
+                        "passage_source_page_ids": ["page-1", "page-2"],
+                    },
+                ),
+            ],
+        )
+        prepared = PreparedPage(
+            page_id="page-2",
+            source_path="page-2.pdf",
+            page_number=2,
+            image=Image.new("RGB", (900, 1200), "white"),
+            original_size=(900, 1200),
+            metadata={
+                "pdf_text_lines": [
+                    {
+                        "text": "42번 문항의 본문과 보기 카드가 이 영역을 차지합니다.",
+                        "bbox": {"left": 470, "top": 100, "right": 840, "bottom": 135},
+                    },
+                    {
+                        "text": "이 텍스트는 43~45번 공통 지문으로 합쳐지면 안 됩니다.",
+                        "bbox": {"left": 470, "top": 180, "right": 840, "bottom": 215},
+                    },
+                ]
+            },
+        )
+
+        problem_board._materialize_pdf_pre_question_passage_continuations(
+            [page],
+            {"page-2": prepared},
+        )
+
+        self.assertFalse(any(
+            problem.metadata.get("passage_pre_question_continuation")
+            for problem in page.problems
+        ))
+        block_by_id = {block.block_id: block for block in page.blocks}
+        next_by_id = problem_board._build_crop_next_problem_map(
+            page.problems,
+            block_by_id,
+        )
+        self.assertEqual(
+            "page-2-problem-43",
+            next_by_id["page-2-problem-42"].unit_id,
+        )
+
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5489,6 +5668,42 @@ class TestEdbPublishFlow(unittest.TestCase):
             secondary = records[0][images[1].offset : images[1].offset + images[1].length]
             self.assertEqual(primary, secondary)
 
+    def test_raw_page_as_is_reuses_exact_source_bytes_on_dark_board(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            source = Image.new("RGB", (1697, 2400), "white")
+            ImageDraw.Draw(source).text((120, 180), "원본 페이지 픽셀 보존", fill="black")
+            source.save(entry.crop_path, format="PNG", compress_level=2)
+            entry.board_render_path = entry.crop_path
+            entry.input_intent = "page-as-is"
+            entry.force_full_page_bounds = True
+            entry.processing_step = problem_board.PROCESSING_STEP_RAW
+            expected_bytes = entry.crop_path.read_bytes()
+
+            with mock.patch.object(
+                problem_board,
+                "_load_board_export_image",
+                side_effect=AssertionError("raw page-as-is must not remove the paper background"),
+            ), mock.patch.object(
+                problem_board,
+                "_encode_image_bytes",
+                side_effect=AssertionError("raw page-as-is must not re-encode the source"),
+            ):
+                records, placements = build_image_only_records(
+                    [entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=CROP_FORMAT_V1,
+                    dark_board=True,
+                )
+
+            images = parse_embedded_images(records[0])
+            primary = records[0][images[0].offset : images[0].offset + images[0].length]
+            secondary = records[0][images[1].offset : images[1].offset + images[1].length]
+            self.assertEqual(expected_bytes, primary)
+            self.assertEqual(expected_bytes, secondary)
+            self.assertEqual("source-preserving", placements[0]["image_resolution_policy"])
+
     def test_v1_regular_problem_secondary_keeps_legacy_preview_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5639,6 +5854,8 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             self.assertEqual(1, len(entries))
             crop = Image.open(entries[0].crop_path).convert("RGB")
+            self.assertGreaterEqual(crop.width, round(entries[0].bounds.width))
+            self.assertLessEqual(crop.width, round(entries[0].bounds.width) + 64)
             gray = crop.convert("L")
             left_band_dark = sum(
                 1
@@ -5660,7 +5877,10 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertLess(left_band_dark, 20)
-            self.assertLess(bottom_left_dark, 20)
+            # Preserve the full PDF column instead of deleting its left edge.
+            # A few disconnected antialiased badge glyph pixels may remain,
+            # but the footer frame itself must be gone.
+            self.assertLess(bottom_left_dark, 80)
             self.assertLess(bottom_blue, 10)
 
     def test_recrop_problem_uses_full_page_chrome_trim(self):
@@ -7335,6 +7555,44 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertEqual(image.size, cleaned.size)
         self.assertEqual((255, 255, 255), cleaned.getpixel((12, 180)))
         self.assertLess(cleaned.convert("L").crop((40, 40, 260, 180)).getextrema()[0], 200)
+
+    def test_trusted_pdf_asset_protection_skips_horizontal_chrome_cropping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = Image.new("RGB", (935, 600), "white")
+            draw = ImageDraw.Draw(source)
+            draw.line((92, 20, 92, 580), fill="black", width=3)
+            draw.rectangle((160, 120, 670, 520), outline="black", width=3)
+            draw.text((24, 48), "17. complete vocational problem", fill="black")
+            task = problem_board._ProblemAssetTask(
+                source_image=source,
+                bounds=Box(left=0.0, top=0.0, width=935.0, height=600.0),
+                crop_path=root / "trusted-pdf-crop.png",
+                board_render_path=root / "trusted-pdf-stage2.png",
+                chalk_color=(238, 238, 226),
+                trim_edge_guides=True,
+                protect_horizontal_bounds=True,
+                pad_edges=True,
+                subject=Subject.UNKNOWN,
+            )
+
+            with mock.patch.object(
+                problem_board,
+                "_trim_edge_vertical_guides",
+                side_effect=AssertionError("trusted PDF bounds must not be cropped"),
+            ), mock.patch.object(
+                problem_board,
+                "_trim_edge_attached_page_chrome",
+                side_effect=AssertionError("trusted PDF content must keep its width"),
+            ):
+                self.assertEqual((967, 688), problem_board._render_problem_asset(task))
+
+            with Image.open(task.crop_path) as crop:
+                self.assertEqual((967, 688), crop.size)
+                self.assertLess(
+                    crop.convert("L").crop((160, 120, 700, 560)).getextrema()[0],
+                    200,
+                )
 
     def test_text_priority_paired_outer_frame_is_preserved(self):
         image = Image.new("RGB", (500, 360), "white")

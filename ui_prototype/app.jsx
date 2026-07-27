@@ -112,12 +112,29 @@ const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, from
 const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
   clientY > rect.top + rect.height / 2 ? 'after' : 'before'
 ));
+const scrollContainerContentTop = REORDER_HELPERS.scrollContainerContentTop || ((itemRect, containerRect, scrollTop = 0) => (
+  (Number(itemRect?.top) || 0) - (Number(containerRect?.top) || 0) + (Number(scrollTop) || 0)
+));
 const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clientY, edgePx = 64, maxPx = 22) => {
   const topStrength = clientY < rect.top + edgePx ? 1 - Math.max(0, clientY - rect.top) / edgePx : 0;
   const bottomStrength = clientY > rect.bottom - edgePx ? 1 - Math.max(0, rect.bottom - clientY) / edgePx : 0;
   if (topStrength > 0) return -Math.max(1, Math.ceil((topStrength ** 2) * maxPx));
   if (bottomStrength > 0) return Math.max(1, Math.ceil((bottomStrength ** 2) * maxPx));
   return 0;
+});
+const acceleratedEdgeAutoScrollDelta = REORDER_HELPERS.acceleratedEdgeAutoScrollDelta || ((
+  rect,
+  clientY,
+  edgePx = 64,
+  maxPx = 22,
+  holdDurationMs = 0,
+  frameDurationMs = 1000 / 60
+) => {
+  const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
+  if (!baseDelta) return 0;
+  const holdMultiplier = 1 + Math.min(1, Math.max(0, Number(holdDurationMs) || 0) / 900);
+  const frameMultiplier = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60))) / (1000 / 60);
+  return Math.sign(baseDelta) * Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));
 });
 const appendBoundedHistory = REORDER_HELPERS.appendBoundedHistory || ((history, entry, limit = 20) => {
   if (!entry) return history;
@@ -165,6 +182,8 @@ const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 const BOARD_COLUMN_MIN = 1;
 const BOARD_COLUMN_MAX = 3;
+const BOARD_PAGE_HEIGHT_PAGES = 1;
+const PLACEMENT_EPSILON_PAGES = 1e-9;
 const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
 const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
@@ -444,11 +463,28 @@ function resetItemPlacement(item){
 
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.ceil((value - 0.001) / slotHeight) * slotHeight;
+  return Math.ceil((value - PLACEMENT_EPSILON_PAGES) / slotHeight) * slotHeight;
+}
+
+function firstPositiveFiniteNumber(...values){
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return null;
 }
 
 function itemHeightPages(item){
-  return Math.max(0.12, item?.heightFrac || item?.actualHeightPages || item?.actual_height_pages || 0.8);
+  const candidates = [
+    item?.heightFrac,
+    item?.actualHeightPages,
+    item?.actual_height_pages,
+    item?.actualContentHeightPages,
+    item?.actual_content_height_pages,
+  ]
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.max(0.12, ...candidates) : 0.8;
 }
 
 function itemUsesContinuousPageFlow(item){
@@ -544,7 +580,10 @@ function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (isContinuousPlacementItem(item)) {
     return Math.max(heightPages, renderedHeightPages, savedSpan);
   }
-  return Math.max(heightPages, renderedHeightPages, savedSpan || snapUpPages(renderedHeightPages, slotHeight));
+  if (renderedHeightPages > slotHeight + PLACEMENT_EPSILON_PAGES) {
+    return Math.max(heightPages, renderedHeightPages);
+  }
+  return Math.max(heightPages, renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight));
 }
 
 function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
@@ -557,21 +596,28 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
   while (index < items.length) {
     const first = items[index];
     const firstContinuous = isContinuousPlacementItem(first);
+    const firstLong = !firstContinuous
+      && itemRenderedHeightPages(first) > slotHeight + PLACEMENT_EPSILON_PAGES;
     const rowItems = [];
-    if (firstContinuous) {
+    if (firstContinuous || firstLong) {
       rowItems.push(first);
       index += 1;
     } else {
       while (index < items.length && rowItems.length < columnCount) {
         const candidate = items[index];
-        if (rowItems.length > 0 && isContinuousPlacementItem(candidate)) break;
+        const candidateContinuous = isContinuousPlacementItem(candidate);
+        const candidateLong = !candidateContinuous
+          && itemRenderedHeightPages(candidate) > slotHeight + PLACEMENT_EPSILON_PAGES;
+        if (rowItems.length > 0 && (candidateContinuous || candidateLong)) break;
         rowItems.push(candidate);
         index += 1;
       }
     }
 
     const rowContinuous = rowItems.length === 1 && isContinuousPlacementItem(rowItems[0]);
-    const rowStartPages = rowContinuous ? cursorPages : snapUpPages(cursorPages, slotHeight);
+    const rowLong = !rowContinuous
+      && rowItems.some(item => itemRenderedHeightPages(item) > slotHeight + PLACEMENT_EPSILON_PAGES);
+    const rowStartPages = cursorPages;
     const rowMetrics = rowItems.map(item => {
       const heightPages = itemHeightPages(item);
       const renderedHeightPages = itemRenderedHeightPages(item);
@@ -583,15 +629,22 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
       ...rowMetrics.map(metric => Math.max(metric.renderedHeightPages, metric.slotSpanPages))
     );
     const flowEndPages = rowStartPages + rowFlowSpanPages;
-    const snappedNextStartYPages = rowContinuous ? flowEndPages : snapUpPages(flowEndPages, slotHeight);
+    const snappedNextStartYPages = rowContinuous
+      ? flowEndPages
+      : rowLong
+        ? Math.max(flowEndPages, snapUpPages(flowEndPages, BOARD_PAGE_HEIGHT_PAGES))
+        : Math.max(flowEndPages, rowStartPages + snapUpPages(rowFlowSpanPages, slotHeight));
     const boardRowHeightPages = Math.max(0, snappedNextStartYPages - rowStartPages);
-    const rowColumnCount = rowContinuous ? BOARD_COLUMN_MIN : columnCount;
+    const rowColumnCount = rowContinuous || rowLong ? BOARD_COLUMN_MIN : columnCount;
 
     rowItems.forEach((item, rowColumnIndex) => {
       const metric = rowMetrics[rowColumnIndex];
       const actualBottomPages = rowStartPages + metric.heightPages;
       const renderedBottomPages = rowStartPages + metric.renderedHeightPages;
-      const slotSpanCount = Math.max(1, Math.ceil((snappedNextStartYPages - rowStartPages - 0.001) / slotHeight));
+      const slotSpanCount = Math.max(
+        1,
+        Math.ceil((snappedNextStartYPages - rowStartPages - PLACEMENT_EPSILON_PAGES) / slotHeight)
+      );
       const autoXRatio = boardColumnXRatio(rowColumnIndex, rowColumnCount);
       const xEdited = Boolean(item.placementXEdited || item.placement_x_edited);
       const rawMagnetColumnIndex = Number(item.placementMagnetColumnIndex ?? item.placement_magnet_column_index);
@@ -696,6 +749,9 @@ const Icon = {
   arrowDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>,
   arrowLeft:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>,
   arrowRight:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>,
+  grip:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>,
+  chevronUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 14.5L12 9l5.5 5.5"/></svg>,
+  chevronDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"/></svg>,
 };
 
 const PROCESSING_STEPS = new Set(['raw', 's1', 's2', 's3']);
@@ -3178,6 +3234,14 @@ function ReviewStage({
                 {aiStageChipText(stage)}
               </span>
             ))}
+            {reviewSummary.aiCostEventCount > 0 && (
+              <span
+                className="review-summary-chip"
+                title={`공개 단가 기반 추정치 · $${reviewSummary.aiCostUsd.toFixed(4)} · 환율 ${Math.round(reviewSummary.aiCostUsdKrwRate).toLocaleString('ko-KR')}원`}
+              >
+                AI 예상 {Math.round(reviewSummary.aiCostKrw).toLocaleString('ko-KR')}원
+              </span>
+            )}
             {reviewSummary.actionableNeedsReviewCount > 0 && (
               <span className="review-summary-chip warn">
                 확인 {reviewSummary.actionableNeedsReviewCount}
@@ -3588,7 +3652,7 @@ function ItemsRail({
   pendingFiles, selectedPendingFileKey, onSelectPendingFile,
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
-  onDownloadItemImage, downloadingItemId, reorderBusy,
+  onDownloadItemImage, downloadingItemId, reorderBusy, moveFeedback,
 }){
   const dragId = useRef(null);
   const [draggingId, setDraggingId] = useState(null);
@@ -3638,12 +3702,22 @@ function ItemsRail({
         const dx = prevRect.left - rect.left;
         const dy = prevRect.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          const isMovedItem = String(moveFeedback?.id || '') === String(it.id);
           el.animate(
-            [
-              { transform: `translate(${dx}px, ${dy}px)` },
-              { transform: 'translate(0, 0)' },
-            ],
-            { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
+            isMovedItem
+              ? [
+                  { transform: `translate(${dx}px, ${dy}px) scale(.985)`, opacity: .78 },
+                  { transform: 'translate(0, 0) scale(1.018)', opacity: 1, offset: .72 },
+                  { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+                ]
+              : [
+                  { transform: `translate(${dx}px, ${dy}px)` },
+                  { transform: 'translate(0, 0)' },
+                ],
+            {
+              duration: isMovedItem ? 420 : 260,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.2,.8,.2,1)',
+            }
           );
         }
       }
@@ -3754,9 +3828,18 @@ function ItemsRail({
 
   const startPointerDrag = (event, itemId) => {
     if (reorderBusy || filterActive || event.button !== 0 || event.target.closest?.('button')) return;
+    const rail = railRef.current;
+    if (!rail) return;
+    const railRect = rail.getBoundingClientRect();
     const rows = items.map(item => {
       const el = itemRefs.current[item.id];
-      return el ? { id: item.id, top: el.offsetTop, height: el.offsetHeight } : null;
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      return {
+        id: item.id,
+        top: scrollContainerContentTop(rect, railRect, rail.scrollTop),
+        height: rect.height,
+      };
     }).filter(Boolean);
     pointerDragRef.current = {
       id: itemId,
@@ -4181,6 +4264,7 @@ function ItemsRail({
               <span>모아보기 중 · 순서 변경은 전체 보기에서</span>
             ) : (
               <>
+                <span className="problem-order-icon" aria-hidden="true">{Icon.grip}</span>
                 <span>드래그로 순서 이동</span>
                 <span aria-hidden="true">·</span>
                 <span><kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd></span>
@@ -4198,6 +4282,8 @@ function ItemsRail({
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
           const hasPageChrome = hasPageChromeArtifactFlag(it);
+          const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
+          const moveDirection = isJustMoved ? moveFeedback.direction : null;
           const downloadTitle = isDownloading
             ? '다운로드 준비 중'
             : canDownloadItem
@@ -4210,7 +4296,7 @@ function ItemsRail({
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
             role="group"
             tabIndex={0}
@@ -4282,8 +4368,19 @@ function ItemsRail({
               clearDragState();
             }}
           >
-            <div className="grip" title="끌어 옮기기">
+            <div
+              className="grip"
+              title="잡고 드래그해 순서 이동"
+              data-tooltip="잡고 드래그해 순서 이동"
+              aria-hidden="true"
+            >
+              <span className="grip-icon">{Icon.grip}</span>
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
+              {isJustMoved && (
+                <span className={`move-cue move-${moveDirection}`}>
+                  {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+                </span>
+              )}
             </div>
             <div className="thumb">
               <TileImage item={it} forceMode="raw" />
@@ -4307,6 +4404,34 @@ function ItemsRail({
             </div>
             <div className="actions">
               <button
+                className="icon-btn item-move-action"
+                type="button"
+                title="한 칸 위로"
+                data-tooltip="한 칸 위로 이동"
+                aria-label={`${problemDisplayName(it, i)} 한 칸 위로 이동`}
+                disabled={reorderBusy || filterActive || i === 0}
+                onClick={e => {
+                  e.stopPropagation();
+                  moveItemByKeyboard(it, 'up');
+                }}
+              >
+                {Icon.chevronUp}
+              </button>
+              <button
+                className="icon-btn item-move-action"
+                type="button"
+                title="한 칸 아래로"
+                data-tooltip="한 칸 아래로 이동"
+                aria-label={`${problemDisplayName(it, i)} 한 칸 아래로 이동`}
+                disabled={reorderBusy || filterActive || i === items.length - 1}
+                onClick={e => {
+                  e.stopPropagation();
+                  moveItemByKeyboard(it, 'down');
+                }}
+              >
+                {Icon.chevronDown}
+              </button>
+              <button
                 className="icon-btn item-download-action"
                 type="button"
                 title={downloadTitle}
@@ -4321,7 +4446,14 @@ function ItemsRail({
               >
                 {Icon.download}
               </button>
-              <button className="icon-btn" title="삭제" onClick={e => { e.stopPropagation(); removeItem(it.id); }}>
+              <button
+                className="icon-btn item-delete-action"
+                type="button"
+                title="삭제"
+                data-tooltip="이 자료 삭제"
+                aria-label={`${problemDisplayName(it, i)} 삭제`}
+                onClick={e => { e.stopPropagation(); removeItem(it.id); }}
+              >
                 {Icon.trash}
               </button>
             </div>
@@ -4339,7 +4471,7 @@ function ItemsRail({
 }
 
 // ─── CENTER: big scrollable board stage ──
-function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder }){
+function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder, moveFeedback }){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -4349,7 +4481,14 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const positionDragRef = useRef(null);
   const suppressClickRef = useRef(null);
   const boardDropTargetRef = useRef(null);
-  const autoScrollRef = useRef({ raf: null, clientY: null });
+  const autoScrollRef = useRef({
+    raf: null,
+    clientX: null,
+    clientY: null,
+    direction: 0,
+    edgeEnteredAt: null,
+    lastFrameAt: null,
+  });
   const scrollSyncFrameRef = useRef(null);
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
@@ -4453,12 +4592,22 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
         const dx = previous.left - rect.left;
         const dy = previous.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          const isMovedItem = String(moveFeedback?.id || '') === String(item.id);
           el.animate(
-            [
-              { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.72 },
-              { transform: 'translate(0, 0)', opacity: 1 },
-            ],
-            { duration: 360, easing: 'cubic-bezier(.2,.82,.2,1)' }
+            isMovedItem
+              ? [
+                  { transform: `translate(${dx}px, ${dy}px) scale(.97)`, opacity: .68 },
+                  { transform: 'translate(0, 0) scale(1.025)', opacity: 1, offset: .76 },
+                  { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+                ]
+              : [
+                  { transform: `translate(${dx}px, ${dy}px)`, opacity: .76 },
+                  { transform: 'translate(0, 0)', opacity: 1 },
+                ],
+            {
+              duration: isMovedItem ? 520 : 380,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.2,.82,.2,1)',
+            }
           );
         }
       }
@@ -4493,6 +4642,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (!c) return;
     const nextPage = Math.min(layout.totalPages, Math.floor(c.scrollTop / pageH) + 1);
     setCurrentPage(prev => prev === nextPage ? prev : nextPage);
+    if (positionDragRef.current) return;
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
@@ -4538,32 +4688,75 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     ));
   };
 
-  const findBoardDropTarget = (clientY, sourceId) => {
+  const findBoardDropTarget = (clientX, clientY, sourceId) => {
     const content = contentRef.current;
-    if (!content || !items.length) return null;
-    const rect = content.getBoundingClientRect();
-    const contentY = clientY - rect.top;
-    let lastCandidateId = null;
-    for (let index = 0; index < layout.positions.length; index += 1) {
-      const placement = layout.positions[index];
+    const scroll = scrollRef.current;
+    if (!content || !scroll || !items.length) return null;
+    const scrollRect = scroll.getBoundingClientRect();
+    if (
+      Number.isFinite(Number(clientX))
+      && (clientX < scrollRect.left || clientX > scrollRect.right)
+    ) {
+      return null;
+    }
+    const contentRect = content.getBoundingClientRect();
+    const candidates = [];
+    for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       if (!item?.id || item.id === sourceId) continue;
-      lastCandidateId = item.id;
-      const midpoint = placement.top + (placement.height / 2);
-      if (contentY < midpoint) {
-        return { id: item.id, position: 'before' };
+      const placement = layout.positions[index];
+      const tileRect = tileRefs.current[item.id]?.getBoundingClientRect?.();
+      const fallbackRect = placement ? {
+        top: contentRect.top + placement.top,
+        bottom: contentRect.top + placement.top + placement.height,
+        left: contentRect.left,
+        right: contentRect.right,
+        width: contentRect.width,
+        height: placement.height,
+      } : null;
+      const rect = tileRect && tileRect.height > 0 ? tileRect : fallbackRect;
+      if (rect) candidates.push({ id: item.id, index, rect });
+    }
+    if (!candidates.length) return null;
+
+    let candidateIndex = 0;
+    while (candidateIndex < candidates.length) {
+      const first = candidates[candidateIndex];
+      const row = [first];
+      candidateIndex += 1;
+      while (
+        candidateIndex < candidates.length
+        && Math.abs(candidates[candidateIndex].rect.top - first.rect.top) <= 12
+      ) {
+        row.push(candidates[candidateIndex]);
+        candidateIndex += 1;
+      }
+      const rowTop = Math.min(...row.map(candidate => candidate.rect.top));
+      const rowBottom = Math.max(...row.map(candidate => candidate.rect.bottom));
+      if (clientY < rowTop) {
+        return { id: row[0].id, position: 'before' };
+      }
+      if (clientY <= rowBottom) {
+        const horizontal = row.slice().sort((a, b) => a.rect.left - b.rect.left || a.index - b.index);
+        for (const candidate of horizontal) {
+          if (clientX < candidate.rect.left + candidate.rect.width / 2) {
+            return { id: candidate.id, position: 'before' };
+          }
+        }
+        return { id: horizontal[horizontal.length - 1].id, position: 'after' };
       }
     }
-    return lastCandidateId ? { id: lastCandidateId, position: 'after' } : null;
+    return { id: candidates[candidates.length - 1].id, position: 'after' };
   };
 
-  const updateBoardDropTarget = (clientY, sourceId, force = false) => {
+  const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
     const drag = positionDragRef.current;
-    if (!force && drag && Math.abs(clientY - drag.startY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
+    const dragDistanceY = drag?.contentDy ?? (drag ? clientY - drag.startY : 0);
+    if (!force && drag && Math.abs(dragDistanceY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
       setCurrentBoardDropTarget(null);
       return null;
     }
-    const target = findBoardDropTarget(clientY, sourceId);
+    const target = findBoardDropTarget(clientX, clientY, sourceId);
     setCurrentBoardDropTarget(target);
     return target;
   };
@@ -4572,34 +4765,115 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (autoScrollRef.current.raf) {
       cancelAnimationFrame(autoScrollRef.current.raf);
     }
-    autoScrollRef.current = { raf: null, clientY: null };
+    autoScrollRef.current = {
+      raf: null,
+      clientX: null,
+      clientY: null,
+      direction: 0,
+      edgeEnteredAt: null,
+      lastFrameAt: null,
+    };
   };
 
-  const stepBoardAutoScroll = () => {
+  const updatePositionDragVisual = (drag, clientX, clientY) => {
+    const scroll = scrollRef.current;
+    if (!drag || !scroll) return;
+    drag.lastClientX = clientX;
+    drag.lastClientY = clientY;
+    const rawDx = clientX - drag.startX;
+    const scrollDeltaY = scroll.scrollTop - drag.startScrollTop;
+    const contentDy = clientY - drag.startY + scrollDeltaY;
+    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + rawDx));
+    const visualDx = nextLeft - drag.startLeft;
+    const nextTopOffset = Math.max(
+      0,
+      Math.min(drag.maxTopOffset, drag.startTopOffset + contentDy)
+    );
+    const rawXRatio = drag.maxLeft > 0
+      ? nextLeft / drag.maxLeft
+      : DEFAULT_PLACEMENT_X_RATIO;
+    drag.currentDxPx = visualDx;
+    drag.contentDy = contentDy;
+    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
+    const nextXRatio = magnet.ratio;
+    const nextYRatio = drag.maxTopOffset > 0
+      ? nextTopOffset / drag.maxTopOffset
+      : DEFAULT_PLACEMENT_Y_RATIO;
+    drag.pendingPlacement = {
+      xRatio: nextXRatio,
+      yRatio: nextYRatio,
+      magnetColumnIndex: magnet.snapped ? magnet.index : null,
+    };
+    drag.tile.style.transform = `translate3d(${visualDx}px, ${contentDy}px, 0)`;
+    drag.tile.style.zIndex = '12';
+    const magnetKey = magnet.snapped ? `${magnet.index}:${magnet.ratio}` : '';
+    if (magnetKey !== drag.lastMagnetKey) {
+      drag.lastMagnetKey = magnetKey;
+      setDragMagnet(magnet.snapped ? {
+        index: magnet.index,
+        ratio: magnet.ratio,
+        distancePx: magnet.distancePx,
+      } : null);
+    }
+  };
+
+  const stepBoardAutoScroll = (timestamp) => {
     const drag = positionDragRef.current;
     const scroll = scrollRef.current;
+    const clientX = autoScrollRef.current.clientX;
     const clientY = autoScrollRef.current.clientY;
     if (!drag || !scroll || clientY == null) {
       stopBoardAutoScroll();
       return;
     }
     const rect = scroll.getBoundingClientRect();
-    const delta = edgeAutoScrollDelta(
+    const baseDelta = edgeAutoScrollDelta(
       rect,
       clientY,
       BOARD_DRAG_AUTOSCROLL_EDGE_PX,
       BOARD_DRAG_AUTOSCROLL_MAX_PX
     );
-    if (delta) {
-      scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta));
-      updateBoardDropTarget(clientY, drag.id);
+    const direction = Math.sign(baseDelta);
+    if (!direction) {
+      autoScrollRef.current.direction = 0;
+      autoScrollRef.current.edgeEnteredAt = null;
+      autoScrollRef.current.lastFrameAt = null;
+      autoScrollRef.current.raf = null;
+      return;
+    }
+    if (direction !== autoScrollRef.current.direction) {
+      autoScrollRef.current.direction = direction;
+      autoScrollRef.current.edgeEnteredAt = timestamp;
+      autoScrollRef.current.lastFrameAt = timestamp;
+    }
+    const edgeEnteredAt = autoScrollRef.current.edgeEnteredAt ?? timestamp;
+    const lastFrameAt = autoScrollRef.current.lastFrameAt ?? timestamp;
+    const delta = acceleratedEdgeAutoScrollDelta(
+      rect,
+      clientY,
+      BOARD_DRAG_AUTOSCROLL_EDGE_PX,
+      BOARD_DRAG_AUTOSCROLL_MAX_PX,
+      Math.max(0, timestamp - edgeEnteredAt),
+      Math.max(4, timestamp - lastFrameAt || (1000 / 60))
+    );
+    autoScrollRef.current.lastFrameAt = timestamp;
+    const previousTop = scroll.scrollTop;
+    const nextTop = Math.max(
+      0,
+      Math.min(scroll.scrollHeight - scroll.clientHeight, previousTop + delta)
+    );
+    scroll.scrollTop = nextTop;
+    if (Math.abs(nextTop - previousTop) > 0.01) {
+      updatePositionDragVisual(drag, clientX ?? drag.lastClientX, clientY);
+      updateBoardDropTarget(clientX ?? drag.lastClientX, clientY, drag.id);
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
     } else {
       autoScrollRef.current.raf = null;
     }
   };
 
-  const applyBoardAutoScroll = (clientY) => {
+  const applyBoardAutoScroll = (clientX, clientY) => {
+    autoScrollRef.current.clientX = clientX;
     autoScrollRef.current.clientY = clientY;
     if (!autoScrollRef.current.raf) {
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
@@ -4616,8 +4890,11 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     }
     if (drag.windowPointerEnd) {
       window.removeEventListener('pointerup', drag.windowPointerEnd);
-      window.removeEventListener('pointercancel', drag.windowPointerEnd);
       drag.windowPointerEnd = null;
+    }
+    if (drag.windowPointerCancel) {
+      window.removeEventListener('pointercancel', drag.windowPointerCancel);
+      drag.windowPointerCancel = null;
     }
   };
 
@@ -4625,8 +4902,10 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
   const beginPositionDrag = (evt, item, placement) => {
     if (evt.button !== 0 || !contentRef.current) return;
+    evt.preventDefault();
     const contentRect = contentRef.current.getBoundingClientRect();
     const tileRect = evt.currentTarget.getBoundingClientRect();
+    const scroll = scrollRef.current;
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
     const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
     const startXRatio = normalizePlacementXRatio(placement.xRatio);
@@ -4641,8 +4920,12 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       id: item.id,
       pointerId: evt.pointerId,
       captureTarget: evt.currentTarget,
+      tile: evt.currentTarget,
       startX: evt.clientX,
       startY: evt.clientY,
+      lastClientX: evt.clientX,
+      lastClientY: evt.clientY,
+      startScrollTop: scroll?.scrollTop || 0,
       startLeft: startXRatio * maxLeft,
       startTopOffset: startYRatio * maxTopOffset,
       maxLeft,
@@ -4652,10 +4935,14 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       startMagnetColumnIndex: startMagnet.snapped ? startMagnet.index : null,
       lastXRatio: startXRatio,
       lastYRatio: startYRatio,
+      lastMagnetKey: '',
+      contentDy: 0,
+      pendingPlacement: null,
       moved: false,
     };
     drag.windowPointerMove = event => movePositionDrag(event);
     drag.windowPointerEnd = event => endPositionDrag(event);
+    drag.windowPointerCancel = event => cancelPositionDrag(event);
     positionDragRef.current = drag;
     setPositioningId(item.id);
     setCurrentBoardDropTarget(null);
@@ -4664,7 +4951,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
     window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
     window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
-    window.addEventListener('pointercancel', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
   };
 
   const movePositionDrag = (evt) => {
@@ -4675,54 +4962,55 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     drag.moved = true;
     evt.preventDefault();
-    applyBoardAutoScroll(evt.clientY);
-    updateBoardDropTarget(evt.clientY, drag.id);
-    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
-    const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
-    const rawXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
-    drag.currentDxPx = dx;
-    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
-    const nextXRatio = magnet.ratio;
-    const nextYRatio = drag.maxTopOffset > 0 ? nextTopOffset / drag.maxTopOffset : DEFAULT_PLACEMENT_Y_RATIO;
-    setDragMagnet(magnet.snapped ? {
-      index: magnet.index,
-      ratio: magnet.ratio,
-      distancePx: magnet.distancePx,
-    } : null);
-    if (
-      Math.abs(nextXRatio - drag.lastXRatio) < 0.002 &&
-      Math.abs(nextYRatio - drag.lastYRatio) < 0.002
-    ) {
-      return;
-    }
-    drag.lastXRatio = nextXRatio;
-    drag.lastYRatio = nextYRatio;
-    setPlacement?.(drag.id, {
-      xRatio: nextXRatio,
-      yRatio: nextYRatio,
-      magnetColumnIndex: magnet.snapped ? magnet.index : null,
-    });
+    updatePositionDragVisual(drag, evt.clientX, evt.clientY);
+    applyBoardAutoScroll(evt.clientX, evt.clientY);
+    updateBoardDropTarget(evt.clientX, evt.clientY, drag.id);
   };
 
   const endPositionDrag = (evt) => {
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
-    const canReorder = drag.moved && Math.abs(evt.clientY - drag.startY) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
+    updatePositionDragVisual(drag, evt.clientX, evt.clientY);
+    const canReorder = drag.moved && Math.abs(drag.contentDy) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
     const target = canReorder
-      ? findBoardDropTarget(evt.clientY, drag.id) || boardDropTargetRef.current
+      ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id) || boardDropTargetRef.current
       : null;
+    const reorderedPreview = target?.id
+      ? reorderItemsForDrop(items, drag.id, target.id, target.position)
+      : items;
+    const orderChanged = reorderedPreview !== items
+      && reorderedPreview.map(item => String(item.id)).join('|') !== boardOrderSignature;
     if (drag.moved) {
       suppressClickRef.current = drag.id;
       window.setTimeout(() => {
         if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
       }, 0);
-      if (target && target.id && target.id !== drag.id) {
+      if (orderChanged) {
         reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
+      } else if (drag.pendingPlacement) {
+        setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
+    drag.tile.style.transform = '';
+    drag.tile.style.zIndex = '';
     removePositionDragWindowListeners(drag);
     const captureTarget = drag.captureTarget || evt.currentTarget;
     captureTarget?.releasePointerCapture?.(evt.pointerId);
+    positionDragRef.current = null;
+    setPositioningId(null);
+    setCurrentBoardDropTarget(null);
+    setDragMagnet(null);
+    stopBoardAutoScroll();
+    window.requestAnimationFrame(captureBoardTileRects);
+  };
+
+  const cancelPositionDrag = (evt) => {
+    const drag = positionDragRef.current;
+    if (!drag || drag.pointerId !== evt.pointerId) return;
+    drag.tile.style.transform = '';
+    drag.tile.style.zIndex = '';
+    removePositionDragWindowListeners(drag);
+    drag.captureTarget?.releasePointerCapture?.(evt.pointerId);
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
@@ -4843,6 +5131,8 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                   const yRatio = normalizePlacementYRatio(p.yRatio);
                   const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
                   const hasPageChrome = hasPageChromeArtifactFlag(it);
+                  const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
+                  const moveDirection = isJustMoved ? moveFeedback.direction : null;
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
                     height: scaledHeight,
@@ -4852,18 +5142,22 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
                       onClick={() => onTileClick(it.id)}
                       title={problemDisplayName(it, i)}
+                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 드래그하여 배치 또는 순서 이동`}
                       style={tileStyle}
                       onPointerDown={e => beginPositionDrag(e, it, p)}
-                      onPointerMove={movePositionDrag}
-                      onPointerUp={endPositionDrag}
-                      onPointerCancel={endPositionDrag}
                     >
                       <div className="tile-hd">
+                        <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
                         <span className="nm">{problemDisplayName(it, i)}</span>
+                        {isJustMoved && (
+                          <span className={`tile-move-cue move-${moveDirection}`} aria-hidden="true">
+                            {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+                          </span>
+                        )}
                         {p.spans > 1 && (
                           <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
                         )}
@@ -4911,36 +5205,43 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
           </div>
         </div>
 
-        <div className="stage-status">
-          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
-          <span className="chip">
-            <span className="pip" />
-            {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
-          </span>
-          {activePlacement && (
+        <div className="stage-status" aria-label="미리보기 상태">
+          <div className="stage-status-track">
+            <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
             <span className="chip">
-              행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
+              <span className="pip" />
+              {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
             </span>
-          )}
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
-            1단계 {s1Count}
-          </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
-            원문 보존 {aiCount}
-          </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
-            고화질 {reconstructCount}
-          </span>
-          {rawCount > 0 && (
-            <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
-              미처리 {rawCount}
+            {activePlacement && (
+              <span className="chip">
+                행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
+              </span>
+            )}
+            <span className="chip">
+              <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
+              1단계 {s1Count}
             </span>
-          )}
-          <div className="spacer" />
-          <span style={{fontFamily:'JetBrains Mono, monospace'}}>{processedCount}/{items.length} 처리됨 · {layout.totalPages}p</span>
+            <span className="chip">
+              <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
+              원문 보존 {aiCount}
+            </span>
+            <span className="chip">
+              <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
+              고화질 {reconstructCount}
+            </span>
+            {rawCount > 0 && (
+              <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
+                미처리 {rawCount}
+              </span>
+            )}
+          </div>
+          <span
+            className="stage-status-summary"
+            aria-label={`${processedCount}/${items.length} 처리됨 · ${layout.totalPages}페이지`}
+            title={`${processedCount}/${items.length} 처리됨 · ${layout.totalPages}p`}
+          >
+            {processedCount}/{items.length} · {layout.totalPages}p
+          </span>
         </div>
       </div>
     </div>
@@ -5178,7 +5479,7 @@ function SidePanel({
   onConfirm,
   userSettings, runtimeDiagnostics, onSaveGeminiKey,
   onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
-  aiEnabled, setAiEnabled,
+  aiEnabled, onToggleAi, aiToggleBusy,
   inputIntent, setInputIntent,
   onRecognizeSession, canRecognizeSession,
   session, published,
@@ -5607,13 +5908,13 @@ function SidePanel({
                   </button>
                   <button
                     className={`step-row ${item.step === 's3' ? 'on' : ''}`}
-                    data-tooltip="원문 보존 2K 또는 선택적 AI 재구성으로 고화질 제작"
+                    data-tooltip="원문 보존 2K 또는 선택적 AI 1K 재구성으로 고화질 제작"
                     onClick={() => setStep(item.id, 's3')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">3단계 · 고화질 <span className="ai-badge">2K</span></div>
-                      <div className="d">보존형 2K · 선택적 AI 재구성</div>
+                      <div className="t">3단계 · 고화질 <span className="ai-badge">SAFE</span></div>
+                      <div className="d">보존형 2K · 선택적 AI 1K</div>
                     </div>
                     <div className="meta-r">선택<strong>1~8s</strong></div>
                   </button>
@@ -5775,14 +6076,14 @@ function SidePanel({
                         type="button"
                         style={{width: '100%', justifyContent: 'space-between', marginTop: 7}}
                         onClick={() => onEnhanceImage?.([item.id], { mode: 'ai' })}
-                        disabled={!canEnhanceCurrent || !userSettings?.hasGeminiApiKey}
-                        title={userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
+                        disabled={!canEnhanceCurrent || !aiEnabled || !userSettings?.hasGeminiApiKey}
+                        title={!aiEnabled ? '설정에서 AI 기능을 켜면 선택적으로 사용할 수 있습니다' : userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
                       >
                         <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 선택적 AI 재구성</span>
-                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 2K</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 1K</span>
                       </button>
                       <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
-                        국어·영어는 글자 보존형을 권장합니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
+                        수식·문자·선지가 있는 자료는 글자 보존형이 기본입니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
                       </div>
                     </div>
                   )}
@@ -6162,18 +6463,22 @@ function SidePanel({
 
             <div className="row-control">
               <div className="lbl">
-                AI 보정 사용
-                <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
+                AI 전체 사용
+                <small>
+                  {userSettings?.hasGeminiApiKey
+                    ? 'OCR · 문항 보정 · 생성형 고화질'
+                    : 'API 키 없음 · 로컬 처리만 가능'}
+                </small>
               </div>
-              <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
+              <label className="check" style={{cursor: aiToggleBusy ? 'wait' : 'pointer', opacity: aiToggleBusy ? .6 : 1}}>
                 <input
                   type="checkbox"
-                  checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
-                  disabled={!userSettings?.hasGeminiApiKey}
-                  onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
+                  checked={!!aiEnabled}
+                  disabled={!!aiToggleBusy}
+                  onChange={e => onToggleAi?.(e.target.checked)}
                 />
                 <span style={{fontSize: 12, color: 'var(--muted)'}}>
-                  {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
+                  {aiEnabled ? '켜짐' : '꺼짐'}
                 </span>
               </label>
             </div>
@@ -6840,7 +7145,10 @@ function makeUniqueId(baseId, existingIds){
 
 function applyItemStateToProblem(problem, item){
   const next = { ...problem };
-  const actualHeightPages = Math.max(0.12, item.heightFrac || next.actualHeightPages || next.actual_height_pages || 0.8);
+  const actualHeightPages = itemHeightPages({
+    ...next,
+    ...item,
+  });
   const startYPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
   const snappedNextStartYPages = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startYPages || 0, item.snappedNextStartYPages)
@@ -6893,7 +7201,16 @@ function applyItemStateToProblem(problem, item){
   if (snappedNextStartYPages !== null) {
     next.snappedNextStartYPages = Number(snappedNextStartYPages.toFixed(6));
     next.snapped_next_start_y_pages = next.snappedNextStartYPages;
-    next.slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - (startYPages || 0)) / DEFAULT_SLOT_HEIGHT_PAGES));
+    next.slotSpanCount = Math.max(
+      1,
+      Math.ceil(
+        (
+          snappedNextStartYPages
+          - (startYPages || 0)
+          - PLACEMENT_EPSILON_PAGES
+        ) / DEFAULT_SLOT_HEIGHT_PAGES
+      )
+    );
     next.slot_span_count = next.slotSpanCount;
   }
   if (startYPages !== null) {
@@ -7130,6 +7447,17 @@ function mapProblemToItem(problem, idx){
     problem.placementScaleRatio ?? problem.placement_scale_ratio,
     problemUsesContinuousFlow ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX
   );
+  const actualHeightPages = firstPositiveFiniteNumber(
+    problem.actualHeightPages,
+    problem.actual_height_pages,
+    problem.actualContentHeightPages,
+    problem.actual_content_height_pages
+  ) || 0.8;
+  const startYPages = firstPositiveFiniteNumber(problem.startYPages, problem.start_y_pages);
+  const snappedNextStartYPages = firstPositiveFiniteNumber(
+    problem.snappedNextStartYPages,
+    problem.snapped_next_start_y_pages
+  );
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -7137,9 +7465,9 @@ function mapProblemToItem(problem, idx){
     type: 'image',
     kind: KIND_BY_SUBJECT[problem.subject] || 'paragraph',
     step,
-    heightFrac: typeof problem.actualHeightPages === 'number' && problem.actualHeightPages > 0
-      ? problem.actualHeightPages
-      : 0.8,
+    heightFrac: actualHeightPages,
+    actualHeightPages,
+    actual_height_pages: actualHeightPages,
     imageUrl: problem.imagePath || null,
     chalkUrl: problem.boardRenderPath || null,
     subject: problem.subject || 'unknown',
@@ -7160,11 +7488,15 @@ function mapProblemToItem(problem, idx){
     inputIntent: problemInputIntent ? normalizeInputIntent(problemInputIntent) : null,
     forceFullPageBounds: Boolean(problem.forceFullPageBounds || problem.force_full_page_bounds),
     placementMode: problemPlacementMode,
-    startYPages: typeof problem.startYPages === 'number' ? problem.startYPages : null,
-    snappedNextStartYPages: typeof problem.snappedNextStartYPages === 'number' ? problem.snappedNextStartYPages : null,
-    overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
+    startYPages: startYPages ?? 0,
+    snappedNextStartYPages: snappedNextStartYPages ?? null,
+    overflowAmountPages: Number.isFinite(Number(problem.overflowAmountPages ?? problem.overflow_amount_pages))
+      ? Number(problem.overflowAmountPages ?? problem.overflow_amount_pages)
+      : 0,
     overflowViolation: Boolean(problem.overflowViolation),
-    slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
+    slotSpanCount: Number.isInteger(Number(problem.slotSpanCount ?? problem.slot_span_count))
+      ? Number(problem.slotSpanCount ?? problem.slot_span_count)
+      : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
@@ -7283,6 +7615,7 @@ const AI_MODEL_LABELS = {
   'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
   'gemini-3-pro-preview': 'Gemini 3 Pro',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-3.6-flash': 'Gemini 3.6 Flash',
 };
 const DEFAULT_INPUT_INTENT = 'multi-problem';
 const DEFAULT_CONTENT_TARGET = 'all';
@@ -8342,6 +8675,11 @@ function sessionReviewSummary(session){
     ?? 0
   );
   const aiStages = normalizeAiStageSummaries(session);
+  const aiCost = session?.ai_cost_summary || session?.aiCostSummary || {};
+  const aiCostEventCount = nonNegativeNumber(aiCost.event_count ?? aiCost.eventCount);
+  const aiCostUsd = nonNegativeNumber(aiCost.estimated_usd ?? aiCost.estimatedUsd);
+  const aiCostKrw = nonNegativeNumber(aiCost.estimated_krw ?? aiCost.estimatedKrw);
+  const aiCostUsdKrwRate = nonNegativeNumber(aiCost.usd_krw_rate ?? aiCost.usdKrwRate) || 1400;
   const duplicateProblemNumberGroups = Array.isArray(session?.duplicateProblemNumberGroups)
     ? session.duplicateProblemNumberGroups
     : Array.isArray(session?.duplicate_problem_number_groups)
@@ -8425,6 +8763,10 @@ function sessionReviewSummary(session){
     hwpRendererCacheHitCount: Number.isFinite(hwpRendererCacheHitCount) ? Math.max(0, hwpRendererCacheHitCount) : 0,
     hwpNormalizedCacheHitCount: Number.isFinite(hwpNormalizedCacheHitCount) ? Math.max(0, hwpNormalizedCacheHitCount) : 0,
     aiStages,
+    aiCostEventCount,
+    aiCostUsd,
+    aiCostKrw,
+    aiCostUsdKrwRate,
     hwpProblemCountMismatchCount: Number.isFinite(hwpProblemCountMismatchCount) ? Math.max(0, hwpProblemCountMismatchCount) : 0,
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
@@ -9330,6 +9672,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       // Full-page input stays as one page/one column by default. Column tiling
       // remains an explicit API option, never an implicit page-as-is behavior.
       pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off',
+      aiEnabled: options.aiEnabled !== false,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     })),
   });
@@ -9574,6 +9917,7 @@ function App(){
 
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
+  const [moveFeedback, setMoveFeedback] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
   const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState(null);
@@ -9592,6 +9936,7 @@ function App(){
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiToggleBusy, setAiToggleBusy] = useState(false);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
@@ -9611,6 +9956,8 @@ function App(){
   const boardColumns = normalizeBoardColumns(t.boardColumns);
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const moveFeedbackTimerRef = useRef(null);
+  const moveSequenceRef = useRef(0);
   const jobControllersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
   const pendingFileKeysRef = useRef(new Set());
@@ -9624,6 +9971,11 @@ function App(){
   useEffect(() => {
     if (view !== 'review') setReviewEditorActive(false);
   }, [view]);
+  useEffect(() => () => {
+    if (moveFeedbackTimerRef.current) {
+      window.clearTimeout(moveFeedbackTimerRef.current);
+    }
+  }, []);
   const canUndo = historyStack.length > 0 && !mutating;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
@@ -10002,6 +10354,10 @@ function App(){
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
     }
+    if (!aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
+      return;
+    }
     const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
     const problemIds = listUnique((args?.problemIds || args?.problem_ids || []).filter(Boolean));
     const isPartialRetry = Boolean(args?.partial || args?.partialRetry || args?.partial_retry) && problemIds.length > 0;
@@ -10066,11 +10422,15 @@ function App(){
       }, 5000);
       showSimpleErrorToast(e, 'AI 재인식 실패');
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
       showToast('문제 인식할 원본 페이지가 없습니다');
+      return;
+    }
+    if (!aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
       return;
     }
     if (!userSettings?.hasGeminiApiKey) {
@@ -10079,7 +10439,7 @@ function App(){
     }
     const pageIds = listUnique(session.pages.map(page => page.id).filter(Boolean));
     await retryAiSession({ pageIds });
-  }, [session, userSettings, retryAiSession]);
+  }, [session, userSettings, aiEnabled, retryAiSession]);
 
   const exportSessionImages = useCallback(async () => {
     if (!session) {
@@ -10209,8 +10569,7 @@ function App(){
         const s = await fetchUserSettings();
         if (cancelled) return;
         setUserSettings(s);
-        // default AI on if key is present
-        setAiEnabled(!!s?.hasGeminiApiKey);
+        setAiEnabled(s?.aiEnabled !== false);
       } catch (e) {
         if (!cancelled) console.warn('[board] user-settings load skipped:', e.message);
       }
@@ -10235,6 +10594,7 @@ function App(){
     try {
       const s = await saveUserSettings({ geminiApiKey: key || '' });
       setUserSettings(s);
+      setAiEnabled(s?.aiEnabled !== false);
       showToast(key ? 'Gemini 키 저장됨' : 'Gemini 키 삭제됨');
     } catch (e) {
       showSimpleErrorToast(e, '저장 실패');
@@ -10251,12 +10611,32 @@ function App(){
     }
   }, [showSimpleErrorToast, showToast]);
 
+  const onToggleAi = useCallback(async (enabled) => {
+    setAiToggleBusy(true);
+    try {
+      const s = await saveUserSettings({ aiEnabled: !!enabled });
+      setUserSettings(s);
+      setAiEnabled(s?.aiEnabled !== false);
+      showToast(enabled
+        ? (s?.hasGeminiApiKey ? 'AI 기능을 켰어요' : 'AI를 켰어요 · API 키를 저장하면 사용할 수 있어요')
+        : 'AI 기능을 껐어요 · OCR과 보정은 로컬로 처리합니다');
+    } catch (e) {
+      showSimpleErrorToast(e, 'AI 설정 저장 실패');
+    } finally {
+      setAiToggleBusy(false);
+    }
+  }, [showSimpleErrorToast, showToast]);
+
   const enhanceImageSession = useCallback(async (problemIds, options = {}) => {
     if (!session) {
       showToast('변경할 세션이 없습니다');
       return;
     }
     const mode = ['auto', 'preserve', 'ai'].includes(options?.mode) ? options.mode : 'auto';
+    if (mode === 'ai' && !aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
+      return;
+    }
     if (mode === 'ai' && !userSettings?.hasGeminiApiKey) {
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
@@ -10275,10 +10655,11 @@ function App(){
         : (ids.length === 1 ? '고화질 재구성 중' : `${ids.length}개 문항 고화질 처리 중`),
       hint: isPreserve
         ? '원본 글자 형태를 유지하며 로컬 2K 확대와 투명 배경 처리를 적용합니다.'
-        : '과목에 맞는 보존형 또는 Nano Banana 2K 경로를 선택합니다.',
+        : '원문 보존형 또는 선택형 Nano Banana 1K 경로를 사용합니다.',
     });
     try {
-      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode, size: '2K' }, { signal: job.controller.signal });
+      const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       const appliedRows = (result.enhance || []).filter(row => row.status === 'applied');
@@ -10310,7 +10691,7 @@ function App(){
       }, 5000);
       showSimpleErrorToast(e, '고화질 처리 실패');
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast]);
 
   const resetSession = useCallback(async () => {
     if (loading) {
@@ -10458,7 +10839,7 @@ function App(){
     const aiFallback = isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
-    const recognitionOcr = fastImageRecognition ? 'none' : 'auto';
+    const recognitionOcr = fastImageRecognition ? 'none' : (aiEnabled ? 'auto' : 'local');
     if (isRecognition) {
       const fileKeys = files.map(fileQueueKey);
       const queueGeneration = queueGenerationRef.current;
@@ -10483,6 +10864,7 @@ function App(){
           preview: true,
           edbName: fileName,
           ocr: recognitionOcr,
+          aiEnabled,
           detectPerspective: !fastImageRecognition,
           skipDeskew: fastImageRecognition,
           contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
@@ -10565,6 +10947,7 @@ function App(){
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
         edbName: fileName,
         ocr: recognitionOcr,
+        aiEnabled,
         preview: true,
         exportEdb: false,
         contentTarget: DEFAULT_CONTENT_TARGET,
@@ -10759,12 +11142,31 @@ function App(){
     }
     const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
     if (reordered === items) return false;
+    const previousOrder = items.map(item => String(item.id)).join('|');
+    const nextOrder = reordered.map(item => String(item.id)).join('|');
+    if (previousOrder === nextOrder) return false;
+    const previousIndex = items.findIndex(item => String(item.id) === String(fromId));
     const snapshotBefore = session
       ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
       : null;
     const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
     const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     const nextIndex = nextItems.findIndex(item => String(item.id) === String(fromId));
+    moveSequenceRef.current += 1;
+    setMoveFeedback({
+      id: fromId,
+      direction: nextIndex < previousIndex ? 'up' : 'down',
+      fromIndex: previousIndex,
+      toIndex: nextIndex,
+      sequence: moveSequenceRef.current,
+    });
+    if (moveFeedbackTimerRef.current) {
+      window.clearTimeout(moveFeedbackTimerRef.current);
+    }
+    moveFeedbackTimerRef.current = window.setTimeout(() => {
+      setMoveFeedback(null);
+      moveFeedbackTimerRef.current = null;
+    }, 900);
     setItems(nextItems);
     setActiveId(fromId);
     if (session) {
@@ -11097,7 +11499,7 @@ function App(){
           clearPendingFiles={clearPendingFiles}
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition}
-          aiAvailable={!!userSettings?.hasGeminiApiKey}
+          aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
           addMockSample={addMockSample}
           canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0}
           recentSessions={recentSessions}
@@ -11106,6 +11508,7 @@ function App(){
           onDownloadItemImage={downloadItemImage}
           downloadingItemId={downloadingItemId}
           reorderBusy={mutating}
+          moveFeedback={moveFeedback}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -11116,7 +11519,7 @@ function App(){
             mutateSession={mutateSession}
             retryAiSession={retryAiSession}
             mutating={mutating}
-            aiAvailable={!!userSettings?.hasGeminiApiKey}
+            aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
             aiBusy={hasRunningSessionRecognition}
             onConfirm={onConfirm}
             reviewFocus={reviewFocus}
@@ -11136,6 +11539,7 @@ function App(){
             addSample={addSample}
             setPlacement={setPlacement}
             reorder={reorder}
+            moveFeedback={moveFeedback}
           />
         )}
         <SidePanel
@@ -11163,11 +11567,12 @@ function App(){
           onEnhanceImage={enhanceImageSession}
           imageEnhanceBusy={hasRunningImageEnhance}
           aiEnabled={aiEnabled}
-          setAiEnabled={setAiEnabled}
+          onToggleAi={onToggleAi}
+          aiToggleBusy={aiToggleBusy}
           inputIntent={inputIntent}
           setInputIntent={setInputIntent}
           onRecognizeSession={recognizeCurrentSession}
-          canRecognizeSession={!!session && pendingFiles.length === 0 && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
+          canRecognizeSession={!!session && pendingFiles.length === 0 && aiEnabled && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
           session={session}
           published={published}
           onClassinReviewComplete={markClassinReviewComplete}

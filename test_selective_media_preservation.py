@@ -14,6 +14,7 @@ from build_problem_board_edb import (
     _build_image_only_record_image,
     _problem_allows_selective_media_preservation,
     _render_problem_asset,
+    _resolve_chalk_color,
     _stage2_prefers_chalk_math_media,
 )
 from edb_builder import CROP_FORMAT_V1
@@ -176,7 +177,8 @@ def test_math_stage2_asset_keeps_figures_as_chalk_cutouts(tmp_path: Path) -> Non
         chalk_color=(238, 238, 226),
         trim_edge_guides=False,
         pad_edges=False,
-        subject=Subject.MATH,
+        subject=Subject.UNKNOWN,
+        source_hints=("2026_math_exam.pdf",),
         source_media_regions=(
             {
                 "kind": "image",
@@ -195,8 +197,23 @@ def test_math_stage2_asset_keeps_figures_as_chalk_cutouts(tmp_path: Path) -> Non
     )
 
     assert _stage2_prefers_chalk_math_media(Subject.MATH, "s2")
+    assert _stage2_prefers_chalk_math_media(
+        Subject.UNKNOWN,
+        "s2",
+        "2026_math_exam.pdf",
+    )
     assert not _stage2_prefers_chalk_math_media(Subject.MATH, "raw")
     assert not _stage2_prefers_chalk_math_media(Subject.KOREAN, "s2")
+    assert not _stage2_prefers_chalk_math_media(
+        Subject.KOREAN,
+        "s2",
+        "2026_math_exam.pdf",
+    )
+    assert not _stage2_prefers_chalk_math_media(
+        Subject.UNKNOWN,
+        "s2",
+        "2026_english_exam.pdf",
+    )
     assert _render_problem_asset(task) == (1100, 500)
 
     with Image.open(task.board_render_path) as rendered:
@@ -214,9 +231,9 @@ def test_math_stage2_edb_export_does_not_restore_white_figure_box(tmp_path: Path
     draw = ImageDraw.Draw(source)
     draw.line((110, 70, 209, 70), fill="black", width=5)
     source.save(crop_path)
-    board = Image.new("RGBA", source.size, (238, 238, 226, 0))
-    ImageDraw.Draw(board).line((110, 70, 209, 70), fill=(238, 238, 226, 255), width=5)
-    board.save(board_path)
+    # Simulate an existing session created before math figures stopped being
+    # restored as opaque white source patches.
+    source.convert("RGBA").save(board_path)
     regions = [
         {
             "kind": "image",
@@ -228,9 +245,9 @@ def test_math_stage2_edb_export_does_not_restore_white_figure_box(tmp_path: Path
         problem_id="math-1",
         title="수학 1번",
         problem_number=1,
-        subject=Subject.MATH,
+        subject=Subject.UNKNOWN,
         source_page_id="page-1",
-        source_path="math.pdf",
+        source_path="2026_math_exam.pdf",
         prepared_page=None,
         bounds=Box(left=0.0, top=0.0, width=240.0, height=140.0),
         crop_path=crop_path,
@@ -264,7 +281,64 @@ def test_math_stage2_edb_export_does_not_restore_white_figure_box(tmp_path: Path
     with Image.open(io.BytesIO(payload.image_bytes)) as exported:
         rgba = exported.convert("RGBA")
         assert rgba.getpixel((160, 50))[3] == 0
-        assert rgba.getpixel((160, 70)) == (238, 238, 226, 255)
+        assert rgba.getpixel((160, 70)) == _resolve_chalk_color("charcoal") + (255,)
+
+
+def test_fresh_math_stage2_edb_export_reuses_preprocessed_board_render(
+    tmp_path: Path,
+) -> None:
+    crop_path = tmp_path / "math-crop.png"
+    board_path = tmp_path / "math-board.png"
+    source = Image.new("RGB", (240, 140), "white")
+    ImageDraw.Draw(source).line((110, 70, 209, 70), fill="black", width=5)
+    source.save(crop_path)
+    chalk = _resolve_chalk_color("charcoal")
+    rendered = Image.new("RGBA", source.size, chalk + (0,))
+    ImageDraw.Draw(rendered).line((110, 70, 209, 70), fill=chalk + (255,), width=5)
+    rendered.save(board_path)
+    entry = ProblemEntry(
+        problem_id="math-fresh-1",
+        title="Math 1",
+        problem_number=1,
+        subject=Subject.UNKNOWN,
+        source_page_id="page-1",
+        source_path="2026_math_exam.pdf",
+        prepared_page=None,
+        bounds=Box(left=0.0, top=0.0, width=240.0, height=140.0),
+        crop_path=crop_path,
+        board_render_path=board_path,
+        blocks=[],
+        actual_height_pages=1.0,
+        overflow_allowed=False,
+        reading_heavy=False,
+        risk_flags=[],
+        processing_step="s2",
+        board_render_preprocessed=True,
+    )
+    placement = SimpleNamespace(
+        metadata={
+            "crop_path": str(crop_path),
+            "board_render_path": str(board_path),
+            "processing_step": "s2",
+        }
+    )
+
+    with patch(
+        "build_problem_board_edb._extract_problem_cutout",
+        side_effect=AssertionError("fresh math render must not be reconstructed"),
+    ):
+        payload = _build_image_only_record_image(
+            placement,
+            entry,
+            dark_board=True,
+            board_theme="charcoal",
+            crop_format=CROP_FORMAT_V1,
+            target_image_width_px=0.0,
+            continuous_flow=False,
+        )
+
+    with Image.open(io.BytesIO(payload.image_bytes)) as exported:
+        assert exported.convert("RGBA").getpixel((160, 70)) == chalk + (255,)
 
 
 def test_text_priority_asset_does_not_run_horizontal_page_chrome_trimmers(
