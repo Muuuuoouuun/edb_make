@@ -498,6 +498,10 @@ class TestWork3PassageMergeAudit(unittest.TestCase):
             self.assertEqual(expected_page_ids, primary_metadata["passage_merged_source_page_ids"])
             self.assertEqual(5, primary_metadata["passage_merged_fragment_count"])
             with Image.open(merged[0].crop_path).convert("RGB") as stitched:
+                # Join cleanup may remove redundant outer whitespace from
+                # intermediate fragments. Verify semantic source order via
+                # each unique marker's centroid instead of assuming every
+                # prepared fragment keeps its original 180 px height.
                 centroids = []
                 for color in colors:
                     rows = [

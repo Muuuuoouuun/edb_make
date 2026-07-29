@@ -22,8 +22,8 @@ class TestWork3ComparePdfPaths(unittest.TestCase):
         # case and should not lower this path-equivalence fixture's recall.
         page.insert_text(
             (48, 82),
-            "[1~2] Read passage. Answer questions.",
-            fontsize=12,
+            "[1~2] Read the following passage and answer the questions.",
+            fontsize=9,
         )
         for row, y in enumerate(range(120, 730, 28), start=1):
             page.insert_text((48, y), f"left passage line {row:02d}", fontsize=11)

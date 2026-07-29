@@ -1066,7 +1066,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             transparent=False,
         )
 
-        self.assertEqual((140, 172), stitched.size)
+        self.assertEqual((140, 176), stitched.size)
         self.assertEqual((255, 255, 255), stitched.getpixel((0, 10)))
         self.assertEqual((0, 0, 0), stitched.getpixel((20, 10)))
         self.assertEqual((0, 0, 0), stitched.getpixel((0, 106)))

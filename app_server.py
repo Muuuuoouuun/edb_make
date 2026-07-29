@@ -36,6 +36,13 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
+from bug_reporting import (
+    DEFAULT_BUG_REPORT_URL,
+    BugReportDeliveryError,
+    BugReportValidationError,
+    build_bug_report,
+    deliver_bug_report,
+)
 from layout_template_schema import LayoutTemplate
 from structured_schema import Box, Subject
 from user_settings import (
@@ -488,6 +495,7 @@ def load_app_update_config() -> dict[str, Any]:
         "updateFeedUrl": "",
         "downloadUrl": "",
         "releaseNotesUrl": "",
+        "bugReportUrl": DEFAULT_BUG_REPORT_URL,
     }
     seen: set[Path] = set()
     for path in (RESOURCE_DIR / APP_UPDATE_CONFIG_FILE, BASE_DIR / APP_UPDATE_CONFIG_FILE):
@@ -508,6 +516,7 @@ def load_app_update_config() -> dict[str, Any]:
         "updateFeedUrl": "EDB_UPDATE_FEED_URL",
         "downloadUrl": "EDB_DOWNLOAD_URL",
         "releaseNotesUrl": "EDB_RELEASE_NOTES_URL",
+        "bugReportUrl": "EDB_BUG_REPORT_URL",
     }
     for key, env_name in env_map.items():
         if os.environ.get(env_name):
@@ -6124,6 +6133,23 @@ def _mutate_classify(session: dict[str, Any], problem_id: str, classification: s
     return session
 
 
+def _mutate_classify_many(
+    session: dict[str, Any],
+    problem_ids: Any,
+    classification: str,
+) -> dict[str, Any]:
+    if not isinstance(problem_ids, list) or not problem_ids:
+        raise ValueError("problemIds must be a non-empty list")
+    ordered_ids = list(dict.fromkeys(str(value or "").strip() for value in problem_ids))
+    ordered_ids = [problem_id for problem_id in ordered_ids if problem_id]
+    if not ordered_ids:
+        raise ValueError("problemIds must contain at least one id")
+    for problem_id in ordered_ids:
+        _mutate_classify(session, problem_id, classification)
+    _refresh_session_problem_counts(session)
+    return session
+
+
 def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     if not _global_ai_enabled():
         raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
@@ -6811,6 +6837,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/user-settings":
             self._handle_user_settings_post()
             return
+        if parsed.path == "/api/bug-report":
+            self._handle_bug_report()
+            return
         if parsed.path == "/api/runtime/artifacts/cleanup":
             self._handle_runtime_artifact_cleanup()
             return
@@ -7376,9 +7405,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     ids_raw = [payload.get("problemId", payload.get("problem_id"))]
                 new_session = _mutate_confirm(session, ids_raw)
             elif action == "classify":
-                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                 classification = str(payload.get("classification") or "")
-                new_session = _mutate_classify(session, problem_id, classification)
+                ids_raw = payload.get("problemIds", payload.get("problem_ids"))
+                if ids_raw is not None:
+                    new_session = _mutate_classify_many(session, ids_raw, classification)
+                else:
+                    problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                    new_session = _mutate_classify(session, problem_id, classification)
             elif action in {"retry-ai", "retry_ai"}:
                 new_session = _mutate_retry_ai(session, payload)
             elif action in {"enhance-image", "enhance_image"}:
@@ -8062,6 +8095,48 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "settings": summary})
+
+    def _handle_bug_report(self) -> None:
+        try:
+            request_payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json(
+                {"ok": False, "error": f"invalid JSON: {exc}"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        app_config = load_app_update_config()
+        try:
+            report = build_bug_report(
+                request_payload,
+                app_config=app_config,
+                log_file=APP_LOG_FILE,
+            )
+        except BugReportValidationError as exc:
+            self._send_json(
+                {"ok": False, "error": str(exc), "code": "invalid_bug_report"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        endpoint = str(app_config.get("bugReportUrl") or DEFAULT_BUG_REPORT_URL).strip()
+        try:
+            receipt = deliver_bug_report(report, endpoint=endpoint)
+        except BugReportDeliveryError as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "code": "bug_report_delivery_failed",
+                    "recoverySteps": [
+                        "인터넷 연결을 확인한 뒤 다시 시도해 주세요.",
+                        "계속 실패하면 앱 로그와 함께 관리자에게 알려 주세요.",
+                    ],
+                },
+                status=HTTPStatus.BAD_GATEWAY,
+            )
+            return
+        print(f"[bug-report] accepted as {receipt['reportId']}")
+        self._send_json(receipt, status=HTTPStatus.CREATED)
 
     def _read_json_body(self) -> dict[str, Any]:
         raw_content_length = self.headers.get("Content-Length", "0")

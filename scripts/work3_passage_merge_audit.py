@@ -291,7 +291,8 @@ def run_strict_audit_matrix() -> dict[str, Any]:
         [footnote, Image.new("RGB", (720, 240), "white")]
     )[0]
     footnote_preserved = bool(
-        _count_color(footnote_prepared, footnote_marker)
+        footnote_prepared.width == footnote.width
+        and _count_color(footnote_prepared, footnote_marker)
         == _count_color(footnote, footnote_marker)
     )
 

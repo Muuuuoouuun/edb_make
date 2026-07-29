@@ -247,29 +247,19 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             pdf_path = Path(temp_dir) / "multiline_passage_header.pdf"
             doc = fitz.open()
             page = doc.new_page(width=600, height=800)
-            font_name = "KoreanPassageTest"
-            font_candidates = (
-                Path("C:/Windows/Fonts/malgun.ttf"),
-                Path("/System/Library/Fonts/AppleSDGothicNeo.ttc"),
-                Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-            )
-            font_path = next((path for path in font_candidates if path.is_file()), None)
-            if font_path is None:
-                doc.close()
-                self.skipTest("No Korean-capable test font is installed")
-            page.insert_font(
-                fontname=font_name,
-                fontfile=str(font_path),
-            )
+            # PyMuPDF's built-in CJK font is platform-independent. A macOS
+            # system font path made this fixture fail on Linux CI before the
+            # segmentation code was exercised.
+            font_name = "korea"
             page.insert_text(
                 (48, 82),
-                "[24~27] (가)와 (나)는 학생이 읽은 글이고, (다)는 이를 바탕",
+                "[24~27] (가)와 (나)는 학생이 읽은 글이고,",
                 fontname=font_name,
                 fontsize=11,
             )
             page.insert_text(
                 (48, 104),
-                "으로 쓴 건의문의 초고이다. 물음에 답하시오.",
+                "(다)는 이를 바탕으로 쓴 건의문의 초고이다. 물음에 답하시오.",
                 fontname=font_name,
                 fontsize=11,
             )

@@ -109,6 +109,18 @@ const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, from
   next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, moved);
   return next;
 });
+const reorderItemGroupForDrop = REORDER_HELPERS.reorderItemGroupForDrop || ((items, fromIds, toId, position = 'before') => {
+  const sourceIdSet = new Set((fromIds || []).map(String));
+  const targetId = String(toId || '');
+  if (!Array.isArray(items) || !sourceIdSet.size || !targetId || sourceIdSet.has(targetId)) return items;
+  const moved = items.filter(item => sourceIdSet.has(String(item.id)));
+  const remaining = items.filter(item => !sourceIdSet.has(String(item.id)));
+  const targetIndex = remaining.findIndex(item => String(item.id) === targetId);
+  if (!moved.length || targetIndex < 0) return items;
+  const next = remaining.slice();
+  next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, ...moved);
+  return next.every((item, index) => String(item.id) === String(items[index]?.id)) ? items : next;
+});
 const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
   clientY > rect.top + rect.height / 2 ? 'after' : 'before'
 ));
@@ -152,6 +164,66 @@ const adjacentReorderCommand = REORDER_HELPERS.adjacentReorderCommand || ((items
     position: targetIndex < sourceIndex ? 'before' : 'after',
     nextIndex: targetIndex,
   };
+});
+const adjacentGroupReorderCommand = REORDER_HELPERS.adjacentGroupReorderCommand || ((items, itemIds, direction) => {
+  const sourceIdSet = new Set((itemIds || []).map(String));
+  const sourceIds = items.map(item => String(item.id)).filter(id => sourceIdSet.has(id));
+  if (!sourceIds.length) return null;
+  const indexes = items
+    .map((item, index) => sourceIdSet.has(String(item.id)) ? index : -1)
+    .filter(index => index >= 0);
+  const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+  const edgeIndex = delta < 0 ? Math.min(...indexes) : Math.max(...indexes);
+  const targetIndex = edgeIndex + delta;
+  if (!delta || targetIndex < 0 || targetIndex >= items.length) return null;
+  const targetId = String(items[targetIndex].id);
+  if (sourceIdSet.has(targetId)) return null;
+  const position = delta < 0 ? 'before' : 'after';
+  const reordered = reorderItemGroupForDrop(items, sourceIds, targetId, position);
+  if (reordered === items) return null;
+  return {
+    sourceId: sourceIds[0],
+    sourceIds,
+    targetId,
+    position,
+    nextIndex: reordered.findIndex(item => String(item.id) === sourceIds[0]),
+  };
+});
+const applySelectionClick = REORDER_HELPERS.applySelectionClick || ((orderedIds, selectedIds, anchorId, targetId, modifiers = {}) => {
+  const ids = (orderedIds || []).map(String);
+  const id = String(targetId || '');
+  if (!id || !ids.includes(id)) return { selectedIds: selectedIds || [], anchorId: anchorId || null };
+  if (modifiers.shiftKey) {
+    const anchor = ids.includes(String(anchorId || '')) ? String(anchorId) : id;
+    const start = ids.indexOf(anchor);
+    const end = ids.indexOf(id);
+    const range = ids.slice(Math.min(start, end), Math.max(start, end) + 1);
+    const selected = modifiers.ctrlKey || modifiers.metaKey
+      ? Array.from(new Set([...(selectedIds || []).map(String), ...range]))
+      : range;
+    return { selectedIds: ids.filter(value => selected.includes(value)), anchorId: anchor };
+  }
+  if (modifiers.ctrlKey || modifiers.metaKey) {
+    const selected = new Set((selectedIds || []).map(String));
+    if (selected.has(id)) selected.delete(id);
+    else selected.add(id);
+    return { selectedIds: ids.filter(value => selected.has(value)), anchorId: id };
+  }
+  return { selectedIds: [id], anchorId: id };
+});
+const selectAllItems = REORDER_HELPERS.selectAllItems || (orderedIds => (orderedIds || []).map(String));
+const clearItemSelection = REORDER_HELPERS.clearItemSelection || (() => []);
+const selectionKeyboardCommand = REORDER_HELPERS.selectionKeyboardCommand || ((orderedIds, selectedIds, anchorId, focusId, key, modifiers = {}) => {
+  const ids = (orderedIds || []).map(String);
+  if ((modifiers.ctrlKey || modifiers.metaKey) && String(key).toLowerCase() === 'a') {
+    return {
+      selectedIds: modifiers.shiftKey ? [] : ids,
+      anchorId: modifiers.shiftKey ? null : (anchorId || focusId || ids[0] || null),
+      focusId: focusId || ids[0] || null,
+    };
+  }
+  if (key === 'Escape') return { selectedIds: [], anchorId: null, focusId: focusId || null };
+  return applySelectionClick(ids, selectedIds, anchorId, focusId, modifiers);
 });
 const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positions, targetTop) => {
   if (!positions.length) return -1;
@@ -738,6 +810,7 @@ const Icon = {
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
   more:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>,
+  bug:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 8.5h8V15a4 4 0 0 1-8 0V8.5zM9.5 5.5h5M12 5.5V3M5 10h3M16 10h3M5 15h3M16 15h3M8.5 19.5L6.5 22M15.5 19.5l2 2.5"/></svg>,
   close:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
@@ -1471,7 +1544,12 @@ function TooltipLayer(){
   );
 }
 
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo, onShutdown, onExportImages, exportingImages, canExportImages }){
+function TopBar({
+  fileName, setFileName, progress, processed, total, onPublish, published, onReset,
+  onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewComplete,
+  recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
+  canExportImages,
+}){
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef(null);
   useEffect(() => {
@@ -1502,19 +1580,42 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <input value={fileName} onChange={e => setFileName(e.target.value)} />
       </div>
       <div className="spacer" />
-      <div className="view-toggle" title={reviewAvailable ? '' : '먼저 자료를 업로드하세요'}>
+      <div className="workflow-progress" aria-label="자료 제작 진행 단계">
+        <span className={`workflow-step ${total > 0 ? 'done' : 'active'}`} aria-current={total === 0 ? 'step' : undefined}>
+          1 자료
+        </span>
+        <span className={`workflow-step ${reviewAvailable ? 'done' : recognitionBusy ? 'active' : ''}`} aria-current={recognitionBusy ? 'step' : undefined}>
+          2 인식
+        </span>
         <button
-          className={view === 'board' ? 'on' : ''}
-          data-tooltip="보드 배치 화면으로 이동"
-          onClick={() => setView && setView('board')}
-        >칠판</button>
-        <button
-          className={view === 'review' ? 'on' : ''}
+          className={`workflow-step ${reviewComplete ? 'done' : view === 'review' ? 'active' : ''}`}
+          type="button"
+          aria-label="검수"
           data-tooltip={reviewAvailable ? 'AI 인식 박스와 문제 분할을 검수' : '먼저 자료를 업로드하세요'}
-          onClick={() => reviewAvailable && setView && setView('review')}
+          aria-current={view === 'review' ? 'step' : undefined}
+          onClick={() => reviewAvailable && setView?.('review')}
           disabled={!reviewAvailable}
-          style={!reviewAvailable ? { cursor: 'not-allowed', opacity: .5 } : null}
-        >검수</button>
+        >
+          3 검수
+        </button>
+        <button
+          className={`workflow-step ${published ? 'done' : view === 'board' && total > 0 ? 'active' : ''}`}
+          type="button"
+          aria-label="칠판"
+          data-tooltip="보드 배치 화면으로 이동"
+          aria-current={view === 'board' && total > 0 ? 'step' : undefined}
+          onClick={() => total > 0 && setView?.('board')}
+          disabled={!total}
+        >
+          4 칠판
+        </button>
+        <span
+          className={`workflow-step ${published ? 'done active' : ''}`}
+          aria-current={published ? 'step' : undefined}
+          aria-disabled={!total ? 'true' : undefined}
+        >
+          5 제작
+        </span>
       </div>
       <div className="progress" title={`${processed} / ${total} 처리됨`}>
         <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
@@ -1631,7 +1732,7 @@ function ReviewFilterTabs({ options, value, onChange }){
 function ReviewStage({
   session, items, activeId, setActive, mutateSession, retryAiSession, mutating,
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
-  onEditorModeChange, onOpenBoard,
+  onEditorModeChange, onOpenBoard, selectedIds, setSelectedIds, reviewUi, setReviewUi,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
@@ -1647,19 +1748,26 @@ function ReviewStage({
     return map;
   }, [items]);
 
-  // Multi-select state: ids of bboxes currently selected. Clicking without
-  // shift replaces selection; shift-click toggles.
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [boxEdit, setBoxEdit] = useState(null);
   const [manualSplit, setManualSplit] = useState(null);
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
   const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
-  const [reviewFilter, setReviewFilter] = useState('all');
-  const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
+  const reviewFilter = reviewUi?.filter || 'all';
+  const reviewRiskFilter = reviewUi?.riskFilter || null;
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
   const [reviewScopePageIds, setReviewScopePageIds] = useState([]);
-  const [reviewZoom, setReviewZoom] = useState(1);
+  const reviewZoom = clampReviewZoom(reviewUi?.zoom || 1);
+  const updateReviewUiField = useCallback((field, value) => {
+    setReviewUi?.(prev => {
+      const previous = prev || {};
+      const nextValue = typeof value === 'function' ? value(previous[field]) : value;
+      return previous[field] === nextValue ? previous : { ...previous, [field]: nextValue };
+    });
+  }, [setReviewUi]);
+  const setReviewFilter = useCallback(value => updateReviewUiField('filter', value), [updateReviewUiField]);
+  const setReviewRiskFilter = useCallback(value => updateReviewUiField('riskFilter', value), [updateReviewUiField]);
+  const setReviewZoom = useCallback(value => updateReviewUiField('zoom', value), [updateReviewUiField]);
   const boxEditDragRef = useRef(null);
   const boxEditCommitRef = useRef(false);
   const manualSplitDragRef = useRef(null);
@@ -1667,7 +1775,9 @@ function ReviewStage({
   const manualSplitSeqRef = useRef(1);
   const manualSplitFocusRef = useRef('');
   const pendingReviewSelectionProblemIdRef = useRef('');
+  const reviewSelectionAnchorRef = useRef(null);
   const reviewWrapRef = useRef(null);
+  const reviewScrollTopRef = useRef(Number(reviewUi?.scrollTop) || 0);
   const reviewEditorActive = Boolean(boxEdit || manualSplit);
 
   useEffect(() => {
@@ -1682,7 +1792,6 @@ function ReviewStage({
     setManualSplit(null);
     setManualSplitDraftBox(null);
     setManualSplitShortcutHelpOpen(false);
-    setReviewRiskFilter(null);
     const pendingProblemId = String(pendingReviewSelectionProblemIdRef.current || '').trim();
     pendingReviewSelectionProblemIdRef.current = '';
     if (pendingProblemId) {
@@ -1695,8 +1804,18 @@ function ReviewStage({
       }
     }
     setBoxEdit(null);
-    setSelectedIds(new Set());
   }, [session]);
+  useLayoutEffect(() => {
+    const wrap = reviewWrapRef.current;
+    if (!wrap) return undefined;
+    if (reviewScrollTopRef.current > 0) wrap.scrollTop = reviewScrollTopRef.current;
+    return () => {
+      setReviewUi?.(prev => ({
+        ...(prev || {}),
+        scrollTop: reviewScrollTopRef.current,
+      }));
+    };
+  }, [setReviewUi]);
   useEffect(() => {
     if (reviewFocus === null) {
       setReviewScopeProblemIds([]);
@@ -1762,16 +1881,16 @@ function ReviewStage({
       evt.stopPropagation();
       return;
     }
-    if (evt.shiftKey) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        if (next.has(probId)) next.delete(probId);
-        else next.add(probId);
-        return next;
-      });
-    } else {
-      setSelectedIds(new Set([probId]));
-    }
+    const orderedIds = items.map(item => String(item.id)).filter(id => problemsById.has(id));
+    const result = applySelectionClick(
+      orderedIds,
+      Array.from(selectedIds || []),
+      reviewSelectionAnchorRef.current,
+      probId,
+      evt
+    );
+    reviewSelectionAnchorRef.current = result.anchorId;
+    setSelectedIds(new Set(result.selectedIds));
     if (setActive) setActive(probId);
   };
 
@@ -3216,6 +3335,7 @@ function ReviewStage({
           className={`review-wrap ${manualSplit ? 'manual-split-open' : ''}`}
           style={{ '--review-zoom': String(reviewZoom) }}
           onWheel={handleReviewWheel}
+          onScroll={event => { reviewScrollTopRef.current = event.currentTarget.scrollTop; }}
           ref={reviewWrapRef}
         >
           {actionBar}
@@ -3653,12 +3773,17 @@ function ItemsRail({
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
   onDownloadItemImage, downloadingItemId, reorderBusy, moveFeedback,
+  selectedItemIds, setSelectedItemIds,
+  onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
 }){
   const dragId = useRef(null);
-  const [draggingId, setDraggingId] = useState(null);
+  const dragIdsRef = useRef([]);
+  const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
   const [materialFilter, setMaterialFilter] = useState('all');
+  const [dragBadgePosition, setDragBadgePosition] = useState(null);
+  const selectionAnchorRef = useRef(null);
   const railRef = useRef(null);
   const itemRefs = useRef({});
   const previousItemRects = useRef(new Map());
@@ -3689,6 +3814,22 @@ function ItemsRail({
       || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter]);
   const filterActive = materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
+  const orderedSelectedIds = useMemo(
+    () => items.map(item => String(item.id)).filter(id => selectedItemIds.has(id)),
+    [items, selectedItemIds]
+  );
+  const selectedItemCount = orderedSelectedIds.length;
+
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedItemIds(prev => {
+      const filtered = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return filtered.size === prev.size ? prev : filtered;
+    });
+    if (selectionAnchorRef.current && !validIds.has(String(selectionAnchorRef.current))) {
+      selectionAnchorRef.current = null;
+    }
+  }, [itemOrderSignature]);
 
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
@@ -3731,9 +3872,49 @@ function ItemsRail({
     }
   }, [itemOrderSignature]);
 
+  const selectRailItem = (itemId, event = {}) => {
+    const id = String(itemId);
+    const visibleIds = visibleItemRows.map(({ item }) => String(item.id));
+    const anchorId = selectionAnchorRef.current && visibleIds.includes(String(selectionAnchorRef.current))
+      ? String(selectionAnchorRef.current)
+      : (activeId && visibleIds.includes(String(activeId)) ? String(activeId) : id);
+    const selection = applySelectionClick(
+      visibleIds,
+      Array.from(selectedItemIds),
+      anchorId,
+      id,
+      event
+    );
+    const next = new Set(selection.selectedIds);
+    selectionAnchorRef.current = selection.anchorId;
+    setSelectedItemIds(next);
+    if (next.has(id)) {
+      setActive(id);
+    } else if (next.size) {
+      const remainingIds = Array.from(next);
+      setActive(remainingIds[remainingIds.length - 1]);
+    } else {
+      setActive(id);
+    }
+  };
+
+  const clearRailSelection = () => {
+    selectionAnchorRef.current = null;
+    setSelectedItemIds(new Set());
+  };
+
+  const removeSelectedItems = () => {
+    if (!orderedSelectedIds.length || reorderBusy) return;
+    removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });
+    clearRailSelection();
+    setReorderAnnouncement(`${orderedSelectedIds.length}개 문제를 삭제했습니다.`);
+  };
+
   const clearDragState = () => {
     dragId.current = null;
-    setDraggingId(null);
+    dragIdsRef.current = [];
+    setDraggingIds(new Set());
+    setDragBadgePosition(null);
     dropTargetRef.current = null;
     setDropTarget(null);
   };
@@ -3746,7 +3927,8 @@ function ItemsRail({
   };
 
   const updateDropTarget = (event, targetId) => {
-    if (!dragId.current || dragId.current === targetId) {
+    const sourceIds = dragIdsRef.current.length ? dragIdsRef.current : [dragId.current].filter(Boolean);
+    if (!sourceIds.length || sourceIds.includes(String(targetId))) {
       setCurrentDropTarget(null);
       return;
     }
@@ -3756,28 +3938,29 @@ function ItemsRail({
     setCurrentDropTarget({ id: targetId, position });
   };
 
-  const findPointerDropTarget = (_clientX, clientY, sourceId) => {
+  const findPointerDropTarget = (_clientX, clientY, sourceIds) => {
     const rail = railRef.current;
     if (!rail) return null;
     const drag = pointerDragRef.current;
-    const rows = drag?.id === sourceId ? drag.rows : [];
+    const sourceIdSet = new Set((sourceIds || []).map(String));
+    const rows = drag?.rows?.filter(row => !sourceIdSet.has(String(row.id))) || [];
     if (!rows.length) return null;
     const railRect = rail.getBoundingClientRect();
     const contentY = clientY - railRect.top + rail.scrollTop;
     const first = rows[0];
     if (contentY < first.top) {
       const id = first.id;
-      return id && id !== sourceId ? { id, position: 'before' } : null;
+      return id ? { id, position: 'before' } : null;
     }
     for (const candidate of rows) {
       const id = candidate.id;
       if (contentY < candidate.top + candidate.height / 2) {
-        return id && id !== sourceId ? { id, position: 'before' } : null;
+        return id ? { id, position: 'before' } : null;
       }
     }
     const last = rows[rows.length - 1];
     const id = last.id;
-    return id && id !== sourceId ? { id, position: 'after' } : null;
+    return id ? { id, position: 'after' } : null;
   };
 
   const stopRailAutoScroll = () => {
@@ -3789,9 +3972,9 @@ function ItemsRail({
 
   const stepRailAutoScroll = () => {
     const rail = railRef.current;
-    const sourceId = dragId.current;
+    const sourceIds = dragIdsRef.current;
     const { clientX, clientY } = railAutoScrollRef.current;
-    if (!rail || !sourceId || clientY == null) {
+    if (!rail || !sourceIds.length || clientY == null) {
       stopRailAutoScroll();
       return;
     }
@@ -3807,7 +3990,7 @@ function ItemsRail({
     }
     const previousTop = rail.scrollTop;
     rail.scrollTop = Math.max(0, Math.min(rail.scrollHeight - rail.clientHeight, previousTop + delta));
-    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceId);
+    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceIds);
     setCurrentDropTarget(target);
     if (rail.scrollTop === previousTop) {
       railAutoScrollRef.current.raf = null;
@@ -3828,6 +4011,10 @@ function ItemsRail({
 
   const startPointerDrag = (event, itemId) => {
     if (reorderBusy || filterActive || event.button !== 0 || event.target.closest?.('button')) return;
+    const id = String(itemId);
+    const sourceIds = selectedItemIds.has(id) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [id];
     const rail = railRef.current;
     if (!rail) return;
     const railRect = rail.getBoundingClientRect();
@@ -3842,14 +4029,16 @@ function ItemsRail({
       };
     }).filter(Boolean);
     pointerDragRef.current = {
-      id: itemId,
+      id,
+      ids: sourceIds,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
       rows,
     };
-    dragId.current = itemId;
+    dragId.current = id;
+    dragIdsRef.current = sourceIds;
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
@@ -3861,11 +4050,16 @@ function ItemsRail({
     if (!drag.moved) {
       if (Math.hypot(dx, dy) < 5) return;
       drag.moved = true;
-      setDraggingId(drag.id);
+      if (!selectedItemIds.has(drag.id)) {
+        selectionAnchorRef.current = drag.id;
+        setSelectedItemIds(new Set([drag.id]));
+      }
+      setDraggingIds(new Set(drag.ids));
     }
+    if (drag.ids.length > 1) setDragBadgePosition({ left: event.clientX, top: event.clientY });
     event.preventDefault();
     applyRailAutoScroll(event.clientX, event.clientY);
-    const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
+    const target = findPointerDropTarget(event.clientX, event.clientY, drag.ids);
     setCurrentDropTarget(target);
   };
 
@@ -3873,7 +4067,7 @@ function ItemsRail({
     const drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const target = drag.moved
-      ? findPointerDropTarget(event.clientX, event.clientY, drag.id) || dropTargetRef.current
+      ? findPointerDropTarget(event.clientX, event.clientY, drag.ids) || dropTargetRef.current
       : null;
     if (drag.moved) {
       event.preventDefault();
@@ -3881,7 +4075,10 @@ function ItemsRail({
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
       if (target) {
         setActive(drag.id);
-        reorder(drag.id, target.id, target.position, { resetPlacement: true });
+        reorder(drag.id, target.id, target.position, {
+          resetPlacement: true,
+          sourceIds: drag.ids,
+        });
       }
     }
     event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -3892,17 +4089,57 @@ function ItemsRail({
 
   const moveItemByKeyboard = (item, direction) => {
     if (reorderBusy || filterActive) return;
-    const command = adjacentReorderCommand(items, item.id, direction);
+    const itemId = String(item.id);
+    const sourceIds = selectedItemIds.has(itemId) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [itemId];
+    const command = sourceIds.length > 1
+      ? adjacentGroupReorderCommand(items, sourceIds, direction)
+      : adjacentReorderCommand(items, item.id, direction);
     if (!command) {
-      setReorderAnnouncement(direction === 'up' ? '이미 첫 번째 문제입니다.' : '이미 마지막 문제입니다.');
+      setReorderAnnouncement(direction === 'up' ? '선택 묶음이 이미 맨 위입니다.' : '선택 묶음이 이미 맨 아래입니다.');
       return;
     }
     pendingKeyboardFocusRef.current = item.id;
     setActive(item.id);
-    const moved = reorder(command.sourceId, command.targetId, command.position, { resetPlacement: true });
+    const moved = reorder(item.id, command.targetId, command.position, {
+      resetPlacement: true,
+      sourceIds,
+    });
     if (moved !== false) {
-      setReorderAnnouncement(`${command.nextIndex + 1}번으로 이동했습니다: ${problemDisplayName(item, command.nextIndex)}.`);
+      setReorderAnnouncement(sourceIds.length > 1
+        ? `${sourceIds.length}개 문제를 ${command.nextIndex + 1}번부터 함께 이동했습니다.`
+        : `${command.nextIndex + 1}번으로 이동했습니다: ${problemDisplayName(item, command.nextIndex)}.`);
     }
+  };
+
+  const applyRailSelectionKeyboard = (item, event) => {
+    if (event.altKey) return false;
+    const visibleIds = visibleItemRows.map(({ item: rowItem }) => String(rowItem.id));
+    const isSelectAll = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a';
+    const isRangeArrow = event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown');
+    if (!isSelectAll && !isRangeArrow && event.key !== 'Escape') return false;
+    const result = selectionKeyboardCommand(
+      visibleIds,
+      Array.from(selectedItemIds),
+      selectionAnchorRef.current,
+      String(item.id),
+      event.key,
+      event
+    );
+    event.preventDefault();
+    selectionAnchorRef.current = result.anchorId;
+    setSelectedItemIds(new Set(result.selectedIds));
+    if (result.focusId && result.selectedIds.includes(result.focusId)) {
+      setActive(result.focusId);
+      pendingKeyboardFocusRef.current = result.focusId;
+    }
+    setReorderAnnouncement(
+      result.selectedIds.length
+        ? `${result.selectedIds.length}개 문제를 선택했습니다.`
+        : '문제 선택을 해제했습니다.'
+    );
+    return true;
   };
 
   const toggleRecentSessionsCollapsed = () => {
@@ -3967,7 +4204,13 @@ function ItemsRail({
                 const firstMatch = items.find(item => value === 'all'
                   || (value === 'questions' && !isPassageFragmentProblem(item))
                   || (value === 'passages' && isPassageFragmentProblem(item)));
-                if (firstMatch) setActive(firstMatch.id);
+                if (firstMatch) {
+                  selectionAnchorRef.current = String(firstMatch.id);
+                  setSelectedItemIds(new Set([String(firstMatch.id)]));
+                  setActive(firstMatch.id);
+                } else {
+                  clearRailSelection();
+                }
               }}
             >
               <span>{label}</span><b>{count}</b>
@@ -4259,15 +4502,49 @@ function ItemsRail({
         )}
 
         {!!items.length && (
-          <div className="problem-order-status" id="problem-order-help">
-            {filterActive ? (
+          <div className={`problem-order-status ${selectedItemCount > 1 ? 'is-selection' : ''}`} id="problem-order-help">
+            {selectedItemCount > 1 ? (
+              <>
+                <strong>{selectedItemCount}개 선택</strong>
+                <span><kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 선택 · 드래그/Alt 이동</span>
+                <div className="rail-selection-tools" role="group" aria-label="선택 문제 일괄 작업">
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's1')} disabled={reorderBusy}>
+                    1단계
+                  </button>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's2')} disabled={reorderBusy}>
+                    원문 보존
+                  </button>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's3')} disabled={reorderBusy}>
+                    고화질
+                  </button>
+                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'question')} disabled={reorderBusy}>
+                    문항
+                  </button>
+                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'shared-passage')} disabled={reorderBusy}>
+                    공통 지문
+                  </button>
+                  <button className="btn" type="button" onClick={() => onConfirmSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
+                    {Icon.check} 확인
+                  </button>
+                  <button className="btn" type="button" onClick={() => onDownloadSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
+                    {Icon.download} PNG
+                  </button>
+                  <button className="btn rail-selection-clear" type="button" onClick={clearRailSelection} disabled={reorderBusy}>
+                    해제
+                  </button>
+                  <button className="btn danger rail-selection-delete" type="button" onClick={removeSelectedItems} disabled={reorderBusy}>
+                    {Icon.trash} 삭제
+                  </button>
+                </div>
+              </>
+            ) : filterActive ? (
               <span>모아보기 중 · 순서 변경은 전체 보기에서</span>
             ) : (
               <>
                 <span className="problem-order-icon" aria-hidden="true">{Icon.grip}</span>
-                <span>드래그로 순서 이동</span>
+                <span><kbd>Shift</kbd> 범위 · <kbd>Ctrl/Cmd</kbd> 개별 선택</span>
                 <span aria-hidden="true">·</span>
-                <span><kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd></span>
+                <span>드래그 또는 <kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd> 이동</span>
               </>
             )}
             {reorderBusy && <strong role="status">순서 저장 중…</strong>}
@@ -4276,8 +4553,19 @@ function ItemsRail({
         <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {reorderAnnouncement}
         </span>
+        {dragBadgePosition && draggingIds.size > 1 && (
+          <div
+            className="rail-selection-drag-badge"
+            style={{ left: dragBadgePosition.left, top: dragBadgePosition.top }}
+            aria-hidden="true"
+          >
+            {draggingIds.size}개 함께 이동
+          </div>
+        )}
 
         {visibleItemRows.map(({ item: it, index: i }) => {
+          const itemId = String(it.id);
+          const isSelected = selectedItemIds.has(itemId);
           const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
@@ -4296,32 +4584,38 @@ function ItemsRail({
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${draggingIds.has(itemId) ? 'dragging' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
             role="group"
             tabIndex={0}
             aria-current={activeId === it.id ? 'true' : undefined}
             aria-busy={reorderBusy ? 'true' : undefined}
             aria-roledescription={filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
-            aria-keyshortcuts={filterActive ? 'Enter Space' : 'Alt+ArrowUp Alt+ArrowDown Enter Space'}
+            aria-keyshortcuts={filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
             aria-posinset={i + 1}
             aria-setsize={items.length}
             aria-describedby="problem-order-help"
-            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. Alt와 위아래 방향키로 순서 이동`}
-            onClick={() => {
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, Ctrl 또는 Command 개별 선택, Alt와 위아래 방향키로 순서 이동`}
+            onClick={e => {
               if (suppressClickRef.current) return;
-              setActive(it.id);
+              selectRailItem(it.id, e);
             }}
             onKeyDown={e => {
               if (e.target !== e.currentTarget) return;
+              if (applyRailSelectionKeyboard(it, e)) return;
               if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                 e.preventDefault();
                 moveItemByKeyboard(it, e.key === 'ArrowUp' ? 'up' : 'down');
                 return;
               }
+              if ((e.key === 'Delete' || e.key === 'Backspace') && selectedItemCount > 0) {
+                e.preventDefault();
+                removeSelectedItems();
+                return;
+              }
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                setActive(it.id);
+                selectRailItem(it.id, e);
               }
             }}
             onPointerDown={e => startPointerDrag(e, it.id)}
@@ -4333,13 +4627,19 @@ function ItemsRail({
                 e.preventDefault();
                 return;
               }
-              dragId.current = it.id;
-              setDraggingId(it.id);
+              const sourceIds = isSelected && orderedSelectedIds.length > 1
+                ? orderedSelectedIds
+                : [itemId];
+              dragId.current = itemId;
+              dragIdsRef.current = sourceIds;
+              setDraggingIds(new Set(sourceIds));
+              if (sourceIds.length > 1) setDragBadgePosition({ left: e.clientX, top: e.clientY });
               e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', it.id);
+              e.dataTransfer.setData('text/plain', itemId);
             }}
             onDragEnter={e => updateDropTarget(e, it.id)}
             onDragOver={e => {
+              if (dragIdsRef.current.length > 1) setDragBadgePosition({ left: e.clientX, top: e.clientY });
               applyRailAutoScroll(e.clientX, e.clientY);
               updateDropTarget(e, it.id);
             }}
@@ -4355,10 +4655,14 @@ function ItemsRail({
                 return;
               }
               const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
+              const sourceIds = dragIdsRef.current.length ? dragIdsRef.current : [sourceId];
               const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && sourceId !== it.id) {
+              if (sourceId && !sourceIds.includes(itemId)) {
                 setActive(sourceId);
-                reorder(sourceId, it.id, position, { resetPlacement: true });
+                reorder(sourceId, it.id, position, {
+                  resetPlacement: true,
+                  sourceIds,
+                });
               }
               stopRailAutoScroll();
               clearDragState();
@@ -4449,10 +4753,23 @@ function ItemsRail({
               <button
                 className="icon-btn item-delete-action"
                 type="button"
-                title="삭제"
-                data-tooltip="이 자료 삭제"
-                aria-label={`${problemDisplayName(it, i)} 삭제`}
-                onClick={e => { e.stopPropagation(); removeItem(it.id); }}
+                title={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '삭제'}
+                data-tooltip={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '이 자료 삭제'}
+                aria-label={isSelected && selectedItemCount > 1
+                  ? `선택한 ${selectedItemCount}개 삭제`
+                  : `${problemDisplayName(it, i)} 삭제`}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (isSelected && selectedItemCount > 1) removeSelectedItems();
+                  else {
+                    removeItem(it.id);
+                    setSelectedItemIds(prev => {
+                      const next = new Set(prev);
+                      next.delete(itemId);
+                      return next;
+                    });
+                  }
+                }}
               >
                 {Icon.trash}
               </button>
@@ -4471,7 +4788,10 @@ function ItemsRail({
 }
 
 // ─── CENTER: big scrollable board stage ──
-function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder, moveFeedback }){
+function BoardStage({
+  items, activeId, setActive, boardColor, boardColumns, fileName, addSample,
+  setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
+}){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -4480,6 +4800,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const syncLock = useRef(0);
   const positionDragRef = useRef(null);
   const suppressClickRef = useRef(null);
+  const selectionAnchorRef = useRef(null);
   const boardDropTargetRef = useRef(null);
   const autoScrollRef = useRef({
     raf: null,
@@ -4490,6 +4811,8 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     lastFrameAt: null,
   });
   const scrollSyncFrameRef = useRef(null);
+  const restoredScrollRef = useRef(false);
+  const boardScrollTopRef = useRef(Number(savedScrollTop) || 0);
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
   const [dragMagnet, setDragMagnet] = useState(null);
@@ -4580,6 +4903,18 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const visibleCurrentPage = Math.min(currentPage, layout.totalPages);
 
   useLayoutEffect(() => {
+    if (restoredScrollRef.current || !scrollRef.current) return;
+    restoredScrollRef.current = true;
+    syncLock.current = Date.now();
+    scrollRef.current.scrollTop = Math.max(0, boardScrollTopRef.current);
+    setCurrentPage(Math.min(layout.totalPages, Math.floor(scrollRef.current.scrollTop / pageH) + 1));
+  }, [layout.totalPages, pageH]);
+
+  useEffect(() => () => {
+    onSaveScrollTop?.(boardScrollTopRef.current);
+  }, [onSaveScrollTop]);
+
+  useLayoutEffect(() => {
     const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== boardOrderSignature);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     const nextRects = new Map();
@@ -4652,6 +4987,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   };
 
   const onScroll = () => {
+    boardScrollTopRef.current = scrollRef.current?.scrollTop || 0;
     if (scrollSyncFrameRef.current != null) return;
     scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
       scrollSyncFrameRef.current = null;
@@ -4666,9 +5002,19 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     }
   }, []);
 
-  const onTileClick = (id) => {
+  const onTileClick = (id, event = {}) => {
     if (suppressClickRef.current === id) return;
     syncLock.current = Date.now();
+    const orderedIds = items.map(item => String(item.id));
+    const result = applySelectionClick(
+      orderedIds,
+      Array.from(selectedIds || []),
+      selectionAnchorRef.current || activeId,
+      id,
+      event
+    );
+    selectionAnchorRef.current = result.anchorId;
+    setSelectedIds?.(new Set(result.selectedIds));
     setActive(id);
   };
 
@@ -5142,8 +5488,8 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
-                      onClick={() => onTileClick(it.id)}
+                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+                      onClick={event => onTileClick(it.id, event)}
                       title={problemDisplayName(it, i)}
                       aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 드래그하여 배치 또는 순서 이동`}
                       style={tileStyle}
@@ -5506,6 +5852,12 @@ function SidePanel({
   const [movePassageGroupTogether, setMovePassageGroupTogether] = useState(true);
   const [breakGroupOnOverflow, setBreakGroupOnOverflow] = useState(true);
   const [placementApplied, setPlacementApplied] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [bugReportDescription, setBugReportDescription] = useState('');
+  const [bugReportIncludeDiagnostics, setBugReportIncludeDiagnostics] = useState(true);
+  const [bugReportBusy, setBugReportBusy] = useState(false);
+  const [bugReportResult, setBugReportResult] = useState(null);
+  const [bugReportError, setBugReportError] = useState('');
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
@@ -5651,6 +6003,39 @@ function SidePanel({
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
+  const canSubmitBugReport = bugReportDescription.trim().length >= 5 && !bugReportBusy;
+  const handleBugReportSubmit = async event => {
+    event?.preventDefault?.();
+    if (!canSubmitBugReport) return;
+    setBugReportBusy(true);
+    setBugReportError('');
+    setBugReportResult(null);
+    try {
+      const receipt = await submitBugReport({
+        description: bugReportDescription.trim(),
+        includeDiagnostics: bugReportIncludeDiagnostics,
+        context: {
+          view,
+          settingsTab: tab,
+          inputIntent: normalizeInputIntent(inputIntent),
+          reviewStatus: published ? 'published' : session ? 'session' : 'empty',
+          itemCount: items.length,
+          pendingCount: pendingFile ? 1 : 0,
+          hangul: {
+            status: hangulDiagnostics?.status || 'unknown',
+            summary: hangulRuntimeSummary(hangulDiagnostics),
+          },
+          runtimeErrors: runtimeErrorsForBugReport(),
+        },
+      });
+      setBugReportDescription('');
+      setBugReportResult(receipt);
+    } catch (error) {
+      setBugReportError(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setBugReportBusy(false);
+    }
+  };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
@@ -6631,6 +7016,90 @@ function SidePanel({
                 {Icon.download} 다운로드 열기
               </button>
             </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>문제 신고 <span className="line" /></div>
+
+            <section className={`bug-report-card ${bugReportOpen ? 'open' : ''}`} aria-label="버그 리포트">
+              <div className="bug-report-summary">
+                <span className="bug-report-icon" aria-hidden="true">{Icon.bug}</span>
+                <span>
+                  <strong>사용 중 문제가 있었나요?</strong>
+                  <small>설명과 선택한 진단 정보만 안전하게 전송합니다.</small>
+                </span>
+                <button
+                  className="btn"
+                  type="button"
+                  aria-expanded={bugReportOpen ? 'true' : 'false'}
+                  onClick={() => {
+                    setBugReportOpen(open => !open);
+                    setBugReportError('');
+                  }}
+                >
+                  {bugReportOpen ? '닫기' : '버그 리포트'}
+                </button>
+              </div>
+
+              {bugReportOpen && (
+                <form className="bug-report-form" onSubmit={handleBugReportSubmit}>
+                  <label htmlFor="bug-report-description">무슨 일이 있었나요?</label>
+                  <textarea
+                    id="bug-report-description"
+                    value={bugReportDescription}
+                    maxLength={4000}
+                    rows={5}
+                    placeholder="문제가 생기기 직전에 한 작업과 화면에 보인 현상을 적어 주세요."
+                    onChange={event => {
+                      setBugReportDescription(event.target.value);
+                      setBugReportError('');
+                      setBugReportResult(null);
+                    }}
+                  />
+                  <div className="bug-report-counter">{bugReportDescription.length.toLocaleString()} / 4,000</div>
+
+                  <label className="bug-report-diagnostics">
+                    <input
+                      type="checkbox"
+                      checked={bugReportIncludeDiagnostics}
+                      onChange={event => setBugReportIncludeDiagnostics(event.target.checked)}
+                    />
+                    <span>
+                      <strong>진단 정보 포함</strong>
+                      <small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small>
+                    </span>
+                  </label>
+
+                  <p className="bug-report-privacy">
+                    원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.
+                  </p>
+
+                  {bugReportError && (
+                    <div className="bug-report-status error" role="alert">{bugReportError}</div>
+                  )}
+                  {bugReportResult?.reportId && (
+                    <div className="bug-report-status success" role="status" aria-live="polite">
+                      접수됐습니다. 번호 <strong>{bugReportResult.reportId}</strong>
+                    </div>
+                  )}
+
+                  <div className="bug-report-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={bugReportBusy}
+                      onClick={() => {
+                        setBugReportOpen(false);
+                        setBugReportError('');
+                      }}
+                    >
+                      취소
+                    </button>
+                    <button className="btn primary" type="submit" disabled={!canSubmitBugReport}>
+                      {bugReportBusy ? '보내는 중...' : '리포트 보내기'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
           </div>
         </>
       )}
@@ -6820,6 +7289,35 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
           </span>
         </div>
 
+        <div className="recognition-transition-summary">
+          <div>
+            <strong>인식 완료 · 다음 작업을 선택하세요</strong>
+            <span>
+              전체 <b>{summary.problems}</b>개
+              {summary.riskCount ? ` · 확인 필요 ${summary.riskCount}개` : ' · 확인 필요 없음'}
+            </span>
+          </div>
+          <div className="recognition-transition-actions" role="group" aria-label="인식 결과 적용 후 이동">
+            {partialRetry ? (
+              <button className="btn primary" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
+                {confirming ? confirmingLabel : confirmLabel}
+              </button>
+            ) : (
+              <>
+                <button className="btn primary" type="button" onClick={() => onConfirm('review-needed')} disabled={confirming || !summary.problems}>
+                  확인 필요만 검수
+                </button>
+                <button className="btn" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
+                  전체 검수
+                </button>
+                <button className="btn" type="button" onClick={() => onConfirm('board')} disabled={confirming || !summary.problems}>
+                  바로 칠판
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
         <div className="recognition-preview">
           {pages.length ? pages.map(page => {
             const pageProblems = (page.problemIds || page.problem_ids || [])
@@ -6870,9 +7368,7 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
 
         <div className="recognition-modal-foot">
           <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
-          <button className="btn primary" type="button" onClick={onConfirm} disabled={confirming || !summary.problems}>
-            {confirming ? confirmingLabel : confirmLabel}
-          </button>
+          <span>{confirming ? confirmingLabel : '선택한 화면으로 결과를 적용합니다.'}</span>
         </div>
       </div>
     </div>
@@ -9729,6 +10225,33 @@ async function fetchRuntimeDiagnostics(){
   return json;
 }
 
+function runtimeErrorsForBugReport(entries = window.EDB_RUNTIME_DIAGNOSTICS){
+  if (!Array.isArray(entries)) return [];
+  return entries.slice(-10).map(entry => {
+    const detail = entry && typeof entry === 'object' ? entry : {};
+    const rawError = detail.error || detail.reason;
+    const message = detail.message || rawError?.message || rawError || '알 수 없는 오류';
+    const safe = {
+      type: String(detail.type || 'runtime').slice(0, 80),
+      message: String(message).slice(0, 1500),
+    };
+    if (detail.filename) safe.filename = String(detail.filename).slice(0, 240);
+    if (detail.componentStack) safe.componentStack = String(detail.componentStack).slice(0, 4000);
+    if (Number.isFinite(Number(detail.lineno))) safe.lineno = Number(detail.lineno);
+    if (Number.isFinite(Number(detail.colno))) safe.colno = Number(detail.colno);
+    return safe;
+  });
+}
+
+async function submitBugReport(payload){
+  const resp = await fetch('/api/bug-report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return expectOkJson(resp, '리포트 전송 실패');
+}
+
 async function fetchAppUpdateStatus(){
   const resp = await fetch('/api/app/update');
   const json = await expectOkJson(resp, '업데이트 확인 실패');
@@ -9939,6 +10462,16 @@ function App(){
   const [aiToggleBusy, setAiToggleBusy] = useState(false);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedProblemIds, setSelectedProblemIds] = useState(() => new Set());
+  const [reviewUi, setReviewUi] = useState({
+    filter: 'all',
+    riskFilter: null,
+    zoom: 1,
+    scrollTop: 0,
+  });
+  const [boardScrollTop, setBoardScrollTop] = useState(0);
+  const [actionToast, setActionToast] = useState(null);
+  const [viewTransitionBanner, setViewTransitionBanner] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -9953,17 +10486,24 @@ function App(){
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
   const [historyStack, setHistoryStack] = useState([]);
+  const historyStackRef = useRef([]);
   const boardColumns = normalizeBoardColumns(t.boardColumns);
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
   const moveFeedbackTimerRef = useRef(null);
   const moveSequenceRef = useRef(0);
+  const actionToastTimerRef = useRef(null);
+  const viewTransitionTimerRef = useRef(null);
   const jobControllersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
+  const reviewComplete = useMemo(
+    () => Boolean(session && reviewFlowState(sessionReviewSummary(session)).complete),
+    [session]
+  );
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
@@ -9971,10 +10511,21 @@ function App(){
   useEffect(() => {
     if (view !== 'review') setReviewEditorActive(false);
   }, [view]);
+  useEffect(() => {
+    historyStackRef.current = historyStack;
+  }, [historyStack]);
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedProblemIds(prev => {
+      const next = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items]);
   useEffect(() => () => {
-    if (moveFeedbackTimerRef.current) {
-      window.clearTimeout(moveFeedbackTimerRef.current);
-    }
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    if (moveFeedbackTimerRef.current) window.clearTimeout(moveFeedbackTimerRef.current);
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
   }, []);
   const canUndo = historyStack.length > 0 && !mutating;
 
@@ -9999,10 +10550,37 @@ function App(){
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
 
+  const showActionToast = useCallback((message, actionLabel, onAction) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast(null);
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    setActionToast({ message, actionLabel, onAction });
+    actionToastTimerRef.current = window.setTimeout(() => setActionToast(null), 6500);
+  }, []);
+
   const showSimpleErrorToast = useCallback((error, fallbackMessage) => {
     console.warn(`[board] ${fallbackMessage || '작업 실패'}:`, error);
     showToast(simpleToastErrorMessage(error, fallbackMessage));
   }, [showToast]);
+
+  const requestViewChange = useCallback((nextView, options = {}) => {
+    const target = nextView === 'review' ? 'review' : 'board';
+    if (target === view) return true;
+    if (reviewEditorActive && !options.force) {
+      showToast('영역 편집을 적용하거나 취소한 뒤 화면을 이동해 주세요');
+      return false;
+    }
+    setView(target);
+    const selectedCount = selectedProblemIds.size;
+    setViewTransitionBanner(
+      target === 'review'
+        ? `검수로 이동 · ${selectedCount ? `선택 ${selectedCount}개와 ` : ''}필터·배율을 유지했어요`
+        : `칠판으로 이동 · ${selectedCount ? `선택 ${selectedCount}개를 ` : ''}그대로 이어갑니다`
+    );
+    if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    viewTransitionTimerRef.current = window.setTimeout(() => setViewTransitionBanner(null), 2600);
+    return true;
+  }, [reviewEditorActive, selectedProblemIds.size, showToast, view]);
 
   const selectBoardItem = useCallback((id) => {
     setSelectedPendingFileKey(null);
@@ -10441,15 +11019,18 @@ function App(){
     await retryAiSession({ pageIds });
   }, [session, userSettings, aiEnabled, retryAiSession]);
 
-  const exportSessionImages = useCallback(async () => {
+  const exportSessionImages = useCallback(async (requestedProblemIds = null) => {
     if (!session) {
       showToast('다운로드할 세션이 없습니다');
       return;
     }
     const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;
+    const requestedIdSet = Array.isArray(requestedProblemIds)
+      ? new Set(requestedProblemIds.map(String))
+      : null;
     const problemIds = listUnique(itemsForExport
-      .filter(item => item?.id && !item.excluded)
+      .filter(item => item?.id && !item.excluded && (!requestedIdSet || requestedIdSet.has(String(item.id))))
       .map(item => item.id));
     if (!problemIds.length) {
       showToast('다운로드할 이미지가 없습니다');
@@ -10472,6 +11053,9 @@ function App(){
       setExportingImages(false);
     }
   }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
+  const exportSelectedImages = useCallback((problemIds) => {
+    void exportSessionImages(problemIds);
+  }, [exportSessionImages]);
 
   const downloadItemImage = useCallback(async (item) => {
     if (!session) {
@@ -10497,8 +11081,9 @@ function App(){
   }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
 
   const undoMutation = useCallback(async () => {
-    if (historyStack.length === 0) return;
-    const snapshot = historyStack[historyStack.length - 1];
+    const currentHistory = historyStackRef.current;
+    if (currentHistory.length === 0) return;
+    const snapshot = currentHistory[currentHistory.length - 1];
     const viewBeforeUndo = view;
     const activeBeforeUndo = activeId;
     mutatingRef.current = true;
@@ -10506,7 +11091,11 @@ function App(){
     setLoading({ label: '되돌리는 중…', startedAt: Date.now() });
     try {
       const restored = await postRestore(snapshot);
-      setHistoryStack(prev => prev.slice(0, -1));
+      setHistoryStack(prev => {
+        const next = prev.slice(0, -1);
+        historyStackRef.current = next;
+        return next;
+      });
       applySession(restored);
       setView(viewBeforeUndo);
       if ((restored?.problems || []).some(problem => problem?.id === activeBeforeUndo)) {
@@ -10521,7 +11110,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast]);
+  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -11005,7 +11594,7 @@ function App(){
     showToast('인식 결과를 적용하지 않았어요');
   }, [confirmingRecognition]);
 
-  const confirmRecognitionReview = useCallback(async () => {
+  const confirmRecognitionReview = useCallback(async (destination = 'review-needed') => {
     const review = recognitionReview;
     if (!review) return;
     setConfirmingRecognition(true);
@@ -11025,13 +11614,29 @@ function App(){
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
         applySession(restored);
-        setReviewFocus(reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition'));
+        const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
+        if (destination === 'board') {
+          setReviewFocus(null);
+          setView('board');
+        } else {
+          setReviewFocus({
+            ...(nextScope || {}),
+            filter: destination === 'review-needed' ? 'check_needed' : 'all',
+            source: 'queue-recognition',
+          });
+          setView('review');
+        }
         refreshSessionHistory();
-        setView('review');
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
-        showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
+        showToast(
+          destination === 'board'
+            ? `칠판으로 이동 · ${summary.problemLabel} 적용`
+            : destination === 'review-needed'
+              ? `확인 필요 항목 검수 · ${summary.problemLabel}`
+              : `전체 검수로 이동 · ${summary.problemLabel}`
+        );
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
           ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
@@ -11061,9 +11666,23 @@ function App(){
           setView('review');
           showToast('영역 재인식 적용 · 번호와 순서를 유지했어요');
         } else {
-          setView('board');
+          if (destination === 'board') {
+            setReviewFocus(null);
+            setView('board');
+          } else {
+            setReviewFocus({
+              filter: destination === 'review-needed' ? 'check_needed' : 'all',
+              problemIds: review.problemIds || [],
+              source: 'retry-ai',
+            });
+            setView('review');
+          }
           const summary = summarizeRecognitionSession(restored, review.pageIds);
-          showToast(`AI 인식 적용 · ${summary.problemLabel}`);
+          showToast(
+            destination === 'board'
+              ? `AI 인식 적용 · ${summary.problemLabel}`
+              : `${destination === 'review-needed' ? '확인 필요 항목' : '전체'} 검수 · ${summary.problemLabel}`
+          );
         }
       }
       setRecognitionReview(null);
@@ -11092,6 +11711,40 @@ function App(){
     const nextStep = normalizeProcessingStep(step);
     setItems(it => it.map(x => x.id === id ? { ...x, step: nextStep } : x));
     setPublished(false);
+  };
+  const applySelectedStep = (problemIds, step) => {
+    const selectedIdSet = new Set((problemIds || []).map(String));
+    if (!selectedIdSet.size) return;
+    const nextStep = normalizeProcessingStep(step);
+    const previousSteps = new Map(items
+      .filter(item => selectedIdSet.has(String(item.id)))
+      .map(item => [String(item.id), item.step]));
+    setItems(prev => prev.map(item => (
+      selectedIdSet.has(String(item.id)) ? { ...item, step: nextStep } : item
+    )));
+    setPublished(false);
+    showActionToast(
+      `${selectedIdSet.size}개 문제를 ${processingStepLabel(nextStep)}로 변경했어요`,
+      '실행 취소',
+      () => {
+        setItems(prev => prev.map(item => (
+          previousSteps.has(String(item.id))
+            ? { ...item, step: previousSteps.get(String(item.id)) }
+            : item
+        )));
+        setActionToast(null);
+        showToast('처리 단계 변경을 취소했어요');
+      }
+    );
+  };
+  const classifySelected = async (problemIds, classification) => {
+    const ids = listUnique((problemIds || []).map(String).filter(Boolean));
+    if (!ids.length) return;
+    if (!session) {
+      showToast('실제 세션에서만 자료 분류를 변경할 수 있어요');
+      return;
+    }
+    await mutateSession('classify', { problemIds: ids, classification });
   };
   const applyToAll = (step, options = {}) => {
     if (!items.length) {
@@ -11140,7 +11793,16 @@ function App(){
       showToast('이전 변경을 적용하는 중입니다');
       return false;
     }
-    const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
+    const requestedSourceIds = Array.isArray(options?.sourceIds) && options.sourceIds.length
+      ? options.sourceIds
+      : [fromId];
+    const sourceIdSet = new Set(requestedSourceIds.map(id => String(id)));
+    const sourceIds = items
+      .map(item => String(item.id))
+      .filter(id => sourceIdSet.has(id));
+    const reordered = sourceIds.length > 1
+      ? reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)
+      : reorderItemsForDrop(items, fromId, toId, dropPosition);
     if (reordered === items) return false;
     const previousOrder = items.map(item => String(item.id)).join('|');
     const nextOrder = reordered.map(item => String(item.id)).join('|');
@@ -11149,7 +11811,7 @@ function App(){
     const snapshotBefore = session
       ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
       : null;
-    const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
+    const resetItems = reordered.map(item => sourceIdSet.has(String(item.id)) ? resetItemPlacement(item) : item);
     const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     const nextIndex = nextItems.findIndex(item => String(item.id) === String(fromId));
     moveSequenceRef.current += 1;
@@ -11199,28 +11861,67 @@ function App(){
         });
     }
     setPublished(false);
-    showToast(`문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`);
+    showToast(sourceIds.length > 1
+      ? `${sourceIds.length}개 문제를 ${Math.max(0, nextIndex) + 1}번부터 함께 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`
+      : `문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`);
     return true;
   };
-  const removeItem = (id) => {
+  const removeItem = async (id, options = {}) => {
+    const requestedIds = Array.isArray(options?.problemIds) && options.problemIds.length
+      ? options.problemIds
+      : [id];
+    const existingIdSet = new Set(items.map(item => String(item.id)));
+    const problemIds = listUnique(requestedIds.map(value => String(value)).filter(value => existingIdSet.has(value)));
+    if (!problemIds.length) return false;
     if (session) {
       if (mutating) {
         showToast('이전 변경을 적용하는 중입니다');
-        return;
+        return false;
       }
-      void mutateSession('exclude', { problemId: id });
-      return;
+      const nextSession = problemIds.length === 1
+        ? await mutateSession('exclude', { problemId: id })
+        : await mutateSession('exclude', { problemIds });
+      if (!nextSession) return false;
+      showActionToast(
+        `${problemIds.length}개 문제를 삭제했어요`,
+        '실행 취소',
+        () => { void undoMutation(); }
+      );
+      return true;
     }
-    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const previousItems = items;
+    const previousActiveId = activeId;
+    const previousUsingMock = usingMock;
+    const previousFileName = fileName;
+    const problemIdSet = new Set(problemIds);
+    const firstRemovedIndex = items.findIndex(item => problemIdSet.has(String(item.id)));
+    const nextItems = reflowItemsForBoardOrder(items.filter(
+      x => !problemIdSet.has(String(x.id))
+    ), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
-    if (activeId === id) {
-      setActiveId(nextItems[0]?.id || null);
+    if (problemIdSet.has(String(activeId))) {
+      const fallbackIndex = Math.max(0, Math.min(firstRemovedIndex, nextItems.length - 1));
+      setActiveId(nextItems[fallbackIndex]?.id || null);
     }
     if (!session && usingMock && nextItems.length === 0) {
       setUsingMock(false);
       setFileName('새 세션');
     }
     setPublished(false);
+    showActionToast(
+      `${problemIds.length}개 문제를 삭제했어요`,
+      '실행 취소',
+      () => {
+        setItems(previousItems);
+        setActiveId(previousActiveId);
+        setUsingMock(previousUsingMock);
+        setFileName(previousFileName);
+        setSelectedProblemIds(new Set(problemIds));
+        setActionToast(null);
+        showToast('삭제를 취소했어요');
+      }
+    );
+    return true;
   };
   const addMockSample = () => {
     if (session) {
@@ -11473,8 +12174,10 @@ function App(){
         refreshing={refreshing}
         canReset={(!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading}
         view={view}
-        setView={setView}
+        setView={requestViewChange}
         reviewAvailable={reviewAvailable}
+        reviewComplete={reviewComplete}
+        recognitionBusy={Boolean(runningRecognitionJob)}
         onUndo={undoMutation}
         canUndo={canUndo}
         onShutdown={shutdownApp}
@@ -11482,6 +12185,11 @@ function App(){
         exportingImages={exportingImages}
         canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
       />
+      {viewTransitionBanner && (
+        <div className="view-transition-banner" role="status" aria-live="polite">
+          {viewTransitionBanner}
+        </div>
+      )}
       <div className={`main ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}>
         <ItemsRail
           items={items}
@@ -11509,6 +12217,12 @@ function App(){
           downloadingItemId={downloadingItemId}
           reorderBusy={mutating}
           moveFeedback={moveFeedback}
+          selectedItemIds={selectedProblemIds}
+          setSelectedItemIds={setSelectedProblemIds}
+          onApplySelectedStep={applySelectedStep}
+          onClassifySelected={classifySelected}
+          onConfirmSelected={problemIds => onConfirm(null, { problemIds, bulk: true })}
+          onDownloadSelected={exportSelectedImages}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -11526,7 +12240,11 @@ function App(){
             onEnhanceImage={enhanceImageSession}
             imageEnhanceBusy={hasRunningImageEnhance}
             onEditorModeChange={setReviewEditorActive}
-            onOpenBoard={() => setView('board')}
+            onOpenBoard={() => requestViewChange('board')}
+            selectedIds={selectedProblemIds}
+            setSelectedIds={setSelectedProblemIds}
+            reviewUi={reviewUi}
+            setReviewUi={setReviewUi}
           />
         ) : (
           <BoardStage
@@ -11540,6 +12258,10 @@ function App(){
             setPlacement={setPlacement}
             reorder={reorder}
             moveFeedback={moveFeedback}
+            selectedIds={selectedProblemIds}
+            setSelectedIds={setSelectedProblemIds}
+            savedScrollTop={boardScrollTop}
+            onSaveScrollTop={setBoardScrollTop}
           />
         )}
         <SidePanel
@@ -11615,6 +12337,23 @@ function App(){
       {toast && (
         <div className="toast" role="status" aria-live="polite" aria-atomic="true">
           {Icon.check}<span>{toast}</span>
+        </div>
+      )}
+      {actionToast && (
+        <div className="undo-toast" role="status" aria-live="polite" aria-atomic="true">
+          <span className="undo-toast-copy">{actionToast.message}</span>
+          <button
+            className="undo-toast-action"
+            type="button"
+            onClick={() => {
+              const action = actionToast.onAction;
+              setActionToast(null);
+              action?.();
+            }}
+            disabled={mutating}
+          >
+            {actionToast.actionLabel}
+          </button>
         </div>
       )}
 

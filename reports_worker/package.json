@@ -1,0 +1,16 @@
+{
+  "name": "classin-edb-reports-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create classin-edb-reports",
+    "db:migrate:local": "wrangler d1 migrations apply classin-edb-reports --local",
+    "db:migrate:remote": "wrangler d1 migrations apply classin-edb-reports --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.27.0"
+  }
+}

@@ -173,7 +173,7 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "unreadable_problem_image": "문항 이미지 흐림",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
-PASSAGE_FRAGMENT_STITCH_GAP_PX = 12
+PASSAGE_FRAGMENT_STITCH_GAP_PX = 16
 PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
 PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
 PASSAGE_SOURCE_VERTICAL_RECOVERY_PX = 12
@@ -4635,6 +4635,10 @@ def _trim_passage_segment_for_join(
             )
             rule_width = max(row_counts[first_rule:rule_end], default=0)
             cropped_page_header_rule = (
+                # The detector operates on the rendered raster, so the same
+                # PDF header lands below 64 px at higher DPI. Keep this
+                # threshold proportional while still limiting it to the
+                # shallow page-header band.
                 first_rule <= max(64, int(round(image.height * 0.08)))
                 and rule_width >= int(round(image.width * 0.93))
             )

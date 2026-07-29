@@ -3,6 +3,8 @@ __pycache__/
 .DS_Store
 *.pyc
 .venv/
+reports_worker/node_modules/
+.wrangler/
 .env.local
 .claude/settings.local.json
 .DS_Store
