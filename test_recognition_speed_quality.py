@@ -1,6 +1,47 @@
 import pytest
 
 
+def test_problem_asset_rendering_deduplicates_identical_tasks(monkeypatch, tmp_path):
+    from PIL import Image
+
+    import build_problem_board_edb as pipeline
+    from structured_schema import Box, Subject
+
+    source = Image.new("RGB", (320, 480), "white")
+    bounds = Box(left=20.0, top=30.0, width=220.0, height=260.0)
+    tasks = [
+        pipeline._ProblemAssetTask(
+            source_image=source,
+            bounds=bounds,
+            crop_path=tmp_path / f"crop-{index}.png",
+            board_render_path=tmp_path / f"board-{index}.png",
+            chalk_color=(238, 238, 226),
+            subject=Subject.UNKNOWN,
+        )
+        for index in range(4)
+    ]
+    tasks[1].source_hints = ("question 2",)
+    tasks[-1].text_priority = True
+    render_calls = []
+
+    def fake_render(task):
+        render_calls.append(task.crop_path)
+        task.crop_path.write_bytes(b"same-crop")
+        task.board_render_path.write_bytes(b"same-board")
+        task.rendered_media_regions = [{"kind": "image", "bbox": {"left": 1}}]
+        return 220, 260
+
+    monkeypatch.setattr(pipeline, "_render_problem_asset", fake_render)
+
+    sizes = pipeline._render_problem_assets(tasks)
+
+    assert sizes == [(220, 260)] * 4
+    assert len(render_calls) == 2
+    assert [task.crop_path.read_bytes() for task in tasks] == [b"same-crop"] * 4
+    assert [task.board_render_path.read_bytes() for task in tasks] == [b"same-board"] * 4
+    assert all(task.rendered_media_regions for task in tasks)
+
+
 def setup_function(_function):
     # Runtime failure backoff is intentionally process-wide; isolate tests that
     # reuse the same synthetic API key.

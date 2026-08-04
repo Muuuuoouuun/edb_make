@@ -280,6 +280,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
         remove_flow = source.split("const removeItem = async (id, options = {}) =>", 1)[1]
         remove_flow = remove_flow.split("const addMockSample", 1)[0]
+        selected_step_flow = source.split("const applySelectedStep = (problemIds, step) =>", 1)[1]
+        selected_step_flow = selected_step_flow.split("const classifySelected", 1)[0]
 
         self.assertIn("selectedItemIds, setSelectedItemIds", items_rail)
         self.assertIn("applySelectionClick(", items_rail)
@@ -289,13 +291,39 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("adjacentGroupReorderCommand(items, sourceIds, direction)", items_rail)
         self.assertIn("removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });", items_rail)
         self.assertIn("선택 문제 일괄 작업", items_rail)
-        self.assertIn("onClassifySelected?.(orderedSelectedIds, 'shared-passage')", items_rail)
+        self.assertNotIn("onClassifySelected?.(orderedSelectedIds, 'shared-passage')", items_rail)
+        self.assertIn("onClassifySelected?.(orderedSelectedIds, 'question')", items_rail)
         self.assertIn("onDownloadSelected?.(orderedSelectedIds)", items_rail)
         self.assertIn("reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)", reorder_flow)
         self.assertIn("await mutateSession('exclude', { problemIds });", remove_flow)
         self.assertIn("showActionToast(", remove_flow)
+        self.assertIn("stepLabel(nextStep)", selected_step_flow)
+        self.assertNotIn("processingStepLabel", selected_step_flow)
         self.assertIn(".item.is-selected", board)
         self.assertIn(".problem-order-status.is-selection", board)
+        self.assertIn("updatePointerDragVisual(event.clientX, event.clientY)", items_rail)
+        self.assertIn("resetPointerDragVisual()", items_rail)
+        self.assertIn("pressedItemId === itemId ? 'is-pressed' : ''", items_rail)
+        self.assertIn(".item.is-pressed:not(.dragging)", board)
+        self.assertIn("ReactDOM.createPortal(", items_rail)
+        self.assertIn("className=\"rail-drag-overlay\"", items_rail)
+        self.assertIn("{dragPreview.count}개 이동", items_rail)
+        self.assertIn("displayedItemRows.map", items_rail)
+        self.assertIn("rail.setPointerCapture?.(event.pointerId)", items_rail)
+        self.assertIn("translate3d(", board)
+        self.assertIn("var(--drag-preview-x, 0)", board)
+        self.assertIn(".rail-drag-overlay .item.rail-drag-overlay-card", board)
+        self.assertIn("String(dropTarget?.id || '') === itemId", items_rail)
+        self.assertIn("dropTargetLayoutSignature", items_rail)
+        self.assertIn("className=\"rail-drop-slot\"", items_rail)
+        self.assertIn("data-drop-position=\"before\"", items_rail)
+        self.assertIn("data-drop-position=\"after\"", items_rail)
+        self.assertIn(".item.drop-before", board)
+        self.assertIn("@keyframes rail-drop-slot-open", board)
+        self.assertIn("@keyframes rail-drop-slot-line", board)
+        self.assertNotIn("@keyframes rail-drop-slot-marker", board)
+        self.assertNotIn(".rail-drop-slot::after", board)
+        self.assertIn("animation: rail-drop-slot-open", board)
 
     def test_item_editor_can_correct_question_and_shared_passage_classification(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -307,7 +335,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn('role="radiogroup" aria-label="선택 자료 분류"', side_panel)
         self.assertIn("classification: 'question'", side_panel)
         self.assertIn("classification: 'shared-passage'", side_panel)
-        self.assertIn("공통 지문은 여러 문항이 함께 쓰는 별도 지문만 지정", side_panel)
+        self.assertIn("이미 잘라진 독립 지문 이미지에만 사용 · 원본 재추출은 왼쪽 버튼", side_panel)
+        self.assertIn(">독립 지문 이미지</button>", side_panel)
         self.assertIn("action === 'classify' ? '자료 분류를 저장하는 중…'", mutation)
         self.assertIn("action === 'classify' ? '자료 분류를 변경했어요'", mutation)
 
@@ -365,16 +394,52 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
         board_stage = source.split("function BoardStage({", 1)[1].split("// ─── RIGHT:", 1)[0]
 
-        self.assertIn("}, [itemOrderSignature]);", items_rail)
+        self.assertIn(
+            "}, [itemOrderSignature, draggingLayoutSignature, dropTargetLayoutSignature]);",
+            items_rail,
+        )
         self.assertIn("}, [boardOrderSignature, pageH, contentW, columnCount]);", board_stage)
         self.assertIn("setCurrentPage(prev => prev === nextPage ? prev : nextPage);", board_stage)
         self.assertIn("nearestPlacementIndex(layout.positions, c.scrollTop + 24)", board_stage)
         self.assertNotIn("setScrollTop(scroll.scrollTop)", board_stage)
         self.assertNotIn("layout.positions\n      .map", board_stage)
-        self.assertIn("const railRect = rail.getBoundingClientRect();", items_rail)
-        self.assertIn("top: scrollContainerContentTop(rect, railRect, rail.scrollTop)", items_rail)
-        self.assertIn("height: rect.height", items_rail)
+        self.assertIn("for (const { item } of visibleItemRows)", items_rail)
+        self.assertIn("const rect = el.getBoundingClientRect();", items_rail)
+        self.assertIn("drag.lastClientY", items_rail)
+        self.assertIn("sourceIdSet: new Set(sourceIds)", items_rail)
+        self.assertIn("activeDrag.sourceIdSet", items_rail)
+        self.assertIn("window.addEventListener('pointermove', drag.windowPointerMove", items_rail)
+        self.assertIn("window.addEventListener('blur', drag.windowBlur)", items_rail)
+        self.assertIn("removeRailDragWindowListeners(drag)", items_rail)
+        self.assertIn("scrollContainerContentTop(itemRect, railRect, rail.scrollTop)", items_rail)
+        self.assertIn("Math.max(18, railRect.height * 0.35)", items_rail)
+        self.assertNotIn("|| dropTargetRef.current", items_rail)
+        self.assertIn("itemLayoutAnimationsRef.current.get(it.id)", items_rail)
+        self.assertIn("duration: isMovedItem ? 480 : 380", items_rail)
+        self.assertIn("|| event.shiftKey", items_rail)
+        self.assertIn("|| event.ctrlKey", items_rail)
+        self.assertIn("|| event.metaKey", items_rail)
+        self.assertIn('className="grip"', items_rail)
+        self.assertIn("onPointerDown={e => startPointerDrag(e, it.id)}", items_rail)
+        self.assertIn("dragVisualFrameRef.current = window.requestAnimationFrame", items_rail)
         self.assertNotIn("rail.querySelectorAll('.item[data-item-id]')", items_rail)
+
+    def test_sidebar_selection_anchor_tracks_external_selection_changes(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+
+        self.assertIn("const railSelectionSnapshotRef = useRef('')", items_rail)
+        self.assertIn("const railOwnsAnchor =", items_rail)
+        self.assertIn("railSelectionSnapshotRef.current === currentSelectionKey", items_rail)
+        self.assertIn("railSelectionSnapshotRef.current = selection.selectedIds.join('|')", items_rail)
+
+    def test_board_drag_uses_header_handle_and_exposes_selection_state(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board_stage = source.split("function BoardStage({", 1)[1].split("// ─── RIGHT:", 1)[0]
+
+        self.assertIn('className="tile-hd"', board_stage)
+        self.assertIn("onPointerDown={e => beginPositionDrag(e, it, p)}", board_stage)
+        self.assertIn("aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}", board_stage)
 
     def test_reorder_has_keyboard_accessibility_and_failed_save_rollback(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -2318,12 +2319,84 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
     return crop.size
 
 
+def _problem_asset_task_dedup_key(task: _ProblemAssetTask) -> tuple[Any, ...]:
+    def box_key(bounds: Box) -> tuple[float, float, float, float]:
+        return (
+            round(float(bounds.left), 4),
+            round(float(bounds.top), 4),
+            round(float(bounds.width), 4),
+            round(float(bounds.height), 4),
+        )
+
+    media_key = json.dumps(
+        list(task.source_media_regions),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return (
+        id(task.source_image),
+        task.source_image.mode,
+        task.source_image.size,
+        box_key(task.bounds),
+        tuple(box_key(bounds) for bounds in (task.segment_bounds or ())),
+        task.text_payload,
+        task.text_title,
+        task.chalk_color,
+        task.trim_edge_guides,
+        task.preserve_horizontal_bounds,
+        task.protect_horizontal_bounds,
+        task.horizontal_safe_padding_px,
+        task.text_priority,
+        task.pad_edges,
+        task.subject.value if isinstance(task.subject, Subject) else str(task.subject),
+        _source_hints_suggest_math(*task.source_hints),
+        media_key,
+    )
+
+
+def _copy_problem_asset(source: Path, destination: Path) -> None:
+    if source == destination:
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+
+
 def _render_problem_assets(tasks: list[_ProblemAssetTask]) -> list[tuple[int, int]]:
-    worker_count = _resolve_problem_asset_worker_count(len(tasks))
+    if not tasks:
+        return []
+
+    canonical_tasks: list[_ProblemAssetTask] = []
+    canonical_index_by_key: dict[tuple[Any, ...], int] = {}
+    canonical_index_by_task: list[int] = []
+    for task in tasks:
+        key = _problem_asset_task_dedup_key(task)
+        canonical_index = canonical_index_by_key.get(key)
+        if canonical_index is None:
+            canonical_index = len(canonical_tasks)
+            canonical_index_by_key[key] = canonical_index
+            canonical_tasks.append(task)
+        canonical_index_by_task.append(canonical_index)
+
+    worker_count = _resolve_problem_asset_worker_count(len(canonical_tasks))
     if worker_count <= 1:
-        return [_render_problem_asset(task) for task in tasks]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-        return list(executor.map(_render_problem_asset, tasks))
+        canonical_sizes = [_render_problem_asset(task) for task in canonical_tasks]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            canonical_sizes = list(executor.map(_render_problem_asset, canonical_tasks))
+
+    for task, canonical_index in zip(tasks, canonical_index_by_task):
+        canonical = canonical_tasks[canonical_index]
+        if task is canonical:
+            continue
+        _copy_problem_asset(canonical.crop_path, task.crop_path)
+        _copy_problem_asset(canonical.board_render_path, task.board_render_path)
+        task.rendered_media_regions = [
+            dict(region)
+            for region in canonical.rendered_media_regions
+        ]
+    return [canonical_sizes[index] for index in canonical_index_by_task]
 
 
 def resolve_subject(name: str | None) -> Subject:

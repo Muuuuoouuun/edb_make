@@ -1192,6 +1192,43 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertIn(("Content-Length", str(len(payload))), headers)
             self.assertEqual(payload, handler.wfile.getvalue())
 
+    def test_file_preview_query_downscales_image_without_changing_source(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            artifact = tmpdir / "large-preview.png"
+            Image.new("RGB", (2400, 1600), (245, 245, 240)).save(artifact)
+            original_size = artifact.stat().st_size
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "allowed_files": {str(artifact.resolve())},
+            })()
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            app_server._build_file_preview_payload.cache_clear()
+            parsed = app_server.urlparse(
+                f"{app_server.path_to_api_url(artifact)}&previewMax=1024"
+            )
+            handler._handle_file(parsed)
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            response_headers = dict(headers)
+            self.assertEqual("image/jpeg", response_headers["Content-Type"])
+            self.assertEqual("1024", response_headers["X-Preview-Max-Dimension"])
+            with Image.open(io.BytesIO(handler.wfile.getvalue())) as preview:
+                self.assertEqual((1024, 683), preview.size)
+            with Image.open(artifact) as source:
+                self.assertEqual((2400, 1600), source.size)
+            self.assertEqual(original_size, artifact.stat().st_size)
+            app_server._build_file_preview_payload.cache_clear()
+
     def test_file_download_marks_zip_as_attachment(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -2460,6 +2497,163 @@ class TestExportSourceResolution(unittest.TestCase):
             resolved = handler._resolve_source_paths({"files": [str(source)]})
 
             self.assertEqual(resolved, [source.resolve()])
+
+    def test_session_reextract_sources_prefer_input_files_and_deduplicate(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            page = tmpdir / "page.png"
+            page.write_bytes(b"png")
+
+            resolved = app_server._session_reextract_source_paths({
+                "input_files": [source.resolve().as_uri(), str(source.resolve())],
+                "pages": [{"sourceImagePath": page.resolve().as_uri()}],
+            })
+
+            self.assertEqual([source.resolve()], resolved)
+
+    def test_session_reextract_sources_fall_back_to_source_pages_in_order(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            missing = tmpdir / "missing.pdf"
+            first = tmpdir / "page-1.png"
+            second = tmpdir / "page-2.png"
+            first.write_bytes(b"one")
+            second.write_bytes(b"two")
+
+            resolved = app_server._session_reextract_source_paths({
+                "input_files": [missing.resolve().as_uri()],
+                "pages": [
+                    {"sourceImagePath": first.resolve().as_uri()},
+                    {"sourceImageUri": first.resolve().as_uri()},
+                    {"sourceImageUri": second.resolve().as_uri()},
+                ],
+            })
+
+            self.assertEqual([first.resolve(), second.resolve()], resolved)
+
+    def test_session_source_reextract_preview_does_not_replace_current_session(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            current_session = {
+                "session_name": "existing",
+                "input_files": [source.resolve().as_uri()],
+                "pages": [],
+                "problems": [{"id": "question-1"}],
+            }
+            payload = {
+                "reuseSessionSources": True,
+                "preview": True,
+                "inputIntent": "multi-problem",
+                "contentTarget": "shared-passages",
+                "exportEdb": False,
+            }
+            captured: dict[str, object] = {}
+            responses = []
+
+            class FakeServer:
+                latest_session = copy.deepcopy(current_session)
+                allowed_files = set()
+
+                def remember_session(self, _session):
+                    raise AssertionError("preview re-extraction must not replace the current session")
+
+            def fake_run_problem_export(run_source, **kwargs):
+                captured["source"] = Path(run_source)
+                captured.update(kwargs)
+                output_dir = Path(kwargs["output_dir"])
+                return {
+                    "ok": True,
+                    "ui_session": {
+                        "pages": [],
+                        "problems": [{"id": "passage-1", "passageRole": "passage_fragment"}],
+                    },
+                    "output_dir": str(output_dir),
+                    "ui_session_path": str(output_dir / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            self.assertEqual(source.resolve(), captured["source"])
+            self.assertEqual("shared-passages", captured["content_target"])
+            self.assertEqual(current_session, handler.server.latest_session)
+            self.assertTrue(responses[0][0]["ok"])
+            self.assertTrue(responses[0][0]["preview"])
+
+    def test_session_source_reextract_rejects_non_preview_export(self):
+        current_session = {"input_files": [], "pages": [], "problems": [{"id": "question-1"}]}
+        responses = []
+
+        class FakeServer:
+            latest_session = copy.deepcopy(current_session)
+            allowed_files = set()
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = FakeServer()
+        handler._read_json_body = lambda: {
+            "reuseSessionSources": True,
+            "preview": False,
+            "contentTarget": "shared-passages",
+        }
+        handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+        with patch.object(
+            app_server,
+            "run_problem_export",
+            side_effect=AssertionError("non-preview session re-extraction must not run"),
+        ):
+            handler._handle_export()
+
+        self.assertFalse(responses[0][0]["ok"])
+        self.assertIn("only allowed for preview", responses[0][0]["error"])
+        self.assertEqual(current_session, handler.server.latest_session)
+
+    def test_session_source_reextract_missing_sources_keeps_current_session(self):
+        current_session = {
+            "session_name": "existing",
+            "input_files": ["file:///definitely/missing/source.pdf"],
+            "pages": [{"id": "page-1", "sourceImagePath": "file:///definitely/missing/page.png"}],
+            "problems": [{"id": "question-1"}],
+        }
+        responses = []
+
+        class FakeServer:
+            latest_session = copy.deepcopy(current_session)
+            allowed_files = set()
+
+            def remember_session(self, _session):
+                raise AssertionError("failed preview re-extraction must not replace the current session")
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = FakeServer()
+        handler._read_json_body = lambda: {
+            "reuseSessionSources": True,
+            "preview": True,
+            "contentTarget": "shared-passages",
+        }
+        handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+        with patch.object(
+            app_server,
+            "run_problem_export",
+            side_effect=AssertionError("re-extraction must not run without a preserved source"),
+        ):
+            handler._handle_export()
+
+        self.assertFalse(responses[0][0]["ok"])
+        self.assertIn("no preserved source files", responses[0][0]["error"])
+        self.assertEqual(current_session, handler.server.latest_session)
 
     def test_uploaded_files_reuse_same_content_path_for_cache_stability(self):
         with TemporaryDirectory() as raw_tmp:

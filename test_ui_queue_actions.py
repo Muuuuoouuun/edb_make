@@ -202,6 +202,52 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition')", queue_branch)
         self.assertNotIn("openOutputFolder(", queue_branch)
 
+    def test_page_first_recognition_review_stays_visible_and_avoids_empty_filter(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        stage = source.split("function RecognitionPageReviewStage", 1)[1]
+        stage = stage.split("function TileImage", 1)[0]
+        confirm = source.split("const confirmRecognitionReview = useCallback", 1)[1]
+        confirm = confirm.split("const setStep =", 1)[0]
+        stage_css = html.split(".recognition-page-review-stage{", 1)[1].split("}", 1)[0]
+        workspace_css = html.split(".recognition-page-workspace{", 1)[1].split("}", 1)[0]
+
+        self.assertIn(
+            "grid-template-rows: auto auto minmax(0, 1fr) auto",
+            stage_css,
+        )
+        self.assertIn("grid-template-columns: 220px minmax(0, 1fr)", workspace_css)
+        short_viewport_css = html.split("@media (max-height: 520px){", 1)[1]
+        short_viewport_css = short_viewport_css.split("@media (max-width: 420px){", 1)[0]
+        self.assertIn(".recognition-summary", short_viewport_css)
+        self.assertIn("display: none", short_viewport_css)
+        self.assertIn("recognition-page-review-foot", stage)
+        self.assertIn("recognition-transition-actions", stage.split("recognition-page-review-foot", 1)[1])
+        self.assertIn("hasActionableReview &&", stage)
+        self.assertIn("hasActionableReview ? '' : 'primary'", stage)
+        self.assertNotIn('role="dialog"', stage)
+        self.assertIn("setActivePageIndex(pageIndex)", stage)
+        self.assertIn("activePageRow", stage)
+        self.assertIn("resolveRecognitionReviewDestination(", confirm)
+        self.assertIn(
+            "filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all'",
+            confirm,
+        )
+
+    def test_queue_recognition_uses_a_synchronous_single_flight_guard(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_action = source.split("const processQueuedFiles = useCallback", 1)[1]
+        queue_action = queue_action.split("const cancelRecognitionReview", 1)[0]
+
+        self.assertIn("const recognitionInFlightRef = useRef(false)", source)
+        self.assertIn("if (recognitionInFlightRef.current)", queue_action)
+        self.assertIn("recognitionInFlightRef.current = true", queue_action)
+        self.assertIn("recognitionInFlightRef.current = false", queue_action)
+        self.assertLess(
+            queue_action.index("recognitionInFlightRef.current = true"),
+            queue_action.index("startBackgroundJob({"),
+        )
+
     def test_page_png_registration_does_not_auto_open_output_folder(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent,", 1)[1]
@@ -318,13 +364,25 @@ class TestUiQueueActions(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_review_setup = source.split("kind: 'queue-recognition',", 1)[1]
         queue_review_setup = queue_review_setup.split("session: incomingSession,", 1)[0]
-        modal_source = source.split("function RecognitionReviewModal", 1)[1]
-        modal_source = modal_source.split("function TileImage", 1)[0]
+        stage_source = source.split("function RecognitionPageReviewStage", 1)[1]
+        stage_source = stage_source.split("function TileImage", 1)[0]
+        app_render = source.split("<div className={`main ${recognitionReview", 1)[1]
+        app_render = app_render.split("<BackgroundJobsPanel", 1)[0]
 
-        self.assertIn("검수 화면", queue_review_setup)
+        self.assertIn("문제 목록에 적용하기 전에", queue_review_setup)
         self.assertNotIn("칠판에", queue_review_setup)
-        self.assertIn("review?.kind === 'queue-recognition'", modal_source)
-        self.assertIn("맞아요, 검수로 이동", modal_source)
+        self.assertIn("review?.kind === 'queue-recognition'", stage_source)
+        self.assertIn("페이지별 원본 확인", stage_source)
+        self.assertIn("문제는 이미 파싱되어 있습니다", stage_source)
+        self.assertIn("recognition-page-review-mode", source)
+        self.assertIn("pageReviewActive={Boolean(recognitionReview)}", source)
+        self.assertIn("pageReviewActive ? 'active'", source)
+        self.assertIn("disabled={pageReviewActive || !reviewAvailable}", source)
+        self.assertIn("disabled={pageReviewActive || !total}", source)
+        self.assertNotIn("<small>{row.page.id}</small>", stage_source)
+        self.assertNotIn("<span>{page.id}</span>", stage_source)
+        self.assertLess(app_render.index("<RecognitionPageReviewStage"), app_render.index("<ItemsRail"))
+        self.assertIn(") : (", app_render.split("<RecognitionPageReviewStage", 1)[1].split("<ItemsRail", 1)[0])
 
     def test_review_stage_exposes_crop_frame_fast_surrounding_crop_and_continuation(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -346,6 +404,22 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("void applyBoxEdit();", source)
         self.assertIn("crop-frame-handle", html)
         self.assertIn("manual-crop-presets", html)
+
+    def test_review_stage_has_fast_page_navigation(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage({", 1)[1]
+        review_stage = review_stage.split("function ItemsRail({", 1)[0]
+
+        self.assertIn("const [reviewPageNav, setReviewPageNav]", review_stage)
+        self.assertIn("syncReviewPageNavigation", review_stage)
+        self.assertIn("jumpReviewPage(-1)", review_stage)
+        self.assertIn("jumpReviewPage(1)", review_stage)
+        self.assertIn('aria-label="이전 검수 페이지"', review_stage)
+        self.assertIn('aria-label="다음 검수 페이지"', review_stage)
+        self.assertIn("syncReviewPageNavigation(event.currentTarget)", review_stage)
+        self.assertIn(".review-page-jump{", html)
+        self.assertIn(".review-page-jump-status{", html)
 
     def test_review_crop_apply_is_primary_rightmost_and_preserves_current_steps(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -477,8 +551,8 @@ class TestUiQueueActions(unittest.TestCase):
     def test_items_rail_keeps_step_and_source_on_one_line_without_status_text_chip(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
-        rail_item = source.split("{visibleItemRows.map(({ item: it, index: i }) => {", 1)[1]
-        rail_item = rail_item.split("</div>\n        );})}", 1)[0]
+        rail_item = source.split("{displayedItemRows.map(({ item: it, displayIndex: i }) => {", 1)[1]
+        rail_item = rail_item.split("</React.Fragment>\n        );})}", 1)[0]
 
         self.assertIn('className="source-label"', rail_item)
         self.assertIn('className="icon-btn item-download-action"', rail_item)
@@ -489,6 +563,28 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn(".item .meta .sub .source-label", html)
         self.assertIn(".item .actions .item-download-action", html)
         self.assertIn("word-break: keep-all", html)
+
+    def test_current_session_can_reextract_and_replace_shared_passages(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        request_source = source.split("async function postReextractSharedPassages", 1)[1]
+        request_source = request_source.split("function formatApiError", 1)[0]
+        confirm_source = source.split("if (review.kind === 'session-passage-reextract') {", 1)[1]
+        confirm_source = confirm_source.split("} else if (review.kind === 'queue-recognition') {", 1)[0]
+        rail_selection = source.split(
+            '<div className="rail-selection-tools" role="group" aria-label="선택 문제 일괄 작업">',
+            1,
+        )[1].split("</div>", 1)[0]
+
+        self.assertIn("현재 원본에서 공통 지문 다시 추출", source)
+        self.assertIn("reuseSessionSources: true", request_source)
+        self.assertIn("preview: true", request_source)
+        self.assertIn("inputIntent: 'multi-problem'", request_source)
+        self.assertIn("contentTarget: 'shared-passages'", request_source)
+        self.assertIn("mergeReextractedSharedPassages(", confirm_source)
+        self.assertNotIn("mergeSessions(", confirm_source)
+        self.assertIn("문항에 잘못 붙인 공통 지문 표시는 문항으로 되돌립니다", source)
+        self.assertNotIn("'shared-passage'", rail_selection)
+        self.assertIn("독립 지문 이미지", source)
 
 
 if __name__ == "__main__":

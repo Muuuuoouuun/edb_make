@@ -22,7 +22,7 @@ class TestUiPerformance(unittest.TestCase):
 
     def test_elapsed_time_updates_do_not_run_twice_per_second(self) -> None:
         loading = self.source.split("function LoadingOverlay", 1)[1]
-        loading = loading.split("function RecognitionReviewModal", 1)[0]
+        loading = loading.split("function RecognitionPageReviewStage", 1)[0]
 
         self.assertNotIn("setInterval(tick, 500)", loading)
         self.assertNotIn("setInterval(() => setNow(Date.now()), 500)", loading)
@@ -40,10 +40,84 @@ class TestUiPerformance(unittest.TestCase):
         tooltip = self.source.split("function TooltipLayer", 1)[1]
         tooltip = tooltip.split("function TopBar", 1)[0]
 
+        self.assertIn("if (event.buttons)", tooltip)
         self.assertIn(
             "document.addEventListener('pointermove', onPointerMove, { capture: true, passive: true })",
             tooltip,
         )
+
+    def test_rail_drag_hit_testing_is_coalesced_per_animation_frame(self) -> None:
+        items_rail = self.source.split("function ItemsRail({", 1)[1]
+        items_rail = items_rail.split("function BoardStage({", 1)[0]
+        pointer_move = items_rail.split("const movePointerDrag = (event) => {", 1)[1]
+        pointer_move = pointer_move.split("const finishPointerDrag", 1)[0]
+
+        self.assertIn("sourceIdSet: new Set(sourceIds)", items_rail)
+        self.assertIn("dragVisualFrameRef.current = window.requestAnimationFrame", items_rail)
+        self.assertIn("activeDrag.sourceIdSet", items_rail)
+        self.assertNotIn("findPointerDropTarget(", pointer_move)
+        self.assertIn("for (const { item } of visibleItemRows)", items_rail)
+
+    def test_tile_images_decode_async_and_gpu_hints_are_drag_scoped(self) -> None:
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        tile_image = self.source.split("function TileImage", 1)[1]
+        tile_image = tile_image.split("function canPreviewImageFile", 1)[0]
+        base_tile_css = board.split(".stage-tile{", 1)[1].split("}", 1)[0]
+        positioning_css = board.split(".stage-tile.positioning{", 1)[1].split("}", 1)[0]
+
+        self.assertIn('loading="lazy"', tile_image)
+        self.assertIn('decoding="async"', tile_image)
+        self.assertNotIn("will-change", base_tile_css)
+        self.assertIn("will-change: transform", positioning_css)
+
+    def test_recognition_preview_mounts_only_the_active_page_image(self) -> None:
+        stage = self.source.split("function RecognitionPageReviewStage", 1)[1]
+        stage = stage.split("function TileImage", 1)[0]
+
+        self.assertIn("pageRows.map((row, pageIndex) =>", stage)
+        self.assertIn("const activePageRow = pageRows[safePageIndex]", stage)
+        self.assertIn("{activePageRow ? (() =>", stage)
+        self.assertNotIn("pages.map((page, pageIndex) =>", stage)
+        self.assertEqual(stage.count("filePreviewUrl(page.sourceImageUri)"), 1)
+        self.assertIn('loading="eager"', stage)
+        self.assertIn('decoding="async"', stage)
+        self.assertIn('fetchPriority="high"', stage)
+
+    def test_center_panels_request_display_sized_images_only(self) -> None:
+        self.assertIn("const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024", self.source)
+        self.assertGreaterEqual(
+            self.source.count("filePreviewUrl(page.sourceImageUri)"),
+            4,
+        )
+        self.assertIn(
+            "<TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />",
+            self.source,
+        )
+        tile_image = self.source.split("function TileImage", 1)[1]
+        tile_image = tile_image.split("function canPreviewImageFile", 1)[0]
+        self.assertIn("filePreviewUrl(url, previewMaxDimension)", tile_image)
+        self.assertIn("const displayUrl = previewMaxDimension", tile_image)
+        self.assertIn("src={displayUrl}", tile_image)
+
+    def test_mobile_sidebar_keeps_scrolling_and_selection_tools_compact(self) -> None:
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        self.assertIn("touch-action: pan-y", board)
+        self.assertIn(".item .grip{", board)
+        self.assertIn(".stage-tile .tile-hd{", board)
+        self.assertIn("touch-action: none", board)
+        self.assertIn("overscroll-behavior: contain", board)
+        self.assertIn("scrollbar-gutter: stable", board)
+        self.assertIn("overscroll-behavior-inline: contain", board)
+        self.assertIn(".problem-order-status .rail-selection-tools{", board)
+        self.assertIn(".items .problem-order-status.is-selection > span{", board)
+
+    def test_smooth_scroll_respects_reduced_motion(self) -> None:
+        smooth_scroll = self.source.split("function smoothScrollTo", 1)[1]
+        smooth_scroll = smooth_scroll.split("const Icon = {", 1)[0]
+
+        self.assertIn("prefers-reduced-motion: reduce", smooth_scroll)
+        self.assertIn("duration = 0", smooth_scroll)
 
     def test_large_upload_is_rejected_before_base64_encoding(self) -> None:
         post_export = self.source.split("async function postExport", 1)[1]

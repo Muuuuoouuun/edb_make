@@ -772,6 +772,9 @@ const freshInitialItems = () => INITIAL_ITEMS.map(item => ({ ...item }));
 // smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
 function smoothScrollTo(el, top, duration = 380){
   if (!el) return;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+    duration = 0;
+  }
   if (duration <= 0){ el.scrollTop = top; return; }
   const start = el.scrollTop;
   const delta = top - start;
@@ -904,7 +907,7 @@ function BoxEditPreview({ label, page, box }){
       <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}` }}>
         {page?.sourceImageUri ? (
           <img
-            src={page.sourceImageUri}
+            src={filePreviewUrl(page.sourceImageUri)}
             alt={`${label} 영역 미리보기`}
             draggable={false}
             style={{
@@ -1094,7 +1097,7 @@ function ManualSplitEditor({
             onMouseLeave={(evt) => onCanvasMouseLeave?.(evt, page)}
           >
             {page.sourceImageUri ? (
-              <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} draggable={false} />
             ) : (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                 페이지 이미지를 불러올 수 없어요.
@@ -1486,10 +1489,18 @@ function TooltipLayer(){
       target?.closest?.('[data-tooltip], [title]')
     );
     const onPointerOver = (event) => {
+      if (event.buttons) {
+        hideTooltip();
+        return;
+      }
       const target = tooltipTarget(event.target);
       if (target) showTooltipFor(target);
     };
     const onPointerMove = (event) => {
+      if (event.buttons) {
+        hideTooltip();
+        return;
+      }
       const target = tooltipTarget(event.target);
       if (target && target !== activeRef.current) {
         showTooltipFor(target);
@@ -1548,7 +1559,7 @@ function TopBar({
   fileName, setFileName, progress, processed, total, onPublish, published, onReset,
   onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewComplete,
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
-  canExportImages,
+  canExportImages, pageReviewActive,
 }){
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef(null);
@@ -1577,35 +1588,38 @@ function TopBar({
       </div>
       <div className="crumb">
         <span>수업 ›</span>
-        <input value={fileName} onChange={e => setFileName(e.target.value)} />
+        <input value={fileName} onChange={e => setFileName(e.target.value)} disabled={pageReviewActive} />
       </div>
       <div className="spacer" />
       <div className="workflow-progress" aria-label="자료 제작 진행 단계">
         <span className={`workflow-step ${total > 0 ? 'done' : 'active'}`} aria-current={total === 0 ? 'step' : undefined}>
           1 자료
         </span>
-        <span className={`workflow-step ${reviewAvailable ? 'done' : recognitionBusy ? 'active' : ''}`} aria-current={recognitionBusy ? 'step' : undefined}>
+        <span
+          className={`workflow-step ${pageReviewActive ? 'active' : reviewAvailable ? 'done' : recognitionBusy ? 'active' : ''}`}
+          aria-current={pageReviewActive || recognitionBusy ? 'step' : undefined}
+        >
           2 인식
         </span>
         <button
-          className={`workflow-step ${reviewComplete ? 'done' : view === 'review' ? 'active' : ''}`}
+          className={`workflow-step ${reviewComplete ? 'done' : !pageReviewActive && view === 'review' ? 'active' : ''}`}
           type="button"
           aria-label="검수"
           data-tooltip={reviewAvailable ? 'AI 인식 박스와 문제 분할을 검수' : '먼저 자료를 업로드하세요'}
-          aria-current={view === 'review' ? 'step' : undefined}
+          aria-current={!pageReviewActive && view === 'review' ? 'step' : undefined}
           onClick={() => reviewAvailable && setView?.('review')}
-          disabled={!reviewAvailable}
+          disabled={pageReviewActive || !reviewAvailable}
         >
           3 검수
         </button>
         <button
-          className={`workflow-step ${published ? 'done' : view === 'board' && total > 0 ? 'active' : ''}`}
+          className={`workflow-step ${published ? 'done' : !pageReviewActive && view === 'board' && total > 0 ? 'active' : ''}`}
           type="button"
           aria-label="칠판"
           data-tooltip="보드 배치 화면으로 이동"
-          aria-current={view === 'board' && total > 0 ? 'step' : undefined}
+          aria-current={!pageReviewActive && view === 'board' && total > 0 ? 'step' : undefined}
           onClick={() => total > 0 && setView?.('board')}
-          disabled={!total}
+          disabled={pageReviewActive || !total}
         >
           4 칠판
         </button>
@@ -1625,11 +1639,11 @@ function TopBar({
         <button
           className="btn ghost icon"
           type="button"
-          title={canReset ? '초기화' : '초기화할 내용이 없습니다'}
-          data-tooltip={canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
+          title={pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요' : canReset ? '초기화' : '초기화할 내용이 없습니다'}
+          data-tooltip={pageReviewActive ? '페이지 확인 중에는 초기화할 수 없습니다' : canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
           aria-label="초기화"
           onClick={onReset}
-          disabled={!canReset}
+          disabled={pageReviewActive || !canReset}
         >
           {Icon.reset}
         </button>
@@ -1639,12 +1653,12 @@ function TopBar({
           data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
           aria-label="되돌리기"
           onClick={onUndo}
-          disabled={!canUndo}
+          disabled={pageReviewActive || !canUndo}
         >{Icon.undo}</button>
         <button
           className="btn ghost icon"
           onClick={onRefresh}
-          disabled={refreshing}
+          disabled={refreshing || pageReviewActive}
           title={refreshing ? '세션 새로고침 중' : '저장된 최신 세션 다시 읽기'}
           data-tooltip={refreshing ? '저장된 최신 세션을 읽는 중' : '디스크에 저장된 최신 세션을 다시 읽기'}
           aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}
@@ -1658,7 +1672,7 @@ function TopBar({
           data-tooltip={canExportImages ? '현재 선택한 처리 단계 기준으로 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
           aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
           onClick={onExportImages}
-          disabled={!canExportImages || exportingImages}
+          disabled={pageReviewActive || !canExportImages || exportingImages}
         >
           {Icon.download}
         </button>
@@ -1692,8 +1706,9 @@ function TopBar({
       </div>
       <button
         className={`btn primary ${published ? 'done' : ''}`}
-        data-tooltip={published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
+        data-tooltip={pageReviewActive ? '페이지 확인 후 제작할 수 있습니다' : published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
         onClick={onPublish}
+        disabled={pageReviewActive}
       >
         {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
       </button>
@@ -1778,7 +1793,39 @@ function ReviewStage({
   const reviewSelectionAnchorRef = useRef(null);
   const reviewWrapRef = useRef(null);
   const reviewScrollTopRef = useRef(Number(reviewUi?.scrollTop) || 0);
+  const [reviewPageNav, setReviewPageNav] = useState({ current: 1, total: pages.length });
   const reviewEditorActive = Boolean(boxEdit || manualSplit);
+
+  const syncReviewPageNavigation = useCallback((wrap = reviewWrapRef.current) => {
+    if (!wrap) return;
+    const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+    if (!pageNodes.length) {
+      setReviewPageNav(prev => (prev.current === 0 && prev.total === 0 ? prev : { current: 0, total: 0 }));
+      return;
+    }
+    const markerTop = wrap.getBoundingClientRect().top + 24;
+    const currentIndex = Math.max(0, pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop));
+    const next = { current: currentIndex + 1, total: pageNodes.length };
+    setReviewPageNav(prev => (
+      prev.current === next.current && prev.total === next.total ? prev : next
+    ));
+  }, []);
+
+  const jumpReviewPage = useCallback((direction) => {
+    const wrap = reviewWrapRef.current;
+    if (!wrap || reviewEditorActive) return;
+    const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+    if (!pageNodes.length) return;
+    const markerTop = wrap.getBoundingClientRect().top + 24;
+    const visibleIndex = pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop);
+    const currentIndex = visibleIndex < 0 ? pageNodes.length - 1 : visibleIndex;
+    const targetIndex = Math.max(0, Math.min(pageNodes.length - 1, currentIndex + direction));
+    const wrapRect = wrap.getBoundingClientRect();
+    const targetRect = pageNodes[targetIndex].getBoundingClientRect();
+    const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+    setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
+    smoothScrollTo(wrap, targetTop, 220);
+  }, [reviewEditorActive]);
 
   useEffect(() => {
     onEditorModeChange?.(reviewEditorActive);
@@ -1816,6 +1863,10 @@ function ReviewStage({
       }));
     };
   }, [setReviewUi]);
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(() => syncReviewPageNavigation());
+    return () => window.cancelAnimationFrame(frame);
+  }, [pages, reviewFilter, reviewRiskFilter, reviewScopeProblemIds, reviewScopePageIds, manualSplit, syncReviewPageNavigation]);
   useEffect(() => {
     if (reviewFocus === null) {
       setReviewScopeProblemIds([]);
@@ -3285,6 +3336,31 @@ function ReviewStage({
           </div>
           <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {formatProblemCount(sessionCounts)}</span>
           <div className="spacer" />
+          <div className="review-page-jump" role="group" aria-label="검수 페이지 이동">
+            <button
+              type="button"
+              className="icon-btn"
+              title="이전 검수 페이지"
+              aria-label="이전 검수 페이지"
+              onClick={() => jumpReviewPage(-1)}
+              disabled={reviewEditorActive || reviewPageNav.current <= 1}
+            >
+              {Icon.arrowLeft}
+            </button>
+            <span className="review-page-jump-status" aria-live="polite">
+              <b>{reviewPageNav.current || 0}</b> / {reviewPageNav.total} 페이지
+            </span>
+            <button
+              type="button"
+              className="icon-btn"
+              title="다음 검수 페이지"
+              aria-label="다음 검수 페이지"
+              onClick={() => jumpReviewPage(1)}
+              disabled={reviewEditorActive || !reviewPageNav.total || reviewPageNav.current >= reviewPageNav.total}
+            >
+              {Icon.arrowRight}
+            </button>
+          </div>
           <div className="review-view-control-group" role="group" aria-label="검수 화면 배율">
             <span className="review-view-control-label">배율</span>
             <div className="review-zoom-controls">
@@ -3335,7 +3411,10 @@ function ReviewStage({
           className={`review-wrap ${manualSplit ? 'manual-split-open' : ''}`}
           style={{ '--review-zoom': String(reviewZoom) }}
           onWheel={handleReviewWheel}
-          onScroll={event => { reviewScrollTopRef.current = event.currentTarget.scrollTop; }}
+          onScroll={event => {
+            reviewScrollTopRef.current = event.currentTarget.scrollTop;
+            syncReviewPageNavigation(event.currentTarget);
+          }}
           ref={reviewWrapRef}
         >
           {actionBar}
@@ -3603,7 +3682,7 @@ function ReviewStage({
                     <ReviewCanvasZoomShell>
                       <div className="review-page-canvas">
                     {page.sourceImageUri ? (
-                      <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                      <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} draggable={false} />
                     ) : (
                       <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                         페이지 이미지를 불러올 수 없어요.
@@ -3775,22 +3854,28 @@ function ItemsRail({
   onDownloadItemImage, downloadingItemId, reorderBusy, moveFeedback,
   selectedItemIds, setSelectedItemIds,
   onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
+  onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
 }){
   const dragId = useRef(null);
-  const dragIdsRef = useRef([]);
   const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
   const [materialFilter, setMaterialFilter] = useState('all');
-  const [dragBadgePosition, setDragBadgePosition] = useState(null);
+  const [dragPreview, setDragPreview] = useState(null);
+  const [pressedItemId, setPressedItemId] = useState(null);
   const selectionAnchorRef = useRef(null);
+  const railSelectionSnapshotRef = useRef('');
   const railRef = useRef(null);
   const itemRefs = useRef({});
   const previousItemRects = useRef(new Map());
+  const itemLayoutAnimationsRef = useRef(new Map());
   const pointerDragRef = useRef(null);
   const suppressClickRef = useRef(false);
   const dropTargetRef = useRef(null);
   const railAutoScrollRef = useRef({ raf: null, clientX: null, clientY: null });
+  const dragVisualFrameRef = useRef(null);
+  const dragVisualOffsetRef = useRef({ x: 0, y: 0, tilt: 0 });
+  const dragPreviewRef = useRef(null);
   const pendingKeyboardFocusRef = useRef(null);
   const [reorderAnnouncement, setReorderAnnouncement] = useState('');
   const [recentSessionsCollapsed, setRecentSessionsCollapsed] = useState(() => {
@@ -3814,11 +3899,31 @@ function ItemsRail({
       || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter]);
   const filterActive = materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
+  const draggingLayoutSignature = Array.from(draggingIds).join('|');
+  const dropTargetLayoutSignature = dropTarget
+    ? `${String(dropTarget.id)}:${dropTarget.position}`
+    : '';
+  const itemsById = useMemo(
+    () => new Map(items.map(item => [String(item.id), item])),
+    [items]
+  );
+  const displayedItemRows = useMemo(() => {
+    let displayIndex = 0;
+    return visibleItemRows.reduce((rows, row) => {
+      if (draggingIds.has(String(row.item.id))) return rows;
+      rows.push({ ...row, displayIndex });
+      displayIndex += 1;
+      return rows;
+    }, []);
+  }, [visibleItemRows, draggingIds]);
   const orderedSelectedIds = useMemo(
     () => items.map(item => String(item.id)).filter(id => selectedItemIds.has(id)),
     [items, selectedItemIds]
   );
   const selectedItemCount = orderedSelectedIds.length;
+  const dragPreviewItem = dragPreview
+    ? itemsById.get(String(dragPreview.id))
+    : null;
 
   useEffect(() => {
     const validIds = new Set(items.map(item => String(item.id)));
@@ -3836,7 +3941,18 @@ function ItemsRail({
     const nextRects = new Map();
     items.forEach(it => {
       const el = itemRefs.current[it.id];
-      if (!el) return;
+      if (!el) {
+        const preservedRect = previousItemRects.current.get(it.id);
+        if (draggingIds.has(String(it.id)) && preservedRect) {
+          nextRects.set(it.id, preservedRect);
+        }
+        return;
+      }
+      const previousAnimation = itemLayoutAnimationsRef.current.get(it.id);
+      if (previousAnimation) {
+        previousAnimation.cancel();
+        itemLayoutAnimationsRef.current.delete(it.id);
+      }
       const rect = el.getBoundingClientRect();
       const prevRect = previousItemRects.current.get(it.id);
       if (prevRect && !reduceMotion) {
@@ -3844,7 +3960,7 @@ function ItemsRail({
         const dy = prevRect.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
           const isMovedItem = String(moveFeedback?.id || '') === String(it.id);
-          el.animate(
+          const animation = el.animate(
             isMovedItem
               ? [
                   { transform: `translate(${dx}px, ${dy}px) scale(.985)`, opacity: .78 },
@@ -3856,10 +3972,18 @@ function ItemsRail({
                   { transform: 'translate(0, 0)' },
                 ],
             {
-              duration: isMovedItem ? 420 : 260,
-              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.2,.8,.2,1)',
+              duration: isMovedItem ? 480 : 380,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.22,1,.36,1)',
             }
           );
+          itemLayoutAnimationsRef.current.set(it.id, animation);
+          const releaseAnimation = () => {
+            if (itemLayoutAnimationsRef.current.get(it.id) === animation) {
+              itemLayoutAnimationsRef.current.delete(it.id);
+            }
+          };
+          animation.onfinish = releaseAnimation;
+          animation.oncancel = releaseAnimation;
         }
       }
       nextRects.set(it.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
@@ -3870,14 +3994,26 @@ function ItemsRail({
       pendingKeyboardFocusRef.current = null;
       window.requestAnimationFrame(() => itemRefs.current[focusId]?.focus?.({ preventScroll: true }));
     }
-  }, [itemOrderSignature]);
+  }, [itemOrderSignature, draggingLayoutSignature, dropTargetLayoutSignature]);
 
   const selectRailItem = (itemId, event = {}) => {
     const id = String(itemId);
     const visibleIds = visibleItemRows.map(({ item }) => String(item.id));
-    const anchorId = selectionAnchorRef.current && visibleIds.includes(String(selectionAnchorRef.current))
+    const currentSelectionKey = visibleIds
+      .filter(visibleId => selectedItemIds.has(visibleId))
+      .join('|');
+    const railOwnsAnchor = railSelectionSnapshotRef.current === currentSelectionKey;
+    const anchorId = railOwnsAnchor
+      && selectionAnchorRef.current
+      && visibleIds.includes(String(selectionAnchorRef.current))
       ? String(selectionAnchorRef.current)
-      : (activeId && visibleIds.includes(String(activeId)) ? String(activeId) : id);
+      : (
+          activeId
+          && selectedItemIds.has(String(activeId))
+          && visibleIds.includes(String(activeId))
+            ? String(activeId)
+            : id
+        );
     const selection = applySelectionClick(
       visibleIds,
       Array.from(selectedItemIds),
@@ -3887,6 +4023,7 @@ function ItemsRail({
     );
     const next = new Set(selection.selectedIds);
     selectionAnchorRef.current = selection.anchorId;
+    railSelectionSnapshotRef.current = selection.selectedIds.join('|');
     setSelectedItemIds(next);
     if (next.has(id)) {
       setActive(id);
@@ -3900,6 +4037,7 @@ function ItemsRail({
 
   const clearRailSelection = () => {
     selectionAnchorRef.current = null;
+    railSelectionSnapshotRef.current = '';
     setSelectedItemIds(new Set());
   };
 
@@ -3910,11 +4048,88 @@ function ItemsRail({
     setReorderAnnouncement(`${orderedSelectedIds.length}개 문제를 삭제했습니다.`);
   };
 
+  useLayoutEffect(() => {
+    const preview = dragPreviewRef.current;
+    if (!dragPreview || !preview) return;
+    const { x, y, tilt } = dragVisualOffsetRef.current;
+    preview.style.setProperty('--drag-preview-x', `${x}px`);
+    preview.style.setProperty('--drag-preview-y', `${y}px`);
+    preview.style.setProperty('--drag-preview-tilt', `${tilt}deg`);
+  }, [dragPreview]);
+
+  const updatePointerDragVisual = (clientX, clientY) => {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
+    drag.lastClientX = Number(clientX);
+    drag.lastClientY = Number(clientY);
+    const unclampedX = drag.lastClientX - drag.grabOffsetX;
+    const maxX = Math.max(4, window.innerWidth - drag.previewWidth - 4);
+    dragVisualOffsetRef.current = {
+      x: Math.max(4, Math.min(maxX, unclampedX)),
+      y: drag.lastClientY - drag.grabOffsetY,
+      tilt: Math.max(-1.1, Math.min(1.1, (drag.lastClientX - drag.startX) / 140)),
+    };
+    if (dragVisualFrameRef.current) return;
+    dragVisualFrameRef.current = window.requestAnimationFrame(() => {
+      dragVisualFrameRef.current = null;
+      const { x, y, tilt } = dragVisualOffsetRef.current;
+      const activeDrag = pointerDragRef.current;
+      if (
+        activeDrag
+        && activeDrag.moved
+        && activeDrag.pointerId === drag.pointerId
+      ) {
+        const target = findPointerDropTarget(
+          activeDrag.lastClientX,
+          activeDrag.lastClientY,
+          activeDrag.sourceIdSet
+        );
+        setCurrentDropTarget(target);
+      }
+      const preview = dragPreviewRef.current;
+      if (!preview) return;
+      preview.style.setProperty('--drag-preview-x', `${x}px`);
+      preview.style.setProperty('--drag-preview-y', `${y}px`);
+      preview.style.setProperty('--drag-preview-tilt', `${tilt}deg`);
+    });
+  };
+
+  const resetPointerDragVisual = () => {
+    if (dragVisualFrameRef.current) {
+      window.cancelAnimationFrame(dragVisualFrameRef.current);
+      dragVisualFrameRef.current = null;
+    }
+    const preview = dragPreviewRef.current;
+    preview?.style.removeProperty('--drag-preview-x');
+    preview?.style.removeProperty('--drag-preview-y');
+    preview?.style.removeProperty('--drag-preview-tilt');
+    dragVisualOffsetRef.current = { x: 0, y: 0, tilt: 0 };
+  };
+
+  const captureDragPreviewRect = (sourceIds) => {
+    const preview = dragPreviewRef.current;
+    if (!preview) return;
+    const previewCard = preview.querySelector('.rail-drag-overlay-card');
+    const rect = (previewCard || preview).getBoundingClientRect();
+    sourceIds.forEach((sourceId, index) => {
+      const item = itemsById.get(String(sourceId));
+      if (!item) return;
+      const fanOffset = Math.min(index, 3) * 2;
+      previousItemRects.current.set(item.id, {
+        top: rect.top + fanOffset,
+        left: rect.left + fanOffset,
+        width: rect.width,
+        height: rect.height,
+      });
+    });
+  };
+
   const clearDragState = () => {
+    resetPointerDragVisual();
     dragId.current = null;
-    dragIdsRef.current = [];
     setDraggingIds(new Set());
-    setDragBadgePosition(null);
+    setDragPreview(null);
+    setPressedItemId(null);
     dropTargetRef.current = null;
     setDropTarget(null);
   };
@@ -3926,41 +4141,40 @@ function ItemsRail({
     ));
   };
 
-  const updateDropTarget = (event, targetId) => {
-    const sourceIds = dragIdsRef.current.length ? dragIdsRef.current : [dragId.current].filter(Boolean);
-    if (!sourceIds.length || sourceIds.includes(String(targetId))) {
-      setCurrentDropTarget(null);
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    const position = dropPositionFromClientY(event.currentTarget.getBoundingClientRect(), event.clientY);
-    setCurrentDropTarget({ id: targetId, position });
-  };
-
-  const findPointerDropTarget = (_clientX, clientY, sourceIds) => {
+  const findPointerDropTarget = (clientX, clientY, sourceIdSet) => {
     const rail = railRef.current;
     if (!rail) return null;
-    const drag = pointerDragRef.current;
-    const sourceIdSet = new Set((sourceIds || []).map(String));
-    const rows = drag?.rows?.filter(row => !sourceIdSet.has(String(row.id))) || [];
-    if (!rows.length) return null;
     const railRect = rail.getBoundingClientRect();
-    const contentY = clientY - railRect.top + rail.scrollTop;
-    const first = rows[0];
-    if (contentY < first.top) {
-      const id = first.id;
-      return id ? { id, position: 'before' } : null;
-    }
-    for (const candidate of rows) {
-      const id = candidate.id;
-      if (contentY < candidate.top + candidate.height / 2) {
-        return id ? { id, position: 'before' } : null;
+    if (
+      Number.isFinite(Number(clientX))
+      && (clientX < railRect.left || clientX > railRect.right)
+    ) return null;
+    let first = null;
+    let last = null;
+    for (const { item } of visibleItemRows) {
+      if (sourceIdSet?.has(String(item.id))) continue;
+      const el = itemRefs.current[item.id];
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.height < 1) continue;
+      previousItemRects.current.set(item.id, {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      });
+      const candidate = { id: item.id, top: rect.top, height: rect.height };
+      if (!first) first = candidate;
+      last = candidate;
+      if (clientY < candidate.top + candidate.height / 2) {
+        return { id: candidate.id, position: 'before' };
       }
     }
-    const last = rows[rows.length - 1];
-    const id = last.id;
-    return id ? { id, position: 'after' } : null;
+    if (!first || !last) return null;
+    if (clientY < first.top) {
+      return { id: first.id, position: 'before' };
+    }
+    return { id: last.id, position: 'after' };
   };
 
   const stopRailAutoScroll = () => {
@@ -3972,16 +4186,21 @@ function ItemsRail({
 
   const stepRailAutoScroll = () => {
     const rail = railRef.current;
-    const sourceIds = dragIdsRef.current;
+    const drag = pointerDragRef.current;
     const { clientX, clientY } = railAutoScrollRef.current;
-    if (!rail || !sourceIds.length || clientY == null) {
+    if (!rail || !drag?.ids.length || clientY == null) {
       stopRailAutoScroll();
       return;
     }
-    const delta = edgeAutoScrollDelta(
-      rail.getBoundingClientRect(),
-      clientY,
+    const railRect = rail.getBoundingClientRect();
+    const edgePx = Math.min(
       RAIL_DRAG_AUTOSCROLL_EDGE_PX,
+      Math.max(18, railRect.height * 0.35)
+    );
+    const delta = edgeAutoScrollDelta(
+      railRect,
+      clientY,
+      edgePx,
       RAIL_DRAG_AUTOSCROLL_MAX_PX
     );
     if (!delta) {
@@ -3990,7 +4209,7 @@ function ItemsRail({
     }
     const previousTop = rail.scrollTop;
     rail.scrollTop = Math.max(0, Math.min(rail.scrollHeight - rail.clientHeight, previousTop + delta));
-    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceIds);
+    const target = findPointerDropTarget(clientX ?? 0, clientY, drag.sourceIdSet);
     setCurrentDropTarget(target);
     if (rail.scrollTop === previousTop) {
       railAutoScrollRef.current.raf = null;
@@ -4007,39 +4226,91 @@ function ItemsRail({
     }
   };
 
-  useEffect(() => () => stopRailAutoScroll(), []);
+  const removeRailDragWindowListeners = (drag = pointerDragRef.current) => {
+    if (!drag) return;
+    if (drag.windowPointerMove) {
+      window.removeEventListener('pointermove', drag.windowPointerMove);
+      drag.windowPointerMove = null;
+    }
+    if (drag.windowPointerEnd) {
+      window.removeEventListener('pointerup', drag.windowPointerEnd);
+      drag.windowPointerEnd = null;
+    }
+    if (drag.windowPointerCancel) {
+      window.removeEventListener('pointercancel', drag.windowPointerCancel);
+      drag.windowPointerCancel = null;
+    }
+    if (drag.windowBlur) {
+      window.removeEventListener('blur', drag.windowBlur);
+      drag.windowBlur = null;
+    }
+  };
+
+  useEffect(() => () => {
+    stopRailAutoScroll();
+    resetPointerDragVisual();
+    removeRailDragWindowListeners();
+    itemLayoutAnimationsRef.current.forEach(animation => animation.cancel());
+    itemLayoutAnimationsRef.current.clear();
+  }, []);
 
   const startPointerDrag = (event, itemId) => {
-    if (reorderBusy || filterActive || event.button !== 0 || event.target.closest?.('button')) return;
+    if (
+      reorderBusy
+      || filterActive
+      || event.button !== 0
+      || event.shiftKey
+      || event.ctrlKey
+      || event.metaKey
+      || event.target.closest?.('button')
+    ) return;
     const id = String(itemId);
     const sourceIds = selectedItemIds.has(id) && orderedSelectedIds.length > 1
       ? orderedSelectedIds
       : [id];
     const rail = railRef.current;
     if (!rail) return;
-    const railRect = rail.getBoundingClientRect();
-    const rows = items.map(item => {
-      const el = itemRefs.current[item.id];
-      if (!el) return null;
-      const rect = el.getBoundingClientRect();
-      return {
-        id: item.id,
-        top: scrollContainerContentTop(rect, railRect, rail.scrollTop),
-        height: rect.height,
-      };
-    }).filter(Boolean);
-    pointerDragRef.current = {
+    const sourceEl = itemRefs.current[id];
+    if (!sourceEl) return;
+    const sourceRect = sourceEl.getBoundingClientRect();
+    const drag = {
       id,
       ids: sourceIds,
+      sourceIdSet: new Set(sourceIds),
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      grabOffsetX: Math.max(0, Math.min(sourceRect.width, event.clientX - sourceRect.left)),
+      grabOffsetY: Math.max(0, Math.min(sourceRect.height, event.clientY - sourceRect.top)),
+      previewWidth: sourceRect.width,
+      previewHeight: sourceRect.height,
       moved: false,
-      rows,
     };
+    drag.windowPointerMove = pointerEvent => movePointerDrag(pointerEvent);
+    drag.windowPointerEnd = pointerEvent => finishPointerDrag(pointerEvent);
+    drag.windowPointerCancel = pointerEvent => finishPointerDrag(pointerEvent);
+    drag.windowBlur = () => {
+      if (pointerDragRef.current !== drag) return;
+      pointerDragRef.current = null;
+      removeRailDragWindowListeners(drag);
+      stopRailAutoScroll();
+      clearDragState();
+    };
+    pointerDragRef.current = drag;
     dragId.current = id;
-    dragIdsRef.current = sourceIds;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setCurrentDropTarget(null);
+    setPressedItemId(id);
+    try {
+      rail.setPointerCapture?.(event.pointerId);
+    } catch (_err) {
+      // Window listeners below keep the drag functional if pointer capture is unavailable.
+    }
+    window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
+    window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
+    window.addEventListener('blur', drag.windowBlur);
   };
 
   const movePointerDrag = (event) => {
@@ -4052,27 +4323,36 @@ function ItemsRail({
       drag.moved = true;
       if (!selectedItemIds.has(drag.id)) {
         selectionAnchorRef.current = drag.id;
+        railSelectionSnapshotRef.current = drag.id;
         setSelectedItemIds(new Set([drag.id]));
       }
+      const previewIndex = items.findIndex(item => String(item.id) === drag.id);
+      setDragPreview({
+        id: drag.id,
+        count: drag.ids.length,
+        index: Math.max(0, previewIndex),
+        width: drag.previewWidth,
+        height: drag.previewHeight,
+      });
       setDraggingIds(new Set(drag.ids));
     }
-    if (drag.ids.length > 1) setDragBadgePosition({ left: event.clientX, top: event.clientY });
+    updatePointerDragVisual(event.clientX, event.clientY);
     event.preventDefault();
     applyRailAutoScroll(event.clientX, event.clientY);
-    const target = findPointerDropTarget(event.clientX, event.clientY, drag.ids);
-    setCurrentDropTarget(target);
   };
 
   const finishPointerDrag = (event) => {
     const drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const target = drag.moved
-      ? findPointerDropTarget(event.clientX, event.clientY, drag.ids) || dropTargetRef.current
+    const cancelled = event.type === 'pointercancel';
+    const target = drag.moved && !cancelled
+      ? findPointerDropTarget(event.clientX, event.clientY, drag.sourceIdSet)
       : null;
     if (drag.moved) {
       event.preventDefault();
       suppressClickRef.current = true;
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+      captureDragPreviewRect(drag.ids);
       if (target) {
         setActive(drag.id);
         reorder(drag.id, target.id, target.position, {
@@ -4081,8 +4361,12 @@ function ItemsRail({
         });
       }
     }
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    const rail = railRef.current;
     pointerDragRef.current = null;
+    removeRailDragWindowListeners(drag);
+    if (rail?.hasPointerCapture?.(event.pointerId)) {
+      rail.releasePointerCapture(event.pointerId);
+    }
     stopRailAutoScroll();
     clearDragState();
   };
@@ -4129,6 +4413,7 @@ function ItemsRail({
     );
     event.preventDefault();
     selectionAnchorRef.current = result.anchorId;
+    railSelectionSnapshotRef.current = result.selectedIds.join('|');
     setSelectedItemIds(new Set(result.selectedIds));
     if (result.focusId && result.selectedIds.includes(result.focusId)) {
       setActive(result.focusId);
@@ -4159,8 +4444,10 @@ function ItemsRail({
     const el = itemRefs.current[activeId];
     const rail = railRef.current;
     if (!el || !rail) return;
-    const top = el.offsetTop;
-    const bot = top + el.offsetHeight;
+    const itemRect = el.getBoundingClientRect();
+    const railRect = rail.getBoundingClientRect();
+    const top = scrollContainerContentTop(itemRect, railRect, rail.scrollTop);
+    const bot = top + itemRect.height;
     const vTop = rail.scrollTop;
     const vBot = vTop + rail.clientHeight;
     if (top < vTop + 16) {
@@ -4188,40 +4475,67 @@ function ItemsRail({
       </div>
 
       {hasSessionItems && (
-        <div className="material-filter" role="group" aria-label="자료 모아보기">
-          {[
-            ['all', '전체', materialCounts.all],
-            ['questions', '문항', materialCounts.questions],
-            ['passages', '공통 지문', materialCounts.passages],
-          ].map(([value, label, count]) => (
+        <>
+          <div className="material-filter" role="group" aria-label="자료 모아보기">
+            {[
+              ['all', '전체', materialCounts.all],
+              ['questions', '문항', materialCounts.questions],
+              ['passages', '공통 지문', materialCounts.passages],
+            ].map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                className={materialFilter === value ? 'on' : ''}
+                aria-pressed={materialFilter === value}
+                onClick={() => {
+                  setMaterialFilter(value);
+                  const firstMatch = items.find(item => value === 'all'
+                    || (value === 'questions' && !isPassageFragmentProblem(item))
+                    || (value === 'passages' && isPassageFragmentProblem(item)));
+                  if (firstMatch) {
+                    selectionAnchorRef.current = String(firstMatch.id);
+                    setSelectedItemIds(new Set([String(firstMatch.id)]));
+                    setActive(firstMatch.id);
+                  } else {
+                    clearRailSelection();
+                  }
+                }}
+              >
+                <span>{label}</span><b>{count}</b>
+              </button>
+            ))}
+          </div>
+          <div style={{ padding: '0 10px 8px' }}>
             <button
-              key={value}
+              className="btn"
               type="button"
-              className={materialFilter === value ? 'on' : ''}
-              aria-pressed={materialFilter === value}
-              onClick={() => {
-                setMaterialFilter(value);
-                const firstMatch = items.find(item => value === 'all'
-                  || (value === 'questions' && !isPassageFragmentProblem(item))
-                  || (value === 'passages' && isPassageFragmentProblem(item)));
-                if (firstMatch) {
-                  selectionAnchorRef.current = String(firstMatch.id);
-                  setSelectedItemIds(new Set([String(firstMatch.id)]));
-                  setActive(firstMatch.id);
-                } else {
-                  clearRailSelection();
-                }
-              }}
+              style={{ width: '100%', justifyContent: 'center' }}
+              title={canReextractSharedPassages
+                ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
+                : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
+              onClick={onReextractSharedPassages}
+              disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
             >
-              <span>{label}</span><b>{count}</b>
+              {Icon.refresh}
+              <span>{reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '현재 원본에서 공통 지문 다시 추출'}</span>
             </button>
-          ))}
-        </div>
+          </div>
+        </>
       )}
 
       <div
         className="items"
         ref={railRef}
+        onScroll={() => {
+          const drag = pointerDragRef.current;
+          if (!drag?.moved) return;
+          const target = findPointerDropTarget(
+            drag.lastClientX,
+            drag.lastClientY,
+            drag.sourceIdSet
+          );
+          setCurrentDropTarget(target);
+        }}
         onDragOver={e => {
           if (!dragId.current || e.dataTransfer?.types?.includes('Files')) return;
           e.preventDefault();
@@ -4520,9 +4834,6 @@ function ItemsRail({
                   <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'question')} disabled={reorderBusy}>
                     문항
                   </button>
-                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'shared-passage')} disabled={reorderBusy}>
-                    공통 지문
-                  </button>
                   <button className="btn" type="button" onClick={() => onConfirmSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
                     {Icon.check} 확인
                   </button>
@@ -4553,20 +4864,56 @@ function ItemsRail({
         <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {reorderAnnouncement}
         </span>
-        {dragBadgePosition && draggingIds.size > 1 && (
+        {dragPreview && dragPreviewItem && ReactDOM.createPortal(
           <div
-            className="rail-selection-drag-badge"
-            style={{ left: dragBadgePosition.left, top: dragBadgePosition.top }}
+            ref={dragPreviewRef}
+            className="rail-drag-overlay"
+            style={{
+              '--drag-preview-width': `${dragPreview.width}px`,
+              '--drag-preview-height': `${dragPreview.height}px`,
+            }}
+            data-drag-count={dragPreview.count}
             aria-hidden="true"
           >
-            {draggingIds.size}개 함께 이동
-          </div>
+            <div className="item rail-drag-overlay-card">
+              <div className="grip">
+                <span className="grip-icon">{Icon.grip}</span>
+                <span className="idx">{String(dragPreview.index + 1).padStart(2, '0')}</span>
+              </div>
+              <div className="thumb">
+                <TileImage item={dragPreviewItem} forceMode="raw" />
+              </div>
+              <div className="meta">
+                <div className="name">
+                  <span
+                    className={`status-dot ${reviewStatusClass(dragPreviewItem.reviewStatus)}`}
+                  />
+                  {problemDisplayName(dragPreviewItem, dragPreview.index)}
+                </div>
+                <div className="sub">
+                  {dragPreviewItem.step === 's1' && <span className="tag s1">1단계</span>}
+                  {dragPreviewItem.step === 's2' && <span className="tag s2">보존</span>}
+                  {dragPreviewItem.step === 's3' && <span className="tag s3">고화질</span>}
+                  {dragPreviewItem.step === 'raw' && <span className="tag">대기</span>}
+                  <span className="source-label">{problemSourceLabel(dragPreviewItem)}</span>
+                </div>
+              </div>
+            </div>
+            {dragPreview.count > 1 && (
+              <span className="rail-drag-count">{dragPreview.count}개 이동</span>
+            )}
+          </div>,
+          document.body
         )}
 
-        {visibleItemRows.map(({ item: it, index: i }) => {
+        {displayedItemRows.map(({ item: it, displayIndex: i }) => {
           const itemId = String(it.id);
           const isSelected = selectedItemIds.has(itemId);
-          const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
+          const dropPosition = (
+            String(dropTarget?.id || '') === itemId
+              ? dropTarget.position
+              : null
+          );
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
           const hasPageChrome = hasPageChromeArtifactFlag(it);
@@ -4578,13 +4925,20 @@ function ItemsRail({
               ? '이 자료 PNG 다운로드'
               : '다운로드할 이미지가 아직 없습니다';
           return (
+          <React.Fragment key={it.id}>
+          {dropPosition === 'before' && (
+            <div
+              className="rail-drop-slot"
+              data-drop-position="before"
+              aria-hidden="true"
+            />
+          )}
           <div
-            key={it.id}
             ref={el => {
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${draggingIds.has(itemId) ? 'dragging' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${pressedItemId === itemId ? 'is-pressed' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
             role="group"
             tabIndex={0}
@@ -4593,7 +4947,7 @@ function ItemsRail({
             aria-roledescription={filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
             aria-keyshortcuts={filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
             aria-posinset={i + 1}
-            aria-setsize={items.length}
+            aria-setsize={displayedItemRows.length}
             aria-describedby="problem-order-help"
             aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, Ctrl 또는 Command 개별 선택, Alt와 위아래 방향키로 순서 이동`}
             onClick={e => {
@@ -4618,65 +4972,13 @@ function ItemsRail({
                 selectRailItem(it.id, e);
               }
             }}
-            onPointerDown={e => startPointerDrag(e, it.id)}
-            onPointerMove={movePointerDrag}
-            onPointerUp={finishPointerDrag}
-            onPointerCancel={finishPointerDrag}
-            onDragStart={e => {
-              if (reorderBusy || filterActive) {
-                e.preventDefault();
-                return;
-              }
-              const sourceIds = isSelected && orderedSelectedIds.length > 1
-                ? orderedSelectedIds
-                : [itemId];
-              dragId.current = itemId;
-              dragIdsRef.current = sourceIds;
-              setDraggingIds(new Set(sourceIds));
-              if (sourceIds.length > 1) setDragBadgePosition({ left: e.clientX, top: e.clientY });
-              e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', itemId);
-            }}
-            onDragEnter={e => updateDropTarget(e, it.id)}
-            onDragOver={e => {
-              if (dragIdsRef.current.length > 1) setDragBadgePosition({ left: e.clientX, top: e.clientY });
-              applyRailAutoScroll(e.clientX, e.clientY);
-              updateDropTarget(e, it.id);
-            }}
-            onDragLeave={e => {
-              if (e.currentTarget.contains(e.relatedTarget)) return;
-              if (dropTargetRef.current?.id === it.id) setCurrentDropTarget(null);
-            }}
-            onDrop={e => {
-              e.preventDefault();
-              if (reorderBusy) {
-                stopRailAutoScroll();
-                clearDragState();
-                return;
-              }
-              const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
-              const sourceIds = dragIdsRef.current.length ? dragIdsRef.current : [sourceId];
-              const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && !sourceIds.includes(itemId)) {
-                setActive(sourceId);
-                reorder(sourceId, it.id, position, {
-                  resetPlacement: true,
-                  sourceIds,
-                });
-              }
-              stopRailAutoScroll();
-              clearDragState();
-            }}
-            onDragEnd={() => {
-              stopRailAutoScroll();
-              clearDragState();
-            }}
           >
             <div
               className="grip"
               title="잡고 드래그해 순서 이동"
               data-tooltip="잡고 드래그해 순서 이동"
               aria-hidden="true"
+              onPointerDown={e => startPointerDrag(e, it.id)}
             >
               <span className="grip-icon">{Icon.grip}</span>
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
@@ -4775,6 +5077,14 @@ function ItemsRail({
               </button>
             </div>
           </div>
+          {dropPosition === 'after' && (
+            <div
+              className="rail-drop-slot"
+              data-drop-position="after"
+              aria-hidden="true"
+            />
+          )}
+          </React.Fragment>
         );})}
         {hasSessionItems && visibleItemRows.length === 0 && (
           <div className="material-filter-empty">
@@ -5492,10 +5802,13 @@ function BoardStage({
                       onClick={event => onTileClick(it.id, event)}
                       title={problemDisplayName(it, i)}
                       aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 드래그하여 배치 또는 순서 이동`}
+                      aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
                       style={tileStyle}
-                      onPointerDown={e => beginPositionDrag(e, it, p)}
                     >
-                      <div className="tile-hd">
+                      <div
+                        className="tile-hd"
+                        onPointerDown={e => beginPositionDrag(e, it, p)}
+                      >
                         <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
                         <span className="nm">{problemDisplayName(it, i)}</span>
@@ -5521,7 +5834,7 @@ function BoardStage({
                         </span>
                       </div>
                       <div className="tile-art">
-                        <TileImage item={it} />
+                        <TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />
                       </div>
                     </button>
                   );
@@ -6210,7 +6523,7 @@ function SidePanel({
                 <div className="item-classification">
                   <div>
                     <strong>자료 분류</strong>
-                    <small>공통 지문은 여러 문항이 함께 쓰는 별도 지문만 지정</small>
+                    <small>이미 잘라진 독립 지문 이미지에만 사용 · 원본 재추출은 왼쪽 버튼</small>
                   </div>
                   <div className="item-classification-options" role="radiogroup" aria-label="선택 자료 분류">
                     <button
@@ -6228,7 +6541,7 @@ function SidePanel({
                       className={isPassageFragmentProblem(item) ? 'on' : ''}
                       disabled={mutating}
                       onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'shared-passage' })}
-                    >공통 지문</button>
+                    >독립 지문 이미지</button>
                   </div>
                 </div>
 
@@ -7217,9 +7530,11 @@ function RecognitionCancelBanner({ job, onCancel }){
   );
 }
 
-function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
+function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel }){
   const previewSession = review?.session;
   const targetPageIds = review?.pageIds || null;
+  const [activePageIndex, setActivePageIndex] = useState(0);
+  const previewRef = useRef(null);
   const pages = useMemo(() => {
     const allPages = Array.isArray(previewSession?.pages) ? previewSession.pages : [];
     if (!targetPageIds?.length) return allPages;
@@ -7237,16 +7552,44 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
     () => summarizeRecognitionSession(previewSession, targetPageIds),
     [previewSession, targetPageIds]
   );
+  const hasActionableReview = useMemo(
+    () => recognitionReviewNeedsAttention(previewSession),
+    [previewSession]
+  );
   const passageOnly = normalizeContentTarget(review?.contentTarget) === 'shared-passages';
   const resultLabel = passageOnly ? `공통 지문 ${summary.problems}개` : summary.problemLabel;
 
+  useEffect(() => {
+    setActivePageIndex(0);
+  }, [review?.id]);
+
+  const safePageIndex = pages.length
+    ? Math.max(0, Math.min(activePageIndex, pages.length - 1))
+    : 0;
+  const pageRows = useMemo(() => pages.map(page => {
+    const problems = (page.problemIds || page.problem_ids || [])
+      .map(id => problemsById.get(id))
+      .filter(Boolean);
+    return {
+      page,
+      problems,
+      riskCount: problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length,
+    };
+  }), [pages, problemsById]);
+  const activePageRow = pageRows[safePageIndex] || null;
+
+  useEffect(() => {
+    if (previewRef.current) previewRef.current.scrollTop = 0;
+  }, [safePageIndex]);
+
   if (!review) return null;
-  const title = review.title || (passageOnly ? '공통 지문 추출 결과 확인' : 'AI 인식 결과 확인');
+  const title = review.title || (passageOnly ? '공통 지문 페이지 확인' : '인식된 원본 페이지 확인');
   const partialRetry = review?.kind === 'retry-ai' && !!review?.partial;
-  const movesToReview = review?.kind === 'queue-recognition' || partialRetry;
+  const passageReextract = review?.kind === 'session-passage-reextract';
+  const movesToReview = review?.kind === 'queue-recognition' || passageReextract || partialRetry;
   const subtitle = review.subtitle || (
     movesToReview
-      ? `${resultLabel}로 분할했습니다. 맞으면 검수 화면에서 경계를 확인합니다.`
+      ? `${resultLabel}로 미리 분할했습니다. 문제 목록에 적용하기 전에 원본 페이지를 한 장씩 확인하세요.`
       : `${resultLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
   );
   const confirmLabel = partialRetry
@@ -7262,77 +7605,69 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
   const cancelLabel = movesToReview ? '적용 안 함' : '취소';
 
   return (
-    <div className="recognition-modal-shell" role="dialog" aria-modal="true" aria-labelledby="recognition-review-title">
-      <div className="recognition-modal-backdrop" onClick={confirming ? undefined : onCancel} />
-      <div className="recognition-modal">
-        <div className="recognition-modal-hd">
-          <div>
-            <span className="recognition-eyebrow">AI 인식 결과</span>
-            <h2 id="recognition-review-title">{title}</h2>
-            <p>{subtitle}</p>
-          </div>
-          <button className="modal-x" type="button" onClick={onCancel} disabled={confirming} title="닫기">×</button>
+    <section className="recognition-page-review-stage" aria-labelledby="recognition-page-review-title">
+      <header className="recognition-page-review-hd">
+        <div>
+          <span className="recognition-eyebrow">페이지별 원본 확인</span>
+          <h2 id="recognition-page-review-title">{title}</h2>
+          <p>{subtitle}</p>
+          <small>문제는 이미 파싱되어 있습니다. 여기서는 원본과 분할 경계만 빠르게 확인합니다.</small>
         </div>
+        <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
+      </header>
 
-        <div className="recognition-summary">
-          {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
-          <span>{summary.pages} 페이지</span>
-          <span>{resultLabel}</span>
-          {passageOnly && Number.isFinite(summary.passageQualityScore) && (
-            <span className={summary.passageQualityReviewCount ? 'warn' : ''}>
-              텍스트·화질 {summary.passageQualityScore.toFixed(1)}/10
-              {summary.passageQualityReviewCount ? ` · 확인 ${summary.passageQualityReviewCount}` : ''}
-            </span>
-          )}
-          <span className={summary.riskCount ? 'warn' : ''}>
-            {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
+      <div className="recognition-summary">
+        {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
+        <span>{summary.pages} 페이지</span>
+        <span>{resultLabel}</span>
+        {passageOnly && Number.isFinite(summary.passageQualityScore) && (
+          <span className={summary.passageQualityReviewCount ? 'warn' : ''}>
+            텍스트·화질 {summary.passageQualityScore.toFixed(1)}/10
+            {summary.passageQualityReviewCount ? ` · 확인 ${summary.passageQualityReviewCount}` : ''}
           </span>
-        </div>
+        )}
+        <span className={summary.riskCount ? 'warn' : ''}>
+          {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
+        </span>
+      </div>
 
-        <div className="recognition-transition-summary">
-          <div>
-            <strong>인식 완료 · 다음 작업을 선택하세요</strong>
-            <span>
-              전체 <b>{summary.problems}</b>개
-              {summary.riskCount ? ` · 확인 필요 ${summary.riskCount}개` : ' · 확인 필요 없음'}
-            </span>
-          </div>
-          <div className="recognition-transition-actions" role="group" aria-label="인식 결과 적용 후 이동">
-            {partialRetry ? (
-              <button className="btn primary" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
-                {confirming ? confirmingLabel : confirmLabel}
-              </button>
-            ) : (
-              <>
-                <button className="btn primary" type="button" onClick={() => onConfirm('review-needed')} disabled={confirming || !summary.problems}>
-                  확인 필요만 검수
-                </button>
-                <button className="btn" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
-                  전체 검수
-                </button>
-                <button className="btn" type="button" onClick={() => onConfirm('board')} disabled={confirming || !summary.problems}>
-                  바로 칠판
-                </button>
-              </>
-            )}
-          </div>
-        </div>
+      <div className="recognition-page-workspace">
+        <nav className="recognition-page-nav" aria-label="인식 원본 페이지">
+          {pageRows.map((row, pageIndex) => (
+            <button
+              key={row.page.id}
+              className={`recognition-page-nav-item ${pageIndex === safePageIndex ? 'active' : ''}`}
+              type="button"
+              onClick={() => setActivePageIndex(pageIndex)}
+              aria-current={pageIndex === safePageIndex ? 'page' : undefined}
+            >
+              <span><b>{pageIndex + 1}페이지</b></span>
+              <span>{formatProblemCount(countSessionProblems(row.problems))}</span>
+              {row.riskCount ? <em>{row.riskCount} 확인</em> : null}
+            </button>
+          ))}
+        </nav>
 
-        <div className="recognition-preview">
-          {pages.length ? pages.map(page => {
-            const pageProblems = (page.problemIds || page.problem_ids || [])
-              .map(id => problemsById.get(id))
-              .filter(Boolean);
+        <div className="recognition-preview" ref={previewRef}>
+          {activePageRow ? (() => {
+            const { page, problems: pageProblems } = activePageRow;
             return (
               <div key={page.id} className="recognition-page">
                 <div className="recognition-page-hd">
-                  <strong>{page.id}</strong>
+                  <strong>{safePageIndex + 1} / {pages.length} 페이지</strong>
                   <span>{formatProblemCount(countSessionProblems(pageProblems))}</span>
                   <span>{page.width}×{page.height}</span>
                 </div>
                 <div className="recognition-page-canvas">
                   {page.sourceImageUri ? (
-                    <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                    <img
+                      src={filePreviewUrl(page.sourceImageUri)}
+                      alt={`${safePageIndex + 1}페이지 원본`}
+                      loading="eager"
+                      decoding="async"
+                      fetchPriority="high"
+                      draggable={false}
+                    />
                   ) : (
                     <div className="recognition-page-empty">페이지 이미지를 불러올 수 없어요.</div>
                   )}
@@ -7361,24 +7696,71 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
                 </div>
               </div>
             );
-          }) : (
+          })() : (
             <div className="recognition-empty">확인할 페이지가 없습니다.</div>
           )}
-        </div>
-
-        <div className="recognition-modal-foot">
-          <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
-          <span>{confirming ? confirmingLabel : '선택한 화면으로 결과를 적용합니다.'}</span>
+          {pages.length > 1 && (
+            <div className="recognition-page-stepper" role="group" aria-label="페이지 이동">
+              <button className="btn" type="button" onClick={() => setActivePageIndex(index => Math.max(0, index - 1))} disabled={safePageIndex === 0}>
+                이전 페이지
+              </button>
+              <span>{safePageIndex + 1} / {pages.length}</span>
+              <button className="btn" type="button" onClick={() => setActivePageIndex(index => Math.min(pages.length - 1, index + 1))} disabled={safePageIndex === pages.length - 1}>
+                다음 페이지
+              </button>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+
+      <footer className="recognition-page-review-foot">
+        <span className="recognition-page-review-foot-copy">
+          {confirming
+            ? confirmingLabel
+            : `페이지 확인 후 적용할 화면을 선택하세요${passageReextract ? ' · 기존 문항은 유지됩니다' : ''}.`}
+        </span>
+        <div className="recognition-transition-actions" role="group" aria-label="인식 결과 적용 후 이동">
+          {partialRetry ? (
+            <button className="btn primary" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
+              {confirming ? confirmingLabel : confirmLabel}
+            </button>
+          ) : (
+            <>
+              {hasActionableReview && (
+                <button className="btn primary" type="button" onClick={() => onConfirm('review-needed')} disabled={confirming || !summary.problems}>
+                  확인 필요만 검수
+                </button>
+              )}
+              <button className={`btn ${hasActionableReview ? '' : 'primary'}`} type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
+                전체 검수
+              </button>
+              <button className="btn" type="button" onClick={() => onConfirm('board')} disabled={confirming || !summary.problems}>
+                바로 칠판
+              </button>
+            </>
+          )}
+        </div>
+      </footer>
+    </section>
   );
 }
 
 // renders a real image when the item came from the backend; falls back to
 // the SVG ItemArt for mock data. forceMode overrides the step→variant mapping
 // (useful for side-panel preview tabs).
-function TileImage({ item, forceMode }){
+const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024;
+
+function filePreviewUrl(url, maxDimension = CENTER_PANEL_PREVIEW_MAX_DIMENSION){
+  const normalizedUrl = String(url || '');
+  if (!normalizedUrl.startsWith('/api/file?')) return normalizedUrl;
+  const resolvedMax = Math.max(256, Math.min(2048, Math.round(Number(maxDimension) || CENTER_PANEL_PREVIEW_MAX_DIMENSION)));
+  if (/[?&]previewMax=/.test(normalizedUrl)) {
+    return normalizedUrl.replace(/([?&]previewMax=)[^&]*/i, `$1${resolvedMax}`);
+  }
+  return `${normalizedUrl}&previewMax=${resolvedMax}`;
+}
+
+function TileImage({ item, forceMode, previewMaxDimension }){
   const wantChalk = forceMode ? forceMode === 'chalk' : item.step !== 's1';
   const chalk = item.chalkUrl;
   const raw = item.imageUrl;
@@ -7386,9 +7768,14 @@ function TileImage({ item, forceMode }){
     ? (chalk || raw)
     : (raw || chalk);
   if (url) {
+    const displayUrl = previewMaxDimension
+      ? filePreviewUrl(url, previewMaxDimension)
+      : url;
     return (
-      <img src={url} alt={item.name || ''}
+      <img src={displayUrl} alt={item.name || ''}
            className={`tile-img ${wantChalk ? 'is-chalk' : 'is-raw'}`}
+           loading="lazy"
+           decoding="async"
            draggable={false} />
     );
   }
@@ -7889,6 +8276,258 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
     edbFileUri: null,
   };
   applyProblemCounts(merged, reflowedProblems);
+  return merged;
+}
+
+function sessionReusableSourcePaths(rawSession){
+  const inputCandidates = rawSession?.input_files || rawSession?.inputFiles || [];
+  const candidates = (Array.isArray(inputCandidates) ? inputCandidates : [inputCandidates])
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!candidates.length) {
+    (rawSession?.pages || []).forEach(page => {
+      const sourcePath = page?.sourceImagePath
+        || page?.source_image_path
+        || page?.sourceImageUri
+        || page?.source_image_uri;
+      if (sourcePath) candidates.push(String(sourcePath).trim());
+    });
+  }
+  return listUnique(
+    candidates.filter(Boolean)
+  );
+}
+
+function problemClassificationSource(problem){
+  return String(
+    problem?.classificationSource
+    || problem?.classification_source
+    || problem?.metadata?.classificationSource
+    || problem?.metadata?.classification_source
+    || ''
+  ).trim().toLowerCase();
+}
+
+function isManualIndependentPassage(problem){
+  return isPassageFragmentProblem(problem)
+    && problemClassificationSource(problem) === 'manual'
+    && passageGroupIdFor(problem).startsWith('manual-passage-');
+}
+
+function isManualMisclassifiedChildQuestion(problem){
+  return isPassageFragmentProblem(problem)
+    && problemClassificationSource(problem) === 'manual'
+    && !passageGroupIdFor(problem).startsWith('manual-passage-');
+}
+
+function restoreManualPassageToChildQuestion(problem){
+  const metadata = { ...(problem?.metadata || {}) };
+  metadata.passageRole = 'child_question';
+  metadata.passage_role = 'child_question';
+  metadata.supplementalItem = false;
+  metadata.supplemental_item = false;
+  return {
+    ...problem,
+    passageRole: 'child_question',
+    passage_role: 'child_question',
+    supplementalItem: false,
+    supplemental_item: false,
+    metadata,
+  };
+}
+
+function questionNumberForPassageInsertion(problem){
+  const candidates = [
+    problem?.questionNumber,
+    problem?.question_number,
+    problem?.number,
+    problem?.metadata?.questionNumber,
+    problem?.metadata?.question_number,
+    problem?.metadata?.number,
+  ];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const titleMatch = String(problem?.title || '').match(/(?:^|\s)(\d{1,3})(?:번|\s|[.)])/);
+  return titleMatch ? Number(titleMatch[1]) : null;
+}
+
+function normalizedSourceIdentity(value){
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase();
+}
+
+function pageIdentityKeys(page){
+  const keys = [];
+  const id = String(page?.id || '').trim();
+  if (id) keys.push(`id:${id}`);
+  const sourcePath = normalizedSourceIdentity(
+    page?.sourceImagePath
+    || page?.source_image_path
+    || page?.sourcePath
+    || page?.source_path
+  );
+  if (sourcePath) keys.push(`path:${sourcePath}`);
+  const sourceUri = normalizedSourceIdentity(page?.sourceImageUri || page?.source_image_uri);
+  if (sourceUri) keys.push(`uri:${sourceUri}`);
+  const sourceIndex = Number(page?.sourceIndex ?? page?.source_index);
+  const pageNumber = Number(page?.pageNumber ?? page?.page_number ?? page?.index);
+  if (Number.isFinite(sourceIndex) && Number.isFinite(pageNumber)) {
+    keys.push(`source-page:${sourceIndex}:${pageNumber}`);
+  }
+  return keys;
+}
+
+function passageInsertionIndex(problems, passage){
+  const groupId = passageGroupIdFor(passage);
+  if (groupId) {
+    const exactChildIndex = problems.findIndex(problem => (
+      !isPassageFragmentProblem(problem)
+      && passageGroupIdFor(problem) === groupId
+    ));
+    if (exactChildIndex >= 0) return exactChildIndex;
+  }
+  const range = passage?.passageRange
+    || passage?.passage_range
+    || passage?.metadata?.passageRange
+    || passage?.metadata?.passage_range;
+  const start = Number(range?.start);
+  const end = Number(range?.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end >= start) {
+    const rangeChildIndex = problems.findIndex(problem => {
+      if (isPassageFragmentProblem(problem)) return false;
+      const questionNumber = questionNumberForPassageInsertion(problem);
+      return Number.isFinite(questionNumber) && questionNumber >= start && questionNumber <= end;
+    });
+    if (rangeChildIndex >= 0) return rangeChildIndex;
+  }
+  return problems.length;
+}
+
+function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
+  const base = cloneSession(baseSession);
+  const incoming = cloneSession(incomingSession);
+  if (!base) return incoming;
+  if (!incoming) return base;
+
+  const retainedProblems = [];
+  const removedPassageIds = new Set();
+  (base.problems || []).forEach(problem => {
+    if (!isPassageFragmentProblem(problem) || isManualIndependentPassage(problem)) {
+      retainedProblems.push(problem);
+      return;
+    }
+    if (isManualMisclassifiedChildQuestion(problem)) {
+      retainedProblems.push(restoreManualPassageToChildQuestion(problem));
+      return;
+    }
+    if (problem?.id) removedPassageIds.add(problem.id);
+  });
+
+  const incomingFragments = (incoming.problems || []).filter(isPassageFragmentProblem);
+  if (!incomingFragments.length) return base;
+
+  const existingProblemIds = new Set(retainedProblems.map(problem => problem?.id).filter(Boolean));
+  const basePages = (base.pages || []).map(page => ({
+    ...page,
+    problemIds: [...(page.problemIds || page.problem_ids || [])]
+      .filter(id => !removedPassageIds.has(id)),
+  }));
+  const existingPageIds = new Set(basePages.map(page => page?.id).filter(Boolean));
+  const pageIdByIdentity = new Map();
+  basePages.forEach(page => {
+    pageIdentityKeys(page).forEach(key => {
+      if (!pageIdByIdentity.has(key)) pageIdByIdentity.set(key, page.id);
+    });
+  });
+
+  const incomingPageIdMap = new Map();
+  const appendedPages = [];
+  (incoming.pages || []).forEach(page => {
+    const matchedPageId = pageIdentityKeys(page)
+      .map(key => pageIdByIdentity.get(key))
+      .find(Boolean);
+    if (matchedPageId) {
+      incomingPageIdMap.set(page.id, matchedPageId);
+      return;
+    }
+    const nextId = makeUniqueId(page.id, existingPageIds);
+    incomingPageIdMap.set(page.id, nextId);
+    const appended = {
+      ...page,
+      id: nextId,
+      problemIds: [],
+    };
+    appendedPages.push(appended);
+    pageIdentityKeys(appended).forEach(key => {
+      if (!pageIdByIdentity.has(key)) pageIdByIdentity.set(key, nextId);
+    });
+  });
+
+  const preparedFragments = incomingFragments.map(problem => {
+    const nextId = makeUniqueId(problem.id, existingProblemIds);
+    const incomingPageId = problem.sourcePageId || problem.source_page_id;
+    const nextPageId = incomingPageIdMap.get(incomingPageId) || incomingPageId;
+    return {
+      ...problem,
+      id: nextId,
+      sourcePageId: nextPageId,
+      source_page_id: nextPageId,
+    };
+  });
+
+  const insertions = new Map();
+  preparedFragments.forEach(problem => {
+    const index = passageInsertionIndex(retainedProblems, problem);
+    const bucket = insertions.get(index) || [];
+    bucket.push(problem);
+    insertions.set(index, bucket);
+  });
+  const mergedProblems = [];
+  retainedProblems.forEach((problem, index) => {
+    mergedProblems.push(...(insertions.get(index) || []), problem);
+  });
+  mergedProblems.push(...(insertions.get(retainedProblems.length) || []));
+
+  const mergedPages = [...basePages, ...appendedPages];
+  const problemOrder = new Map(mergedProblems.map((problem, index) => [problem.id, index]));
+  const pageProblemIds = new Map();
+  mergedProblems.forEach(problem => {
+    const pageId = problem?.sourcePageId || problem?.source_page_id;
+    if (!pageId) return;
+    const ids = pageProblemIds.get(pageId) || [];
+    ids.push(problem.id);
+    pageProblemIds.set(pageId, ids);
+  });
+  mergedPages.forEach(page => {
+    const ids = pageProblemIds.get(page.id) || [];
+    const orderedIds = listUnique(ids)
+      .sort((a, b) => (problemOrder.get(a) ?? 999999) - (problemOrder.get(b) ?? 999999));
+    page.problemIds = orderedIds;
+    page.problem_ids = [...orderedIds];
+  });
+
+  const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
+  const merged = {
+    ...base,
+    session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    input_file_count: sessionReusableSourcePaths(base).length,
+    input_files: sessionReusableSourcePaths(base),
+    rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
+    rendered_page_file_uris: concatUnique(base.rendered_page_file_uris || [], incoming.rendered_page_file_uris || []),
+    warning_messages: concatUnique(
+      base.warning_messages || base.warningMessages || [],
+      incoming.warning_messages || incoming.warningMessages || []
+    ),
+    problems: mergedProblems,
+    pages: mergedPages,
+    source_page_count: mergedPages.length,
+    edb_path: null,
+    edb_file_uri: null,
+    edbPath: null,
+    edbFileUri: null,
+  };
+  applyProblemCounts(merged, mergedProblems);
   return merged;
 }
 
@@ -9308,6 +9947,20 @@ function reviewFlowState(reviewSummary){
   };
 }
 
+function recognitionReviewNeedsAttention(session){
+  const summary = sessionReviewSummary(session);
+  return (
+    (summary.unresolvedReviewProblemIds || []).length > 0
+    || Number(summary.actionableNeedsReviewCount) > 0
+    || Number(summary.passageReviewItemCount) > 0
+  );
+}
+
+function resolveRecognitionReviewDestination(session, destination){
+  if (destination !== 'review-needed') return destination;
+  return recognitionReviewNeedsAttention(session) ? destination : 'review-all';
+}
+
 function publishReviewWarningMessage(session, publishReviewSummary){
   const actionableNeedsReviewCount = Math.max(0, Number(publishReviewSummary?.actionableNeedsReviewCount) || 0);
   const passageReviewItemCount = Math.max(0, Number(publishReviewSummary?.passageReviewItemCount) || 0);
@@ -10181,6 +10834,51 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
   return json.session;
 }
 
+async function postReextractSharedPassages(options = {}){
+  const sourcePaths = sessionReusableSourcePaths(options.session);
+  if (!sourcePaths.length) {
+    throw new Error('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.');
+  }
+  const resp = await fetch('/api/export', {
+    method: 'POST',
+    signal: options.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(withExpectedSessionRevision({
+      preview: true,
+      exportEdb: false,
+      reuseSessionSources: true,
+      reuse_session_sources: true,
+      exportMode: 'question',
+      inputIntent: 'multi-problem',
+      input_intent: 'multi-problem',
+      contentTarget: 'shared-passages',
+      content_target: 'shared-passages',
+      sourceMode: 'auto',
+      source_mode: 'auto',
+      subject: 'korean',
+      ocr: options.ocr || 'auto',
+      edbName: edbFileNameFromSessionName(options.edbName, sourcePaths[0] || 'classin'),
+      detectPerspective: false,
+      skipDeskew: false,
+      skipCrop: false,
+      pdfDpi: options.pdfDpi || 200,
+      maxDimension: options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION,
+      pageTileMode: 'off',
+      aiEnabled: options.aiEnabled !== false,
+      aiFallback: AI_FALLBACK_OFF,
+    })),
+  });
+  const json = await readJsonResponse(resp, '공통 지문 재추출 실패');
+  if (!resp.ok || !json.ok) {
+    throw new Error(formatApiError(json, `공통 지문 재추출 실패 (${resp.status})`));
+  }
+  if (sessionResponseRevisionIsStale(json)) {
+    throw new Error('더 최신 작업이 완료되어 늦게 도착한 공통 지문 결과를 적용하지 않았습니다.');
+  }
+  captureSessionRevision(json);
+  return json.session;
+}
+
 function formatApiError(payload, fallbackMessage){
   const baseMessage = String(payload?.error || fallbackMessage || '요청에 실패했습니다').trim();
   const steps = Array.isArray(payload?.recoverySteps)
@@ -10498,6 +11196,7 @@ function App(){
   const sessionHistoryRequestRef = useRef(0);
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
+  const recognitionInFlightRef = useRef(false);
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
   const reviewComplete = useMemo(
@@ -10534,6 +11233,10 @@ function App(){
   const selectedPendingFile = useMemo(
     () => pendingFiles.find(file => fileQueueKey(file) === selectedPendingFileKey) || null,
     [pendingFiles, selectedPendingFileKey]
+  );
+  const reusableSessionSourcePaths = useMemo(
+    () => sessionReusableSourcePaths(session),
+    [session]
   );
   const processed = items.filter(i => i.step !== 'raw').length;
   const progress = items.length ? processed / items.length : 0;
@@ -10965,7 +11668,7 @@ function App(){
       settleBackgroundJob(job.id, {
         status: 'done',
         label: 'AI 인식 완료',
-        hint: '결과 확인 팝업에서 문제 경계를 확인하세요.',
+        hint: '페이지별 원본 확인 화면에서 문제 경계를 확인하세요.',
       });
       setRecognitionReview({
         id: `review-${job.id}`,
@@ -11018,6 +11721,87 @@ function App(){
     const pageIds = listUnique(session.pages.map(page => page.id).filter(Boolean));
     await retryAiSession({ pageIds });
   }, [session, userSettings, aiEnabled, retryAiSession]);
+
+  const reextractSharedPassagesFromSession = useCallback(async () => {
+    if (!session || usingMock) {
+      showToast('공통 지문을 다시 추출할 실제 세션이 없습니다');
+      return;
+    }
+    if (!sessionReusableSourcePaths(session).length) {
+      showToast('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다');
+      return;
+    }
+    if (mutatingRef.current || hasRunningSessionRecognition) {
+      showToast('진행 중인 세션 작업이 끝난 뒤 다시 시도해 주세요');
+      return;
+    }
+    const job = startBackgroundJob({
+      scope: 'session-recognition',
+      label: '현재 원본에서 공통 지문 추출 중',
+      hint: '원본 PDF·이미지를 다시 읽습니다. 기존 문항은 결과를 적용할 때 그대로 유지됩니다.',
+    });
+    try {
+      const incomingSession = await postReextractSharedPassages({
+        session,
+        signal: job.controller.signal,
+        edbName: fileName,
+        ocr: aiEnabled ? 'auto' : 'local',
+        aiEnabled,
+      });
+      if (job.controller.signal.aborted) return;
+      const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
+      const summary = summarizeRecognitionSession(incomingSession);
+      settleBackgroundJob(job.id, {
+        status: 'done',
+        label: '공통 지문 재추출 완료',
+        hint: incomingFragments.length
+          ? `${incomingFragments.length}개 결과를 확인한 뒤 적용할 수 있습니다.`
+          : '찾은 공통 지문이 없습니다. 원본과 문항 범위를 확인해 주세요.',
+      });
+      setRecognitionReview({
+        id: `review-${job.id}`,
+        kind: 'session-passage-reextract',
+        title: incomingFragments.length
+          ? `현재 원본에서 공통 지문 ${incomingFragments.length}개를 찾았어요`
+          : '현재 원본에서 공통 지문을 찾지 못했어요',
+        subtitle: incomingFragments.length
+          ? '기존 문항 crop은 유지하고 자동 지문만 교체합니다. 문항에 잘못 붙인 공통 지문 표시는 문항으로 되돌립니다.'
+          : '기존 문항과 지문은 변경되지 않습니다. 적용하지 않고 닫아 주세요.',
+        contentTarget: 'shared-passages',
+        session: incomingSession,
+        incomingSession,
+        fileCount: reusableSessionSourcePaths.length,
+        sourcePaths: reusableSessionSourcePaths,
+        summary,
+      });
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        settleBackgroundJob(job.id, {
+          status: 'canceled',
+          label: '공통 지문 재추출 취소됨',
+          hint: '결과를 적용하지 않았습니다.',
+        });
+        return;
+      }
+      settleBackgroundJob(job.id, {
+        status: 'failed',
+        label: '공통 지문 재추출 실패',
+        hint: e.message,
+      }, 5000);
+      showSimpleErrorToast(e, '공통 지문 재추출 실패');
+    }
+  }, [
+    session,
+    usingMock,
+    hasRunningSessionRecognition,
+    fileName,
+    aiEnabled,
+    reusableSessionSourcePaths,
+    startBackgroundJob,
+    settleBackgroundJob,
+    showSimpleErrorToast,
+    showToast,
+  ]);
 
   const exportSessionImages = useCallback(async (requestedProblemIds = null) => {
     if (!session) {
@@ -11430,6 +12214,11 @@ function App(){
       : AI_FALLBACK_OFF;
     const recognitionOcr = fastImageRecognition ? 'none' : (aiEnabled ? 'auto' : 'local');
     if (isRecognition) {
+      if (recognitionInFlightRef.current) {
+        showToast('이미 인식을 진행 중입니다');
+        return;
+      }
+      recognitionInFlightRef.current = true;
       const fileKeys = files.map(fileQueueKey);
       const queueGeneration = queueGenerationRef.current;
       const job = startBackgroundJob({
@@ -11484,8 +12273,8 @@ function App(){
               ? `${files[0].name || '파일'} · ${summary.problemLabel}로 인식했어요`
               : `${summary.problemLabel}로 인식했어요`,
           subtitle: isPassageOnly
-            ? '긴 지문 경계와 여러 열·페이지 연결 순서를 확인합니다.'
-            : '문제 경계가 맞으면 검수 화면에서 원본 위 박스를 확인합니다.',
+            ? '문제 목록에 적용하기 전에 긴 지문 경계와 여러 열·페이지 연결 순서를 페이지별로 확인합니다.'
+            : '문제는 미리 분할했습니다. 문제 목록에 적용하기 전에 원본 페이지를 한 장씩 확인하세요.',
           contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
           session: incomingSession,
           incomingSession,
@@ -11510,6 +12299,7 @@ function App(){
         }, 5000);
         showSimpleErrorToast(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패');
       } finally {
+        recognitionInFlightRef.current = false;
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
       return;
@@ -11597,9 +12387,62 @@ function App(){
   const confirmRecognitionReview = useCallback(async (destination = 'review-needed') => {
     const review = recognitionReview;
     if (!review) return;
+    const resolvedDestination = resolveRecognitionReviewDestination(
+      review.incomingSession || review.session,
+      destination
+    );
     setConfirmingRecognition(true);
     try {
-      if (review.kind === 'queue-recognition') {
+      if (review.kind === 'session-passage-reextract') {
+        const incomingSession = review.incomingSession || review.session;
+        const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
+        if (!incomingFragments.length) {
+          showToast('적용할 공통 지문이 없습니다');
+          return;
+        }
+        const currentSnapshot = session && !usingMock
+          ? materializeSessionForItems(session, items, fileName, boardColumns)
+          : null;
+        if (!currentSnapshot) {
+          throw new Error('기존 문항을 보존할 현재 세션을 찾지 못했습니다.');
+        }
+        const candidate = mergeReextractedSharedPassages(
+          currentSnapshot,
+          incomingSession,
+          fileName
+        );
+        const restored = await postRestore(candidate);
+        setHistoryStack(prev => appendBoundedHistory(
+          prev,
+          currentSnapshot,
+          UNDO_HISTORY_LIMIT
+        ));
+        applySession(restored);
+        const reextractedIds = (restored?.problems || [])
+          .filter(problem => (
+            isPassageFragmentProblem(problem)
+            && !isManualIndependentPassage(problem)
+          ))
+          .map(problem => problem.id)
+          .filter(Boolean);
+        if (resolvedDestination === 'board') {
+          setReviewFocus(null);
+          setView('board');
+        } else {
+          setReviewFocus({
+            filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
+            problemIds: reextractedIds,
+            source: 'session-passage-reextract',
+          });
+          setView('review');
+        }
+        refreshSessionHistory();
+        showToast(
+          resolvedDestination === 'board'
+            ? `공통 지문 ${incomingFragments.length}개 교체 · 기존 문항 유지`
+            : `공통 지문 ${incomingFragments.length}개 검수 · 기존 문항 crop 유지·오분류 문항 복원`
+        );
+      } else if (review.kind === 'queue-recognition') {
         if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
           setRecognitionReview(null);
           showToast('Upload queue changed. Please run recognition again.');
@@ -11615,13 +12458,13 @@ function App(){
         const restored = await postRestore(candidate);
         applySession(restored);
         const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
-        if (destination === 'board') {
+        if (resolvedDestination === 'board') {
           setReviewFocus(null);
           setView('board');
         } else {
           setReviewFocus({
             ...(nextScope || {}),
-            filter: destination === 'review-needed' ? 'check_needed' : 'all',
+            filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
             source: 'queue-recognition',
           });
           setView('review');
@@ -11631,9 +12474,9 @@ function App(){
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
         showToast(
-          destination === 'board'
+          resolvedDestination === 'board'
             ? `칠판으로 이동 · ${summary.problemLabel} 적용`
-            : destination === 'review-needed'
+            : resolvedDestination === 'review-needed'
               ? `확인 필요 항목 검수 · ${summary.problemLabel}`
               : `전체 검수로 이동 · ${summary.problemLabel}`
         );
@@ -11666,12 +12509,12 @@ function App(){
           setView('review');
           showToast('영역 재인식 적용 · 번호와 순서를 유지했어요');
         } else {
-          if (destination === 'board') {
+          if (resolvedDestination === 'board') {
             setReviewFocus(null);
             setView('board');
           } else {
             setReviewFocus({
-              filter: destination === 'review-needed' ? 'check_needed' : 'all',
+              filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
               problemIds: review.problemIds || [],
               source: 'retry-ai',
             });
@@ -11679,9 +12522,9 @@ function App(){
           }
           const summary = summarizeRecognitionSession(restored, review.pageIds);
           showToast(
-            destination === 'board'
+            resolvedDestination === 'board'
               ? `AI 인식 적용 · ${summary.problemLabel}`
-              : `${destination === 'review-needed' ? '확인 필요 항목' : '전체'} 검수 · ${summary.problemLabel}`
+              : `${resolvedDestination === 'review-needed' ? '확인 필요 항목' : '전체'} 검수 · ${summary.problemLabel}`
           );
         }
       }
@@ -11724,7 +12567,7 @@ function App(){
     )));
     setPublished(false);
     showActionToast(
-      `${selectedIdSet.size}개 문제를 ${processingStepLabel(nextStep)}로 변경했어요`,
+      `${selectedIdSet.size}개 문제를 ${stepLabel(nextStep)}로 변경했어요`,
       '실행 취소',
       () => {
         setItems(prev => prev.map(item => (
@@ -12178,6 +13021,7 @@ function App(){
         reviewAvailable={reviewAvailable}
         reviewComplete={reviewComplete}
         recognitionBusy={Boolean(runningRecognitionJob)}
+        pageReviewActive={Boolean(recognitionReview)}
         onUndo={undoMutation}
         canUndo={canUndo}
         onShutdown={shutdownApp}
@@ -12190,8 +13034,17 @@ function App(){
           {viewTransitionBanner}
         </div>
       )}
-      <div className={`main ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}>
-        <ItemsRail
+      <div className={`main ${recognitionReview ? 'recognition-page-review-mode' : (view === 'review' && reviewEditorActive ? 'review-editor-focus' : '')}`}>
+        {recognitionReview ? (
+          <RecognitionPageReviewStage
+            review={recognitionReview}
+            confirming={confirmingRecognition}
+            onConfirm={confirmRecognitionReview}
+            onCancel={cancelRecognitionReview}
+          />
+        ) : (
+          <>
+            <ItemsRail
           items={items}
           activeId={activeId}
           setActive={selectBoardItem}
@@ -12223,6 +13076,14 @@ function App(){
           onClassifySelected={classifySelected}
           onConfirmSelected={problemIds => onConfirm(null, { problemIds, bulk: true })}
           onDownloadSelected={exportSelectedImages}
+          onReextractSharedPassages={reextractSharedPassagesFromSession}
+          canReextractSharedPassages={
+            !!session
+            && !usingMock
+            && reusableSessionSourcePaths.length > 0
+            && !loading
+          }
+          reextractSharedPassagesBusy={hasRunningSessionRecognition}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -12264,7 +13125,7 @@ function App(){
             onSaveScrollTop={setBoardScrollTop}
           />
         )}
-        <SidePanel
+            <SidePanel
           item={active}
           items={items}
           activeIndex={activeIndex}
@@ -12311,7 +13172,9 @@ function App(){
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition}
           onPendingPreviewError={showPendingPreviewError}
-        />
+            />
+          </>
+        )}
       </div>
 
       <BackgroundJobsPanel
@@ -12323,13 +13186,6 @@ function App(){
       <RecognitionCancelBanner
         job={runningRecognitionJob}
         onCancel={cancelBackgroundJob}
-      />
-
-      <RecognitionReviewModal
-        review={recognitionReview}
-        confirming={confirmingRecognition}
-        onConfirm={confirmRecognitionReview}
-        onCancel={cancelRecognitionReview}
       />
 
       <TooltipLayer />

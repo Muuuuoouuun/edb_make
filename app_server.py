@@ -341,6 +341,9 @@ EMPTY_GENERATED_SESSION_JS = "window.EDB_UI_SESSION = null;\n"
 DEFAULT_OUTPUT_ROOT_NAME = "outputs"
 RUNTIME_ARTIFACT_ROOT_NAMES = ("uploads", DEFAULT_OUTPUT_ROOT_NAME, "exports")
 DEFAULT_ARTIFACT_RETENTION_DAYS = 30.0
+FILE_PREVIEW_MIN_DIMENSION = 256
+FILE_PREVIEW_MAX_DIMENSION = 2048
+FILE_PREVIEW_JPEG_QUALITY = 82
 _session_storage_lock = threading.RLock()
 
 
@@ -1811,6 +1814,66 @@ def path_to_api_url(path: str | Path | None) -> str | None:
     return f"/api/file?path={quote(str(resolved))}"
 
 
+def _parse_file_preview_max_dimension(query: dict[str, list[str]]) -> int | None:
+    raw_value = query.get("previewMax", query.get("preview_max", [None]))[0]
+    if raw_value is None:
+        return None
+    try:
+        requested = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return max(FILE_PREVIEW_MIN_DIMENSION, min(FILE_PREVIEW_MAX_DIMENSION, requested))
+
+
+@lru_cache(maxsize=32)
+def _build_file_preview_payload(
+    path_value: str,
+    modified_ns: int,
+    file_size: int,
+    max_dimension: int,
+) -> tuple[bytes, str] | None:
+    del modified_ns, file_size  # cache-key inputs; the path is opened below
+    from PIL import Image, ImageOps
+
+    path = Path(path_value)
+    with Image.open(path) as loaded:
+        if max(loaded.size) <= max_dimension:
+            return None
+        image = ImageOps.exif_transpose(loaded).copy()
+
+    image.thumbnail(
+        (max_dimension, max_dimension),
+        Image.Resampling.LANCZOS,
+        reducing_gap=3.0,
+    )
+    has_alpha = "A" in image.getbands() or (
+        image.mode == "P" and "transparency" in image.info
+    )
+    output = BytesIO()
+    if has_alpha:
+        if image.mode != "RGBA":
+            image = image.convert("RGBA")
+        image.save(
+            output,
+            format="PNG",
+            compress_level=6,
+            optimize=False,
+        )
+        mime_type = "image/png"
+    else:
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(
+            output,
+            format="JPEG",
+            quality=FILE_PREVIEW_JPEG_QUALITY,
+            optimize=True,
+            progressive=True,
+        )
+        mime_type = "image/jpeg"
+    return output.getvalue(), mime_type
+
+
 def _classin_handoff_readiness(path: Path | None) -> tuple[str, bool | None]:
     if path is None or not path.is_file():
         return "", None
@@ -3269,6 +3332,52 @@ def _resolve_session_path(value: Any) -> Path | None:
         raw = params.get("path", [None])[0]
         return Path(unquote(raw)) if raw else None
     return Path(text)
+
+
+def _session_reextract_source_paths(session: dict[str, Any] | None) -> list[Path]:
+    """Return preserved source files for a session-only re-extraction preview.
+
+    Prefer the first-generation input documents.  Older/restored sessions may
+    not retain those paths, so fall back to the source page images in page
+    order.  Only existing regular files are returned and aliases resolving to
+    the same file are de-duplicated.
+    """
+
+    if not isinstance(session, dict):
+        return []
+
+    def existing_unique(values: list[Any]) -> list[Path]:
+        resolved_paths: list[Path] = []
+        seen: set[str] = set()
+        for value in values:
+            path = _resolve_session_path(value)
+            if path is None:
+                continue
+            try:
+                resolved = path.resolve()
+            except (OSError, ValueError):
+                continue
+            if not resolved.is_file():
+                continue
+            key = os.path.normcase(str(resolved))
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved_paths.append(resolved)
+        return resolved_paths
+
+    input_paths = existing_unique(
+        list(session.get("input_files") or session.get("inputFiles") or [])
+    )
+    if input_paths:
+        return input_paths
+
+    page_values: list[Any] = []
+    for page in session.get("pages", []) or []:
+        if not isinstance(page, dict):
+            continue
+        page_values.append(page.get("sourceImagePath") or page.get("sourceImageUri"))
+    return existing_unique(page_values)
 
 
 def _next_problem_id(session: dict[str, Any], base: str, suffix: str) -> str:
@@ -8233,7 +8342,30 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         elif path.suffix.lower() == ".zip":
             mime_type = "application/zip"
 
-        file_size = path.stat().st_size
+        file_stat = path.stat()
+        file_size = file_stat.st_size
+        preview_max_dimension = _parse_file_preview_max_dimension(query)
+        if preview_max_dimension is not None and str(mime_type or "").startswith("image/"):
+            try:
+                preview_payload = _build_file_preview_payload(
+                    normalized,
+                    file_stat.st_mtime_ns,
+                    file_size,
+                    preview_max_dimension,
+                )
+            except (OSError, ValueError):
+                preview_payload = None
+            if preview_payload is not None:
+                payload, preview_mime_type = preview_payload
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", preview_mime_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.send_header("X-Preview-Max-Dimension", str(preview_max_dimension))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("Content-Length", str(file_size))
@@ -8264,7 +8396,24 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             target_path.write_bytes(file_bytes)
         return target_path
 
-    def _resolve_source_paths(self, payload: dict[str, Any]) -> list[Path]:
+    def _resolve_source_paths(
+        self,
+        payload: dict[str, Any],
+        *,
+        session: dict[str, Any] | None = None,
+    ) -> list[Path]:
+        reuse_session_sources = _coerce_bool(
+            payload.get("reuseSessionSources")
+            if "reuseSessionSources" in payload
+            else payload.get("reuse_session_sources"),
+            default=False,
+        )
+        if reuse_session_sources:
+            resolved_paths = _session_reextract_source_paths(session)
+            if not resolved_paths:
+                raise FileNotFoundError("current session has no preserved source files available for re-extraction")
+            return resolved_paths
+
         file_payloads = payload.get("files")
         if isinstance(file_payloads, list) and file_payloads:
             resolved_paths: list[Path] = []
@@ -8349,9 +8498,20 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else payload.get("dryRun"),
                 default=False,
             )
-            if not preview_only and not self._validate_expected_session_revision(payload, current_revision):
+            reuse_session_sources = _coerce_bool(
+                payload.get("reuseSessionSources")
+                if "reuseSessionSources" in payload
+                else payload.get("reuse_session_sources"),
+                default=False,
+            )
+            if reuse_session_sources and not preview_only:
+                raise ValueError("reuseSessionSources is only allowed for preview exports")
+            if (not preview_only or reuse_session_sources) and not self._validate_expected_session_revision(
+                payload,
+                current_revision,
+            ):
                 return
-            source_paths = self._resolve_source_paths(payload)
+            source_paths = self._resolve_source_paths(payload, session=base_session)
             output_dir = (
                 self._resolve_preview_output_dir(payload, source_paths)
                 if preview_only
