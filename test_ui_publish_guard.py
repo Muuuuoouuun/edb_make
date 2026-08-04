@@ -138,7 +138,7 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
-        self.assertIn("publish_guard.js?v=preflight-scaled-reflow-20260702", html)
+        self.assertIn("publish_guard.js?v=preflight-passage-envelope-20260803", html)
 
 
 if __name__ == "__main__":
