@@ -33,7 +33,7 @@ from build_structured_page_json import (
     resolve_recognition_worker_count,
 )
 from assemble_page import extract_set_problem_range
-from segment import draw_segment_debug
+from segment import detect_pdf_visual_column_divider_x, draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -178,6 +178,7 @@ PASSAGE_FRAGMENT_STITCH_GAP_PX = 16
 PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX = 24
 PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX = 64
 PASSAGE_SOURCE_VERTICAL_RECOVERY_PX = 12
+PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6
 PASSAGE_JOIN_BLANK_RUN_MIN_PX = 40
 PASSAGE_JOIN_EDGE_PADDING_PX = 16
 PASSAGE_JOIN_CONTENT_PADDING_PX = 8
@@ -1006,24 +1007,30 @@ def _expand_passage_source_bounds_horizontally(
     *,
     image_width: int,
     padding_px: int = PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX,
+    column_divider_x: float | None = None,
 ) -> Box:
     """Recover glyphs that sit just outside PDF-derived column bounds."""
     padding = max(0.0, float(padding_px))
     # PDF text ranges can omit the final glyph in the left column or the first
     # glyph in the right column. Recover both toward the page midpoint, but
     # clamp there so adjacent columns never duplicate each other's text.
-    midpoint = float(image_width) * 0.5
+    midpoint = (
+        float(column_divider_x)
+        if column_divider_x is not None
+        else float(image_width) * 0.5
+    )
+    divider_exclusion = float(PASSAGE_CENTER_DIVIDER_EXCLUSION_PX)
     bounds_left = float(bounds.left)
     bounds_right = float(bounds.right)
     if bounds_right <= midpoint:
         left = max(0.0, bounds_left - padding)
         right = min(
-            midpoint,
+            max(0.0, midpoint - divider_exclusion),
             bounds_right + max(padding, float(PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX)),
         )
     elif bounds_left >= midpoint:
         left = max(
-            midpoint,
+            min(float(image_width), midpoint + divider_exclusion),
             bounds_left - max(padding, float(PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX)),
         )
         right = min(float(image_width), bounds_right + padding)
@@ -1045,6 +1052,7 @@ def _expand_passage_segment_source_bounds(
     image_height: int,
     horizontal_padding_px: int = PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX,
     vertical_padding_px: int = PASSAGE_SOURCE_VERTICAL_RECOVERY_PX,
+    column_divider_x: float | None = None,
 ) -> Box:
     """Recover glyph strokes at every edge of an explicit passage segment.
 
@@ -1057,6 +1065,7 @@ def _expand_passage_segment_source_bounds(
         bounds,
         image_width=image_width,
         padding_px=horizontal_padding_px,
+        column_divider_x=column_divider_x,
     )
     vertical_padding = max(0.0, float(vertical_padding_px))
     top = max(0.0, float(expanded.top) - vertical_padding)
@@ -1796,6 +1805,7 @@ class ProblemEntry:
     input_intent: str | None = None
     force_full_page_bounds: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
 
 
@@ -1843,6 +1853,7 @@ class _ProblemEntryDraft:
     force_full_page_bounds: bool
     asset_task: _ProblemAssetTask | None
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    source_segments: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -2204,6 +2215,12 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         _render_problem_board_asset(crop, task)
         return crop.size
 
+    passage_column_divider_x = (
+        detect_pdf_visual_column_divider_x(task.source_image)
+        if task.preserve_horizontal_bounds
+        else None
+    )
+
     def crop_segment(
         bounds: Box,
         *,
@@ -2219,6 +2236,7 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
                     if recover_vertical_edges
                     else 0
                 ),
+                column_divider_x=passage_column_divider_x,
             )
         elif task.text_priority:
             source_bounds = _expand_text_priority_source_bounds_horizontally(
@@ -2293,7 +2311,10 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
 
     if task.segment_bounds:
         segment_payloads = [
-            crop_segment(bounds, recover_vertical_edges=True)
+            # Passage segmenters already leave explicit top/bottom safety
+            # space. A second unconditional +/-12 px recovery can reach above
+            # the continuation text or below the lower separator/next problem.
+            crop_segment(bounds, recover_vertical_edges=False)
             for bounds in task.segment_bounds
         ]
         stitch_placements: list[dict[str, int]] = []
@@ -3742,11 +3763,64 @@ def _metadata_string_list(metadata: dict[str, Any], key: str) -> list[str]:
 def _refresh_cross_page_passage_group(group: dict[str, Any]) -> None:
     source_page_ids = list(group["source_page_ids"])
     continues_across_pages = len(source_page_ids) > 1
+    member_page_ids = group.get("member_page_ids")
+    if not isinstance(member_page_ids, dict):
+        member_page_ids = {}
+    fragment_source_page_ids: list[str] = []
+    for member in group["members"]:
+        if not _problem_is_passage_fragment_unit(member):
+            continue
+        member_page_id = str(member_page_ids.get(member.unit_id) or "").strip()
+        if member_page_id:
+            _append_unique_string(fragment_source_page_ids, member_page_id)
     for member in group["members"]:
         metadata = member.metadata
         metadata["passage_source_page_ids"] = list(source_page_ids)
         metadata["passage_continues_across_pages"] = continues_across_pages
         metadata["passage_fragment_count"] = len(source_page_ids)
+        # The legacy source-page field is group-wide and also includes pages
+        # that contain child questions only.  Image stitching needs the exact
+        # pages on which passage fragments were actually materialized.
+        metadata["passage_fragment_source_page_ids"] = list(fragment_source_page_ids)
+        metadata["passage_has_cross_page_fragments"] = len(fragment_source_page_ids) > 1
+
+
+def _cross_page_passage_group_actual_child_numbers(group: Mapping[str, Any]) -> set[int]:
+    """Return child-question numbers already attached to a passage group.
+
+    ``child_numbers`` describes the expected range, so it cannot tell us when
+    that range has actually been consumed.  Keeping completed groups active is
+    dangerous: small numbered labels in a chart on the next page can otherwise
+    look like the first child question and revive the previous passage.
+    """
+    numbers: set[int] = set()
+    members = group.get("members")
+    if not isinstance(members, list):
+        return numbers
+    for member in members:
+        if not isinstance(member, ProblemUnit):
+            continue
+        if str(member.metadata.get("passage_role") or "").strip() != "child_question":
+            continue
+        number = _problem_metadata_number(member)
+        if number is not None:
+            numbers.add(number)
+    return numbers
+
+
+def _cross_page_passage_group_is_complete(group: Mapping[str, Any]) -> bool:
+    expected = {
+        number
+        for number in group.get("child_numbers", [])
+        if isinstance(number, int) and number >= 1
+    }
+    if not expected:
+        start = _coerce_int(group.get("start"))
+        end = _coerce_int(group.get("end"))
+        if start is None or end is None or end < start:
+            return False
+        expected = set(range(start, end + 1))
+    return expected.issubset(_cross_page_passage_group_actual_child_numbers(group))
 
 
 def _apply_cross_page_passage_group(
@@ -3764,6 +3838,7 @@ def _apply_cross_page_passage_group(
     metadata.setdefault("passage_child_problem_numbers", list(group["child_numbers"]))
 
     _append_unique_string(group["source_page_ids"], page_id)
+    group.setdefault("member_page_ids", {})[problem.unit_id] = page_id
     if not any(member is problem for member in group["members"]):
         group["members"].append(problem)
     _refresh_cross_page_passage_group(group)
@@ -3792,6 +3867,7 @@ def _seed_cross_page_passage_group(
             "child_numbers": _passage_child_numbers(metadata, start, end),
             "source_page_ids": [],
             "members": [],
+            "member_page_ids": {},
         }
         active_groups[group_id] = group
     else:
@@ -3848,6 +3924,8 @@ def _infer_pdf_cross_page_passage_continuation(
     first_problem: ProblemUnit | None = None
     for number, problem in numbered:
         for group in active_groups.values():
+            if _cross_page_passage_group_is_complete(group):
+                continue
             source_page_ids = [str(value) for value in group.get("source_page_ids", [])]
             if (
                 number == int(group["start"])
@@ -4218,11 +4296,106 @@ def _annotate_marker_continuation_pages_to_following_groups(pages: Sequence[Page
                 )
 
 
+def _demote_nested_passage_materials(
+    page: PageModel,
+    active_groups: Mapping[str, dict[str, Any]],
+) -> int:
+    """Keep an in-question range material out of passage-only results.
+
+    A later page can start with ``[13~14] <보기>...`` while questions 13 and
+    14 still belong to an earlier ``[11~14]`` reading passage. Per-page
+    segmentation cannot know that the smaller range is nested. At document
+    scope the still-active parent range is decisive: retain the material as a
+    normal supplemental record, and link its child questions to the parent.
+    """
+    block_by_id = {block.block_id: block for block in page.blocks}
+    demoted = 0
+    for problem in page.problems:
+        if not _problem_is_passage_fragment_unit(problem):
+            continue
+        nested_range = _passage_range_tuple(problem.metadata)
+        nested_group_id = str(problem.metadata.get("passage_group_id") or "").strip()
+        if nested_range is None or not nested_group_id:
+            continue
+        nested_start, nested_end = nested_range
+        parent_candidates = [
+            group
+            for group in active_groups.values()
+            if int(group["start"]) <= nested_start
+            and nested_end <= int(group["end"])
+            and (int(group["start"]), int(group["end"])) != nested_range
+        ]
+        if not parent_candidates:
+            continue
+        parent = min(
+            parent_candidates,
+            key=lambda group: (int(group["end"]) - int(group["start"]), str(group["group_id"])),
+        )
+        parent_start = int(parent["start"])
+        parent_end = int(parent["end"])
+        parent_group_id = str(parent["group_id"])
+
+        metadata = problem.metadata
+        metadata["question_material_range"] = {"start": nested_start, "end": nested_end}
+        metadata["question_material_parent_group_id"] = parent_group_id
+        metadata["nested_passage_suppressed"] = True
+        metadata["passage_role"] = "question_material_fragment"
+        for key in (
+            "passage_group_id",
+            "passage_range",
+            "passage_child_problem_numbers",
+            "shared_passage_block_ids",
+            "passage_source_page_ids",
+            "passage_fragment_source_page_ids",
+            "passage_continues_across_pages",
+            "passage_has_cross_page_fragments",
+        ):
+            metadata.pop(key, None)
+        problem.title = f"공통 자료 {nested_start}~{nested_end}"
+
+        for block_id in _iter_problem_block_ids_raw(problem):
+            block = block_by_id.get(block_id)
+            if block is None:
+                continue
+            block.metadata["shared_passage"] = False
+            block.metadata["question_material_fragment"] = True
+            block.metadata["nested_passage_suppressed"] = True
+
+        for child in page.problems:
+            child_metadata = child.metadata
+            if str(child_metadata.get("passage_group_id") or "").strip() != nested_group_id:
+                continue
+            if str(child_metadata.get("passage_role") or "").strip() != "child_question":
+                continue
+            child_metadata.update(
+                {
+                    "passage_group_id": parent_group_id,
+                    "passage_range": {"start": parent_start, "end": parent_end},
+                    "passage_child_problem_numbers": list(parent["child_numbers"]),
+                    "passage_role": "child_question",
+                    "nested_question_material_range": {
+                        "start": nested_start,
+                        "end": nested_end,
+                    },
+                }
+            )
+            if parent["shared_block_ids"]:
+                child_metadata["shared_passage_block_ids"] = list(parent["shared_block_ids"])
+        demoted += 1
+
+    if demoted:
+        page.metadata["nested_passage_material_count"] = (
+            (_coerce_int(page.metadata.get("nested_passage_material_count")) or 0) + demoted
+        )
+    return demoted
+
+
 def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
     _annotate_hwp_preview_passage_ranges(pages)
     _annotate_marker_continuation_pages_to_following_groups(pages)
     active_groups: dict[str, dict[str, Any]] = {}
     for page_index, page in enumerate(pages):
+        _demote_nested_passage_materials(page, active_groups)
         _infer_pdf_cross_page_passage_continuation(pages, page_index, active_groups)
         ordered_problems = sorted(
             page.problems,
@@ -4249,6 +4422,13 @@ def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
                 if int(group["start"]) <= problem_number <= int(group["end"]):
                     _apply_cross_page_passage_group(group, page_id=page.page_id, problem=problem)
                     break
+
+        # A range that already owns every expected child question is finished.
+        # Retiring it at the page boundary prevents numbered chart/data labels
+        # on later pages from being attached to (or extending) the old passage.
+        for group_id, group in list(active_groups.items()):
+            if _cross_page_passage_group_is_complete(group):
+                active_groups.pop(group_id, None)
 
 
 def _pdf_text_line_box(value: Any) -> Box | None:
@@ -4902,9 +5082,42 @@ def _erase_passage_outer_margin_page_guides(image: Image.Image) -> Image.Image:
     instruction text and edge glyphs cannot be cropped.
     """
     frame_bounds = _passage_box_horizontal_bounds(image)
+    vertical_frame_bounds = _passage_frame_edges(image)
+    if frame_bounds is not None:
+        # A real outer frame normally contributes long vertical edges as well
+        # as horizontal rules.  Underlines and small embedded material boxes
+        # do not.  If either horizontal endpoint lacks that vertical support,
+        # prefer the full-height frame detector instead.
+        if "A" in image.getbands():
+            frame_signal = image.convert("RGBA").getchannel("A")
+        else:
+            frame_signal = ImageOps.invert(image.convert("L"))
+        column_values = list(
+            frame_signal.resize((image.width, 1), Image.Resampling.BOX).get_flattened_data()
+        )
+        horizontal_left, horizontal_right = frame_bounds
+        if (
+            column_values[horizontal_left] < 72
+            or column_values[horizontal_right] < 72
+        ):
+            frame_bounds = vertical_frame_bounds
+    elif vertical_frame_bounds is not None:
+        frame_bounds = vertical_frame_bounds
     if frame_bounds is None or image.width <= 0 or image.height <= 0:
         return image
     frame_left, frame_right = frame_bounds
+    # Cleanup is safe only when the detected frame is the passage's outer
+    # frame.  A small [A]/[B] material box can have more perfectly repeated
+    # horizontal rules than the lightly antialiased outer border.  Treating
+    # that inner box as the frame makes the real left border look like a page
+    # guide and can erase speaker labels one glyph at a time.  When either
+    # endpoint sits too far inside the crop, preserve the source verbatim.
+    maximum_outer_inset = max(12, int(round(image.width * 0.06)))
+    if (
+        frame_left > maximum_outer_inset
+        or image.width - 1 - frame_right > maximum_outer_inset
+    ):
+        return image
     rgba = image.convert("RGBA")
     if np is not None:
         arr = np.asarray(rgba, dtype=np.uint8)
@@ -4960,51 +5173,24 @@ def _erase_passage_outer_margin_page_guides(image: Image.Image) -> Image.Image:
         if np is not None
         else [[False for _x in range(image.width)] for _y in range(image.height)]
     )
-    maximum_arm = max(18, int(round(image.width * 0.18)))
-
     def foreground_at(x: int, y: int) -> bool:
         return bool(foreground[y, x])
 
     def mark(x: int, y: int) -> None:
         erase[y, x] = True
 
-    def erase_guide(candidates: Sequence[int], *, side: str) -> None:
+    def erase_guide(candidates: Sequence[int]) -> None:
         if not candidates:
             return
         guide_min = max(0, min(candidates) - 2)
         guide_max = min(image.width - 1, max(candidates) + 2)
         for y in range(image.height):
-            guide_visible = any(
-                foreground_at(x, y)
-                for x in range(guide_min, guide_max + 1)
-            )
             for x in range(guide_min, guide_max + 1):
                 if foreground_at(x, y):
                     mark(x, y)
-            if not guide_visible:
-                continue
-            if side == "left":
-                x_values = range(guide_max + 1, min(image.width, guide_max + maximum_arm + 1))
-            else:
-                x_values = range(guide_min - 1, max(-1, guide_min - maximum_arm - 1), -1)
-            gap = 0
-            connected: list[int] = []
-            for x in x_values:
-                if foreground_at(x, y):
-                    gap = 0
-                    connected.append(x)
-                else:
-                    gap += 1
-                    # Antialiased/scanned rules can contain a few thresholded
-                    # gaps near their free end. The real passage frame remains
-                    # protected by ``safe_gap`` and is much farther away.
-                    if gap > 6:
-                        break
-            for x in connected:
-                mark(x, y)
 
-    erase_guide(left_candidates, side="left")
-    erase_guide(right_candidates, side="right")
+    erase_guide(left_candidates)
+    erase_guide(right_candidates)
 
     # Scanner/page-rule cleanup can leave a detached antialiased endpoint
     # below an otherwise closed passage box. Remove only a genuinely tiny,
@@ -5539,7 +5725,19 @@ def _coalesce_cross_page_passage_drafts(
         ]
         expected_source_page_ids: list[str] = []
         expected_fragment_count = 0
+        precise_fragment_source_page_ids: list[str] = []
         for problem in group_problems:
+            raw_fragment_source_page_ids = problem.metadata.get(
+                "passage_fragment_source_page_ids"
+            )
+            if isinstance(raw_fragment_source_page_ids, list):
+                for page_id in raw_fragment_source_page_ids:
+                    normalized_page_id = str(page_id or "").strip()
+                    if (
+                        normalized_page_id
+                        and normalized_page_id not in precise_fragment_source_page_ids
+                    ):
+                        precise_fragment_source_page_ids.append(normalized_page_id)
             raw_source_page_ids = problem.metadata.get("passage_source_page_ids")
             if isinstance(raw_source_page_ids, list):
                 for page_id in raw_source_page_ids:
@@ -5550,6 +5748,9 @@ def _coalesce_cross_page_passage_drafts(
                 expected_fragment_count,
                 _coerce_int(problem.metadata.get("passage_fragment_count")) or 0,
             )
+        if precise_fragment_source_page_ids:
+            expected_source_page_ids = precise_fragment_source_page_ids
+            expected_fragment_count = len(precise_fragment_source_page_ids)
         missing_source_page_ids = [
             page_id for page_id in expected_source_page_ids if page_id not in source_page_ids
         ]
@@ -5581,6 +5782,12 @@ def _coalesce_cross_page_passage_drafts(
             stitch_diagnostics_output=stitch_diagnostics,
         )
         primary.preserve_media_regions = stitched_regions
+        primary.source_segments = [
+            dict(segment)
+            for index in ordered_indices
+            for segment in drafts[index].source_segments
+            if isinstance(segment, dict)
+        ]
         if primary.asset_task is not None:
             primary.asset_task.rendered_media_regions = list(stitched_regions)
         _stitch_passage_image_files(
@@ -5792,6 +5999,8 @@ def build_problem_entries(
                 ),
                 key=lambda block: (
                     int(block.metadata.get("passage_fragment_index") or 0),
+                    int(block.metadata.get("column_index") or 0),
+                    block.bbox.left,
                     block.reading_order,
                 ),
             )
@@ -5801,6 +6010,22 @@ def build_problem_entries(
                 and len(passage_segment_blocks) > 1
                 else None
             )
+            passage_source_segments = [
+                {
+                    "source_page_id": page.page_id,
+                    "column_index": _coerce_int(block.metadata.get("column_index")) or 1,
+                    "fragment_index": (
+                        _coerce_int(block.metadata.get("passage_fragment_index")) or index
+                    ),
+                    "bbox": {
+                        "left": float(block.bbox.left),
+                        "top": float(block.bbox.top),
+                        "width": float(block.bbox.width),
+                        "height": float(block.bbox.height),
+                    },
+                }
+                for index, block in enumerate(passage_segment_blocks, start=1)
+            ]
             if passage_fragment_problem and passage_segment_blocks:
                 blocks = passage_segment_blocks
             explicit_passage_range = (
@@ -5878,7 +6103,7 @@ def build_problem_entries(
                     top_padding_px=top_padding_px,
                     bottom_padding_px=bottom_padding_px,
                 )
-                if has_document_band_metadata:
+                if has_document_band_metadata and not explicit_passage_range:
                     merged_box = _clamp_box_to_next_problem(
                         merged_box,
                         next_problem,
@@ -5900,7 +6125,7 @@ def build_problem_entries(
                             else PROBLEM_EDGE_BOTTOM_EXTRA_PADDING_PX
                         ),
                     )
-                if has_document_band_metadata:
+                if has_document_band_metadata and not explicit_passage_range:
                     merged_box = _clamp_box_to_next_problem(
                         merged_box,
                         next_problem,
@@ -5972,6 +6197,7 @@ def build_problem_entries(
                         if reuse_full_page_asset and _problem_allows_selective_media_preservation(problem)
                         else []
                     ),
+                    source_segments=passage_source_segments,
                     asset_task=None
                     if reuse_full_page_asset
                     else _ProblemAssetTask(
@@ -6057,6 +6283,7 @@ def build_problem_entries(
                 input_intent=draft.input_intent,
                 force_full_page_bounds=draft.force_full_page_bounds,
                 preserve_media_regions=list(draft.preserve_media_regions),
+                source_segments=list(draft.source_segments),
                 board_render_preprocessed=draft.asset_task is not None,
             )
         )
@@ -6666,6 +6893,57 @@ def _coerce_problem_number(value: Any) -> int | None:
     if isinstance(value, str) and value.isdigit() and int(value) > 0:
         return int(value)
     return None
+
+
+def _normalize_problem_source_segments(
+    value: Any,
+    *,
+    fallback_page_id: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, raw_segment in enumerate(value, start=1):
+        if not isinstance(raw_segment, Mapping):
+            continue
+        raw_bbox = raw_segment.get("bbox")
+        if not isinstance(raw_bbox, Mapping):
+            continue
+        left = _coerce_float(raw_bbox.get("left"))
+        top = _coerce_float(raw_bbox.get("top"))
+        width = _coerce_float(raw_bbox.get("width"))
+        height = _coerce_float(raw_bbox.get("height"))
+        if None in {left, top, width, height} or width <= 0 or height <= 0:
+            continue
+        source_page_id = str(
+            raw_segment.get("source_page_id")
+            or raw_segment.get("sourcePageId")
+            or fallback_page_id
+        ).strip()
+        column_index = _coerce_int(
+            raw_segment.get("column_index") or raw_segment.get("columnIndex")
+        ) or 1
+        fragment_index = _coerce_int(
+            raw_segment.get("fragment_index") or raw_segment.get("fragmentIndex")
+        ) or index
+        bbox = {
+            "left": float(left),
+            "top": float(top),
+            "width": float(width),
+            "height": float(height),
+        }
+        normalized.append(
+            {
+                "sourcePageId": source_page_id,
+                "source_page_id": source_page_id,
+                "columnIndex": column_index,
+                "column_index": column_index,
+                "fragmentIndex": fragment_index,
+                "fragment_index": fragment_index,
+                "bbox": bbox,
+            }
+        )
+    return normalized
 
 
 def _ordered_unique_strings(values: Iterable[Any]) -> list[str]:
@@ -8775,6 +9053,10 @@ def build_ui_session(
         source_path = Path(str(placement["source_path"])).resolve()
         source_page_id = str(placement["source_page_id"])
         bbox = placement.get("bbox") or {}
+        source_segments = _normalize_problem_source_segments(
+            placement.get("source_segments") or placement.get("sourceSegments"),
+            fallback_page_id=source_page_id,
+        )
         page_quality = _page_quality_payload(pages_by_id.get(source_page_id))
         page_flags = base_page_risk_flags.get(source_page_id, [])
         # Only propagate "this specific problem may be merged / auto-grouped"
@@ -8857,6 +9139,8 @@ def build_ui_session(
                     "width": float(bbox.get("width", 0.0)),
                     "height": float(bbox.get("height", 0.0)),
                 },
+                "sourceSegments": source_segments,
+                "source_segments": source_segments,
                 "riskFlags": problem_flags,
                 "reviewStatus": "check_needed" if problem_flags else "normal",
                 "parseConfidence": page_quality["parseConfidence"],
@@ -8865,7 +9149,17 @@ def build_ui_session(
                 **passage_payload,
             }
         )
-        problems_by_page.setdefault(source_page_id, []).append(problem_id)
+        problem_source_page_ids = list(
+            dict.fromkeys(
+                str(segment.get("sourcePageId") or "")
+                for segment in source_segments
+                if str(segment.get("sourcePageId") or "")
+            )
+        ) or [source_page_id]
+        for problem_source_page_id in problem_source_page_ids:
+            page_problem_ids = problems_by_page.setdefault(problem_source_page_id, [])
+            if problem_id not in page_problem_ids:
+                page_problem_ids.append(problem_id)
 
     hwp_flags_by_page_id, hwp_warning_messages = _collect_hwp_problem_count_mismatches(
         list(pages_by_id.values()),
@@ -9412,6 +9706,7 @@ def placement_inputs(
                     "width": entry.bounds.width,
                     "height": entry.bounds.height,
                 },
+                "source_segments": [dict(segment) for segment in entry.source_segments],
                 "risk_flags": list(entry.risk_flags),
                 "processing_step": _normalize_processing_step(entry.processing_step),
                 "placement_scale_ratio": _clamp_placement_scale_ratio(
@@ -10099,6 +10394,7 @@ def build_image_only_records(
                 "overflow_violation": overflow_amount_pages > 0 and not placement.overflow_allowed,
                 "slot_span_count": slot_span_count,
                 "bbox": placement.metadata["bbox"],
+                "source_segments": list(placement.metadata.get("source_segments") or []),
                 "risk_flags": list(placement.metadata.get("risk_flags") or []),
                 "record_mode": "image-only",
                 "step": processing_step,
@@ -10287,6 +10583,7 @@ def build_mixed_records(
                     "width": entry.bounds.width,
                     "height": entry.bounds.height,
                 },
+                "source_segments": [dict(segment) for segment in entry.source_segments],
                 "risk_flags": list(entry.risk_flags),
                 "record_mode": "mixed",
                 "text_record_count": text_record_count,

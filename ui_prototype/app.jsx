@@ -1,6 +1,15 @@
 // 칠판 자료 편집기 — main app
 const { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } = React;
 
+const RUNTIME_PLATFORM = typeof navigator === 'undefined'
+  ? ''
+  : String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '');
+const IS_MAC_PLATFORM = /Mac|iPhone|iPad|iPod/i.test(RUNTIME_PLATFORM);
+const PRIMARY_MODIFIER_LABEL = IS_MAC_PLATFORM ? '⌘' : 'Ctrl';
+const PRIMARY_MODIFIER_NAME = IS_MAC_PLATFORM ? 'Command' : 'Control';
+const ALTERNATE_MODIFIER_LABEL = IS_MAC_PLATFORM ? 'Option' : 'Alt';
+const ALTERNATE_MODIFIER_NAME = IS_MAC_PLATFORM ? 'Option' : 'Alt';
+
 function reportRuntimeDiagnostic(error, detail = {}) {
   const payload = {
     type: detail.type || 'runtime',
@@ -897,13 +906,131 @@ function reviewBoxesEqual(leftBox, rightBox){
   ));
 }
 
+function editableSourceSegmentsForProblem(problem){
+  const sourceSegments = Array.isArray(problem?.sourceSegments || problem?.source_segments)
+    ? (problem.sourceSegments || problem.source_segments)
+    : [];
+  const normalized = sourceSegments.flatMap((segment, index) => {
+    const bbox = segment?.bbox || {};
+    const pageId = String(segment?.sourcePageId || segment?.source_page_id || '').trim();
+    if (!pageId || !finiteNumber(bbox.width, 0) || !finiteNumber(bbox.height, 0)) return [];
+    return [{
+      id: `passage-segment-${index + 1}`,
+      pageId,
+      order: index + 1,
+      bbox: {
+        left: finiteNumber(bbox.left, 0),
+        top: finiteNumber(bbox.top, 0),
+        width: Math.max(1, finiteNumber(bbox.width, 1)),
+        height: Math.max(1, finiteNumber(bbox.height, 1)),
+      },
+    }];
+  });
+  if (normalized.length) return normalized;
+  const fallbackBox = problem?.bbox || {};
+  const fallbackPageId = String(problem?.sourcePageId || problem?.source_page_id || '').trim();
+  if (!fallbackPageId || !finiteNumber(fallbackBox.width, 0) || !finiteNumber(fallbackBox.height, 0)) return [];
+  return [{
+    id: 'passage-segment-1',
+    pageId: fallbackPageId,
+    order: 1,
+    bbox: {
+      left: finiteNumber(fallbackBox.left, 0),
+      top: finiteNumber(fallbackBox.top, 0),
+      width: Math.max(1, finiteNumber(fallbackBox.width, 1)),
+      height: Math.max(1, finiteNumber(fallbackBox.height, 1)),
+    },
+  }];
+}
+
+function boxEditSegmentsEqual(leftSegments, rightSegments){
+  const left = leftSegments || [];
+  const right = rightSegments || [];
+  return left.length === right.length && left.every((segment, index) => (
+    String(segment?.pageId || '') === String(right[index]?.pageId || '')
+    && reviewBoxesEqual(segment?.bbox, right[index]?.bbox)
+  ));
+}
+
+function renumberBoxEditSegments(segments){
+  return (segments || []).map((segment, index) => ({ ...segment, order: index + 1 }));
+}
+
+function serializeBoxEditSegments(segments){
+  return renumberBoxEditSegments(segments).map(segment => ({
+    pageId: segment.pageId,
+    order: segment.order,
+    bbox: {
+      left: Math.round(finiteNumber(segment.bbox?.left, 0)),
+      top: Math.round(finiteNumber(segment.bbox?.top, 0)),
+      width: Math.round(Math.max(1, finiteNumber(segment.bbox?.width, 1))),
+      height: Math.round(Math.max(1, finiteNumber(segment.bbox?.height, 1))),
+    },
+  }));
+}
+
+function reviewSourcePageLabel(pages, pageId){
+  const pageIndex = (pages || []).findIndex(page => String(page?.id || '') === String(pageId || ''));
+  if (pageIndex >= 0) return `${pageIndex + 1}페이지`;
+  return '원본 페이지';
+}
+
+function reviewBoxIntersectionOverUnion(leftBox, rightBox){
+  const left = Math.max(finiteNumber(leftBox?.left, 0), finiteNumber(rightBox?.left, 0));
+  const top = Math.max(finiteNumber(leftBox?.top, 0), finiteNumber(rightBox?.top, 0));
+  const right = Math.min(
+    finiteNumber(leftBox?.left, 0) + finiteNumber(leftBox?.width, 0),
+    finiteNumber(rightBox?.left, 0) + finiteNumber(rightBox?.width, 0)
+  );
+  const bottom = Math.min(
+    finiteNumber(leftBox?.top, 0) + finiteNumber(leftBox?.height, 0),
+    finiteNumber(rightBox?.top, 0) + finiteNumber(rightBox?.height, 0)
+  );
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const leftArea = Math.max(0, finiteNumber(leftBox?.width, 0)) * Math.max(0, finiteNumber(leftBox?.height, 0));
+  const rightArea = Math.max(0, finiteNumber(rightBox?.width, 0)) * Math.max(0, finiteNumber(rightBox?.height, 0));
+  const union = leftArea + rightArea - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function boxEditSegmentValidation(segments){
+  const segmentList = segments || [];
+  const hardIssues = [];
+  const warnings = [];
+  if (!segmentList.length) hardIssues.push('이어붙일 영역이 없습니다.');
+  if (segmentList.length > 32) hardIssues.push('한 지문에는 영역을 최대 32개까지 합칠 수 있습니다.');
+  segmentList.forEach((segment, index) => {
+    if (finiteNumber(segment?.bbox?.width, 0) < 8 || finiteNumber(segment?.bbox?.height, 0) < 8) {
+      hardIssues.push(`${index + 1}번째 영역이 너무 작습니다.`);
+    }
+  });
+  for (let leftIndex = 0; leftIndex < segmentList.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < segmentList.length; rightIndex += 1) {
+      const leftSegment = segmentList[leftIndex];
+      const rightSegment = segmentList[rightIndex];
+      if (String(leftSegment?.pageId || '') !== String(rightSegment?.pageId || '')) continue;
+      const overlap = reviewBoxIntersectionOverUnion(leftSegment?.bbox, rightSegment?.bbox);
+      if (overlap >= 0.98) {
+        hardIssues.push(`${leftIndex + 1}번과 ${rightIndex + 1}번이 사실상 같은 영역입니다.`);
+      } else if (overlap >= 0.5) {
+        warnings.push(`${leftIndex + 1}번과 ${rightIndex + 1}번이 많이 겹칩니다.`);
+      }
+    }
+  }
+  return {
+    valid: hardIssues.length === 0,
+    hardIssues: listUnique(hardIssues),
+    warnings: listUnique(warnings),
+  };
+}
+
 function BoxEditPreview({ label, page, box }){
   const pageWidth = Math.max(1, finiteNumber(page?.width, 1));
   const cropWidth = Math.max(1, finiteNumber(box?.width, 1));
   const cropHeight = Math.max(1, finiteNumber(box?.height, 1));
   return (
     <div className="box-edit-preview-item">
-      <span>{label}</span>
+      {label && <span>{label}</span>}
       <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}` }}>
         {page?.sourceImageUri ? (
           <img
@@ -924,56 +1051,138 @@ function BoxEditPreview({ label, page, box }){
   );
 }
 
+function BoxEditStitchedPreview({ pages, segments }){
+  const segmentList = segments || [];
+  return (
+    <div className="box-edit-stitched-preview" aria-label="합친 지문 결과 미리보기">
+      <div className="box-edit-stitched-preview-head">
+        <strong>합친 결과</strong>
+        <span>위에서 아래로 {segmentList.length}개 영역</span>
+      </div>
+      <div className="box-edit-stitched-fragments">
+        {segmentList.map((segment, index) => {
+          const sourcePage = (pages || []).find(page => String(page?.id || '') === String(segment?.pageId || ''));
+          return (
+            <div className="box-edit-stitched-fragment" key={segment.id || `${segment.pageId}-${index}`}>
+              <BoxEditPreview
+                label={`${index + 1} · ${reviewSourcePageLabel(pages, segment.pageId)} · ${manualSplitBoxSizeLabel(segment.bbox)}`}
+                page={sourcePage}
+                box={segment.bbox}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function BoxEditPanel({
   page,
+  pages,
   problem,
   displayNumber,
   originalBox,
   box,
+  originalSegments,
+  segments,
+  selectedSegmentId,
+  multi,
+  addingSegment,
   mode,
   mutating,
   aiAvailable,
   aiBusy,
   onModeChange,
+  onToggleAddSegment,
+  onSelectSegment,
+  onDeleteSegment,
+  onMoveSegment,
   onReset,
   onCancel,
   onApply,
 }){
-  const changed = !reviewBoxesEqual(originalBox, box);
-  const recognizeMode = mode === 'recognize';
+  const segmentList = segments || [];
+  const selectedSegment = segmentList.find(segment => segment.id === selectedSegmentId) || segmentList[0] || null;
+  const selectedOriginalSegment = (originalSegments || []).find(segment => segment.id === selectedSegment?.id) || null;
+  const selectedPage = (pages || []).find(item => item.id === selectedSegment?.pageId) || page;
+  const selectedBox = selectedSegment?.bbox || box;
+  const selectedOriginalBox = selectedOriginalSegment?.bbox || (multi ? selectedBox : originalBox) || selectedBox;
+  const changed = multi
+    ? !boxEditSegmentsEqual(originalSegments, segmentList)
+    : !reviewBoxesEqual(originalBox, box);
+  const recognizeMode = !multi && mode === 'recognize';
   const recognizeDisabled = !aiAvailable || aiBusy;
   const busy = mutating || (recognizeMode && aiBusy);
-  const canApply = recognizeMode || changed;
-  const nearPageEdge = finiteNumber(box?.left, 0) < 4
-    || finiteNumber(box?.top, 0) < 4
-    || finiteNumber(box?.left, 0) + finiteNumber(box?.width, 0) > finiteNumber(page?.width, 1) - 4
-    || finiteNumber(box?.top, 0) + finiteNumber(box?.height, 0) > finiteNumber(page?.height, 1) - 4;
+  const segmentValidation = boxEditSegmentValidation(segmentList);
+  const canApply = multi ? segmentValidation.valid && changed : recognizeMode || changed;
+  const nearPageEdge = finiteNumber(selectedBox?.left, 0) < 4
+    || finiteNumber(selectedBox?.top, 0) < 4
+    || finiteNumber(selectedBox?.left, 0) + finiteNumber(selectedBox?.width, 0) > finiteNumber(selectedPage?.width, 1) - 4
+    || finiteNumber(selectedBox?.top, 0) + finiteNumber(selectedBox?.height, 0) > finiteNumber(selectedPage?.height, 1) - 4;
+  const sourcePageCount = new Set(segmentList.map(segment => segment.pageId)).size;
   return (
-    <aside className="box-edit-panel" aria-label="영역 다시 잡기 확인 패널">
+    <aside className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 다시 잡기 확인 패널">
       <div className="box-edit-panel-head">
         <div>
           <span>선택된 항목</span>
-          <strong>{displayNumber ? `${displayNumber}번 문항` : (problem?.title || '선택 문항')}</strong>
+          <strong>{multi ? (problem?.title || '선택 지문') : displayNumber ? `${displayNumber}번 문항` : (problem?.title || '선택 문항')}</strong>
         </div>
         <button className="icon-btn" type="button" aria-label="영역 편집 취소" onClick={onCancel} disabled={mutating}>
           {Icon.close}
         </button>
       </div>
       <div className="box-edit-panel-section">
-        <h3>영역 다시 잡기</h3>
-        <p>시험지 위의 파란 테두리와 조절점을 직접 움직이세요.</p>
+        <h3>{multi ? '지문 여러 영역 이어붙이기' : '영역 다시 잡기'}</h3>
+        <p>{multi
+          ? '분할선이나 페이지를 넘어가는 지문을 여러 번 드래그하세요. 아래 순서대로 한 지문이 됩니다.'
+          : '시험지 위의 파란 테두리와 조절점을 직접 움직이세요.'}</p>
       </div>
+      {multi && (
+        <div className="box-edit-panel-section multi-crop-segment-section">
+          <div className="box-edit-section-head">
+            <h4>이어붙일 영역</h4>
+            <button
+              className={`btn ${addingSegment ? 'primary' : ''}`}
+              type="button"
+              aria-pressed={addingSegment}
+              onClick={onToggleAddSegment}
+              disabled={busy || segmentList.length >= 32}
+            >
+              {Icon.crop} {addingSegment ? '페이지에서 드래그…' : '영역 추가'}
+            </button>
+          </div>
+          <p>페이지가 달라도 추가할 수 있습니다. 목록 순서가 최종 읽기 순서입니다.</p>
+          <div className="multi-crop-segment-list">
+            {segmentList.map((segment, index) => (
+              <div key={segment.id} className={`multi-crop-segment-row ${segment.id === selectedSegment?.id ? 'selected' : ''}`}>
+                <button type="button" className="multi-crop-segment-main" onClick={() => onSelectSegment?.(segment.id)}>
+                  <strong>{index + 1}</strong>
+                  <span title={segment.pageId}>{reviewSourcePageLabel(pages, segment.pageId)}<small>{manualSplitBoxSizeLabel(segment.bbox)}</small></span>
+                </button>
+                <div className="multi-crop-segment-actions">
+                  <button type="button" className="icon-btn" aria-label={`${index + 1}번째 영역 위로`} onClick={() => onMoveSegment?.(segment.id, -1)} disabled={busy || index === 0}>{Icon.arrowUp}</button>
+                  <button type="button" className="icon-btn" aria-label={`${index + 1}번째 영역 아래로`} onClick={() => onMoveSegment?.(segment.id, 1)} disabled={busy || index === segmentList.length - 1}>{Icon.arrowDown}</button>
+                  <button type="button" className="icon-btn danger" aria-label={`${index + 1}번째 영역 삭제`} onClick={() => onDeleteSegment?.(segment.id)} disabled={busy || segmentList.length <= 1}>{Icon.trash}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="box-edit-panel-section">
         <div className="box-edit-section-head">
           <h4>미리보기</h4>
           <button className="text-action" type="button" onClick={onReset} disabled={mutating || !changed}>원래 영역으로</button>
         </div>
         <div className="box-edit-previews">
-          <BoxEditPreview label="조정 전" page={page} box={originalBox} />
-          <BoxEditPreview label="조정 후" page={page} box={box} />
+          <BoxEditPreview label="조정 전" page={selectedPage} box={selectedOriginalBox} />
+          <BoxEditPreview label="조정 후" page={selectedPage} box={selectedBox} />
         </div>
+        {multi && <BoxEditStitchedPreview pages={pages} segments={segmentList} />}
+        <p className="box-edit-keyboard-help">방향키 1px 이동 · Shift+방향키 10px 이동</p>
       </div>
-      <div className="box-edit-panel-section">
+      {!multi && <div className="box-edit-panel-section">
         <h4>적용 방식</h4>
         <label className={`box-edit-mode ${recognizeMode ? '' : 'selected'}`}>
           <input
@@ -1007,16 +1216,33 @@ function BoxEditPanel({
             </small>
           </span>
         </label>
-      </div>
+      </div>}
       {nearPageEdge && (
         <div className="box-edit-warning" role="status">
           <strong>페이지 가장자리에 닿아 있습니다.</strong>
           <span>글자나 그림이 잘리지 않았는지 미리보기를 확인하세요.</span>
         </div>
       )}
+      {multi && segmentValidation.hardIssues.length > 0 && (
+        <div className="box-edit-warning error" role="alert">
+          <strong>합칠 수 없는 영역이 있습니다.</strong>
+          <span>{segmentValidation.hardIssues.join(' ')}</span>
+        </div>
+      )}
+      {multi && segmentValidation.warnings.length > 0 && (
+        <div className="box-edit-warning" role="status">
+          <strong>겹친 내용을 확인하세요.</strong>
+          <span>{segmentValidation.warnings.join(' ')}</span>
+        </div>
+      )}
       <div className="box-edit-impact">
         <span>영향 요약</span>
-        <strong>{displayNumber ? `${displayNumber}번 문항만 교체` : '선택 문항만 교체'} <small>· 번호와 순서 유지</small></strong>
+        <strong>
+          {multi
+            ? `영역 ${segmentList.length}개 · ${sourcePageCount}페이지를 한 지문으로 교체`
+            : displayNumber ? `${displayNumber}번 문항만 교체` : '선택 문항만 교체'}
+          {' '}<small>· ID와 순서 유지</small>
+        </strong>
       </div>
       <div className="box-edit-panel-footer">
         <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={busy}>취소</button>
@@ -1028,7 +1254,9 @@ function BoxEditPanel({
           disabled={busy || !canApply || (recognizeMode && !aiAvailable)}
         >
           {recognizeMode ? Icon.wand : Icon.check}{' '}
-          {recognizeMode
+          {multi
+            ? (mutating ? '이어붙이는 중…' : '한 지문으로 합치기')
+            : recognizeMode
             ? (aiBusy ? '인식 중…' : '다시 인식')
             : (mutating ? '적용 중…' : '적용')}
         </button>
@@ -1276,8 +1504,8 @@ function ManualSplitEditor({
             <span><kbd>G</kbd> 드래그 모드</span>
             <span><kbd>S</kbd> 스탬프 모드</span>
             <span><kbd>P</kbd> 패널 좌우 이동</span>
-            <span><kbd>⌘/Ctrl A</kbd> 전체 선택</span>
-            <span><kbd>⌘/Ctrl D</kbd> 선택 복제</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 전체 선택</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} D</kbd> 선택 복제</span>
             <span><kbd>방향키</kbd> 1px 이동</span>
             <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
             <span><kbd>Delete</kbd> 선택 삭제</span>
@@ -1649,7 +1877,7 @@ function TopBar({
         </button>
         <button
           className="btn ghost icon"
-          title={canUndo ? '되돌리기 (Ctrl/Cmd+Z)' : '되돌릴 변경이 없습니다'}
+          title={canUndo ? `되돌리기 (${PRIMARY_MODIFIER_LABEL}+Z)` : '되돌릴 변경이 없습니다'}
           data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
           aria-label="되돌리기"
           onClick={onUndo}
@@ -1755,6 +1983,10 @@ function ReviewStage({
     (session?.problems || []).forEach(p => { if (p && p.id) map.set(p.id, p); });
     return map;
   }, [session]);
+  const passageOnlyReview = Boolean(
+    (session?.problems || []).length
+    && (session?.problems || []).every(problem => isPassageFragmentProblem(problem))
+  );
   // Problem display number reflects the current rail order (user reordering /
   // excluding is honoured here, so the chip on each bbox matches the rail).
   const orderMap = useMemo(() => {
@@ -1764,6 +1996,7 @@ function ReviewStage({
   }, [items]);
 
   const [boxEdit, setBoxEdit] = useState(null);
+  const [boxEditDraftBox, setBoxEditDraftBox] = useState(null);
   const [manualSplit, setManualSplit] = useState(null);
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
@@ -1785,6 +2018,7 @@ function ReviewStage({
   const setReviewZoom = useCallback(value => updateReviewUiField('zoom', value), [updateReviewUiField]);
   const boxEditDragRef = useRef(null);
   const boxEditCommitRef = useRef(false);
+  const boxEditSeqRef = useRef(1);
   const manualSplitDragRef = useRef(null);
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
@@ -1813,7 +2047,7 @@ function ReviewStage({
 
   const jumpReviewPage = useCallback((direction) => {
     const wrap = reviewWrapRef.current;
-    if (!wrap || reviewEditorActive) return;
+    if (!wrap || manualSplit) return;
     const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
     if (!pageNodes.length) return;
     const markerTop = wrap.getBoundingClientRect().top + 24;
@@ -1825,7 +2059,7 @@ function ReviewStage({
     const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
     setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
     smoothScrollTo(wrap, targetTop, 220);
-  }, [reviewEditorActive]);
+  }, [manualSplit]);
 
   useEffect(() => {
     onEditorModeChange?.(reviewEditorActive);
@@ -1835,6 +2069,7 @@ function ReviewStage({
   // Reset transient editors if the session changes underneath after a mutation.
   useEffect(() => {
     boxEditCommitRef.current = false;
+    setBoxEditDraftBox(null);
     manualSplitCommitRef.current = false;
     setManualSplit(null);
     setManualSplitDraftBox(null);
@@ -2255,12 +2490,11 @@ function ReviewStage({
   }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
-    if (!manualSplit) return;
     if (!evt.ctrlKey && !evt.metaKey) return;
     if (!evt.target?.closest?.('.review-canvas-scroll')) return;
     evt.preventDefault();
     adjustReviewZoom(evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
-  }, [adjustReviewZoom, manualSplit]);
+  }, [adjustReviewZoom]);
 
   const cancelManualPageSplit = () => {
     manualSplitDragRef.current = null;
@@ -2631,24 +2865,58 @@ function ReviewStage({
     if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
     setManualSplit(null);
     setManualSplitDraftBox(null);
+    setBoxEditDraftBox(null);
     boxEditCommitRef.current = false;
-    const initialBox = clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage);
+    const multi = isPassageFragmentProblem(selectedSingleProblem);
+    const initialSegments = editableSourceSegmentsForProblem(selectedSingleProblem).flatMap(segment => {
+      const segmentPage = pages.find(page => page.id === segment.pageId);
+      return segmentPage ? [{ ...segment, bbox: clampReviewBox(segment.bbox, segmentPage) }] : [];
+    });
+    const fallbackBox = clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage);
+    const segments = initialSegments.length ? initialSegments : [{
+      id: 'passage-segment-1',
+      pageId: selectedSinglePage.id,
+      order: 1,
+      bbox: fallbackBox,
+    }];
+    const firstSegment = segments[0];
+    const initialBox = firstSegment.bbox;
     setBoxEdit({
       problemId: selectedSingleProblem.id,
-      pageId: selectedSinglePage.id,
+      pageId: firstSegment.pageId,
       originalBox: initialBox,
       box: initialBox,
+      originalSegments: segments.map(segment => ({ ...segment, bbox: { ...segment.bbox } })),
+      segments,
+      selectedSegmentId: firstSegment.id,
+      multi,
+      addingSegment: false,
       mode: 'crop',
     });
   };
   const cancelBoxEdit = () => {
     boxEditDragRef.current = null;
     boxEditCommitRef.current = false;
+    setBoxEditDraftBox(null);
     setBoxEdit(null);
   };
   const resetBoxEdit = () => {
     boxEditDragRef.current = null;
-    setBoxEdit(prev => prev?.originalBox ? { ...prev, box: { ...prev.originalBox } } : prev);
+    setBoxEditDraftBox(null);
+    setBoxEdit(prev => {
+      if (!prev?.originalBox) return prev;
+      const segments = (prev.originalSegments || []).map(segment => ({ ...segment, bbox: { ...segment.bbox } }));
+      const selected = segments[0] || null;
+      return {
+        ...prev,
+        pageId: selected?.pageId || prev.pageId,
+        originalBox: { ...prev.originalBox },
+        box: selected?.bbox || { ...prev.originalBox },
+        segments,
+        selectedSegmentId: selected?.id || prev.selectedSegmentId,
+        addingSegment: false,
+      };
+    });
   };
   const setBoxEditMode = (mode) => {
     setBoxEdit(prev => prev ? {
@@ -2658,8 +2926,13 @@ function ReviewStage({
   };
   const applyBoxEdit = useCallback(async () => {
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
-    const recognizeMode = boxEdit.mode === 'recognize';
-    if (!recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
+    const recognizeMode = !boxEdit.multi && boxEdit.mode === 'recognize';
+    if (boxEdit.multi) {
+      if (!(boxEdit.segments || []).length) return;
+      if (!boxEditSegmentValidation(boxEdit.segments).valid) return;
+      if (boxEditSegmentsEqual(boxEdit.originalSegments, boxEdit.segments)) return;
+    }
+    if (!boxEdit.multi && !recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
     if (recognizeMode && (!aiAvailable || aiBusy)) return;
     boxEditCommitRef.current = true;
     try {
@@ -2675,11 +2948,17 @@ function ReviewStage({
         return;
       }
       pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;
-      const nextSession = await mutateSession?.('crop', {
-        problemId: boxEdit.problemId,
-        cropBox: boxEdit.box,
-      });
+      const nextSession = boxEdit.multi
+        ? await mutateSession?.('stitch-crop', {
+            problemId: boxEdit.problemId,
+            segments: serializeBoxEditSegments(boxEdit.segments || []),
+          })
+        : await mutateSession?.('crop', {
+            problemId: boxEdit.problemId,
+            cropBox: boxEdit.box,
+          });
       if (nextSession) {
+        setBoxEditDraftBox(null);
         setBoxEdit(null);
       } else {
         pendingReviewSelectionProblemIdRef.current = '';
@@ -2693,18 +2972,110 @@ function ReviewStage({
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
     await mutateSession?.('crop', { problemId: problem.id, cropBox: retryBox });
   };
-  const beginBoxDrag = (evt, mode, page) => {
+  const selectBoxEditSegment = (segmentId) => {
+    setBoxEdit(prev => {
+      const segment = (prev?.segments || []).find(item => item.id === segmentId);
+      return prev && segment ? {
+        ...prev,
+        pageId: segment.pageId,
+        box: segment.bbox,
+        selectedSegmentId: segment.id,
+        addingSegment: false,
+      } : prev;
+    });
+  };
+  const toggleBoxEditAddSegment = () => {
+    boxEditDragRef.current = null;
+    setBoxEditDraftBox(null);
+    setBoxEdit(prev => prev?.multi && (prev.segments || []).length < 32
+      ? { ...prev, addingSegment: !prev.addingSegment }
+      : prev);
+  };
+  const deleteBoxEditSegment = (segmentId) => {
+    setBoxEdit(prev => {
+      if (!prev?.multi || (prev.segments || []).length <= 1) return prev;
+      const segments = renumberBoxEditSegments((prev.segments || []).filter(segment => segment.id !== segmentId));
+      const selected = segments.find(segment => segment.id === prev.selectedSegmentId) || segments[0];
+      return {
+        ...prev,
+        segments,
+        selectedSegmentId: selected.id,
+        pageId: selected.pageId,
+        box: selected.bbox,
+        addingSegment: false,
+      };
+    });
+  };
+  const moveBoxEditSegment = (segmentId, direction) => {
+    setBoxEdit(prev => {
+      if (!prev?.multi) return prev;
+      const segments = [...(prev.segments || [])];
+      const fromIndex = segments.findIndex(segment => segment.id === segmentId);
+      const toIndex = Math.max(0, Math.min(segments.length - 1, fromIndex + direction));
+      if (fromIndex < 0 || fromIndex === toIndex) return prev;
+      const [segment] = segments.splice(fromIndex, 1);
+      segments.splice(toIndex, 0, segment);
+      return { ...prev, segments: renumberBoxEditSegments(segments) };
+    });
+  };
+  const nudgeBoxEditSelection = useCallback((deltaX, deltaY) => {
+    setBoxEdit(prev => {
+      if (!prev?.box) return prev;
+      const selectedSegment = prev.multi
+        ? (prev.segments || []).find(segment => segment.id === prev.selectedSegmentId)
+        : null;
+      const pageId = selectedSegment?.pageId || prev.pageId;
+      const sourcePage = pages.find(page => String(page?.id || '') === String(pageId || ''));
+      if (!sourcePage) return prev;
+      const currentBox = selectedSegment?.bbox || prev.box;
+      const nextBox = clampReviewBox({
+        ...currentBox,
+        left: finiteNumber(currentBox.left, 0) + deltaX,
+        top: finiteNumber(currentBox.top, 0) + deltaY,
+      }, sourcePage);
+      const nextSegments = selectedSegment
+        ? (prev.segments || []).map(segment => (
+            segment.id === selectedSegment.id ? { ...segment, bbox: nextBox } : segment
+          ))
+        : prev.segments;
+      return { ...prev, box: nextBox, segments: nextSegments };
+    });
+  }, [pages, clampReviewBox]);
+  const beginBoxSegmentDraw = (evt, page) => {
+    if (!boxEdit?.multi || !boxEdit.addingSegment || evt.button !== 0) return;
+    if (!evt.currentTarget?.getBoundingClientRect) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const startPoint = manualSplitPointFromClient(evt.clientX, evt.clientY, page, rect);
+    boxEditDragRef.current = {
+      mode: 'draw-segment',
+      page,
+      rect,
+      startPoint,
+      startX: evt.clientX,
+      startY: evt.clientY,
+      moved: false,
+    };
+  };
+  const beginBoxDrag = (evt, mode, page, segmentId = null) => {
     if (!boxEdit?.box || evt.button !== 0) return;
     evt.preventDefault();
     evt.stopPropagation();
     const canvas = evt.currentTarget.closest?.('.review-page-canvas');
     const rect = canvas?.getBoundingClientRect?.();
     if (!rect?.width || !rect?.height) return;
+    const segment = segmentId
+      ? (boxEdit.segments || []).find(item => item.id === segmentId)
+      : null;
+    const initialBox = segment?.bbox || boxEdit.box;
+    if (segment) selectBoxEditSegment(segment.id);
     boxEditDragRef.current = {
       mode,
+      segmentId: segment?.id || null,
       startX: evt.clientX,
       startY: evt.clientY,
-      initialBox: { ...boxEdit.box },
+      initialBox: { ...initialBox },
       pageWidth: Number(page?.width) || 1,
       pageHeight: Number(page?.height) || 1,
       scaleX: (Number(page?.width) || 1) / rect.width,
@@ -2766,6 +3137,14 @@ function ReviewStage({
     const onMove = (evt) => {
       const drag = boxEditDragRef.current;
       if (!drag) return;
+      if (drag.mode === 'draw-segment') {
+        const point = manualSplitPointFromClient(evt.clientX, evt.clientY, drag.page, drag.rect);
+        const bbox = manualSplitBoxFromPoints(drag.startPoint, point, drag.page);
+        drag.latestBox = bbox;
+        drag.moved = Math.hypot(evt.clientX - drag.startX, evt.clientY - drag.startY) >= MANUAL_SPLIT_DRAW_THRESHOLD_PX;
+        setBoxEditDraftBox({ pageId: drag.page.id, bbox });
+        return;
+      }
       const dx = (evt.clientX - drag.startX) * drag.scaleX;
       const dy = (evt.clientY - drag.startY) * drag.scaleY;
       const minWidth = Math.min(drag.pageWidth, Math.max(12, Math.min(36, drag.pageWidth * 0.02)));
@@ -2794,9 +3173,37 @@ function ReviewStage({
         { left, top, width: right - left, height: bottom - top },
         { width: drag.pageWidth, height: drag.pageHeight }
       );
-      setBoxEdit(prev => prev ? { ...prev, box: nextBox } : prev);
+      setBoxEdit(prev => {
+        if (!prev) return prev;
+        const segments = drag.segmentId
+          ? (prev.segments || []).map(segment => (
+              segment.id === drag.segmentId ? { ...segment, bbox: nextBox } : segment
+            ))
+          : prev.segments;
+        return { ...prev, box: nextBox, segments };
+      });
     };
     const onUp = () => {
+      const drag = boxEditDragRef.current;
+      if (drag?.mode === 'draw-segment') {
+        if (drag.moved && drag.latestBox) {
+          const id = `manual-passage-segment-${boxEditSeqRef.current++}`;
+          setBoxEdit(prev => {
+            if (!prev?.multi) return prev;
+            const nextSegment = { id, pageId: drag.page.id, bbox: drag.latestBox };
+            const segments = renumberBoxEditSegments([...(prev.segments || []), nextSegment]);
+            return {
+              ...prev,
+              pageId: drag.page.id,
+              box: drag.latestBox,
+              segments,
+              selectedSegmentId: id,
+              addingSegment: false,
+            };
+          });
+        }
+        setBoxEditDraftBox(null);
+      }
       boxEditDragRef.current = null;
     };
     window.addEventListener('mousemove', onMove);
@@ -2817,11 +3224,40 @@ function ReviewStage({
       } else if (evt.key === 'Enter') {
         evt.preventDefault();
         void applyBoxEdit();
+      } else {
+        const arrowDelta = {
+          ArrowLeft: [-1, 0],
+          ArrowRight: [1, 0],
+          ArrowUp: [0, -1],
+          ArrowDown: [0, 1],
+        }[evt.key];
+        if (arrowDelta) {
+          evt.preventDefault();
+          const step = evt.shiftKey ? 10 : 1;
+          nudgeBoxEditSelection(arrowDelta[0] * step, arrowDelta[1] * step);
+        }
       }
     };
     window.addEventListener('keydown', onBoxEditKeyDown);
     return () => window.removeEventListener('keydown', onBoxEditKeyDown);
-  }, [boxEdit, mutating, applyBoxEdit]);
+  }, [boxEdit, mutating, applyBoxEdit, nudgeBoxEditSelection]);
+
+  useLayoutEffect(() => {
+    const wrap = reviewWrapRef.current;
+    const pageId = String(boxEdit?.pageId || '').trim();
+    if (!wrap || !pageId) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const target = Array.from(wrap.querySelectorAll('.review-page'))
+        .find(node => String(node.dataset?.pageId || '') === pageId);
+      if (!target) return;
+      const wrapRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+      smoothScrollTo(wrap, targetTop, 180);
+      syncReviewPageNavigation(wrap);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [boxEdit?.pageId, syncReviewPageNavigation]);
 
   useEffect(() => {
     const onMove = (evt) => {
@@ -3065,10 +3501,27 @@ function ReviewStage({
 
   const actionBar = boxEdit ? (
     <div className="review-actionbar box-edit-actionbar">
-      <span className="count-chip">영역 다시 잡기</span>
-      <span className="hint">시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. Enter 적용 · Esc 취소</span>
+      <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 다시 잡기'}</span>
+      <span className="hint">
+        {boxEdit.multi
+          ? '페이지를 스크롤하며 영역을 추가하세요. 목록 순서대로 한 지문이 됩니다. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'
+          : '시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'}
+      </span>
       <div className="spacer" />
-      <span className="box-edit-actionbar-impact">선택 문항만 변경 · 번호와 순서 유지</span>
+      {boxEdit.multi && (
+        <button
+          className={`btn ${boxEdit.addingSegment ? 'primary' : ''}`}
+          type="button"
+          aria-pressed={boxEdit.addingSegment}
+          onClick={toggleBoxEditAddSegment}
+          disabled={mutating || (boxEdit.segments || []).length >= 32}
+        >
+          {Icon.crop} {boxEdit.addingSegment ? '페이지에서 드래그…' : '영역 추가'}
+        </button>
+      )}
+      <span className="box-edit-actionbar-impact">
+        {boxEdit.multi ? `영역 ${(boxEdit.segments || []).length}개 · 한 지문으로 유지` : '선택 문항만 변경 · 번호와 순서 유지'}
+      </span>
     </div>
   ) : manualSplit ? (
     <div className="review-actionbar manual-split-actionbar">
@@ -3087,7 +3540,7 @@ function ReviewStage({
         <button
           className="btn"
           type="button"
-          title="모든 영역 선택 (Ctrl/Cmd+A)"
+          title={`모든 영역 선택 (${PRIMARY_MODIFIER_LABEL}+A)`}
           aria-keyshortcuts="Control+A Meta+A"
           onClick={selectAllManualSplitRegions}
           disabled={mutating || !(manualSplit.regions || []).length || (manualSplit.selectedRegionIds || []).length === (manualSplit.regions || []).length}
@@ -3097,7 +3550,7 @@ function ReviewStage({
         <button
           className="btn"
           type="button"
-          title="선택 영역 복제 (Ctrl/Cmd+D)"
+          title={`선택 영역 복제 (${PRIMARY_MODIFIER_LABEL}+D)`}
           aria-keyshortcuts="Control+D Meta+D"
           onClick={duplicateManualSplitSelected}
           disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
@@ -3343,7 +3796,7 @@ function ReviewStage({
               title="이전 검수 페이지"
               aria-label="이전 검수 페이지"
               onClick={() => jumpReviewPage(-1)}
-              disabled={reviewEditorActive || reviewPageNav.current <= 1}
+              disabled={!!manualSplit || reviewPageNav.current <= 1}
             >
               {Icon.arrowLeft}
             </button>
@@ -3356,7 +3809,7 @@ function ReviewStage({
               title="다음 검수 페이지"
               aria-label="다음 검수 페이지"
               onClick={() => jumpReviewPage(1)}
-              disabled={reviewEditorActive || !reviewPageNav.total || reviewPageNav.current >= reviewPageNav.total}
+              disabled={!!manualSplit || !reviewPageNav.total || reviewPageNav.current >= reviewPageNav.total}
             >
               {Icon.arrowRight}
             </button>
@@ -3591,7 +4044,7 @@ function ReviewStage({
               .filter(Boolean)
               .filter(problemInReviewScope);
             const pageId = String(page?.id || '').trim();
-            const pageInScope = !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
+            const pageInScope = boxEdit?.multi || !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
             if (!pageInScope) return null;
             if (manualSplit && page.id !== manualSplit.pageId) return null;
             const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
@@ -3600,19 +4053,28 @@ function ReviewStage({
             const pageProblems = allPageProblems
               .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
               .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
-            if ((reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
+            if (!boxEdit?.multi && (reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
             const pageCounts = countSessionProblems(allPageProblems);
             const pageRiskFlags = riskFlagsFor(page);
-            const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status)
-              || (!allPageProblems.length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
+            const storedPageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
+            const pageStatus = passageOnlyReview && !pageRiskFlags.length
+              ? 'normal'
+              : storedPageStatus
+                || (!allPageProblems.length && !passageOnlyReview ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
             const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
             const pageCanRetry = pageRetryIds.includes(page.id);
+            const editedProblem = boxEdit?.multi ? problemsById.get(boxEdit.problemId) : null;
+            const canvasProblems = editedProblem && !pageProblems.some(problem => problem.id === editedProblem.id)
+              ? [...pageProblems, editedProblem]
+              : pageProblems;
             return (
-              <div key={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
+              <div key={page.id} data-page-id={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
                 <div className="review-page-hd">
                   <span className="pg-num">{page.id}</span>
                   <span className="pg-count">
-                    {reviewFilter === 'all' && !reviewRiskFilter
+                    {passageOnlyReview && !allPageProblems.length
+                      ? '지문 없음'
+                      : reviewFilter === 'all' && !reviewRiskFilter
                       ? formatProblemCount(pageCounts)
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
                   </span>
@@ -3680,7 +4142,12 @@ function ReviewStage({
                 ) : (
                   <div className={`box-edit-layout ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
                     <ReviewCanvasZoomShell>
-                      <div className="review-page-canvas">
+                      <div
+                        className={`review-page-canvas ${boxEdit?.multi && boxEdit.addingSegment ? 'adding-passage-segment' : ''}`}
+                        onMouseDown={boxEdit?.multi && boxEdit.addingSegment
+                          ? (evt) => beginBoxSegmentDraw(evt, page)
+                          : undefined}
+                      >
                     {page.sourceImageUri ? (
                       <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} draggable={false} />
                     ) : (
@@ -3688,16 +4155,10 @@ function ReviewStage({
                         페이지 이미지를 불러올 수 없어요.
                       </div>
                     )}
-                    {pageProblems.map(prob => {
+                    {canvasProblems.flatMap(prob => {
                     const isEditing = boxEdit?.problemId === prob.id;
-                    const bbox = isEditing ? boxEdit.box : (prob.bbox || {});
                     const w = page.width || 1;
                     const h = page.height || 1;
-                    if (!bbox.width || !bbox.height) return null;
-                    const leftPct = (bbox.left / w) * 100;
-                    const topPct = (bbox.top / h) * 100;
-                    const widthPct = (bbox.width / w) * 100;
-                    const heightPct = (bbox.height / h) * 100;
                     const isSelected = selectedIds.has(prob.id);
                     const isActive = prob.id === activeId;
                     const status = deriveProblemStatus(prob);
@@ -3717,19 +4178,38 @@ function ReviewStage({
                     if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
                     if (hasPageChrome) tooltipParts.push('페이지 선/번호 감지');
                     if (isPassage) tooltipParts.push(`지문 ${passageGroupId}`);
-                    const classes = [
-                      'review-bbox',
-                      isPassage ? 'review-bbox-passage' : '',
-                      hasPageChrome ? 'page-chrome-artifact' : '',
-                      isSelected ? 'selected' : '',
-                      isActive ? 'active' : '',
-                      isRisky ? 'risky' : '',
-                      reviewStatusClass(status),
-                      isEditing ? 'editing' : '',
-                    ].filter(Boolean).join(' ');
-                    return (
+                    const editableBoxes = isEditing
+                      ? (boxEdit.multi
+                          ? (boxEdit.segments || []).filter(segment => segment.pageId === page.id)
+                          : [{ id: 'single-box', pageId: page.id, bbox: boxEdit.box, order: 1 }])
+                      : editableSourceSegmentsForProblem(prob).filter(segment => segment.pageId === page.id);
+                    const boxes = editableBoxes.length
+                      ? editableBoxes
+                      : (!isEditing && String(prob.sourcePageId || prob.source_page_id || page.id) === String(page.id)
+                          ? [{ id: `${prob.id}-fallback`, pageId: page.id, bbox: prob.bbox || {}, order: 1 }]
+                          : []);
+                    return boxes.filter(segment => segment.bbox?.width && segment.bbox?.height).map((segment, segmentIndex) => {
+                      const bbox = segment.bbox;
+                      const leftPct = (bbox.left / w) * 100;
+                      const topPct = (bbox.top / h) * 100;
+                      const widthPct = (bbox.width / w) * 100;
+                      const heightPct = (bbox.height / h) * 100;
+                      const segmentSelected = !boxEdit?.multi || segment.id === boxEdit.selectedSegmentId;
+                      const classes = [
+                        'review-bbox',
+                        isPassage ? 'review-bbox-passage' : '',
+                        hasPageChrome ? 'page-chrome-artifact' : '',
+                        isSelected ? 'selected' : '',
+                        isActive ? 'active' : '',
+                        isRisky ? 'risky' : '',
+                        reviewStatusClass(status),
+                        isEditing ? 'editing' : '',
+                        isEditing && boxEdit.multi ? 'passage-segment-box' : '',
+                        isEditing && segmentSelected ? 'segment-selected' : '',
+                      ].filter(Boolean).join(' ');
+                      return (
                       <div
-                        key={prob.id}
+                        key={`${prob.id}-${segment.id || segmentIndex}`}
                         className={classes}
                         style={{
                           left: `${leftPct}%`,
@@ -3737,10 +4217,13 @@ function ReviewStage({
                           width: `${widthPct}%`,
                           height: `${heightPct}%`,
                         }}
-                        onMouseDown={isEditing ? (evt) => beginBoxDrag(evt, 'move', page) : undefined}
+                        onMouseDown={isEditing
+                          ? (evt) => beginBoxDrag(evt, 'move', page, boxEdit.multi ? segment.id : null)
+                          : undefined}
                         onClick={(evt) => {
                           if (isEditing) {
                             evt.stopPropagation();
+                            if (boxEdit.multi) selectBoxEditSegment(segment.id);
                             return;
                           }
                           onBoxClick(prob.id, evt);
@@ -3748,44 +4231,68 @@ function ReviewStage({
                         title={tooltipParts.filter(Boolean).join(' · ')}
                       >
                         <div className="review-bbox-label">
-                          {bboxPrimaryLabel}
+                          {isEditing && boxEdit.multi ? `${segment.order || segmentIndex + 1} · ${bboxPrimaryLabel}` : bboxPrimaryLabel}
                           {isPassage && !isPassageFragment && <span className="review-bbox-passage-tag">지문</span>}
                           {hasPageChrome
                             ? <span className="review-bbox-risk">페이지 장식</span>
                             : isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
-                        {isEditing && (
+                        {isEditing && segmentSelected && (
                           <>
-                            <div className="crop-frame-label">영역 조정</div>
+                            <div className="crop-frame-label">{boxEdit.multi ? `${segment.order || segmentIndex + 1}번째 영역` : '영역 조정'}</div>
                             {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
                               <button
                                 key={mode}
                                 type="button"
                                 className={`crop-frame-handle ${mode}`}
                                 aria-label={`자르기 틀 ${mode}`}
-                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page)}
+                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page, boxEdit.multi ? segment.id : null)}
                                 onClick={(evt) => evt.stopPropagation()}
                               />
                             ))}
                           </>
                         )}
                       </div>
-                    );
+                      );
+                    });
                     })}
+                    {boxEditDraftBox?.pageId === page.id && boxEditDraftBox.bbox && (
+                      <div
+                        className="review-bbox editing passage-segment-box passage-segment-draft"
+                        style={{
+                          left: `${(boxEditDraftBox.bbox.left / (page.width || 1)) * 100}%`,
+                          top: `${(boxEditDraftBox.bbox.top / (page.height || 1)) * 100}%`,
+                          width: `${(boxEditDraftBox.bbox.width / (page.width || 1)) * 100}%`,
+                          height: `${(boxEditDraftBox.bbox.height / (page.height || 1)) * 100}%`,
+                        }}
+                      >
+                        <div className="crop-frame-label">새 영역</div>
+                      </div>
+                    )}
                       </div>
                     </ReviewCanvasZoomShell>
                     {boxEdit?.pageId === page.id && (
                       <BoxEditPanel
                         page={page}
+                        pages={pages}
                         problem={problemsById.get(boxEdit.problemId)}
                         displayNumber={orderMap.get(boxEdit.problemId)}
                         originalBox={boxEdit.originalBox}
                         box={boxEdit.box}
+                        originalSegments={boxEdit.originalSegments}
+                        segments={boxEdit.segments}
+                        selectedSegmentId={boxEdit.selectedSegmentId}
+                        multi={boxEdit.multi}
+                        addingSegment={boxEdit.addingSegment}
                         mode={boxEdit.mode}
                         mutating={mutating}
                         aiAvailable={aiAvailable}
                         aiBusy={aiBusy}
                         onModeChange={setBoxEditMode}
+                        onToggleAddSegment={toggleBoxEditAddSegment}
+                        onSelectSegment={selectBoxEditSegment}
+                        onDeleteSegment={deleteBoxEditSegment}
+                        onMoveSegment={moveBoxEditSegment}
                         onReset={resetBoxEdit}
                         onCancel={cancelBoxEdit}
                         onApply={applyBoxEdit}
@@ -4802,7 +5309,7 @@ function ItemsRail({
                 <span className="queue-action-icon">{Icon.pen}</span>
                 <span className="queue-action-copy">
                   <strong>수동 쪼개기</strong>
-                  <small>가운데 미리보기에서 Ctrl+휠 확대</small>
+                  <small>가운데 미리보기에서 {PRIMARY_MODIFIER_LABEL}+휠 확대</small>
                 </span>
               </button>
               {!aiAvailable && (
@@ -4820,7 +5327,7 @@ function ItemsRail({
             {selectedItemCount > 1 ? (
               <>
                 <strong>{selectedItemCount}개 선택</strong>
-                <span><kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 선택 · 드래그/Alt 이동</span>
+                <span><kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 선택 · 드래그/{ALTERNATE_MODIFIER_LABEL} 이동</span>
                 <div className="rail-selection-tools" role="group" aria-label="선택 문제 일괄 작업">
                   <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's1')} disabled={reorderBusy}>
                     1단계
@@ -4853,9 +5360,9 @@ function ItemsRail({
             ) : (
               <>
                 <span className="problem-order-icon" aria-hidden="true">{Icon.grip}</span>
-                <span><kbd>Shift</kbd> 범위 · <kbd>Ctrl/Cmd</kbd> 개별 선택</span>
+                <span><kbd>Shift</kbd> 범위 · <kbd>{PRIMARY_MODIFIER_LABEL}</kbd> 개별 선택</span>
                 <span aria-hidden="true">·</span>
-                <span>드래그 또는 <kbd>Alt</kbd> + <kbd>↑</kbd><kbd>↓</kbd> 이동</span>
+                <span>드래그 또는 <kbd>{ALTERNATE_MODIFIER_LABEL}</kbd> + <kbd>↑</kbd><kbd>↓</kbd> 이동</span>
               </>
             )}
             {reorderBusy && <strong role="status">순서 저장 중…</strong>}
@@ -4949,7 +5456,7 @@ function ItemsRail({
             aria-posinset={i + 1}
             aria-setsize={displayedItemRows.length}
             aria-describedby="problem-order-help"
-            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, Ctrl 또는 Command 개별 선택, Alt와 위아래 방향키로 순서 이동`}
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
             onClick={e => {
               if (suppressClickRef.current) return;
               selectRailItem(it.id, e);
@@ -7534,6 +8041,7 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
   const previewSession = review?.session;
   const targetPageIds = review?.pageIds || null;
   const [activePageIndex, setActivePageIndex] = useState(0);
+  const [recognitionZoom, setRecognitionZoom] = useState(1);
   const previewRef = useRef(null);
   const pages = useMemo(() => {
     const allPages = Array.isArray(previewSession?.pages) ? previewSession.pages : [];
@@ -7561,6 +8069,8 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
 
   useEffect(() => {
     setActivePageIndex(0);
+    setRecognitionZoom(1);
+    if (previewRef.current) previewRef.current.scrollTop = 0;
   }, [review?.id]);
 
   const safePageIndex = pages.length
@@ -7576,11 +8086,33 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
       riskCount: problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length,
     };
   }), [pages, problemsById]);
-  const activePageRow = pageRows[safePageIndex] || null;
+  const scrollRecognitionPageToIndex = useCallback((pageIndex) => {
+    const preview = previewRef.current;
+    if (!preview || !pageRows.length) return;
+    const nextIndex = Math.max(0, Math.min(pageRows.length - 1, pageIndex));
+    const node = preview.querySelector(`[data-recognition-page-index="${nextIndex}"]`);
+    if (!node) return;
+    const previewRect = preview.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    setActivePageIndex(nextIndex);
+    smoothScrollTo(preview, Math.max(0, preview.scrollTop + nodeRect.top - previewRect.top - 12), 220);
+  }, [pageRows.length]);
 
-  useEffect(() => {
-    if (previewRef.current) previewRef.current.scrollTop = 0;
-  }, [safePageIndex]);
+  const syncRecognitionPageIndex = useCallback((preview) => {
+    const pageNodes = Array.from(preview?.querySelectorAll?.('.recognition-page') || []);
+    if (!pageNodes.length) return;
+    const markerTop = preview.getBoundingClientRect().top + 28;
+    const visibleIndex = pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop);
+    const nextIndex = visibleIndex < 0 ? pageNodes.length - 1 : visibleIndex;
+    setActivePageIndex(previous => previous === nextIndex ? previous : nextIndex);
+  }, []);
+
+  const handleRecognitionWheel = useCallback((evt) => {
+    if (!evt.ctrlKey && !evt.metaKey) return;
+    evt.preventDefault();
+    const delta = evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP;
+    setRecognitionZoom(previous => clampReviewZoom(previous + delta));
+  }, []);
 
   if (!review) return null;
   const title = review.title || (passageOnly ? '공통 지문 페이지 확인' : '인식된 원본 페이지 확인');
@@ -7629,6 +8161,36 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
         <span className={summary.riskCount ? 'warn' : ''}>
           {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
         </span>
+        <div className="recognition-zoom-controls review-zoom-controls" role="group" aria-label="원본 페이지 배율">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="원본 페이지 축소"
+            onClick={() => setRecognitionZoom(previous => clampReviewZoom(previous - REVIEW_ZOOM_STEP))}
+            disabled={recognitionZoom <= REVIEW_ZOOM_MIN}
+          >
+            {Icon.zoomOut}
+          </button>
+          <button
+            type="button"
+            className="review-zoom-reset"
+            title="100%로 되돌리기"
+            onClick={() => setRecognitionZoom(1)}
+            disabled={Math.abs(recognitionZoom - 1) < 0.001}
+          >
+            {reviewZoomPercent(recognitionZoom)}%
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="원본 페이지 확대"
+            onClick={() => setRecognitionZoom(previous => clampReviewZoom(previous + REVIEW_ZOOM_STEP))}
+            disabled={recognitionZoom >= REVIEW_ZOOM_MAX}
+          >
+            {Icon.zoomIn}
+          </button>
+          <small>⌘+휠</small>
+        </div>
       </div>
 
       <div className="recognition-page-workspace">
@@ -7638,7 +8200,7 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
               key={row.page.id}
               className={`recognition-page-nav-item ${pageIndex === safePageIndex ? 'active' : ''}`}
               type="button"
-              onClick={() => setActivePageIndex(pageIndex)}
+              onClick={() => scrollRecognitionPageToIndex(pageIndex)}
               aria-current={pageIndex === safePageIndex ? 'page' : undefined}
             >
               <span><b>{pageIndex + 1}페이지</b></span>
@@ -7648,13 +8210,18 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
           ))}
         </nav>
 
-        <div className="recognition-preview" ref={previewRef}>
-          {activePageRow ? (() => {
-            const { page, problems: pageProblems } = activePageRow;
+        <div
+          className="recognition-preview"
+          ref={previewRef}
+          style={{ '--recognition-zoom': String(recognitionZoom) }}
+          onWheel={handleRecognitionWheel}
+          onScroll={event => syncRecognitionPageIndex(event.currentTarget)}
+        >
+          {pageRows.length ? pageRows.map(({ page, problems: pageProblems }, pageIndex) => {
             return (
-              <div key={page.id} className="recognition-page">
+              <div key={page.id} className="recognition-page" data-recognition-page-index={pageIndex}>
                 <div className="recognition-page-hd">
-                  <strong>{safePageIndex + 1} / {pages.length} 페이지</strong>
+                  <strong>{pageIndex + 1} / {pages.length} 페이지</strong>
                   <span>{formatProblemCount(countSessionProblems(pageProblems))}</span>
                   <span>{page.width}×{page.height}</span>
                 </div>
@@ -7662,24 +8229,35 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
                   {page.sourceImageUri ? (
                     <img
                       src={filePreviewUrl(page.sourceImageUri)}
-                      alt={`${safePageIndex + 1}페이지 원본`}
-                      loading="eager"
+                      alt={`${pageIndex + 1}페이지 원본`}
+                      loading={pageIndex < 2 ? 'eager' : 'lazy'}
                       decoding="async"
-                      fetchPriority="high"
+                      fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
                       draggable={false}
                     />
                   ) : (
                     <div className="recognition-page-empty">페이지 이미지를 불러올 수 없어요.</div>
                   )}
-                  {pageProblems.map((problem, index) => {
-                    const bbox = problem.bbox || {};
+                  {pageProblems.flatMap((problem, index) => {
                     const w = page.width || 1;
                     const h = page.height || 1;
-                    if (!bbox.width || !bbox.height) return null;
+                    const sourceSegments = Array.isArray(problem.sourceSegments || problem.source_segments)
+                      ? (problem.sourceSegments || problem.source_segments)
+                      : [];
+                    const pageSegments = sourceSegments.filter(segment => (
+                      String(segment?.sourcePageId || segment?.source_page_id || '') === String(page.id)
+                      && Number(segment?.bbox?.width || 0) > 0
+                      && Number(segment?.bbox?.height || 0) > 0
+                    ));
+                    const boxes = pageSegments.length
+                      ? pageSegments.map(segment => segment.bbox)
+                      : String(problem.sourcePageId || '') === String(page.id)
+                        ? [problem.bbox || {}]
+                        : [];
                     const status = deriveProblemStatus(problem);
-                    return (
+                    return boxes.filter(bbox => bbox.width && bbox.height).map((bbox, segmentIndex) => (
                       <div
-                        key={problem.id}
+                        key={`${problem.id}-${segmentIndex}`}
                         className={`recognition-box ${reviewStatusClass(status)}`}
                         style={{
                           left: `${(bbox.left / w) * 100}%`,
@@ -7689,23 +8267,26 @@ function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel })
                         }}
                         title={problem.title || problem.id}
                       >
-                        <span>{String(index + 1).padStart(2, '0')}</span>
+                        <span>
+                          {String(index + 1).padStart(2, '0')}
+                          {boxes.length > 1 ? `.${segmentIndex + 1}` : ''}
+                        </span>
                       </div>
-                    );
+                    ));
                   })}
                 </div>
               </div>
             );
-          })() : (
+          }) : (
             <div className="recognition-empty">확인할 페이지가 없습니다.</div>
           )}
           {pages.length > 1 && (
             <div className="recognition-page-stepper" role="group" aria-label="페이지 이동">
-              <button className="btn" type="button" onClick={() => setActivePageIndex(index => Math.max(0, index - 1))} disabled={safePageIndex === 0}>
+              <button className="btn" type="button" onClick={() => scrollRecognitionPageToIndex(safePageIndex - 1)} disabled={safePageIndex === 0}>
                 이전 페이지
               </button>
               <span>{safePageIndex + 1} / {pages.length}</span>
-              <button className="btn" type="button" onClick={() => setActivePageIndex(index => Math.min(pages.length - 1, index + 1))} disabled={safePageIndex === pages.length - 1}>
+              <button className="btn" type="button" onClick={() => scrollRecognitionPageToIndex(safePageIndex + 1)} disabled={safePageIndex === pages.length - 1}>
                 다음 페이지
               </button>
             </div>
@@ -10888,10 +11469,15 @@ function formatApiError(payload, fallbackMessage){
   return `${baseMessage}\n\n다음 조치:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`;
 }
 
+function isNetworkRequestError(error){
+  const raw = String(error?.message || error || '').trim();
+  return /failed to fetch|networkerror|load failed|network/i.test(raw);
+}
+
 function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   const raw = String(error?.message || error || '').trim();
-  if (/failed to fetch|networkerror|load failed|network/i.test(raw)) {
-    return `${fallbackMessage} · 로컬 앱 연결 확인`;
+  if (isNetworkRequestError(error)) {
+    return `${fallbackMessage} · 앱을 다시 실행해 주세요`;
   }
   if (/한 번에 처리할 수 있는 범위|파일을 나누어 등록/i.test(raw)) {
     return `${fallbackMessage} · 파일을 나누어 등록하세요`;
@@ -11197,6 +11783,8 @@ function App(){
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
   const recognitionInFlightRef = useRef(false);
+  const sessionRecognitionInFlightRef = useRef(false);
+  const sessionRecognitionGuardUntilRef = useRef(0);
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
   const reviewComplete = useMemo(
@@ -11581,6 +12169,7 @@ function App(){
       label: action === 'split' ? '문제를 가르는 중…'
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
+        : action === 'stitch-crop' ? '지문 영역을 이어붙이는 중…'
         : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : action === 'confirm' ? '확인 상태를 저장하는 중…'
@@ -11599,6 +12188,7 @@ function App(){
         action === 'split' ? '문제를 두 개로 갈랐어요'
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
+        : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
         : action === 'bulk-crop' ? '수동 분할을 적용했어요'
         : action === 'confirm' ? '확인 상태를 저장했어요'
         : action === 'classify' ? '자료 분류를 변경했어요'
@@ -11639,6 +12229,15 @@ function App(){
       showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
       return;
     }
+    if (
+      sessionRecognitionInFlightRef.current
+      || Date.now() < sessionRecognitionGuardUntilRef.current
+    ) {
+      showToast('이미 세션 인식 작업을 진행 중입니다');
+      return;
+    }
+    sessionRecognitionInFlightRef.current = true;
+    sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
     const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
     const problemIds = listUnique((args?.problemIds || args?.problem_ids || []).filter(Boolean));
     const isPartialRetry = Boolean(args?.partial || args?.partialRetry || args?.partial_retry) && problemIds.length > 0;
@@ -11702,6 +12301,8 @@ function App(){
         hint: e.message,
       }, 5000);
       showSimpleErrorToast(e, 'AI 재인식 실패');
+    } finally {
+      sessionRecognitionInFlightRef.current = false;
     }
   }, [session, userSettings, aiEnabled, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
 
@@ -11731,10 +12332,17 @@ function App(){
       showToast('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다');
       return;
     }
-    if (mutatingRef.current || hasRunningSessionRecognition) {
+    if (
+      mutatingRef.current
+      || hasRunningSessionRecognition
+      || sessionRecognitionInFlightRef.current
+      || Date.now() < sessionRecognitionGuardUntilRef.current
+    ) {
       showToast('진행 중인 세션 작업이 끝난 뒤 다시 시도해 주세요');
       return;
     }
+    sessionRecognitionInFlightRef.current = true;
+    sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
     const job = startBackgroundJob({
       scope: 'session-recognition',
       label: '현재 원본에서 공통 지문 추출 중',
@@ -11783,12 +12391,17 @@ function App(){
         });
         return;
       }
+      const connectionLost = isNetworkRequestError(e);
       settleBackgroundJob(job.id, {
         status: 'failed',
-        label: '공통 지문 재추출 실패',
-        hint: e.message,
+        label: connectionLost ? '로컬 앱 연결 끊김' : '공통 지문 재추출 실패',
+        hint: connectionLost
+          ? '앱을 다시 실행한 뒤 공통 지문 추출을 다시 눌러 주세요.'
+          : e.message,
       }, 5000);
       showSimpleErrorToast(e, '공통 지문 재추출 실패');
+    } finally {
+      sessionRecognitionInFlightRef.current = false;
     }
   }, [
     session,
@@ -12705,8 +13318,8 @@ function App(){
     }
     setPublished(false);
     showToast(sourceIds.length > 1
-      ? `${sourceIds.length}개 문제를 ${Math.max(0, nextIndex) + 1}번부터 함께 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`
-      : `문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요`);
+      ? `${sourceIds.length}개 문제를 ${Math.max(0, nextIndex) + 1}번부터 함께 이동했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`
+      : `문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`);
     return true;
   };
   const removeItem = async (id, options = {}) => {

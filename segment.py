@@ -71,6 +71,7 @@ LARGE_BLOCK_AREA_RATIO = 0.18
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX = 3.0
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO = 0.001
 PDF_CHOICE_MARKERS = ("①", "②", "③", "④", "⑤")
+PDF_PASSAGE_TEXT_EDGE_PADDING_PX = 4.0
 PDF_PASSAGE_RANGE_BRACKET_RE = re.compile(
     r"^\s*[\[［（(<]"
     r"(?P<start>[0-9０-９]{1,3})\s*[~\-〜－]\s*(?P<end>[0-9０-９]{1,3})\s*(?:번)?"
@@ -802,6 +803,22 @@ def _detect_pdf_visual_column_boxes(image: Image.Image) -> list[Box]:
     return sorted(columns, key=lambda column: column.left)
 
 
+def detect_pdf_visual_column_divider_x(image: Image.Image) -> float | None:
+    """Return the visual gutter/divider between two PDF body columns.
+
+    Official Korean exam pages are not always symmetric around the physical
+    page midpoint. Reusing the segmentation boundary prevents later crop
+    recovery from expanding into the neighbouring column.
+    """
+    columns = _detect_pdf_visual_column_boxes(image)
+    if len(columns) != 2:
+        return None
+    left_column, right_column = sorted(columns, key=lambda box: box.left)
+    if left_column.right >= right_column.left:
+        return None
+    return (float(left_column.right) + float(right_column.left)) * 0.5
+
+
 def _assign_pdf_marker_columns(
     image: Image.Image,
     markers: list[dict[str, Any]],
@@ -1290,7 +1307,15 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
     if not compact:
         return True
     no_space = re.sub(r"\s+", "", compact)
-    if no_space in {"국어", "영어", "화법과작문", "언어와매체"}:
+    header_label = re.sub(r"[^0-9A-Za-z가-힣]", "", no_space)
+    if header_label in {
+        "국어",
+        "영어",
+        "화법과작문",
+        "언어와매체",
+        "홀수형",
+        "짝수형",
+    }:
         return True
     if compact in {
         "고 1",
@@ -1310,6 +1335,8 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
         "영어영역",
         "영역",
     }:
+        return True
+    if re.fullmatch(r"고[123]\d{1,2}", collapsed):
         return True
     if re.fullmatch(r"[━─—\-_=·•\s]+", compact):
         return True
@@ -1376,7 +1403,13 @@ def _pdf_pre_question_text_regions(
             continue
         top = max(0.0, min(box.top for box, _text in region_lines) - padding)
         if column_index == first_column:
-            bottom = max(top + 1.0, first_box.top - max(8.0, float(image.height) * 0.004))
+            # Leave a visible gap before the first question marker, but do not
+            # pull the crop boundary so far upward that the last passage line
+            # loses its antialiased baseline on 200-DPI pages.
+            bottom = max(
+                top + 1.0,
+                first_box.top - max(6.0, float(image.height) * 0.002),
+            )
         else:
             bottom = min(
                 float(image.height),
@@ -1449,7 +1482,13 @@ def _pdf_passage_column_text_bottom(
         bottoms.append(line_box.bottom)
     if not bottoms:
         return None
-    return min(bottom, max(bottoms) + max(18.0, float(image_height) * 0.012))
+    # Text-layer boxes already include the glyph body. Keep only a small
+    # rasterization allowance here: the previous 1.2%-of-page outset could
+    # cross a lower frame/separator on high-resolution exam pages.
+    return min(
+        bottom,
+        max(bottoms) + max(PDF_PASSAGE_TEXT_EDGE_PADDING_PX, float(image_height) * 0.002),
+    )
 
 
 def _trim_pdf_passage_column_bottom_to_ink(
@@ -1493,7 +1532,9 @@ def _trim_pdf_passage_column_bottom_to_ink(
     if not meaningful_runs:
         return bottom
     last_run = meaningful_runs[-1]
-    padding = max(16.0, float(image.height) * 0.012)
+    # Stop close to the last real ink run. A large fixed tail is especially
+    # harmful when the next question begins immediately below a passage.
+    padding = max(PDF_PASSAGE_TEXT_EDGE_PADDING_PX, float(image.height) * 0.002)
     trimmed_bottom = min(bottom, float(crop_box[1] + last_run[1]) + padding)
     return trimmed_bottom if trimmed_bottom - top >= 40.0 else bottom
 
@@ -1804,7 +1845,14 @@ def _build_pdf_passage_range_blocks(
             header_center_x,
             image,
         )
-        ordered_columns = sorted(column_entries, key=lambda entry: entry[0])
+        # Passage reading order is column-major: finish the physical left
+        # column, then continue at the top of the physical right column.  Do
+        # not trust caller-provided indices here; recovered columns can arrive
+        # in detection order on rotated/noisy pages.
+        ordered_columns = sorted(
+            column_entries,
+            key=lambda entry: (float(entry[2][0]), float(entry[2][1]), entry[0]),
+        )
         current_column_markers = next(
             (
                 markers
@@ -1943,6 +1991,11 @@ def _build_pdf_passage_range_blocks(
                 and fragment_left <= (candidate_box.left + candidate_box.right) / 2.0 <= fragment_right
                 and fragment_top <= (candidate_box.top + candidate_box.bottom) / 2.0 <= fragment_bottom
                 and str(candidate.get("text") or "").strip()
+                and not _looks_like_pdf_page_header_text_line(
+                    candidate.get("text"),
+                    candidate_box,
+                    image.height,
+                )
                 and not _looks_like_pdf_footer_text_line(
                     candidate.get("text"),
                     candidate_box,
@@ -1969,7 +2022,10 @@ def _build_pdf_passage_range_blocks(
             ) if fragment_text_boxes else fragment_right
             box_bottom = max(
                 fragment_bottom,
-                *(candidate_box.bottom for candidate_box in fragment_text_boxes),
+                *(
+                    candidate_box.bottom + PDF_PASSAGE_TEXT_EDGE_PADDING_PX
+                    for candidate_box in fragment_text_boxes
+                ),
             ) if fragment_text_boxes else fragment_bottom
             box = Box.from_points(
                 max(0.0, box_left),

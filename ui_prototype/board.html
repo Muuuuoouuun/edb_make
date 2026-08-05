@@ -4859,6 +4859,28 @@
     box-shadow: 0 0 0 2px rgba(47,111,237,.35), 0 0 0 9999px rgba(13,18,30,.16);
     z-index: 9;
   }
+  .review-page-canvas.adding-passage-segment{
+    cursor: crosshair;
+  }
+  .review-bbox.editing.passage-segment-box{
+    box-shadow: 0 0 0 2px rgba(47,111,237,.28);
+    background: rgba(47,111,237,.08);
+    z-index: 8;
+  }
+  .review-bbox.editing.passage-segment-box.segment-selected{
+    border-color: var(--accent);
+    background: rgba(47,111,237,.14);
+    box-shadow: 0 0 0 3px rgba(47,111,237,.32);
+    z-index: 10;
+  }
+  .review-bbox.passage-segment-draft{
+    pointer-events: none;
+    border-style: dashed;
+    border-color: #16a34a;
+    background: rgba(22,163,74,.12);
+    box-shadow: 0 0 0 2px rgba(22,163,74,.2);
+    z-index: 12;
+  }
   .crop-frame-label{
     position: absolute;
     right: 4px;
@@ -5025,6 +5047,52 @@
     color: var(--muted-2);
     font-size: 10px;
   }
+  .box-edit-stitched-preview{
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 9px;
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-soft) 32%, var(--surface));
+  }
+  .box-edit-stitched-preview-head{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .box-edit-stitched-preview-head strong{
+    color: var(--ink);
+    font-size: 11px;
+  }
+  .box-edit-stitched-preview-head span{
+    color: var(--muted);
+    font-size: 9.5px;
+  }
+  .box-edit-stitched-fragments{
+    display: flex;
+    max-height: 310px;
+    flex-direction: column;
+    gap: 3px;
+    overflow: auto;
+    padding-right: 3px;
+  }
+  .box-edit-stitched-fragment{
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .box-edit-stitched-fragment .box-edit-preview-viewport{
+    min-height: 70px;
+    max-height: 170px;
+    border-radius: 4px;
+  }
+  .box-edit-keyboard-help{
+    color: var(--muted-2) !important;
+    font-size: 10px !important;
+  }
   .box-edit-mode{
     display: flex;
     align-items: flex-start;
@@ -5060,6 +5128,11 @@
   }
   .box-edit-warning strong{ color: #a65335; font-size: 11px; }
   .box-edit-warning span{ color: var(--muted); font-size: 10.5px; line-height: 1.4; }
+  .box-edit-warning.error{
+    border-color: rgba(220,38,38,.35);
+    background: rgba(220,38,38,.08);
+  }
+  .box-edit-warning.error strong{ color: #b91c1c; }
   .box-edit-impact{
     display: flex;
     flex-direction: column;
@@ -5081,6 +5154,74 @@
     width: 100%;
     min-height: 40px;
     justify-content: center;
+  }
+  .multi-crop-segment-section{
+    background: color-mix(in srgb, var(--accent-soft) 46%, var(--surface));
+  }
+  .multi-crop-segment-list{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .multi-crop-segment-row{
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .multi-crop-segment-row.selected{
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .multi-crop-segment-main{
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+  }
+  .multi-crop-segment-main > strong{
+    display: grid;
+    width: 24px;
+    height: 24px;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    font: 800 11px 'JetBrains Mono', monospace;
+  }
+  .multi-crop-segment-main > span{
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 11px;
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .multi-crop-segment-main small{
+    color: var(--muted);
+    font-size: 9.5px;
+    font-weight: 600;
+  }
+  .multi-crop-segment-actions{
+    display: flex;
+    gap: 2px;
+    padding-right: 5px;
+  }
+  .multi-crop-segment-actions .icon-btn{
+    width: 25px;
+    height: 25px;
   }
   .manual-split-layout{
     display: grid;
@@ -5944,12 +6085,27 @@
   }
   .recognition-page{
     overflow: hidden;
-    max-width: 920px;
+    width: calc(100% * var(--recognition-zoom, 1));
+    max-width: calc(920px * var(--recognition-zoom, 1));
     margin: 0 auto;
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--surface);
     box-shadow: var(--shadow-1);
+  }
+  .recognition-page + .recognition-page{
+    margin-top: 18px;
+  }
+  .recognition-zoom-controls{
+    margin-left: auto;
+    flex: none;
+  }
+  .recognition-zoom-controls small{
+    padding: 0 5px 0 2px;
+    color: var(--muted);
+    font-size: 9.5px;
+    font-weight: 700;
+    white-space: nowrap;
   }
   .recognition-page-hd{
     display: flex;
@@ -6014,12 +6170,20 @@
   .recognition-box.status-check-needed span{ background: #d97757; }
   .recognition-box.status-failed span{ background: var(--danger); }
   .recognition-page-stepper{
+    position: sticky;
+    bottom: 0;
     max-width: 920px;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 12px;
     margin: 14px auto 0;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    box-shadow: var(--shadow-1);
+    backdrop-filter: blur(10px);
   }
   .recognition-page-stepper span{
     min-width: 64px;
@@ -6377,6 +6541,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-c508c9e9005dfe739ad9de951018dc392480ff6716337491af22851db54c8fc0"></script>
+<script src="app.bundle.js?v=frontend-bundle-f590ecc0399a00b3a7dfa77a16172385989621efa020372ea39946d6fe2bda48"></script>
 </body>
 </html>

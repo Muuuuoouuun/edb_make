@@ -33,7 +33,17 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
     def test_compact_exam_page_headers_are_not_passage_text(self):
         top_box = Box(left=330, top=10, width=220, height=30)
 
-        for text in ("고2", "고 2", "영역", "영어영역", "국어 영역"):
+        for text in (
+            "고2",
+            "고 2",
+            "고1 11",
+            "영역",
+            "영어영역",
+            "국어 영역",
+            "홀수형",
+            "짝수형",
+            "(언어와 매체)",
+        ):
             with self.subTest(text=text):
                 self.assertTrue(
                     _looks_like_pdf_page_header_text_line(text, top_box, 1200)
@@ -449,6 +459,28 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 block for block in shared_blocks if block.metadata.get("column_index") == 2
             )
             self.assertLess(right_fragment.bbox.bottom, first_question.bbox.top)
+            right_passage_lines = [
+                line
+                for line in prepared.metadata.get("pdf_text_lines") or []
+                if "continued passage line" in str(line.get("text") or "")
+            ]
+            last_right_line_bottom = max(
+                float(line["bbox"]["bottom"])
+                for line in right_passage_lines
+            )
+            self.assertGreaterEqual(
+                right_fragment.bbox.bottom,
+                last_right_line_bottom + 3.5,
+            )
+            first_question_marker = next(
+                marker
+                for marker in prepared.metadata.get("pdf_problem_markers") or []
+                if marker.get("number") == 1
+            )
+            self.assertGreaterEqual(
+                float(first_question_marker["bbox"]["top"]) - right_fragment.bbox.bottom,
+                8.0,
+            )
 
             entries = build_problem_entries(
                 [prepared],
@@ -457,6 +489,18 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 LayoutTemplate(name="academy-default"),
             )
             passage_entry = next(entry for entry in entries if entry.problem_id == passage.unit_id)
+            self.assertEqual(
+                [1, 2],
+                [segment["column_index"] for segment in passage_entry.source_segments],
+            )
+            self.assertEqual(
+                [prepared.page_id, prepared.page_id],
+                [segment["source_page_id"] for segment in passage_entry.source_segments],
+            )
+            self.assertLess(
+                passage_entry.source_segments[0]["bbox"]["left"],
+                passage_entry.source_segments[1]["bbox"]["left"],
+            )
             with Image.open(passage_entry.crop_path) as stitched:
                 # The instruction header can be wider than the passage body;
                 # preserving its full text takes priority over forcing the

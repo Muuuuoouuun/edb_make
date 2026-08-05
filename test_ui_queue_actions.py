@@ -14,7 +14,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("페이지 전체 넣기", source)
         self.assertIn("한 페이지를 그대로 칠판에 배치", source)
         self.assertIn("수동 쪼개기", source)
-        self.assertIn("가운데 미리보기에서 Ctrl+휠 확대", source)
+        self.assertIn("가운데 미리보기에서 {PRIMARY_MODIFIER_LABEL}+휠 확대", source)
         self.assertIn("문항 AI 인식", source)
         self.assertIn("문제별 자동 분리", source)
         self.assertIn("onClick={() => processQueuedFiles('register')}", source)
@@ -114,6 +114,27 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패')", queue_source)
         self.assertNotIn("문제 인식 실패: ${e.message}", queue_source)
         self.assertNotIn("등록'} 실패: ${e.message}", queue_source)
+
+    def test_session_recognition_has_a_synchronous_double_submit_guard(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        retry_source = source.split("const retryAiSession = useCallback(async (args) => {", 1)[1]
+        retry_source = retry_source.split("const recognizeCurrentSession = useCallback", 1)[0]
+        passage_source = source.split("const reextractSharedPassagesFromSession = useCallback(async () => {", 1)[1]
+        passage_source = passage_source.split("const exportSessionImages = useCallback", 1)[0]
+
+        self.assertIn("const sessionRecognitionInFlightRef = useRef(false);", source)
+        self.assertIn("const sessionRecognitionGuardUntilRef = useRef(0);", source)
+        self.assertIn("sessionRecognitionInFlightRef.current", retry_source)
+        self.assertIn("sessionRecognitionInFlightRef.current = true;", retry_source)
+        self.assertIn("Date.now() < sessionRecognitionGuardUntilRef.current", retry_source)
+        self.assertIn("sessionRecognitionGuardUntilRef.current = Date.now() + 1500;", retry_source)
+        self.assertIn("sessionRecognitionInFlightRef.current = false;", retry_source)
+        self.assertIn("sessionRecognitionInFlightRef.current", passage_source)
+        self.assertIn("sessionRecognitionInFlightRef.current = true;", passage_source)
+        self.assertIn("Date.now() < sessionRecognitionGuardUntilRef.current", passage_source)
+        self.assertIn("sessionRecognitionGuardUntilRef.current = Date.now() + 1500;", passage_source)
+        self.assertIn("sessionRecognitionInFlightRef.current = false;", passage_source)
+        self.assertIn("앱을 다시 실행한 뒤 공통 지문 추출을 다시 눌러 주세요.", passage_source)
 
     def test_manual_split_queue_registers_without_recognition_and_opens_editor(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -226,8 +247,11 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("hasActionableReview &&", stage)
         self.assertIn("hasActionableReview ? '' : 'primary'", stage)
         self.assertNotIn('role="dialog"', stage)
-        self.assertIn("setActivePageIndex(pageIndex)", stage)
-        self.assertIn("activePageRow", stage)
+        self.assertIn("scrollRecognitionPageToIndex(pageIndex)", stage)
+        self.assertIn("pageRows.map(({ page, problems: pageProblems }, pageIndex)", stage)
+        self.assertIn("syncRecognitionPageIndex(event.currentTarget)", stage)
+        self.assertIn("onWheel={handleRecognitionWheel}", stage)
+        self.assertIn("--recognition-zoom", stage)
         self.assertIn("resolveRecognitionReviewDestination(", confirm)
         self.assertIn(
             "filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all'",
@@ -392,13 +416,13 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("영역 다시 잡기", source)
         self.assertIn("applyExpandedCrop", source)
         self.assertIn("pendingReviewSelectionProblemIdRef", source)
-        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. Enter 적용 · Esc 취소", source)
+        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소", source)
         self.assertIn("onBoxEditKeyDown", source)
         self.assertIn("aria-keyshortcuts=\"Enter\"", source)
         self.assertIn("aria-keyshortcuts=\"Escape\"", source)
         self.assertIn("MANUAL_CROP_OUTSET_MAX", source)
         self.assertIn("인식 중단", source)
-        self.assertIn('className="box-edit-panel"', source)
+        self.assertIn("className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`}", source)
         self.assertIn("onApply={applyBoxEdit}", source)
         self.assertIn("onCancel={cancelBoxEdit}", source)
         self.assertIn("void applyBoxEdit();", source)
@@ -423,7 +447,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_review_crop_apply_is_primary_rightmost_and_preserves_current_steps(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        box_edit_panel = source.split('className="box-edit-panel"', 1)[1]
+        box_edit_panel = source.split("className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`}", 1)[1]
         box_edit_panel = box_edit_panel.split("function ManualSplitEditor", 1)[0]
         cancel_index = box_edit_panel.index("취소")
         apply_index = box_edit_panel.index("(mutating ? '적용 중…' : '적용')")
@@ -451,7 +475,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("originalBox: initialBox", review_stage)
         self.assertIn("box: initialBox", review_stage)
         self.assertIn("mode: 'crop'", review_stage)
-        self.assertIn("if (!recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;", review_stage)
+        self.assertIn("if (!boxEdit.multi && !recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;", review_stage)
         self.assertIn("pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;", review_stage)
         self.assertIn("preserveProblemIdentity: true", review_stage)
         self.assertIn("collapseToSingle: true", review_stage)
@@ -476,6 +500,37 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn(".review-actionbar.is-selection{\n    align-items: flex-start;\n    flex-wrap: wrap;", html)
         self.assertIn(".review-actionbar.is-selection .review-actionbar-actions{\n    flex: 1 1 100%;", html)
         self.assertNotIn(".split-guide", html)
+
+    def test_passage_area_reset_supports_ordered_multi_page_stitching(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1].split("// ─── LEFT:", 1)[0]
+
+        self.assertIn("editableSourceSegmentsForProblem", source)
+        self.assertIn("지문 여러 영역 이어붙이기", source)
+        self.assertIn("페이지가 달라도 추가할 수 있습니다", source)
+        self.assertIn("한 지문으로 합치기", source)
+        self.assertIn("serializeBoxEditSegments", source)
+        self.assertIn("mutateSession?.('stitch-crop'", review_stage)
+        self.assertIn("mode: 'draw-segment'", review_stage)
+        self.assertIn("manual-passage-segment-", review_stage)
+        self.assertIn("moveBoxEditSegment", review_stage)
+        self.assertIn("boxEditSegmentValidation", source)
+        self.assertIn("BoxEditStitchedPreview", source)
+        self.assertIn("합친 결과", source)
+        self.assertIn("reviewSourcePageLabel", source)
+        self.assertIn("nudgeBoxEditSelection", review_stage)
+        self.assertIn("data-page-id={page.id}", review_stage)
+        self.assertIn("smoothScrollTo(wrap, targetTop, 180)", review_stage)
+        self.assertIn("const passageOnlyReview = Boolean(", review_stage)
+        self.assertIn("? '지문 없음'", review_stage)
+        self.assertIn("const pageStatus = passageOnlyReview && !pageRiskFlags.length", review_stage)
+        self.assertIn("boxEdit?.multi || !reviewScopeActive", review_stage)
+        self.assertIn("pageProblems.flatMap", source)
+        self.assertIn(".multi-crop-segment-list", html)
+        self.assertIn(".box-edit-stitched-preview", html)
+        self.assertIn(".passage-segment-draft", html)
+        self.assertNotIn("if (!manualSplit) return;\n    if (!evt.ctrlKey && !evt.metaKey) return;", review_stage)
 
     def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

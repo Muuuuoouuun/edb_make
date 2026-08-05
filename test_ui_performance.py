@@ -70,18 +70,17 @@ class TestUiPerformance(unittest.TestCase):
         self.assertNotIn("will-change", base_tile_css)
         self.assertIn("will-change: transform", positioning_css)
 
-    def test_recognition_preview_mounts_only_the_active_page_image(self) -> None:
+    def test_recognition_preview_scrolls_all_pages_but_lazily_loads_later_images(self) -> None:
         stage = self.source.split("function RecognitionPageReviewStage", 1)[1]
         stage = stage.split("function TileImage", 1)[0]
 
         self.assertIn("pageRows.map((row, pageIndex) =>", stage)
-        self.assertIn("const activePageRow = pageRows[safePageIndex]", stage)
-        self.assertIn("{activePageRow ? (() =>", stage)
-        self.assertNotIn("pages.map((page, pageIndex) =>", stage)
+        self.assertIn("pageRows.map(({ page, problems: pageProblems }, pageIndex)", stage)
+        self.assertIn('data-recognition-page-index={pageIndex}', stage)
+        self.assertIn("loading={pageIndex < 2 ? 'eager' : 'lazy'}", stage)
         self.assertEqual(stage.count("filePreviewUrl(page.sourceImageUri)"), 1)
-        self.assertIn('loading="eager"', stage)
         self.assertIn('decoding="async"', stage)
-        self.assertIn('fetchPriority="high"', stage)
+        self.assertIn("fetchPriority={pageIndex < 2 ? 'high' : 'auto'}", stage)
 
     def test_center_panels_request_display_sized_images_only(self) -> None:
         self.assertIn("const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024", self.source)

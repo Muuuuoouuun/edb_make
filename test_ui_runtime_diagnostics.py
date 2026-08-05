@@ -14,6 +14,42 @@ def run_node(script: str) -> None:
 
 
 class TestUiRuntimeDiagnostics(unittest.TestCase):
+    def test_keyboard_help_uses_native_platform_modifiers(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        platform_block = "const RUNTIME_PLATFORM" + source.split(
+            "const RUNTIME_PLATFORM", 1
+        )[1].split("function reportRuntimeDiagnostic", 1)[0]
+        run_node(
+            """
+            const vm = require('vm');
+            function labels(platform) {
+              const sandbox = { navigator: { platform } };
+              sandbox.globalThis = sandbox;
+              vm.runInNewContext(process.env.PLATFORM_BLOCK + `
+                globalThis.labels = {
+                  primary: PRIMARY_MODIFIER_LABEL,
+                  primaryName: PRIMARY_MODIFIER_NAME,
+                  alternate: ALTERNATE_MODIFIER_LABEL,
+                  alternateName: ALTERNATE_MODIFIER_NAME,
+                };
+              `, sandbox);
+              return sandbox.labels;
+            }
+            const mac = labels('MacIntel');
+            if (JSON.stringify(mac) !== JSON.stringify({
+              primary: '⌘', primaryName: 'Command', alternate: 'Option', alternateName: 'Option'
+            })) throw new Error(`unexpected mac labels: ${JSON.stringify(mac)}`);
+            const windows = labels('Win32');
+            if (JSON.stringify(windows) !== JSON.stringify({
+              primary: 'Ctrl', primaryName: 'Control', alternate: 'Alt', alternateName: 'Alt'
+            })) throw new Error(`unexpected windows labels: ${JSON.stringify(windows)}`);
+            """.replace("process.env.PLATFORM_BLOCK", repr(platform_block))
+        )
+
+        self.assertIn("<kbd>{PRIMARY_MODIFIER_LABEL}</kbd> 개별 선택", source)
+        self.assertIn("<kbd>{ALTERNATE_MODIFIER_LABEL}</kbd> +", source)
+        self.assertNotIn("<kbd>Ctrl/Cmd</kbd>", source)
+
     def test_session_revision_never_regresses_from_late_preview_response(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         revision_block = "let latestServerSessionRevision" + source.split(

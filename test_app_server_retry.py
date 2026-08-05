@@ -2143,6 +2143,218 @@ class TestSessionCropMutation(unittest.TestCase):
             with Image.open(board_path) as board_image:
                 self.assertIn("A", board_image.getbands())
 
+    def test_stitch_crop_combines_ordered_regions_across_pages_into_one_passage(self):
+        from PIL import Image, ImageDraw
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            first_page_path = tmpdir / "page-1.png"
+            second_page_path = tmpdir / "page-2.png"
+            original_path = tmpdir / "passage.png"
+            first_page = Image.new("RGB", (180, 140), "white")
+            second_page = Image.new("RGB", (180, 140), "white")
+            ImageDraw.Draw(first_page).rectangle((20, 30, 120, 100), fill="black")
+            ImageDraw.Draw(second_page).rectangle((40, 15, 150, 85), fill="black")
+            first_page.save(first_page_path)
+            second_page.save(second_page_path)
+            first_page.crop((20, 30, 121, 101)).save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [
+                    {
+                        "id": "page-1",
+                        "sourceImageUri": first_page_path.resolve().as_uri(),
+                        "problemIds": ["p0", "passage", "p1"],
+                    },
+                    {
+                        "id": "page-2",
+                        "sourceImageUri": second_page_path.resolve().as_uri(),
+                        "problemIds": ["p2"],
+                    },
+                    {"id": "page-3", "problemIds": ["passage", "p3"]},
+                ],
+                "problems": [{
+                    "id": "passage",
+                    "title": "지문 1~3",
+                    "problemNumber": 1,
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 20, "top": 30, "width": 101, "height": 71},
+                    "passageRole": "passage_fragment",
+                    "passageGroupId": "passage-1-3",
+                    "riskFlags": ["passage_cross_page_merge_check"],
+                }],
+            }
+
+            updated = app_server._mutate_stitch_crop(
+                session,
+                "passage",
+                [
+                    {
+                        "pageId": "page-2",
+                        "order": 1,
+                        "bbox": {"left": 40, "top": 15, "width": 111, "height": 71},
+                    },
+                    {
+                        "pageId": "page-1",
+                        "order": 2,
+                        "bbox": {"left": 20, "top": 30, "width": 101, "height": 71},
+                    },
+                ],
+            )
+
+            problem = updated["problems"][0]
+            self.assertEqual("passage", problem["id"])
+            self.assertEqual(1, problem["problemNumber"])
+            self.assertEqual("page-2", problem["sourcePageId"])
+            self.assertEqual(
+                ["page-2", "page-1"],
+                [segment["sourcePageId"] for segment in problem["sourceSegments"]],
+            )
+            self.assertEqual([1, 2], [segment["fragmentIndex"] for segment in problem["sourceSegments"]])
+            self.assertTrue(problem["passageFragmentsMerged"])
+            self.assertTrue(problem["manualStitch"])
+            self.assertEqual([], problem["riskFlags"])
+            self.assertEqual("normal", problem["reviewStatus"])
+            self.assertEqual(["p0", "passage", "p1"], updated["pages"][0]["problemIds"])
+            self.assertEqual(["p2", "passage"], updated["pages"][1]["problemIds"])
+            self.assertEqual(["p3"], updated["pages"][2]["problemIds"])
+            stitched_path = app_server._resolve_session_path(problem["imagePath"])
+            self.assertIsNotNone(stitched_path)
+            self.assertTrue(stitched_path.exists())
+            with Image.open(stitched_path) as stitched:
+                self.assertGreater(stitched.height, 71)
+
+    def test_stitch_crop_rejects_ambiguous_or_duplicate_regions(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 140), "white").save(page_path)
+            Image.new("RGB", (80, 60), "white").save(original_path)
+
+            def make_session():
+                return {
+                    "output_dir": str(tmpdir / "out"),
+                    "pages": [{
+                        "id": "page-1",
+                        "sourceImageUri": page_path.resolve().as_uri(),
+                        "problemIds": ["passage"],
+                    }],
+                    "problems": [{
+                        "id": "passage",
+                        "sourcePageId": "page-1",
+                        "imagePath": original_path.resolve().as_uri(),
+                        "boardRenderPath": original_path.resolve().as_uri(),
+                        "bbox": {"left": 20, "top": 20, "width": 80, "height": 60},
+                        "passageRole": "passage_fragment",
+                    }],
+                }
+
+            with self.assertRaisesRegex(ValueError, "unique order"):
+                app_server._mutate_stitch_crop(make_session(), "passage", [
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 70, "height": 50}},
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 90, "top": 10, "width": 70, "height": 50}},
+                ])
+
+            with self.assertRaisesRegex(ValueError, "duplicate regions"):
+                app_server._mutate_stitch_crop(make_session(), "passage", [
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 70, "height": 50}},
+                    {"pageId": "page-1", "order": 2, "bbox": {"left": 10, "top": 10, "width": 70, "height": 50}},
+                ])
+
+            with self.assertRaisesRegex(ValueError, "too small"):
+                app_server._mutate_stitch_crop(make_session(), "passage", [
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 7, "height": 50}},
+                ])
+
+    def test_http_session_recovers_legacy_passage_source_segments_from_pages_json(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            pages_json_path = tmpdir / "pages.json"
+            pages_json_path.write_text(json.dumps([
+                {
+                    "page_id": "page-1",
+                    "blocks": [
+                        {
+                            "block_id": "right-fragment",
+                            "reading_order": 2,
+                            "bbox": {"left": 100, "top": 10, "width": 80, "height": 90},
+                            "metadata": {
+                                "segmenter": "pdf-passage-range",
+                                "passage_range": {"start": 4, "end": 9},
+                                "passage_fragment_index": 2,
+                                "column_index": 2,
+                            },
+                        },
+                        {
+                            "block_id": "left-fragment",
+                            "reading_order": 1,
+                            "bbox": {"left": 0, "top": 20, "width": 80, "height": 100},
+                            "metadata": {
+                                "segmenter": "pdf-passage-range",
+                                "passage_range": {"start": 4, "end": 9},
+                                "passage_fragment_index": 1,
+                                "column_index": 1,
+                            },
+                        },
+                    ],
+                },
+                {
+                    "page_id": "page-2",
+                    "blocks": [{
+                        "block_id": "child-question-only",
+                        "bbox": {"left": 0, "top": 10, "width": 80, "height": 90},
+                        "metadata": {"problem_number": 5},
+                    }],
+                },
+                {
+                    "page_id": "page-3",
+                    "blocks": [{
+                        "block_id": "next-page-continuation",
+                        "reading_order": 1,
+                        "bbox": {"left": 0, "top": 5, "width": 80, "height": 45},
+                        "metadata": {
+                            "segmenter": "pdf-pre-question-passage-continuation",
+                            "passage_range": {"start": 4, "end": 9},
+                        },
+                    }],
+                },
+            ], ensure_ascii=False), encoding="utf-8")
+            session = {
+                "pages_json_path": str(pages_json_path),
+                "pages": [
+                    {"id": "page-1", "problemIds": ["passage"]},
+                    {"id": "page-2", "problemIds": []},
+                    {"id": "page-3", "problemIds": []},
+                ],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "passageRole": "passage_fragment",
+                    "passageRange": {"start": 4, "end": 9},
+                    "passageSourcePageIds": ["page-1", "page-2", "page-3"],
+                    "bbox": {"left": 0, "top": 10, "width": 180, "height": 110},
+                }],
+            }
+
+            rewritten = app_server.rewrite_session_for_http(session)
+
+            passage = rewritten["problems"][0]
+            self.assertTrue(passage["sourceSegmentsRecovered"])
+            self.assertEqual(
+                ["left-fragment", "right-fragment", "next-page-continuation"],
+                [segment["sourceBlockId"] for segment in passage["sourceSegments"]],
+            )
+            self.assertEqual(["page-1", "page-1", "page-3"], [segment["sourcePageId"] for segment in passage["sourceSegments"]])
+            self.assertEqual([0.0, 100.0, 0.0], [segment["bbox"]["left"] for segment in passage["sourceSegments"]])
+            self.assertEqual(["passage"], rewritten["pages"][0]["problemIds"])
+            self.assertEqual([], rewritten["pages"][1]["problemIds"])
+            self.assertEqual(["passage"], rewritten["pages"][2]["problemIds"])
+
     def test_bulk_crop_replaces_source_problem_with_multiple_png_entries(self):
         from PIL import Image
 

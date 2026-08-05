@@ -21,7 +21,7 @@ _COMPACT_RANGE_RE = re.compile(
 )
 
 _KOREAN_MATERIAL_NOUNS = (
-    r"글|자료|대화|담화|발표|토의|토론|작문|초고|건의문|작품|"
+    r"글|자료|대화|담화|발표|토의|토론|회의|협상|작문|초고|건의문|작품|"
     r"도표|표|그림|실험|보기|지문"
 )
 _KOREAN_MATERIAL_RE = re.compile(

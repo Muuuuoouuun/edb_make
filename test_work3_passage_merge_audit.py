@@ -417,6 +417,77 @@ class TestWork3PassageMergeAudit(unittest.TestCase):
                 )
                 self.assertNotIn("passage_fragments_merged", problem.metadata)
 
+    def test_coalescer_ignores_child_only_pages_when_fragment_pages_are_precise(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = [root / "page-1.png", root / "page-2.png"]
+            Image.new("RGB", (240, 180), (210, 30, 30)).save(paths[0])
+            Image.new("RGB", (240, 180), (30, 50, 210)).save(paths[1])
+            prepared = [
+                PreparedPage(
+                    page_id=f"page-{index}",
+                    source_path=str(path),
+                    page_number=index,
+                    image=Image.open(path).convert("RGB"),
+                    original_size=(240, 180),
+                )
+                for index, path in enumerate(paths, start=1)
+            ]
+            metadata = {
+                "passage_group_id": "passage-43-45",
+                "passage_role": "passage_fragment",
+                # page-3 contains only a child question and must not block the
+                # merge of the two actual passage fragments.
+                "passage_source_page_ids": ["page-1", "page-2", "page-3"],
+                "passage_fragment_source_page_ids": ["page-1", "page-2"],
+                "passage_fragment_count": 3,
+            }
+            problems = [
+                ProblemUnit(
+                    unit_id=f"fragment-{index}",
+                    subject=Subject.KOREAN,
+                    title="passage",
+                    metadata=dict(metadata),
+                )
+                for index in (1, 2)
+            ]
+            pages = [
+                PageModel(
+                    page_id=f"page-{index}",
+                    width_px=240,
+                    height_px=180,
+                    subject=Subject.KOREAN,
+                    source_path=str(paths[index - 1]),
+                    problems=[problems[index - 1]],
+                )
+                for index in (1, 2)
+            ]
+            drafts = [
+                self._make_draft(root, f"fragment-{index}", prepared[index - 1], paths[index - 1])
+                for index in (1, 2)
+            ]
+            for index, draft in enumerate(drafts, start=1):
+                draft.source_segments = [
+                    {
+                        "source_page_id": f"page-{index}",
+                        "fragment_index": index,
+                        "bbox": {"left": 10, "top": 20, "width": 200, "height": 140},
+                    }
+                ]
+
+            merged, _sizes = _coalesce_cross_page_passage_drafts(
+                drafts,
+                [(240, 180), (240, 180)],
+                pages,
+            )
+
+            self.assertEqual(["fragment-1"], [item.problem_id for item in merged])
+            self.assertEqual(
+                ["page-1", "page-2"],
+                [segment["source_page_id"] for segment in merged[0].source_segments],
+            )
+            self.assertTrue(problems[0].metadata["passage_fragments_merged"])
+
     def test_coalescer_orders_five_pages_and_removes_duplicate_draft(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

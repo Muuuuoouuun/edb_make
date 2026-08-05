@@ -189,6 +189,10 @@ def recrop_problem(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "recrop_problem", *args, **kwargs)
 
 
+def _stitch_passage_image_files(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_stitch_passage_image_files", *args, **kwargs)
+
+
 def resolve_subject(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "resolve_subject", *args, **kwargs)
 
@@ -3268,6 +3272,10 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
 
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten = json.loads(json.dumps(session))
+    _backfill_passage_source_segments(
+        rewritten,
+        pages_json_pages=_session_pages_json_pages(session),
+    )
     rewritten["edb_file_uri"] = path_to_api_url(
         session.get("edb_path") or session.get("edbPath") or session.get("edb_file_uri") or session.get("edbFileUri")
     )
@@ -3301,6 +3309,168 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
         # endpoints to re-open with PIL.
         page["sourceImageUri"] = path_to_api_url(page.get("sourceImagePath") or page.get("sourceImageUri"))
     return rewritten
+
+
+def _passage_range_key(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        start = int(value.get("start"))
+        end = int(value.get("end"))
+    except (TypeError, ValueError):
+        return None
+    return (start, end) if start > 0 and end >= start else None
+
+
+def _problem_passage_range_key(problem: dict[str, Any]) -> tuple[int, int] | None:
+    metadata = problem.get("metadata") if isinstance(problem.get("metadata"), dict) else {}
+    for value in (
+        problem.get("passageRange"),
+        problem.get("passage_range"),
+        metadata.get("passage_range"),
+    ):
+        passage_range = _passage_range_key(value)
+        if passage_range is not None:
+            return passage_range
+    return None
+
+
+def _backfill_passage_source_segments(
+    session: dict[str, Any],
+    *,
+    pages_json_pages: list[dict[str, Any]] | None = None,
+) -> int:
+    """Recover exact passage fragments for sessions created before sourceSegments.
+
+    The legacy UI session retained only a union bbox, even though pages.json still
+    contains the original left-to-right and cross-page passage blocks.  Restrict
+    recovery to matching passage ranges and known source pages so child-question
+    pages are never promoted to passage fragments merely because they share a
+    passage group.
+    """
+    structured_pages = pages_json_pages if pages_json_pages is not None else _session_pages_json_pages(session)
+    if not structured_pages:
+        return 0
+
+    session_pages_by_id = {
+        str(page.get("id") or page.get("page_id") or "").strip(): page
+        for page in (session.get("pages") or [])
+        if isinstance(page, dict) and str(page.get("id") or page.get("page_id") or "").strip()
+    }
+
+    candidates: dict[tuple[int, int], list[tuple[int, float, float, str, dict[str, Any], dict[str, Any]]]] = {}
+    for page_index, page in enumerate(structured_pages):
+        page_id = str(page.get("page_id") or page.get("id") or "").strip()
+        if not page_id:
+            continue
+        for block_index, block in enumerate(page.get("blocks") or []):
+            if not isinstance(block, dict):
+                continue
+            metadata = block.get("metadata") if isinstance(block.get("metadata"), dict) else {}
+            segmenter = str(metadata.get("segmenter") or "").strip().lower()
+            marker_kind = str(metadata.get("marker_kind") or "").strip().lower()
+            if "passage" not in segmenter and marker_kind not in {"passage_range", "passage_continuation"}:
+                continue
+            passage_range = _passage_range_key(metadata.get("passage_range"))
+            bbox = block.get("bbox") if isinstance(block.get("bbox"), dict) else {}
+            try:
+                width = float(bbox.get("width") or 0)
+                height = float(bbox.get("height") or 0)
+            except (TypeError, ValueError):
+                continue
+            if passage_range is None or width <= 0 or height <= 0:
+                continue
+            raw_order = metadata.get("passage_fragment_index", block.get("reading_order", block_index + 1))
+            try:
+                within_page_order = float(raw_order)
+            except (TypeError, ValueError):
+                within_page_order = float(block_index + 1)
+            try:
+                left = float(bbox.get("left") or 0)
+            except (TypeError, ValueError):
+                left = 0.0
+            candidates.setdefault(passage_range, []).append(
+                (page_index, within_page_order, left, page_id, block, metadata)
+            )
+
+    recovered = 0
+    for problem in session.get("problems") or []:
+        if not isinstance(problem, dict):
+            continue
+        existing = problem.get("sourceSegments") or problem.get("source_segments")
+        if isinstance(existing, list) and existing:
+            continue
+        if problem.get("manualStitch") or problem.get("manual_stitch"):
+            continue
+        role = str(problem.get("passageRole") or problem.get("passage_role") or "").strip().lower()
+        if role not in {"passage_fragment", "shared_passage", "passage"}:
+            continue
+        passage_range = _problem_passage_range_key(problem)
+        if passage_range is None:
+            continue
+        source_page_ids = {
+            str(page_id).strip()
+            for page_id in (
+                problem.get("passageSourcePageIds")
+                or problem.get("passage_source_page_ids")
+                or []
+            )
+            if str(page_id or "").strip()
+        }
+        matched = [
+            item for item in candidates.get(passage_range, [])
+            if not source_page_ids or item[3] in source_page_ids
+        ]
+        if not matched:
+            continue
+        matched.sort(key=lambda item: (item[0], item[1], item[2]))
+        source_segments: list[dict[str, Any]] = []
+        for fragment_index, (_page_index, _within_order, _left, page_id, block, metadata) in enumerate(matched, start=1):
+            bbox = block.get("bbox") or {}
+            normalized_bbox = {
+                "left": float(bbox.get("left") or 0),
+                "top": float(bbox.get("top") or 0),
+                "width": float(bbox.get("width") or 0),
+                "height": float(bbox.get("height") or 0),
+            }
+            raw_column_index = metadata.get("column_index", fragment_index)
+            try:
+                column_index = int(raw_column_index)
+            except (TypeError, ValueError):
+                column_index = fragment_index
+            source_segments.append({
+                "sourcePageId": page_id,
+                "source_page_id": page_id,
+                "sourceBlockId": str(block.get("block_id") or ""),
+                "source_block_id": str(block.get("block_id") or ""),
+                "fragmentIndex": fragment_index,
+                "fragment_index": fragment_index,
+                "columnIndex": column_index,
+                "column_index": column_index,
+                "bbox": normalized_bbox,
+                "recoveredFromPagesJson": True,
+                "recovered_from_pages_json": True,
+            })
+        problem["sourceSegments"] = source_segments
+        problem["source_segments"] = list(source_segments)
+        problem["sourceSegmentsRecovered"] = True
+        problem["source_segments_recovered"] = True
+        problem_id = str(problem.get("id") or "").strip()
+        if problem_id:
+            for page_id in dict.fromkeys(segment["sourcePageId"] for segment in source_segments):
+                page = session_pages_by_id.get(page_id)
+                if page is None:
+                    continue
+                raw_problem_ids = page.get("problemIds")
+                if not isinstance(raw_problem_ids, list):
+                    raw_problem_ids = page.get("problem_ids")
+                problem_ids = [str(value) for value in (raw_problem_ids or []) if str(value or "").strip()]
+                if problem_id not in problem_ids:
+                    problem_ids.append(problem_id)
+                page["problemIds"] = problem_ids
+                page["problem_ids"] = list(problem_ids)
+        recovered += 1
+    return recovered
 
 
 def _find_problem(session: dict[str, Any], problem_id: str) -> tuple[int, dict[str, Any]]:
@@ -4608,6 +4778,206 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     problem["preserve_media_regions"] = list(preserved_regions)
     if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
         _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
+    _refresh_session_problem_counts(session)
+    return session
+
+
+def _mutate_stitch_crop(
+    session: dict[str, Any],
+    problem_id: str,
+    segments: Any,
+) -> dict[str, Any]:
+    """Replace one problem with an ordered stitch of page-level crop boxes."""
+    _index, problem = _find_problem(session, problem_id)
+    raw_segments = segments if isinstance(segments, list) else []
+    if not raw_segments:
+        raise ValueError("segments is required")
+    if len(raw_segments) > 32:
+        raise ValueError("segments must contain at most 32 regions")
+
+    page_cache: dict[str, tuple[dict[str, Any], Path, int, int]] = {}
+    normalized: list[tuple[str, Box, int]] = []
+    from PIL import Image
+
+    for index, raw_segment in enumerate(raw_segments, start=1):
+        segment = raw_segment if isinstance(raw_segment, dict) else {}
+        page_id = str(
+            segment.get("pageId")
+            or segment.get("page_id")
+            or segment.get("sourcePageId")
+            or segment.get("source_page_id")
+            or ""
+        ).strip()
+        if not page_id:
+            raise ValueError(f"segments[{index - 1}].pageId is required")
+        if page_id not in page_cache:
+            page = _find_page(session, page_id)
+            source_path = _resolve_session_path(
+                page.get("sourceImagePath") or page.get("sourceImageUri")
+            )
+            if source_path is None or not source_path.exists():
+                raise FileNotFoundError(f"page image missing for {page_id}: {source_path}")
+            with Image.open(source_path) as page_image:
+                image_width, image_height = page_image.size
+            page_cache[page_id] = (page, source_path, image_width, image_height)
+        _page, _source_path, image_width, image_height = page_cache[page_id]
+        raw_box = (
+            segment.get("bbox")
+            or segment.get("cropBox")
+            or segment.get("crop_box")
+            or segment
+        )
+        box = _coerce_crop_box(raw_box, image_width=image_width, image_height=image_height)
+        if box.width < 8 or box.height < 8:
+            raise ValueError(f"segments[{index - 1}] is too small (minimum 8x8 px)")
+        raw_order = segment.get("order", segment.get("fragmentIndex", segment.get("fragment_index", index)))
+        try:
+            order = int(raw_order)
+        except (TypeError, ValueError):
+            raise ValueError(f"segments[{index - 1}].order must be an integer") from None
+        if order < 1:
+            raise ValueError(f"segments[{index - 1}].order must be positive")
+        normalized.append((page_id, box, order))
+
+    orders = [order for _page_id, _box, order in normalized]
+    if len(set(orders)) != len(orders):
+        raise ValueError("segments must have unique order values")
+
+    for left_index, (left_page_id, left_box, _left_order) in enumerate(normalized):
+        for right_page_id, right_box, _right_order in normalized[left_index + 1:]:
+            if left_page_id != right_page_id:
+                continue
+            intersection_width = max(0.0, min(left_box.right, right_box.right) - max(left_box.left, right_box.left))
+            intersection_height = max(0.0, min(left_box.bottom, right_box.bottom) - max(left_box.top, right_box.top))
+            intersection_area = intersection_width * intersection_height
+            union_area = left_box.area + right_box.area - intersection_area
+            overlap = intersection_area / union_area if union_area > 0 else 0.0
+            if overlap >= 0.98:
+                raise ValueError("segments contain duplicate regions on the same page")
+
+    normalized.sort(key=lambda item: item[2])
+    crop_dir = _crop_dir_for_session(session)
+    stitched_path = crop_dir / _make_crop_filename(problem_id, "manual_stitch")
+    with tempfile.TemporaryDirectory(prefix=".manual-stitch-", dir=str(crop_dir)) as raw_tmp:
+        temp_dir = Path(raw_tmp)
+        fragment_paths: list[Path] = []
+        for index, (page_id, box, _order) in enumerate(normalized, start=1):
+            source_path = page_cache[page_id][1]
+            fragment_path = temp_dir / f"fragment-{index:03d}.png"
+            _crop_image_by_bbox(source_path, box, fragment_path)
+            fragment_paths.append(fragment_path)
+        _stitch_passage_image_files(
+            fragment_paths,
+            stitched_path,
+            transparent=False,
+        )
+
+    board_uri = stitched_path.resolve().as_uri()
+    if _crop_refreshes_board_render(problem):
+        board_path = crop_dir / _make_crop_filename(problem_id, "manual_stitch_board")
+        _render_board_crop_from_raw(stitched_path, board_path, problem)
+        board_uri = board_path.resolve().as_uri()
+
+    source_segments: list[dict[str, Any]] = []
+    for fragment_index, (page_id, box, _order) in enumerate(normalized, start=1):
+        bbox = {
+            "left": box.left,
+            "top": box.top,
+            "width": box.width,
+            "height": box.height,
+        }
+        source_segments.append({
+            "sourcePageId": page_id,
+            "source_page_id": page_id,
+            "fragmentIndex": fragment_index,
+            "fragment_index": fragment_index,
+            "columnIndex": fragment_index,
+            "column_index": fragment_index,
+            "bbox": bbox,
+        })
+
+    first_page_id, first_box, _first_order = normalized[0]
+    first_source_path = page_cache[first_page_id][1]
+    first_bbox = {
+        "left": first_box.left,
+        "top": first_box.top,
+        "width": first_box.width,
+        "height": first_box.height,
+    }
+    source_page_ids = list(dict.fromkeys(page_id for page_id, _box, _order in normalized))
+
+    problem["sourcePageId"] = first_page_id
+    problem["source_page_id"] = first_page_id
+    problem["sourceImagePath"] = first_source_path.resolve().as_uri()
+    problem["bbox"] = first_bbox
+    problem["sourceSegments"] = source_segments
+    problem["source_segments"] = list(source_segments)
+    problem["imagePath"] = stitched_path.resolve().as_uri()
+    problem["boardRenderPath"] = board_uri
+    problem["recordMode"] = "image-only"
+    problem["textRecordCount"] = 0
+    problem["imageRecordCount"] = 1
+    problem["manualStitch"] = True
+    problem["manual_stitch"] = True
+    problem["passageSourcePageIds"] = source_page_ids
+    problem["passage_source_page_ids"] = list(source_page_ids)
+    problem["passageFragmentsMerged"] = len(source_segments) > 1
+    problem["passage_fragments_merged"] = len(source_segments) > 1
+    problem["passageFragmentCount"] = len(source_segments)
+    problem["passage_fragment_count"] = len(source_segments)
+    problem["passageMergedSourcePageIds"] = source_page_ids
+    problem["passage_merged_source_page_ids"] = list(source_page_ids)
+    problem["passageMergedFragmentCount"] = len(source_segments)
+    problem["passage_merged_fragment_count"] = len(source_segments)
+    problem["manualCrop"] = {
+        "leftRatio": 0.0,
+        "rightRatio": 0.0,
+        "topRatio": 0.0,
+        "bottomRatio": 0.0,
+    }
+    problem["manual_crop"] = dict(problem["manualCrop"])
+    problem["preserveMediaRegions"] = []
+    problem["preserve_media_regions"] = []
+    problem["riskFlags"] = []
+    problem["risk_flags"] = []
+    problem["reviewStatus"] = "normal"
+    problem["review_status"] = "normal"
+    for key in (
+        "cropBaseBbox",
+        "cropBaseImagePath",
+        "cropBaseBoardRenderPath",
+        "cropBasePreserveMediaRegions",
+    ):
+        problem.pop(key, None)
+
+    metadata = problem.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["passage_source_page_ids"] = list(source_page_ids)
+        metadata["passage_fragments_merged"] = len(source_segments) > 1
+        metadata["passage_fragment_count"] = len(source_segments)
+        metadata["passage_merged_source_page_ids"] = list(source_page_ids)
+        metadata["passage_merged_fragment_count"] = len(source_segments)
+        metadata["manual_stitch"] = True
+
+    previous_positions: dict[str, int] = {}
+    for page in session.get("pages", []) or []:
+        if not isinstance(page, dict):
+            continue
+        ids = [str(raw_id) for raw_id in (page.get("problemIds") or page.get("problem_ids") or []) if raw_id]
+        if problem_id in ids:
+            previous_positions[str(page.get("id") or "")] = ids.index(problem_id)
+        next_ids = [current_id for current_id in ids if current_id != problem_id]
+        page["problemIds"] = next_ids
+        page["problem_ids"] = list(next_ids)
+    for page_id in source_page_ids:
+        page = page_cache[page_id][0]
+        ids = [str(raw_id) for raw_id in (page.get("problemIds") or []) if raw_id]
+        insertion_index = min(previous_positions.get(page_id, len(ids)), len(ids))
+        ids.insert(insertion_index, problem_id)
+        page["problemIds"] = ids
+        page["problem_ids"] = list(ids)
+
+    _refresh_mutated_crop_layout(problem, stitched_path)
     _refresh_session_problem_counts(session)
     return session
 
@@ -7455,7 +7825,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json(response)
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "bulk-crop" | "exclude" | "classify", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session, current_revision = self._current_session_state()
@@ -7496,6 +7866,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if raw_crop is None:
                     raw_crop = payload
                 new_session = _mutate_crop(session, problem_id, raw_crop)
+            elif action in {"stitch-crop", "stitch_crop"}:
+                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                segments = payload.get("segments")
+                new_session = _mutate_stitch_crop(session, problem_id, segments)
             elif action in {"bulk-crop", "bulk_crop"}:
                 page_id = str(payload.get("pageId") or payload.get("page_id") or "")
                 regions = payload.get("regions")
@@ -7527,7 +7901,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|confirm|classify|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|classify|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return

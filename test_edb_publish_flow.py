@@ -768,24 +768,22 @@ class TestEdbPublishFlow(unittest.TestCase):
         image = Image.new("RGB", (240, 220), "white")
         draw = ImageDraw.Draw(image)
         draw.text((112, 8), "(B)", fill="black")
-        draw.rectangle((30, 42, 210, 160), outline="black", width=2)
-        draw.line((8, 0, 8, 219), fill="black", width=2)
-        draw.line((8, 168, 17, 168), fill="black", width=2)
-        draw.line((21, 168, 24, 168), fill="black", width=2)
-        draw.line((232, 0, 232, 219), fill="black", width=2)
-        draw.line((216, 32, 220, 32), fill="black", width=2)
-        draw.line((224, 32, 232, 32), fill="black", width=2)
+        draw.rectangle((14, 42, 226, 160), outline="black", width=2)
+        draw.line((4, 0, 4, 219), fill="black", width=2)
+        draw.line((4, 168, 10, 168), fill="black", width=2)
+        draw.line((235, 0, 235, 219), fill="black", width=2)
+        draw.line((229, 32, 235, 32), fill="black", width=2)
         draw.rectangle((180, 195, 181, 197), fill="black")
 
         cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
 
         self.assertEqual(image.size, cleaned.size)
-        self.assertEqual((255, 255, 255), cleaned.getpixel((8, 80)))
-        self.assertEqual((255, 255, 255), cleaned.getpixel((20, 168)))
-        self.assertEqual((255, 255, 255), cleaned.getpixel((232, 80)))
-        self.assertEqual((255, 255, 255), cleaned.getpixel((220, 32)))
-        self.assertEqual((255, 255, 255), cleaned.getpixel((180, 196)))
-        self.assertEqual((0, 0, 0), cleaned.getpixel((30, 80)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((4, 80)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((10, 168)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((235, 80)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((229, 32)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((180, 196)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((14, 80)))
         self.assertLess(
             cleaned.convert("L").crop((96, 0, 144, 32)).getextrema()[0],
             200,
@@ -795,7 +793,7 @@ class TestEdbPublishFlow(unittest.TestCase):
         image = Image.new("RGB", (500, 640), "white")
         draw = ImageDraw.Draw(image)
         draw.line((12, 0, 12, 639), fill="black", width=2)
-        draw.rectangle((36, 52, 478, 620), outline="black", width=2)
+        draw.rectangle((25, 52, 478, 620), outline="black", width=2)
         draw.text((52, 16), "[26 ~ 28] passage", fill="black")
         draw.text((52, 84), "first glyph must stay", fill="black")
         # Repeated answer underlines are long enough to be frame candidates,
@@ -808,11 +806,43 @@ class TestEdbPublishFlow(unittest.TestCase):
         cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
 
         self.assertEqual((255, 255, 255), cleaned.getpixel((12, 300)))
-        self.assertEqual((0, 0, 0), cleaned.getpixel((36, 300)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((25, 300)))
         self.assertLess(
             cleaned.convert("L").crop((48, 80, 90, 104)).getextrema()[0],
             200,
         )
+
+    def test_passage_cleanup_does_not_erase_text_beside_an_inner_material_box(self):
+        image = Image.new("RGB", (240, 220), "white")
+        draw = ImageDraw.Draw(image)
+        # A long outer rule and tightly spaced glyph-like strokes model a
+        # speaker label.  The smaller material box is intentionally cleaner
+        # and therefore easier for the frame detector to find.
+        draw.line((8, 0, 8, 219), fill="black", width=2)
+        for left in (13, 22, 31, 40):
+            draw.rectangle((left, 80, left + 5, 88), fill="black")
+        draw.rectangle((48, 42, 228, 190), outline="black", width=2)
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual(image.tobytes(), cleaned.tobytes())
+        self.assertEqual((0, 0, 0), cleaned.getpixel((14, 84)))
+
+    def test_passage_cleanup_prefers_vertical_frame_over_repeated_underlines(self):
+        image = Image.new("RGB", (240, 220), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((4, 0, 4, 180), fill="black", width=2)  # page divider
+        draw.line((14, 0, 14, 219), fill="black", width=2)  # passage frame
+        draw.line((228, 0, 228, 219), fill="black", width=2)
+        for y in (48, 82, 116, 150):
+            draw.line((48, y, 210, y), fill="black", width=2)
+        draw.rectangle((31, 176, 38, 184), fill="black")  # first glyph
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual((255, 255, 255), cleaned.getpixel((4, 100)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((14, 100)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((34, 180)))
 
     def test_passage_stitch_collapses_duplicate_edge_padding(self):
         first = Image.new("RGB", (240, 220), "white")
@@ -873,14 +903,31 @@ class TestEdbPublishFlow(unittest.TestCase):
             Box(240, 40, 120, 320),
             image_width=400,
         )
-        self.assertEqual(200.0, right_column.left)
-        self.assertEqual(184.0, right_column.width)
+        self.assertEqual(206.0, right_column.left)
+        self.assertEqual(178.0, right_column.width)
         left_column = problem_board._expand_passage_source_bounds_horizontally(
             Box(40, 40, 120, 320),
             image_width=400,
         )
         self.assertEqual(16.0, left_column.left)
-        self.assertEqual(184.0, left_column.width)
+        self.assertEqual(178.0, left_column.width)
+
+    def test_passage_source_bounds_exclude_off_center_column_divider(self):
+        left_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(40, 40, 120, 320),
+            image_width=400,
+            column_divider_x=180.0,
+        )
+        right_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(200, 40, 120, 320),
+            image_width=400,
+            column_divider_x=180.0,
+        )
+
+        self.assertEqual(174.0, left_column.right)
+        self.assertEqual(186.0, right_column.left)
+        self.assertLess(left_column.right, 180.0)
+        self.assertGreater(right_column.left, 180.0)
 
     def test_passage_segment_source_bounds_recover_vertical_edge_glyphs(self):
         expanded = problem_board._expand_passage_segment_source_bounds(
@@ -893,6 +940,43 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertEqual(0.0, expanded.top)
         self.assertEqual(248.0, expanded.width)
         self.assertEqual(400.0, expanded.height)
+
+    def test_stitched_passage_does_not_apply_a_second_vertical_outset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = Image.new("RGB", (400, 400), "white")
+            draw = ImageDraw.Draw(source)
+            draw.text((40, 96), "first passage fragment", fill="black")
+            draw.text((240, 216), "second passage fragment", fill="black")
+            task = problem_board._ProblemAssetTask(
+                source_image=source,
+                bounds=Box(32, 80, 320, 240),
+                segment_bounds=(
+                    Box(32, 80, 128, 80),
+                    Box(224, 200, 128, 80),
+                ),
+                crop_path=root / "crop.png",
+                board_render_path=root / "board.png",
+                chalk_color=(238, 238, 226),
+                trim_edge_guides=False,
+                preserve_horizontal_bounds=True,
+                pad_edges=False,
+            )
+            captured_heights: list[int] = []
+            original_compose = problem_board._compose_passage_segments
+
+            def capture_segments(images, **kwargs):
+                captured_heights.extend(image.height for image in images)
+                return original_compose(images, **kwargs)
+
+            with mock.patch.object(
+                problem_board,
+                "_compose_passage_segments",
+                side_effect=capture_segments,
+            ):
+                problem_board._render_problem_asset(task)
+
+            self.assertEqual([80, 80], captured_heights)
 
     def test_text_priority_source_bounds_recover_only_crossing_glyphs(self):
         image = Image.new("RGB", (600, 400), "white")
@@ -2332,6 +2416,98 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["continued-line-1"], problem["passagePreQuestionContinuationBlockIds"])
             self.assertEqual(["continued-line-1"], problem["passage_pre_question_continuation_block_ids"])
 
+    def test_ui_session_keeps_ordered_passage_boxes_on_every_source_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_paths = [root / "page-1.png", root / "page-2.png"]
+            crop_path = root / "passage.png"
+            for source_path in source_paths:
+                Image.new("RGB", (900, 1200), "white").save(source_path)
+            Image.new("RGB", (600, 900), "white").save(crop_path)
+            prepared_pages = [
+                PreparedPage(
+                    page_id=f"page-{index}",
+                    source_path=str(source_path),
+                    page_number=index,
+                    image=Image.open(source_path).convert("RGB"),
+                    original_size=(900, 1200),
+                )
+                for index, source_path in enumerate(source_paths, start=1)
+            ]
+            pages = [
+                PageModel(
+                    page_id=f"page-{index}",
+                    width_px=900,
+                    height_px=1200,
+                    subject=Subject.KOREAN,
+                    source_path=str(source_path),
+                )
+                for index, source_path in enumerate(source_paths, start=1)
+            ]
+            placement = {
+                "problem_id": "passage-1",
+                "title": "지문 1~3",
+                "problem_number": None,
+                "subject": "korean",
+                "source_page_id": "page-1",
+                "source_path": str(source_paths[0]),
+                "crop_path": str(crop_path),
+                "board_render_path": str(crop_path),
+                "actual_content_height_pages": 1.0,
+                "overflow_allowed": True,
+                "overflow_violation": False,
+                "overflow_amount_pages": 0.0,
+                "slot_span_count": 1,
+                "start_y_pages": 0.0,
+                "snapped_next_start_y_pages": 1.2,
+                "placement_x_ratio": 0.0,
+                "placement_y_ratio": 0.0,
+                "placement_scale_ratio": 1.0,
+                "record_mode": "image-only",
+                "processing_step": "raw",
+                "text_record_count": 0,
+                "image_record_count": 1,
+                "bbox": {"left": 40, "top": 60, "width": 820, "height": 1080},
+                "source_segments": [
+                    {
+                        "source_page_id": "page-1",
+                        "column_index": 1,
+                        "fragment_index": 1,
+                        "bbox": {"left": 40, "top": 500, "width": 390, "height": 620},
+                    },
+                    {
+                        "source_page_id": "page-1",
+                        "column_index": 2,
+                        "fragment_index": 2,
+                        "bbox": {"left": 470, "top": 60, "width": 390, "height": 760},
+                    },
+                    {
+                        "source_page_id": "page-2",
+                        "column_index": 1,
+                        "fragment_index": 3,
+                        "bbox": {"left": 40, "top": 60, "width": 390, "height": 420},
+                    },
+                ],
+                "risk_flags": [],
+            }
+
+            ui_session = build_problem_ui_session(
+                prepared_pages,
+                [placement],
+                root / "out",
+                None,
+                source_paths,
+                record_mode="image-only",
+                pages=pages,
+            )
+
+            problem = ui_session["problems"][0]
+            self.assertEqual(
+                ["page-1", "page-1", "page-2"],
+                [segment["sourcePageId"] for segment in problem["sourceSegments"]],
+            )
+            self.assertEqual([["passage-1"], ["passage-1"]], [page["problemIds"] for page in ui_session["pages"]])
+
     def test_ui_session_links_cross_page_passage_child_questions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3698,6 +3874,123 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertGreater(primary.metadata.get("passage_text_character_count", 0), 40)
             self.assertTrue(passage_entry.board_render_path.is_file())
 
+    def test_nested_question_material_is_not_exported_as_a_passage(self):
+        parent_group = "page-1-passage-11-14"
+        page_1 = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="passage-11-14",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=120, width=380, height=600),
+                    reading_order=0,
+                    text="[11~14] 다음 글을 읽고 물음에 답하시오.",
+                ),
+                ContentBlock(
+                    block_id="q11",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=120, width=380, height=240),
+                    reading_order=1,
+                    text="11. 첫 문항",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id=parent_group,
+                    subject=Subject.KOREAN,
+                    title="지문 11~14",
+                    stem_block_ids=["passage-11-14"],
+                    metadata={
+                        "passage_group_id": parent_group,
+                        "passage_range": {"start": 11, "end": 14},
+                        "passage_role": "passage_fragment",
+                        "passage_child_problem_numbers": [11, 12, 13, 14],
+                        "shared_passage_block_ids": ["passage-11-14"],
+                    },
+                ),
+                ProblemUnit(
+                    unit_id="q11",
+                    subject=Subject.KOREAN,
+                    title="11.",
+                    stem_block_ids=["q11"],
+                    metadata={
+                        "problem_number": 11,
+                        "passage_group_id": parent_group,
+                        "passage_range": {"start": 11, "end": 14},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [11, 12, 13, 14],
+                    },
+                ),
+            ],
+        )
+        nested_group = "page-2-passage-13-14"
+        page_2 = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="material-13-14",
+                    block_type=BlockType.IMAGE,
+                    bbox=Box(left=40, top=120, width=380, height=300),
+                    reading_order=0,
+                    text="[13~14] <보기>를 참고하시오.",
+                    metadata={"shared_passage": True},
+                ),
+                ContentBlock(
+                    block_id="q13",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=460, width=380, height=260),
+                    reading_order=1,
+                    text="13. 자료 문항",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id=nested_group,
+                    subject=Subject.KOREAN,
+                    title="지문 13~14",
+                    figure_block_ids=["material-13-14"],
+                    metadata={
+                        "passage_group_id": nested_group,
+                        "passage_range": {"start": 13, "end": 14},
+                        "passage_role": "passage_fragment",
+                        "passage_child_problem_numbers": [13, 14],
+                        "shared_passage_block_ids": ["material-13-14"],
+                        "supplemental_item": True,
+                    },
+                ),
+                ProblemUnit(
+                    unit_id="q13",
+                    subject=Subject.KOREAN,
+                    title="13.",
+                    stem_block_ids=["q13"],
+                    metadata={
+                        "problem_number": 13,
+                        "passage_group_id": nested_group,
+                        "passage_range": {"start": 13, "end": 14},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [13, 14],
+                    },
+                ),
+            ],
+        )
+
+        problem_board._annotate_cross_page_passage_groups([page_1, page_2])
+
+        material = next(problem for problem in page_2.problems if problem.unit_id == nested_group)
+        child = next(problem for problem in page_2.problems if problem.unit_id == "q13")
+        self.assertEqual("question_material_fragment", material.metadata.get("passage_role"))
+        self.assertTrue(material.metadata.get("nested_passage_suppressed"))
+        self.assertFalse(problem_board._problem_matches_content_target(material, "shared-passages"))
+        self.assertEqual(parent_group, child.metadata.get("passage_group_id"))
+        self.assertEqual({"start": 11, "end": 14}, child.metadata.get("passage_range"))
+        self.assertFalse(page_2.blocks[0].metadata.get("shared_passage"))
+
     def test_later_child_page_content_is_not_materialized_as_passage_continuation(self):
         page_1 = PageModel(
             page_id="page-1",
@@ -3785,6 +4078,114 @@ class TestEdbPublishFlow(unittest.TestCase):
             problem.metadata.get("passage_pre_question_continuation")
             for problem in page_2.problems
         ))
+
+    def test_completed_passage_group_is_not_revived_by_next_page_numbered_material(self):
+        group_id = "page-1-passage-1-2"
+        page_1 = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            metadata={"source_type": "pdf", "segmenter": "pdf-text-markers"},
+            blocks=[
+                ContentBlock(
+                    block_id="passage-1-2",
+                    block_type=BlockType.IMAGE,
+                    bbox=Box(left=40, top=720, width=820, height=420),
+                    reading_order=0,
+                    metadata={"shared_passage": True},
+                ),
+                ContentBlock(
+                    block_id="q1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=100, width=380, height=240),
+                    reading_order=1,
+                    text="1. 첫 문항",
+                ),
+                ContentBlock(
+                    block_id="q2",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=100, width=380, height=240),
+                    reading_order=2,
+                    text="2. 둘째 문항",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id=group_id,
+                    subject=Subject.KOREAN,
+                    title="지문 1~2",
+                    figure_block_ids=["passage-1-2"],
+                    metadata={
+                        "passage_group_id": group_id,
+                        "passage_range": {"start": 1, "end": 2},
+                        "passage_role": "passage_fragment",
+                        "passage_child_problem_numbers": [1, 2],
+                        "shared_passage_block_ids": ["passage-1-2"],
+                    },
+                ),
+                *[
+                    ProblemUnit(
+                        unit_id=f"page-1-problem-{number}",
+                        subject=Subject.KOREAN,
+                        title=f"{number}.",
+                        stem_block_ids=[f"q{number}"],
+                        metadata={
+                            "problem_number": number,
+                            "passage_group_id": group_id,
+                            "passage_range": {"start": 1, "end": 2},
+                            "passage_role": "child_question",
+                            "passage_child_problem_numbers": [1, 2],
+                        },
+                    )
+                    for number in (1, 2)
+                ],
+            ],
+        )
+        page_2 = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            metadata={
+                "source_type": "pdf",
+                "segmenter": "pdf-text-markers",
+                "pdf_pre_question_text_regions": [
+                    {
+                        "before_problem_number": 1,
+                        "column_index": 1,
+                        "bbox": {"left": 40, "top": 80, "right": 420, "bottom": 500},
+                    }
+                ],
+            },
+            blocks=[
+                ContentBlock(
+                    block_id="page-2-material-1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=520, width=380, height=120),
+                    reading_order=0,
+                    text="1. 도표 안의 항목 번호",
+                )
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="page-2-material-1",
+                    subject=Subject.KOREAN,
+                    title="1.",
+                    stem_block_ids=["page-2-material-1"],
+                    metadata={"problem_number": 1},
+                )
+            ],
+        )
+
+        problem_board._annotate_cross_page_passage_groups([page_1, page_2])
+
+        self.assertFalse(any(
+            problem.metadata.get("cross_page_passage_inferred")
+            for problem in page_2.problems
+        ))
+        self.assertIsNone(page_2.problems[0].metadata.get("passage_group_id"))
+        self.assertEqual(["page-1"], page_1.problems[0].metadata.get("passage_source_page_ids"))
 
     def test_numbered_question_before_first_passage_child_is_not_swallowed(self):
         page = PageModel(
