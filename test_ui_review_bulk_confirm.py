@@ -36,6 +36,8 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertIn("전체 ${confirmedIds.size}개 확인 완료", on_confirm)
         self.assertIn("await mutateSession('confirm', { problemIds: [...confirmedIds] })", on_confirm)
         self.assertNotIn("postRestore(nextSession)", on_confirm)
+        self.assertIn("return nextSession;", on_confirm)
+        self.assertIn("return false;", on_confirm)
 
     def test_final_and_bulk_confirmation_move_directly_to_board_preview(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -84,12 +86,29 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
         self.assertIn("review-completion-bar", review_stage)
-        self.assertIn("마지막 항목을 확인하면 칠판 미리보기가 자동으로 열립니다.", review_stage)
-        self.assertIn("확인하고 칠판 보기", review_stage)
+        self.assertIn("확인하면 다음 항목이 자동으로 선택됩니다.", review_stage)
+        self.assertIn("마지막 확인 · 칠판 보기", review_stage)
+        self.assertIn("확인하고 다음", review_stage)
         self.assertIn("칠판 미리보기", review_stage)
         self.assertIn("onOpenBoard", review_stage)
         self.assertIn(".review-completion-bar", html)
         self.assertIn(".review-completion-primary", html)
+        self.assertIn(".review-completion-shortcut", html)
+
+    def test_review_confirmation_advances_and_has_a_keyboard_shortcut(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+
+        self.assertIn("const confirmSelectedAndAdvance = useCallback(async () => {", review_stage)
+        self.assertIn("sessionReviewSummary(confirmedSession).unresolvedReviewProblemIds", review_stage)
+        self.assertIn("focusReviewProblem(nextProblemId)", review_stage)
+        self.assertIn("normalizedProblemId.startsWith('page:')", review_stage)
+        self.assertIn("다음 확인 페이지", review_stage)
+        self.assertIn("evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey)", review_stage)
+        self.assertIn('aria-keyshortcuts="Meta+Enter Control+Enter"', review_stage)
+        self.assertIn("review-completion-shortcut", review_stage)
+        self.assertNotIn("그대로 확인", review_stage)
 
     def test_review_top_toolbars_use_grouped_reusable_components(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

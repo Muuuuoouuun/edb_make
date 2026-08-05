@@ -4708,16 +4708,42 @@
     flex: 0 0 auto;
   }
   .review-completion-primary{
-    min-height: 42px;
-    padding: 0 16px;
+    min-width: 216px;
+    min-height: 48px;
+    padding: 0 10px 0 16px;
     background: var(--accent) !important;
     border-color: var(--accent) !important;
     color: white !important;
     font-weight: 750;
     white-space: nowrap;
+    justify-content: space-between;
+    gap: 14px;
+    box-shadow: 0 8px 18px rgba(47,111,237,.22);
   }
   .review-completion-primary:hover{
     background: var(--accent-ink) !important;
+  }
+  .review-completion-primary-label{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+  }
+  .review-completion-shortcut{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 42px;
+    height: 28px;
+    padding: 0 7px;
+    border: 1px solid rgba(255,255,255,.38);
+    border-radius: 7px;
+    background: rgba(255,255,255,.14);
+    color: white;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
   }
   @media (max-width: 1100px){
     .review-toolbar-guidance{
@@ -4759,6 +4785,13 @@
     }
     .review-completion-help{
       flex-basis: 240px;
+    }
+    .review-completion-actions,
+    .review-completion-primary{
+      flex: 1 1 220px;
+    }
+    .review-completion-primary{
+      width: 100%;
     }
   }
   .review-summary-strip{
@@ -6541,6 +6574,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-f590ecc0399a00b3a7dfa77a16172385989621efa020372ea39946d6fe2bda48"></script>
+<script src="app.bundle.js?v=frontend-bundle-d901d72330b4a1349b831be8df66cf1c755ebd4416de41d48f5cec026914d546"></script>
 </body>
 </html>

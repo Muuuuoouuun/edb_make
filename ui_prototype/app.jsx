@@ -2284,8 +2284,14 @@ function ReviewStage({
     () => new Set(reviewSummary.unresolvedReviewProblemIds || []),
     [reviewSummary.unresolvedReviewProblemIds]
   );
-  const selectedUnresolvedProblemIds = selectedList.filter(id => unresolvedProblemIdSet.has(id));
+  const selectedUnresolvedProblemIds = useMemo(
+    () => selectedActionIds.filter(id => unresolvedProblemIdSet.has(id)),
+    [selectedActionIds, unresolvedProblemIdSet]
+  );
   const nextUnresolvedProblemId = (reviewSummary.unresolvedReviewProblemIds || [])[0] || null;
+  const nextUnresolvedIsPage = String(nextUnresolvedProblemId || '').startsWith('page:');
+  const nextUnresolvedAfterSelectionId = (reviewSummary.unresolvedReviewProblemIds || [])
+    .find(id => !selectedUnresolvedProblemIds.includes(id)) || null;
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
   const selectedCanBoxEdit = Boolean(
@@ -3112,11 +3118,84 @@ function ReviewStage({
     setSelectedIds(new Set(visibleReviewScope.problemIds));
     if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
-  const selectNextUnresolvedProblem = () => {
-    if (!nextUnresolvedProblemId) return;
-    setSelectedIds(new Set([nextUnresolvedProblemId]));
-    if (setActive) setActive(nextUnresolvedProblemId);
-  };
+  const scrollReviewPageIntoView = useCallback((pageId) => {
+    const normalizedPageId = String(pageId || '').trim();
+    if (!normalizedPageId) return;
+    window.requestAnimationFrame(() => {
+      const wrap = reviewWrapRef.current;
+      if (!wrap) return;
+      const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+      const targetIndex = pageNodes.findIndex(
+        node => String(node.dataset?.pageId || '') === normalizedPageId
+      );
+      if (targetIndex < 0) return;
+      const target = pageNodes[targetIndex];
+      const wrapRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+      reviewScrollTopRef.current = targetTop;
+      setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
+      smoothScrollTo(wrap, targetTop, 220);
+    });
+  }, []);
+  const focusReviewProblem = useCallback((problemId) => {
+    const normalizedProblemId = String(problemId || '').trim();
+    if (!normalizedProblemId) return;
+    if (normalizedProblemId.startsWith('page:')) {
+      setSelectedIds(new Set());
+      scrollReviewPageIntoView(normalizedProblemId.slice(5));
+      return;
+    }
+    setSelectedIds(new Set([normalizedProblemId]));
+    if (setActive) setActive(normalizedProblemId);
+    scrollReviewPageIntoView(problemsById.get(normalizedProblemId)?.sourcePageId);
+  }, [problemsById, scrollReviewPageIntoView, setActive, setSelectedIds]);
+  const selectNextUnresolvedProblem = useCallback(() => {
+    focusReviewProblem(nextUnresolvedProblemId);
+  }, [focusReviewProblem, nextUnresolvedProblemId]);
+  const confirmSelectedAndAdvance = useCallback(async () => {
+    if (mutating || selectedUnresolvedProblemIds.length === 0) return false;
+    const confirmedSession = await onConfirm?.(null, {
+      problemIds: selectedUnresolvedProblemIds,
+      bulk: true,
+    });
+    if (!confirmedSession) return false;
+    const nextProblemId = Array.isArray(confirmedSession?.problems)
+      ? (sessionReviewSummary(confirmedSession).unresolvedReviewProblemIds || [])[0]
+      : nextUnresolvedAfterSelectionId;
+    if (nextProblemId) focusReviewProblem(nextProblemId);
+    return true;
+  }, [
+    focusReviewProblem,
+    mutating,
+    nextUnresolvedAfterSelectionId,
+    onConfirm,
+    selectedUnresolvedProblemIds,
+  ]);
+
+  useEffect(() => {
+    if (reviewEditorActive || reviewFlow.complete) return undefined;
+    const onReviewConfirmKey = (evt) => {
+      if (evt.defaultPrevented || evt.repeat || mutating || isEditableKeyboardTarget(evt.target)) return;
+      if (evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey) || evt.altKey) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      if (selectedUnresolvedProblemIds.length > 0) {
+        void confirmSelectedAndAdvance();
+      } else {
+        selectNextUnresolvedProblem();
+      }
+    };
+    window.addEventListener('keydown', onReviewConfirmKey);
+    return () => window.removeEventListener('keydown', onReviewConfirmKey);
+  }, [
+    confirmSelectedAndAdvance,
+    mutating,
+    reviewEditorActive,
+    reviewFlow.complete,
+    selectNextUnresolvedProblem,
+    selectedUnresolvedProblemIds.length,
+  ]);
 
   useEffect(() => {
     if (manualSplit || selectedActionIds.length === 0) return undefined;
@@ -3753,15 +3832,7 @@ function ReviewStage({
           </div>
         )}
         <div className="review-action-group review-action-group-status">
-          <span className="review-action-group-label">처리</span>
-          <button
-            className="btn soft-success"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: selectedList, bulk: true })}
-            disabled={mutating}
-          >
-            {Icon.check} 그대로 확인 {selectedList.length}
-          </button>
+          <span className="review-action-group-label">선택</span>
           <button className="btn danger" type="button" onClick={doExclude} disabled={mutating}>
             {Icon.trash} 제외 {selectedList.length}
           </button>
@@ -4316,9 +4387,11 @@ function ReviewStage({
             <span className="review-completion-help">
               {reviewFlow.complete
                 ? '모든 확인이 끝났어요. 칠판 배치를 바로 확인해 보세요.'
+                : selectedUnresolvedProblemIds.length === 0 && nextUnresolvedIsPage
+                  ? `문항이 없는 실패 페이지를 확인해야 합니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 해당 페이지로 이동하세요.`
                 : reviewFlow.remaining === 1
-                  ? '마지막 항목을 확인하면 칠판 미리보기가 자동으로 열립니다.'
-                  : '선택한 문제를 확인하면 다음 검수 항목으로 이어집니다.'}
+                  ? `마지막 항목입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
+                  : `확인하면 다음 항목이 자동으로 선택됩니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 빠르게 진행하세요.`}
             </span>
             <div className="review-completion-actions">
               {reviewFlow.complete ? (
@@ -4329,10 +4402,20 @@ function ReviewStage({
                 <button
                   className="btn primary review-completion-primary"
                   type="button"
-                  onClick={() => onConfirm?.(null, { problemIds: selectedUnresolvedProblemIds, bulk: true })}
+                  onClick={confirmSelectedAndAdvance}
                   disabled={mutating}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 확인`}
                 >
-                  {Icon.check} {reviewFlow.remaining === selectedUnresolvedProblemIds.length ? '확인하고 칠판 보기' : `선택 확인 완료 ${selectedUnresolvedProblemIds.length}`}
+                  <span className="review-completion-primary-label">
+                    {Icon.check}
+                    {reviewFlow.remaining === selectedUnresolvedProblemIds.length
+                      ? '마지막 확인 · 칠판 보기'
+                      : selectedUnresolvedProblemIds.length === 1
+                        ? '확인하고 다음'
+                        : `${selectedUnresolvedProblemIds.length}개 확인하고 다음`}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
                 </button>
               ) : (
                 <button
@@ -4340,8 +4423,13 @@ function ReviewStage({
                   type="button"
                   onClick={selectNextUnresolvedProblem}
                   disabled={mutating || !nextUnresolvedProblemId}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 다음 확인 ${nextUnresolvedIsPage ? '페이지 이동' : '항목 선택'}`}
                 >
-                  다음 확인 항목 보기 {Icon.arrowRight}
+                  <span className="review-completion-primary-label">
+                    {nextUnresolvedIsPage ? '다음 확인 페이지' : '다음 확인 항목'} {Icon.arrowRight}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
                 </button>
               )}
             </div>
@@ -4931,7 +5019,7 @@ function ItemsRail({
         ? `${result.selectedIds.length}개 문제를 선택했습니다.`
         : '문제 선택을 해제했습니다.'
     );
-    return true;
+    return nextSession;
   };
 
   const toggleRecentSessionsCollapsed = () => {
@@ -13424,7 +13512,7 @@ function App(){
       ? explicitProblemIds
       : options.bulk ? items.map(item => item.id) : [id];
     const confirmedIds = new Set(targetIds.filter(Boolean));
-    if (!confirmedIds.size) return;
+    if (!confirmedIds.size) return false;
     if (!session) {
       const allItemsConfirmedByBulk = options.bulk
         && items.length > 0
@@ -13442,11 +13530,11 @@ function App(){
           ? `전체 ${confirmedIds.size}개 확인 완료`
           : `"${items.find(i=>i.id===id)?.name}" 확인 완료`);
       }
-      return;
+      return true;
     }
     const beforeFlow = reviewFlowState(sessionReviewSummary(session));
     const nextSession = await mutateSession('confirm', { problemIds: [...confirmedIds] });
-    if (!nextSession) return;
+    if (!nextSession) return false;
     const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));
     if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk)) {
       setReviewFocus(null);
@@ -13455,6 +13543,7 @@ function App(){
         ? '일괄 확인 완료 · 칠판 미리보기로 이동했어요'
         : '검수 완료 · 칠판 미리보기로 이동했어요');
     }
+    return nextSession;
   };
 
   const markClassinReviewComplete = useCallback(async () => {
