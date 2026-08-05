@@ -104,11 +104,27 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertIn("sessionReviewSummary(confirmedSession).unresolvedReviewProblemIds", review_stage)
         self.assertIn("focusReviewProblem(nextProblemId)", review_stage)
         self.assertIn("normalizedProblemId.startsWith('page:')", review_stage)
-        self.assertIn("다음 확인 페이지", review_stage)
+        self.assertIn("페이지 검수 시작", review_stage)
+        self.assertIn("지문 없음 확인하고 다음", review_stage)
+        self.assertIn("mutateSession?.('confirm-page'", review_stage)
+        self.assertIn("reviewFlowState(confirmedSummary).complete", review_stage)
+        self.assertIn("onOpenBoard?.()", review_stage)
         self.assertIn("evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey)", review_stage)
         self.assertIn('aria-keyshortcuts="Meta+Enter Control+Enter"', review_stage)
         self.assertIn("review-completion-shortcut", review_stage)
         self.assertNotIn("그대로 확인", review_stage)
+
+    def test_review_screen_has_only_one_confirmation_domain(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        box_editor = source.split("function BoxEditPanel", 1)[1].split("function ManualSplitEditor", 1)[0]
+
+        self.assertIn("view !== 'review'", side_panel)
+        self.assertIn("처리 방식 적용", side_panel)
+        self.assertIn("전체 처리 적용", side_panel)
+        self.assertNotIn("<button className=\"btn\" disabled={!item}>건너뛰기</button>", side_panel)
+        self.assertIn("합치고 다음 검수", box_editor)
 
     def test_review_top_toolbars_use_grouped_reusable_components(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

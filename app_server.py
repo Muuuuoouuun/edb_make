@@ -4196,12 +4196,16 @@ def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:
             for flag in (page.get("riskFlags") or page.get("risk_flags") or [])
             if str(flag or "").strip()
         }
-        if not page_flags.intersection(actionable_flags):
-            continue
+        page_status = str(page.get("reviewStatus") or page.get("review_status") or "").strip().lower()
+        page_confirmed = bool(page.get("pageReviewConfirmed") or page.get("page_review_confirmed"))
         page_problem_ids = [str(pid) for pid in (page.get("problemIds") or page.get("problem_ids") or []) if pid]
         if page_problem_ids:
-            actionable_problem_ids.update(page_problem_ids)
-        else:
+            if page_flags.intersection(actionable_flags) or page_status in {"check_needed", "failed"}:
+                actionable_problem_ids.update(page_problem_ids)
+        elif not page_confirmed and (
+            page_status in {"check_needed", "failed"}
+            or bool(page_flags.intersection(actionable_flags))
+        ):
             actionable_page_count += 1
     actionable_needs_review_count = len(actionable_problem_ids) + actionable_page_count
     return {
@@ -5512,6 +5516,55 @@ def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]
             page["risk_flags"] = []
             page["reviewStatus"] = "normal"
             page["review_status"] = "normal"
+    return session
+
+
+def _mutate_confirm_pages(
+    session: dict[str, Any],
+    page_ids: Any,
+    *,
+    decision: str = "no_passage",
+) -> dict[str, Any]:
+    """Resolve review-only pages that intentionally contain no extracted item.
+
+    A page without problem ids cannot be sent through ``_mutate_confirm``.  Keep
+    an explicit decision on the page so the review target remains part of the
+    stable progress denominator after it is resolved.
+    """
+    ids = set(_coerce_problem_ids(page_ids))
+    if not ids:
+        raise ValueError("pageIds is required")
+    normalized_decision = str(decision or "no_passage").strip().lower().replace("-", "_")
+    if normalized_decision not in {"no_passage"}:
+        raise ValueError(f"unsupported page review decision: {decision}")
+
+    pages = session.get("pages")
+    if not isinstance(pages, list):
+        raise ValueError("session pages are missing")
+    available_pages = {
+        str(page.get("id")): page
+        for page in pages
+        if isinstance(page, dict) and page.get("id")
+    }
+    missing = sorted(ids - set(available_pages))
+    if missing:
+        raise ValueError(f"page not found: {', '.join(missing)}")
+
+    for page_id in ids:
+        page = available_pages[page_id]
+        problem_ids = page.get("problemIds")
+        if not isinstance(problem_ids, list):
+            problem_ids = page.get("problem_ids")
+        if any(problem_ids or []):
+            raise ValueError(f"page still has review items: {page_id}")
+        page["riskFlags"] = []
+        page["risk_flags"] = []
+        page["reviewStatus"] = "normal"
+        page["review_status"] = "normal"
+        page["pageReviewConfirmed"] = True
+        page["page_review_confirmed"] = True
+        page["pageReviewDecision"] = normalized_decision
+        page["page_review_decision"] = normalized_decision
     return session
 
 
@@ -7825,7 +7878,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json(response)
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "classify", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "confirm" | "confirm-page" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session, current_revision = self._current_session_state()
@@ -7887,6 +7940,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if ids_raw is None:
                     ids_raw = [payload.get("problemId", payload.get("problem_id"))]
                 new_session = _mutate_confirm(session, ids_raw)
+            elif action in {"confirm-page", "confirm_page"}:
+                ids_raw = payload.get("pageIds", payload.get("page_ids"))
+                if ids_raw is None:
+                    ids_raw = [payload.get("pageId", payload.get("page_id"))]
+                decision = str(payload.get("decision") or "no_passage")
+                new_session = _mutate_confirm_pages(session, ids_raw, decision=decision)
             elif action == "classify":
                 classification = str(payload.get("classification") or "")
                 ids_raw = payload.get("problemIds", payload.get("problem_ids"))
@@ -7901,7 +7960,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|classify|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|confirm-page|classify|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return

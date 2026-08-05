@@ -1255,7 +1255,7 @@ function BoxEditPanel({
         >
           {recognizeMode ? Icon.wand : Icon.check}{' '}
           {multi
-            ? (mutating ? '이어붙이는 중…' : '한 지문으로 합치기')
+            ? (mutating ? '이어붙이는 중…' : '합치고 다음 검수')
             : recognizeMode
             ? (aiBusy ? '인식 중…' : '다시 인식')
             : (mutating ? '적용 중…' : '적용')}
@@ -2001,6 +2001,7 @@ function ReviewStage({
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
   const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
+  const [focusedPageReviewTargetId, setFocusedPageReviewTargetId] = useState('');
   const reviewFilter = reviewUi?.filter || 'all';
   const reviewRiskFilter = reviewUi?.riskFilter || null;
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
@@ -2077,8 +2078,26 @@ function ReviewStage({
     const pendingProblemId = String(pendingReviewSelectionProblemIdRef.current || '').trim();
     pendingReviewSelectionProblemIdRef.current = '';
     if (pendingProblemId) {
+      if (pendingProblemId.startsWith('page:')) {
+        const pendingPageId = pendingProblemId.slice(5);
+        setSelectedIds(new Set());
+        setFocusedPageReviewTargetId(pendingProblemId);
+        window.requestAnimationFrame(() => {
+          const wrap = reviewWrapRef.current;
+          const target = wrap?.querySelector?.(`.review-page[data-page-id="${CSS.escape(pendingPageId)}"]`);
+          if (!wrap || !target) return;
+          const wrapRect = wrap.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+          reviewScrollTopRef.current = targetTop;
+          smoothScrollTo(wrap, targetTop, 220);
+        });
+        setBoxEdit(null);
+        return;
+      }
       const nextProblem = (session?.problems || []).find(problem => String(problem?.id || '') === pendingProblemId);
       if (nextProblem) {
+        setFocusedPageReviewTargetId('');
         setSelectedIds(new Set([pendingProblemId]));
         if (setActive) setActive(pendingProblemId);
         setBoxEdit(null);
@@ -2190,33 +2209,49 @@ function ReviewStage({
     : null;
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
+  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
   const statusCounts = useMemo(() => {
     const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(scopedProblems);
-    if (helperCounts) return helperCounts;
-    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
+    const counts = helperCounts
+      ? { ...helperCounts }
+      : { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
     const passageGroups = new Set();
     scopedProblems.forEach(problem => {
+      const passageGroupId = passageGroupIdFor(problem);
+      if (passageGroupId) {
+        passageGroups.add(passageGroupId);
+      }
+      if (helperCounts) return;
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
-      const passageGroupId = passageGroupIdFor(problem);
-      if (passageGroupId) {
-        counts.passage += 1;
-        passageGroups.add(passageGroupId);
-      }
+      if (passageGroupId) counts.passage += 1;
     });
-    counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
-    counts.passageGroups = passageGroups.size;
+    if (!helperCounts) {
+      counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
+      counts.passageGroups = passageGroups.size;
+    }
+    (reviewSummary.reviewTargets || [])
+      .filter(target => target?.type === 'page')
+      .filter(target => !reviewScopeActive || reviewScopePageIdSet.has(target.pageId))
+      .forEach(target => {
+        const status = normalizeReviewStatus(target.status) || 'check_needed';
+        counts.all += 1;
+        counts[status] = (counts[status] || 0) + 1;
+      });
     return counts;
-  }, [scopedProblems]);
+  }, [reviewScopeActive, reviewScopePageIdSet, reviewSummary.reviewTargets, scopedProblems]);
   const sessionCounts = useMemo(
     () => reviewScopeActive ? countSessionProblems(scopedProblems) : sessionProblemCounts(session),
     [reviewScopeActive, scopedProblems, session]
   );
-  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
   const passageReviewProblemIds = useMemo(
     () => new Set(reviewSummary.passageReviewProblemIds || []),
     [reviewSummary.passageReviewProblemIds]
+  );
+  const reviewTargetById = useMemo(
+    () => new Map((reviewSummary.reviewTargets || []).map(target => [target.id, target])),
+    [reviewSummary.reviewTargets]
   );
   const riskFilterHasProblemMatches = useMemo(() => {
     if (!reviewRiskFilter) return false;
@@ -2237,12 +2272,18 @@ function ReviewStage({
       const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
       const hasProblemRisk = scopedPageProblems
         .some(problem => deriveProblemStatus(problem) !== 'normal');
-      if (pageStatus === 'failed' || (Array.isArray(pageFlags) && pageFlags.length) || !scopedPageProblems.length || hasProblemRisk) {
+      const pageTarget = reviewTargetById.get(pageReviewTargetId(page));
+      if (
+        pageStatus === 'failed'
+        || (Array.isArray(pageFlags) && pageFlags.length)
+        || pageTarget?.status === 'check_needed'
+        || hasProblemRisk
+      ) {
         ids.push(page.id);
       }
     });
     return listUnique(ids.filter(Boolean));
-  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
+  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet, reviewTargetById]);
   const activeReviewFilter = reviewFilter !== 'all' || Boolean(reviewRiskFilter) || reviewScopeActive;
   const visibleReviewScope = useMemo(() => {
     const retryPageIdSet = new Set();
@@ -2288,8 +2329,18 @@ function ReviewStage({
     () => selectedActionIds.filter(id => unresolvedProblemIdSet.has(id)),
     [selectedActionIds, unresolvedProblemIdSet]
   );
-  const nextUnresolvedProblemId = (reviewSummary.unresolvedReviewProblemIds || [])[0] || null;
-  const nextUnresolvedIsPage = String(nextUnresolvedProblemId || '').startsWith('page:');
+  const nextUnresolvedTarget = (reviewSummary.unresolvedReviewTargets || [])[0] || null;
+  const nextUnresolvedProblemId = nextUnresolvedTarget?.id
+    || (reviewSummary.unresolvedReviewProblemIds || [])[0]
+    || null;
+  const nextUnresolvedIsPage = nextUnresolvedTarget
+    ? nextUnresolvedTarget.type === 'page'
+    : String(nextUnresolvedProblemId || '').startsWith('page:');
+  const nextUnresolvedPageFocused = Boolean(
+    nextUnresolvedIsPage
+    && focusedPageReviewTargetId
+    && focusedPageReviewTargetId === nextUnresolvedProblemId
+  );
   const nextUnresolvedAfterSelectionId = (reviewSummary.unresolvedReviewProblemIds || [])
     .find(id => !selectedUnresolvedProblemIds.includes(id)) || null;
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
@@ -2953,7 +3004,6 @@ function ReviewStage({
         if (result) setBoxEdit(null);
         return;
       }
-      pendingReviewSelectionProblemIdRef.current = boxEdit.problemId;
       const nextSession = boxEdit.multi
         ? await mutateSession?.('stitch-crop', {
             problemId: boxEdit.problemId,
@@ -2964,6 +3014,7 @@ function ReviewStage({
             cropBox: boxEdit.box,
           });
       if (nextSession) {
+        pendingReviewSelectionProblemIdRef.current = sessionReviewSummary(nextSession).unresolvedReviewTargets?.[0]?.id || '';
         setBoxEditDraftBox(null);
         setBoxEdit(null);
       } else {
@@ -3143,9 +3194,11 @@ function ReviewStage({
     if (!normalizedProblemId) return;
     if (normalizedProblemId.startsWith('page:')) {
       setSelectedIds(new Set());
+      setFocusedPageReviewTargetId(normalizedProblemId);
       scrollReviewPageIntoView(normalizedProblemId.slice(5));
       return;
     }
+    setFocusedPageReviewTargetId('');
     setSelectedIds(new Set([normalizedProblemId]));
     if (setActive) setActive(normalizedProblemId);
     scrollReviewPageIntoView(problemsById.get(normalizedProblemId)?.sourcePageId);
@@ -3172,6 +3225,24 @@ function ReviewStage({
     onConfirm,
     selectedUnresolvedProblemIds,
   ]);
+  const confirmPageAndAdvance = useCallback(async (pageId) => {
+    const normalizedPageId = String(pageId || '').trim().replace(/^page:/, '');
+    if (mutating || !normalizedPageId) return false;
+    const confirmedSession = await mutateSession?.('confirm-page', {
+      pageIds: [normalizedPageId],
+      decision: 'no_passage',
+    });
+    if (!confirmedSession) return false;
+    const confirmedSummary = sessionReviewSummary(confirmedSession);
+    const nextTargetId = confirmedSummary.unresolvedReviewTargets?.[0]?.id || null;
+    setFocusedPageReviewTargetId('');
+    if (nextTargetId) {
+      focusReviewProblem(nextTargetId);
+    } else if (reviewFlowState(confirmedSummary).complete) {
+      onOpenBoard?.();
+    }
+    return true;
+  }, [focusReviewProblem, mutateSession, mutating, onOpenBoard]);
 
   useEffect(() => {
     if (reviewEditorActive || reviewFlow.complete) return undefined;
@@ -3182,6 +3253,8 @@ function ReviewStage({
       evt.stopPropagation();
       if (selectedUnresolvedProblemIds.length > 0) {
         void confirmSelectedAndAdvance();
+      } else if (nextUnresolvedPageFocused) {
+        void confirmPageAndAdvance(nextUnresolvedProblemId);
       } else {
         selectNextUnresolvedProblem();
       }
@@ -3190,10 +3263,13 @@ function ReviewStage({
     return () => window.removeEventListener('keydown', onReviewConfirmKey);
   }, [
     confirmSelectedAndAdvance,
+    confirmPageAndAdvance,
     mutating,
     reviewEditorActive,
     reviewFlow.complete,
     selectNextUnresolvedProblem,
+    nextUnresolvedPageFocused,
+    nextUnresolvedProblemId,
     selectedUnresolvedProblemIds.length,
   ]);
 
@@ -4124,15 +4200,30 @@ function ReviewStage({
             const pageProblems = allPageProblems
               .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
               .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
-            if (!boxEdit?.multi && (reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
+            const pageReviewTarget = reviewTargetById.get(pageReviewTargetId(page));
+            const pageTargetMatchesFilter = Boolean(
+              pageReviewTarget
+              && !reviewRiskFilter
+              && (
+                reviewFilter === 'all'
+                || reviewFilter === pageReviewTarget.status
+              )
+            );
+            if (
+              !boxEdit?.multi
+              && (reviewFilter !== 'all' || reviewRiskFilter)
+              && pageProblems.length === 0
+              && !pageTargetMatchesFilter
+            ) return null;
             const pageCounts = countSessionProblems(allPageProblems);
             const pageRiskFlags = riskFlagsFor(page);
             const storedPageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
-            const pageStatus = passageOnlyReview && !pageRiskFlags.length
-              ? 'normal'
-              : storedPageStatus
-                || (!allPageProblems.length && !passageOnlyReview ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
-            const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
+            const pageStatus = pageReviewTarget?.status
+              || (passageOnlyReview && !pageRiskFlags.length
+                ? 'normal'
+                : storedPageStatus
+                || (!allPageProblems.length && !passageOnlyReview ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal'));
+            const hasRisk = pageRiskFlags.length > 0 || pageReviewTarget?.status === 'check_needed' || pageStatus !== 'normal';
             const pageCanRetry = pageRetryIds.includes(page.id);
             const editedProblem = boxEdit?.multi ? problemsById.get(boxEdit.problemId) : null;
             const canvasProblems = editedProblem && !pageProblems.some(problem => problem.id === editedProblem.id)
@@ -4143,8 +4234,10 @@ function ReviewStage({
                 <div className="review-page-hd">
                   <span className="pg-num">{page.id}</span>
                   <span className="pg-count">
-                    {passageOnlyReview && !allPageProblems.length
-                      ? '지문 없음'
+                    {pageReviewTarget?.type === 'page'
+                      ? pageReviewTarget.status === 'normal' ? '지문 없음 확인됨' : '지문 미검출'
+                      : passageOnlyReview && !allPageProblems.length
+                        ? '지문 없음'
                       : reviewFilter === 'all' && !reviewRiskFilter
                       ? formatProblemCount(pageCounts)
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
@@ -4154,10 +4247,23 @@ function ReviewStage({
                   </span>
                   {hasRisk && (
                     <span className="pg-risk" title={pageRiskFlags.join(', ')}>
-                      {pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
+                      {pageReviewTarget?.status === 'check_needed'
+                        ? '지문이 검출되지 않아 확인이 필요합니다'
+                        : pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
                     </span>
                   )}
                   <div className="spacer" />
+                  {pageReviewTarget?.type === 'page' && pageReviewTarget.status === 'check_needed' && (
+                    <button
+                      className="mini-action"
+                      type="button"
+                      title="이 페이지에 별도 지문이 없음을 확인하고 다음 검수 대상으로 이동"
+                      onClick={() => confirmPageAndAdvance(page.id)}
+                      disabled={mutating}
+                    >
+                      {Icon.check} 지문 없음 확인
+                    </button>
+                  )}
                   {pageCanRetry && (
                     <button
                       className="mini-action"
@@ -4387,8 +4493,14 @@ function ReviewStage({
             <span className="review-completion-help">
               {reviewFlow.complete
                 ? '모든 확인이 끝났어요. 칠판 배치를 바로 확인해 보세요.'
+                : nextUnresolvedPageFocused
+                  ? reviewFlow.remaining === 1
+                    ? `마지막 페이지입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
+                    : `현재 페이지에 별도 지문이 없는지 확인하세요. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하고 다음으로 이동합니다.`
+                : selectedActionIds.length > 0 && selectedUnresolvedProblemIds.length === 0
+                  ? '현재 선택 항목은 이미 정상입니다. 다음 미확인 대상으로 이동할 수 있습니다.'
                 : selectedUnresolvedProblemIds.length === 0 && nextUnresolvedIsPage
-                  ? `문항이 없는 실패 페이지를 확인해야 합니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 해당 페이지로 이동하세요.`
+                  ? `지문이 검출되지 않은 페이지를 확인해야 합니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 페이지 검수를 시작하세요.`
                 : reviewFlow.remaining === 1
                   ? `마지막 항목입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
                   : `확인하면 다음 항목이 자동으로 선택됩니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 빠르게 진행하세요.`}
@@ -4417,6 +4529,20 @@ function ReviewStage({
                   </span>
                   <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
                 </button>
+              ) : nextUnresolvedPageFocused ? (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={() => confirmPageAndAdvance(nextUnresolvedProblemId)}
+                  disabled={mutating}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 지문 없음 확인 후 다음 검수 대상으로 이동`}
+                >
+                  <span className="review-completion-primary-label">
+                    {Icon.check} {reviewFlow.remaining === 1 ? '마지막 확인 · 칠판 보기' : '지문 없음 확인하고 다음'}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
               ) : (
                 <button
                   className="btn primary review-completion-primary"
@@ -4427,7 +4553,7 @@ function ReviewStage({
                   title={`${PRIMARY_MODIFIER_LABEL}+Enter로 다음 확인 ${nextUnresolvedIsPage ? '페이지 이동' : '항목 선택'}`}
                 >
                   <span className="review-completion-primary-label">
-                    {nextUnresolvedIsPage ? '다음 확인 페이지' : '다음 확인 항목'} {Icon.arrowRight}
+                    {nextUnresolvedIsPage ? '페이지 검수 시작' : '다음 확인 항목'} {Icon.arrowRight}
                   </span>
                   <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
                 </button>
@@ -6948,7 +7074,7 @@ function SidePanel({
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
-  const showItemConfirmBar = !!item && (bulk || item.step !== 'raw');
+  const showItemConfirmBar = view !== 'review' && !!item && (bulk || item.step !== 'raw');
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
@@ -7409,17 +7535,17 @@ function SidePanel({
               전체 적용
             </label>
             <div className="spacer" />
-            <button className="btn" disabled={!item}>건너뛰기</button>
             <button
               className="btn primary"
               disabled={!item || item.step === 'raw'}
+              title="선택한 처리 방식을 저장하고 확인 상태로 변경"
               onClick={() => {
                 if (!item) return;
                 if (bulk) applyToAll(item.step, { silent: true });
                 onConfirm(item.id, { bulk });
               }}
             >
-              {Icon.check} {bulk ? '일괄 확인' : '확인'}
+              {Icon.check} {bulk ? '전체 처리 적용' : '처리 방식 적용'}
             </button>
           </div>
           )}
@@ -10156,6 +10282,89 @@ function collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts){
   return matched;
 }
 
+function pageReviewProblemIds(page){
+  const rawIds = Array.isArray(page?.problemIds)
+    ? page.problemIds
+    : Array.isArray(page?.problem_ids)
+      ? page.problem_ids
+      : [];
+  return rawIds.map(id => String(id || '').trim()).filter(Boolean);
+}
+
+function pageReviewTargetId(page){
+  const pageId = String(page?.id || '').trim();
+  return pageId ? `page:${pageId}` : '';
+}
+
+function pageReviewConfirmed(page){
+  return Boolean(page?.pageReviewConfirmed || page?.page_review_confirmed);
+}
+
+function collectReviewTargets(session, actionableRiskFlagCounts){
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const problemsById = new Map();
+  problems.forEach((problem, index) => {
+    const id = String(problem?.id || problem?.problem_id || `problem-index-${index}`);
+    problemsById.set(id, problem);
+  });
+  const unresolvedIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
+  const targets = [];
+  const seenProblemIds = new Set();
+  const addProblemTarget = (problemId) => {
+    if (!problemId || seenProblemIds.has(problemId)) return;
+    const problem = problemsById.get(problemId);
+    if (!problem) return;
+    seenProblemIds.add(problemId);
+    const sourceStatus = deriveProblemStatus(problem);
+    targets.push({
+      id: problemId,
+      type: 'problem',
+      pageId: String(problem?.sourcePageId || problem?.source_page_id || '').trim(),
+      problemIds: [problemId],
+      status: unresolvedIds.has(problemId)
+        ? (sourceStatus === 'failed' ? 'failed' : 'check_needed')
+        : 'normal',
+      sourceStatus,
+      reason: riskFlagsFor(problem)[0] || (sourceStatus === 'failed' ? 'parse_failed' : ''),
+    });
+  };
+
+  pages.forEach(page => {
+    const problemIds = pageReviewProblemIds(page);
+    problemIds.forEach(addProblemTarget);
+    if (problemIds.length) return;
+    const id = pageReviewTargetId(page);
+    if (!id) return;
+    const confirmed = pageReviewConfirmed(page);
+    if (!confirmed && !unresolvedIds.has(id)) return;
+    targets.push({
+      id,
+      type: 'page',
+      pageId: String(page.id || '').trim(),
+      problemIds: [],
+      status: confirmed ? 'normal' : 'check_needed',
+      sourceStatus: normalizeReviewStatus(page?.reviewStatus || page?.review_status) || 'check_needed',
+      reason: confirmed
+        ? String(page?.pageReviewDecision || page?.page_review_decision || 'no_passage')
+        : riskFlagsFor(page)[0] || 'no_passage_detected',
+      decision: String(page?.pageReviewDecision || page?.page_review_decision || ''),
+    });
+  });
+  problemsById.forEach((_problem, id) => addProblemTarget(id));
+  return targets;
+}
+
+function collectReviewTargetStatusCounts(targets){
+  const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
+  (targets || []).forEach(target => {
+    const status = normalizeReviewStatus(target?.status) || 'check_needed';
+    counts.all += 1;
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  return counts;
+}
+
 function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
   const matched = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
   return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
@@ -10436,8 +10645,11 @@ function sessionReviewSummary(session){
   const riskFlagCounts = fallbackRiskFlagCounts;
   const actionableRiskFlagCounts = filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
   const actionableReviewProblemIds = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
-  const unresolvedReviewProblemIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
-  const actionableNeedsReviewCount = countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
+  const reviewTargets = collectReviewTargets(session, actionableRiskFlagCounts);
+  const unresolvedReviewTargets = reviewTargets.filter(target => target.status !== 'normal');
+  const unresolvedReviewProblemIds = new Set(unresolvedReviewTargets.map(target => target.id));
+  const reviewTargetStatusCounts = collectReviewTargetStatusCounts(reviewTargets);
+  const actionableNeedsReviewCount = unresolvedReviewTargets.length;
   const passageReviewSummary = collectPassageReviewSummary(session, { actionableProblemIds: unresolvedReviewProblemIds });
   const topRiskFlags = normalizeFilterableRiskFlagItems(session, actionableRiskFlagCounts);
   const warningMessages = Array.isArray(raw.warningMessages)
@@ -10543,11 +10755,16 @@ function sessionReviewSummary(session){
   return {
     counts,
     reviewStatusCounts,
+    reviewTargetStatusCounts,
     coreReviewStatusCounts: rawCoreStatusCounts,
     supplementalReviewStatusCounts: rawSupplementalStatusCounts,
     needsReviewCount: Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
     actionableNeedsReviewCount,
     unresolvedReviewProblemIds: Array.from(unresolvedReviewProblemIds),
+    reviewTargets,
+    unresolvedReviewTargets,
+    pageReviewTargetCount: reviewTargets.filter(target => target.type === 'page').length,
+    pendingPageReviewTargetCount: unresolvedReviewTargets.filter(target => target.type === 'page').length,
     riskFlagCounts,
     actionableRiskFlagCounts,
     topRiskFlags,
@@ -10599,12 +10816,15 @@ function sessionReviewSummary(session){
 }
 
 function reviewFlowState(reviewSummary){
-  const total = Math.max(0, Number(reviewSummary?.reviewStatusCounts?.all) || 0);
-  const unresolvedIds = Array.isArray(reviewSummary?.unresolvedReviewProblemIds)
-    ? reviewSummary.unresolvedReviewProblemIds.filter(Boolean)
-    : [];
+  const targetCounts = reviewSummary?.reviewTargetStatusCounts || reviewSummary?.reviewStatusCounts || {};
+  const total = Math.max(0, Number(targetCounts.all) || 0);
+  const unresolvedTargets = Array.isArray(reviewSummary?.unresolvedReviewTargets)
+    ? reviewSummary.unresolvedReviewTargets.filter(target => target?.id)
+    : Array.isArray(reviewSummary?.unresolvedReviewProblemIds)
+      ? reviewSummary.unresolvedReviewProblemIds.filter(Boolean)
+      : [];
   const remaining = Math.min(total, Math.max(
-    unresolvedIds.length,
+    unresolvedTargets.length,
     Number(reviewSummary?.actionableNeedsReviewCount) || 0,
     Number(reviewSummary?.passageReviewItemCount) || 0
   ));
@@ -12261,6 +12481,7 @@ function App(){
         : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : action === 'confirm' ? '확인 상태를 저장하는 중…'
+        : action === 'confirm-page' ? '페이지 확인 상태를 저장하는 중…'
         : action === 'classify' ? '자료 분류를 저장하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
@@ -12279,6 +12500,7 @@ function App(){
         : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
         : action === 'bulk-crop' ? '수동 분할을 적용했어요'
         : action === 'confirm' ? '확인 상태를 저장했어요'
+        : action === 'confirm-page' ? '지문 없음으로 확인했어요'
         : action === 'classify' ? '자료 분류를 변경했어요'
         : '문제를 제외했어요'
       );

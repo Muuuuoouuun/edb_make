@@ -4576,6 +4576,32 @@
     color: var(--ink);
     box-shadow: var(--shadow-1);
   }
+  @media (max-width: 1500px){
+    .review-overview-toolbar{
+      align-items: center;
+      flex-wrap: wrap;
+      overflow: visible;
+    }
+    .review-overview-toolbar > .review-toolbar-view-group{
+      flex: 1 1 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .review-overview-toolbar > .review-toolbar-view-group .review-toolbar-group-content{
+      min-width: max-content;
+    }
+    .review-overview-toolbar > .review-toolbar-guidance{
+      flex: 1 1 180px;
+      max-width: none;
+    }
+    .review-overview-toolbar > .spacer{
+      display: none;
+    }
+    .review-overview-toolbar > .review-toolbar-batch-group{
+      margin-left: auto;
+    }
+  }
   .review-filters button:hover:not(.on){
     color: var(--ink-2);
     background: color-mix(in srgb, var(--surface) 72%, transparent);
@@ -6574,6 +6600,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-d901d72330b4a1349b831be8df66cf1c755ebd4416de41d48f5cec026914d546"></script>
+<script src="app.bundle.js?v=frontend-bundle-2a3a401036b9b5f442a64813f5036ad09ff750dd7542f75eb2c1a2e51e442947"></script>
 </body>
 </html>

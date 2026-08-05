@@ -14,6 +14,56 @@ def run_node(script: str) -> None:
 
 
 class TestUiRuntimeDiagnostics(unittest.TestCase):
+    def test_review_target_queue_keeps_empty_page_progress_stable(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('function normalizePublishSummary');
+            if (start < 0 || end < 0) throw new Error('review helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+
+            const session = {
+              problems: [
+                { id: 'p1', sourcePageId: 'page-1', reviewStatus: 'normal', bbox: { width: 10, height: 10 } },
+                { id: 'p2', sourcePageId: 'page-2', reviewStatus: 'normal', bbox: { width: 10, height: 10 } },
+              ],
+              pages: [
+                { id: 'page-1', problemIds: ['p1'], reviewStatus: 'normal' },
+                { id: 'page-2', problemIds: ['p2'], reviewStatus: 'normal' },
+                { id: 'page-3', problemIds: [], reviewStatus: 'failed', riskFlags: [] },
+                { id: 'page-4', problemIds: [], reviewStatus: 'failed', riskFlags: [] },
+              ],
+            };
+            const before = sandbox.sessionReviewSummary(session);
+            const beforeFlow = sandbox.reviewFlowState(before);
+            if (beforeFlow.total !== 4 || beforeFlow.reviewed !== 2 || beforeFlow.remaining !== 2) {
+              throw new Error(`unexpected initial flow: ${JSON.stringify(beforeFlow)}`);
+            }
+            if (before.reviewTargetStatusCounts.check_needed !== 2 || before.reviewTargetStatusCounts.failed !== 0) {
+              throw new Error(`unexpected target counts: ${JSON.stringify(before.reviewTargetStatusCounts)}`);
+            }
+            if (before.unresolvedReviewTargets.map(target => target.id).join(',') !== 'page:page-3,page:page-4') {
+              throw new Error(`unexpected queue: ${JSON.stringify(before.unresolvedReviewTargets)}`);
+            }
+
+            session.pages[2] = {
+              ...session.pages[2],
+              reviewStatus: 'normal',
+              pageReviewConfirmed: true,
+              pageReviewDecision: 'no_passage',
+            };
+            const afterFlow = sandbox.reviewFlowState(sandbox.sessionReviewSummary(session));
+            if (afterFlow.total !== 4 || afterFlow.reviewed !== 3 || afterFlow.remaining !== 1) {
+              throw new Error(`progress denominator changed after confirmation: ${JSON.stringify(afterFlow)}`);
+            }
+            """
+        )
+
     def test_keyboard_help_uses_native_platform_modifiers(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         platform_block = "const RUNTIME_PLATFORM" + source.split(

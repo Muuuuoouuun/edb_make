@@ -1795,6 +1795,48 @@ class TestSessionConfirmMutation(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "problem not found: missing"):
             app_server._mutate_confirm({"problems": [{"id": "p1"}]}, ["missing"])
 
+    def test_confirm_page_resolves_empty_page_and_preserves_review_decision(self):
+        session = {
+            "pages": [{
+                "id": "page-3",
+                "problemIds": [],
+                "riskFlags": [],
+                "reviewStatus": "failed",
+            }],
+            "problems": [],
+        }
+
+        updated = app_server._mutate_confirm_pages(session, ["page-3"])
+
+        page = updated["pages"][0]
+        self.assertEqual("normal", page["reviewStatus"])
+        self.assertEqual("normal", page["review_status"])
+        self.assertEqual([], page["riskFlags"])
+        self.assertTrue(page["pageReviewConfirmed"])
+        self.assertTrue(page["page_review_confirmed"])
+        self.assertEqual("no_passage", page["pageReviewDecision"])
+        self.assertEqual("no_passage", page["page_review_decision"])
+
+    def test_confirm_page_rejects_page_that_still_has_items(self):
+        session = {
+            "pages": [{"id": "page-1", "problemIds": ["p1"]}],
+            "problems": [{"id": "p1"}],
+        }
+
+        with self.assertRaisesRegex(ValueError, "page still has review items: page-1"):
+            app_server._mutate_confirm_pages(session, ["page-1"])
+
+    def test_review_summary_counts_unconfirmed_failed_empty_page(self):
+        session = {
+            "pages": [{"id": "page-3", "problemIds": [], "reviewStatus": "failed"}],
+            "problems": [],
+        }
+
+        self.assertEqual(1, app_server._session_review_summary(session)["actionableNeedsReviewCount"])
+
+        app_server._mutate_confirm_pages(session, ["page-3"])
+        self.assertEqual(0, app_server._session_review_summary(session)["actionableNeedsReviewCount"])
+
 
 class TestSessionClassifyMutation(unittest.TestCase):
     def test_classify_round_trip_uses_only_separate_shared_passage_role(self):
