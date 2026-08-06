@@ -73,6 +73,9 @@ PASSAGE_REVIEW_REASON_LABELS = {
     "passage_quality_review": "지문 품질 확인",
     "source_problem_bbox_overlap": "문항 영역 겹침",
 }
+MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
+MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO = 0.30
+MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO = 0.70
 
 
 @lru_cache(maxsize=None)
@@ -4799,8 +4802,8 @@ def _mutate_stitch_crop(
     if len(raw_segments) > 32:
         raise ValueError("segments must contain at most 32 regions")
 
-    page_cache: dict[str, tuple[dict[str, Any], Path, int, int]] = {}
-    normalized: list[tuple[str, Box, int]] = []
+    page_cache: dict[str, tuple[dict[str, Any], Path, int, int, float | None]] = {}
+    normalized: list[tuple[str, Box, int, int]] = []
     from PIL import Image
 
     for index, raw_segment in enumerate(raw_segments, start=1):
@@ -4823,8 +4826,35 @@ def _mutate_stitch_crop(
                 raise FileNotFoundError(f"page image missing for {page_id}: {source_path}")
             with Image.open(source_path) as page_image:
                 image_width, image_height = page_image.size
-            page_cache[page_id] = (page, source_path, image_width, image_height)
-        _page, _source_path, image_width, image_height = page_cache[page_id]
+                column_divider_x = _lazy_call(
+                    "segment",
+                    "detect_pdf_visual_column_divider_x",
+                    page_image.convert("RGB"),
+                )
+                try:
+                    column_divider_x = float(column_divider_x)
+                except (TypeError, ValueError):
+                    column_divider_x = None
+                if (
+                    column_divider_x is not None
+                    and (
+                        not math.isfinite(column_divider_x)
+                        or column_divider_x < image_width * MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO
+                        or column_divider_x > image_width * MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO
+                    )
+                ):
+                    # Side rules and answer-box borders can resemble a column
+                    # divider. Only a line in the central page band is allowed
+                    # to constrain a manual passage crop.
+                    column_divider_x = None
+            page_cache[page_id] = (
+                page,
+                source_path,
+                image_width,
+                image_height,
+                column_divider_x,
+            )
+        _page, _source_path, image_width, image_height, column_divider_x = page_cache[page_id]
         raw_box = (
             segment.get("bbox")
             or segment.get("cropBox")
@@ -4832,8 +4862,43 @@ def _mutate_stitch_crop(
             or segment
         )
         box = _coerce_crop_box(raw_box, image_width=image_width, image_height=image_height)
+        raw_column_index = segment.get("columnIndex", segment.get("column_index"))
+        try:
+            column_index = int(raw_column_index) if raw_column_index is not None else 0
+        except (TypeError, ValueError):
+            column_index = 0
+        if column_divider_x is not None:
+            # Legacy UI sessions sometimes defaulted every fragment to the
+            # left column. Treat a hint as stale when the whole box is already
+            # on the opposite side; a box crossing the divider still honors
+            # the explicit column selected by the user.
+            if column_index == 1 and box.left >= column_divider_x:
+                column_index = 2
+            elif column_index == 2 and box.right <= column_divider_x:
+                column_index = 1
+            if column_index not in {1, 2}:
+                column_index = 1 if (box.left + box.right) * 0.5 < column_divider_x else 2
+            if column_index == 1:
+                safe_right = max(
+                    1.0,
+                    float(column_divider_x) - MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                )
+                right = min(float(box.right), safe_right)
+                left = min(float(box.left), right - 1.0)
+            else:
+                safe_left = min(
+                    float(image_width) - 1.0,
+                    float(column_divider_x) + MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                )
+                left = max(float(box.left), safe_left)
+                right = max(left + 1.0, float(box.right))
+            box = Box.from_points(left, box.top, right, box.bottom)
+        elif column_index < 1:
+            column_index = 1
         if box.width < 8 or box.height < 8:
-            raise ValueError(f"segments[{index - 1}] is too small (minimum 8x8 px)")
+            raise ValueError(
+                f"segments[{index - 1}] is too small after page-boundary cleanup (minimum 8x8 px)"
+            )
         raw_order = segment.get("order", segment.get("fragmentIndex", segment.get("fragment_index", index)))
         try:
             order = int(raw_order)
@@ -4841,14 +4906,14 @@ def _mutate_stitch_crop(
             raise ValueError(f"segments[{index - 1}].order must be an integer") from None
         if order < 1:
             raise ValueError(f"segments[{index - 1}].order must be positive")
-        normalized.append((page_id, box, order))
+        normalized.append((page_id, box, order, column_index))
 
-    orders = [order for _page_id, _box, order in normalized]
+    orders = [order for _page_id, _box, order, _column_index in normalized]
     if len(set(orders)) != len(orders):
         raise ValueError("segments must have unique order values")
 
-    for left_index, (left_page_id, left_box, _left_order) in enumerate(normalized):
-        for right_page_id, right_box, _right_order in normalized[left_index + 1:]:
+    for left_index, (left_page_id, left_box, _left_order, _left_column) in enumerate(normalized):
+        for right_page_id, right_box, _right_order, _right_column in normalized[left_index + 1:]:
             if left_page_id != right_page_id:
                 continue
             intersection_width = max(0.0, min(left_box.right, right_box.right) - max(left_box.left, right_box.left))
@@ -4865,16 +4930,65 @@ def _mutate_stitch_crop(
     with tempfile.TemporaryDirectory(prefix=".manual-stitch-", dir=str(crop_dir)) as raw_tmp:
         temp_dir = Path(raw_tmp)
         fragment_paths: list[Path] = []
-        for index, (page_id, box, _order) in enumerate(normalized, start=1):
+        for index, (page_id, box, _order, _column_index) in enumerate(normalized, start=1):
             source_path = page_cache[page_id][1]
             fragment_path = temp_dir / f"fragment-{index:03d}.png"
             _crop_image_by_bbox(source_path, box, fragment_path)
+            with Image.open(fragment_path) as fragment_image:
+                cleaned_fragment = _lazy_call(
+                    "build_problem_board_edb",
+                    "_erase_corner_page_badges",
+                    fragment_image.copy(),
+                )
+                cleaned_fragment = _lazy_call(
+                    "build_problem_board_edb",
+                    "_trim_text_priority_bottom_page_badge",
+                    cleaned_fragment,
+                )
+                cleaned_fragment.save(fragment_path)
             fragment_paths.append(fragment_path)
+        source_crop_boxes: list[tuple[int, int, int, int]] = []
+        stitch_diagnostics: dict[str, Any] = {}
         _stitch_passage_image_files(
             fragment_paths,
             stitched_path,
             transparent=False,
+            source_crop_boxes_output=source_crop_boxes,
+            stitch_diagnostics_output=stitch_diagnostics,
         )
+
+    effective_normalized: list[tuple[str, Box, int, int]] = []
+    trimmed_fragment_count = 0
+    for index, (page_id, box, order, column_index) in enumerate(normalized):
+        source_left = math.floor(box.left)
+        source_top = math.floor(box.top)
+        source_right = math.ceil(box.right)
+        source_bottom = math.ceil(box.bottom)
+        crop_width = max(1, source_right - source_left)
+        crop_height = max(1, source_bottom - source_top)
+        crop_box = (
+            source_crop_boxes[index]
+            if index < len(source_crop_boxes)
+            else (0, 0, crop_width, crop_height)
+        )
+        crop_left, crop_top, crop_right, crop_bottom = crop_box
+        crop_left = max(0, min(crop_width - 1, int(crop_left)))
+        crop_top = max(0, min(crop_height - 1, int(crop_top)))
+        crop_right = max(crop_left + 1, min(crop_width, int(crop_right)))
+        crop_bottom = max(crop_top + 1, min(crop_height, int(crop_bottom)))
+        if (crop_left, crop_top, crop_right, crop_bottom) != (0, 0, crop_width, crop_height):
+            trimmed_fragment_count += 1
+        effective_normalized.append((
+            page_id,
+            Box.from_points(
+                source_left + crop_left,
+                source_top + crop_top,
+                source_left + crop_right,
+                source_top + crop_bottom,
+            ),
+            order,
+            column_index,
+        ))
 
     board_uri = stitched_path.resolve().as_uri()
     if _crop_refreshes_board_render(problem):
@@ -4883,7 +4997,7 @@ def _mutate_stitch_crop(
         board_uri = board_path.resolve().as_uri()
 
     source_segments: list[dict[str, Any]] = []
-    for fragment_index, (page_id, box, _order) in enumerate(normalized, start=1):
+    for fragment_index, (page_id, box, _order, column_index) in enumerate(effective_normalized, start=1):
         bbox = {
             "left": box.left,
             "top": box.top,
@@ -4895,12 +5009,12 @@ def _mutate_stitch_crop(
             "source_page_id": page_id,
             "fragmentIndex": fragment_index,
             "fragment_index": fragment_index,
-            "columnIndex": fragment_index,
-            "column_index": fragment_index,
+            "columnIndex": column_index,
+            "column_index": column_index,
             "bbox": bbox,
         })
 
-    first_page_id, first_box, _first_order = normalized[0]
+    first_page_id, first_box, _first_order, _first_column = effective_normalized[0]
     first_source_path = page_cache[first_page_id][1]
     first_bbox = {
         "left": first_box.left,
@@ -4908,7 +5022,9 @@ def _mutate_stitch_crop(
         "width": first_box.width,
         "height": first_box.height,
     }
-    source_page_ids = list(dict.fromkeys(page_id for page_id, _box, _order in normalized))
+    source_page_ids = list(dict.fromkeys(
+        page_id for page_id, _box, _order, _column in effective_normalized
+    ))
 
     problem["sourcePageId"] = first_page_id
     problem["source_page_id"] = first_page_id
@@ -4933,6 +5049,13 @@ def _mutate_stitch_crop(
     problem["passage_merged_source_page_ids"] = list(source_page_ids)
     problem["passageMergedFragmentCount"] = len(source_segments)
     problem["passage_merged_fragment_count"] = len(source_segments)
+    stitch_diagnostics = {
+        **stitch_diagnostics,
+        "trimmed_source_fragment_count": trimmed_fragment_count,
+        "trimmedSourceFragmentCount": trimmed_fragment_count,
+    }
+    problem["manualStitchDiagnostics"] = stitch_diagnostics
+    problem["manual_stitch_diagnostics"] = dict(stitch_diagnostics)
     problem["manualCrop"] = {
         "leftRatio": 0.0,
         "rightRatio": 0.0,
@@ -4962,6 +5085,7 @@ def _mutate_stitch_crop(
         metadata["passage_merged_source_page_ids"] = list(source_page_ids)
         metadata["passage_merged_fragment_count"] = len(source_segments)
         metadata["manual_stitch"] = True
+        metadata["manual_stitch_diagnostics"] = dict(stitch_diagnostics)
 
     previous_positions: dict[str, int] = {}
     for page in session.get("pages", []) or []:

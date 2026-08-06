@@ -218,7 +218,11 @@ class TestUiQueueActions(unittest.TestCase):
         queue_branch = source.split("if (review.kind === 'queue-recognition') {", 1)[1]
         queue_branch = queue_branch.split("} else if (review.kind === 'retry-ai') {", 1)[0]
 
-        self.assertIn("setView('review');", queue_branch)
+        self.assertIn("destinationView = 'review';", queue_branch)
+        confirm_branch = source.split("const confirmRecognitionReview = useCallback", 1)[1]
+        confirm_branch = confirm_branch.split("  const setStep =", 1)[0]
+        self.assertIn("requestViewChange(destinationView", confirm_branch)
+        self.assertIn("beforeCommit: () => setRecognitionReview(null)", confirm_branch)
         self.assertIn("검수로 이동", queue_branch)
         self.assertIn("reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition')", queue_branch)
         self.assertNotIn("openOutputFolder(", queue_branch)
@@ -441,7 +445,10 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("jumpReviewPage(1)", review_stage)
         self.assertIn('aria-label="이전 검수 페이지"', review_stage)
         self.assertIn('aria-label="다음 검수 페이지"', review_stage)
-        self.assertIn("syncReviewPageNavigation(event.currentTarget)", review_stage)
+        self.assertIn("const handleReviewScroll = useCallback((event) =>", review_stage)
+        self.assertIn("reviewScrollSyncFrameRef.current = window.requestAnimationFrame", review_stage)
+        self.assertIn("syncReviewPageNavigation(wrap)", review_stage)
+        self.assertIn("onScroll={handleReviewScroll}", review_stage)
         self.assertIn(".review-page-jump{", html)
         self.assertIn(".review-page-jump-status{", html)
 

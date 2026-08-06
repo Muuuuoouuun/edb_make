@@ -118,6 +118,23 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("prefers-reduced-motion: reduce", smooth_scroll)
         self.assertIn("duration = 0", smooth_scroll)
 
+    def test_review_scroll_zoom_and_images_are_stable_for_long_documents(self) -> None:
+        review_stage = self.source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+
+        self.assertIn("const reviewScrollSyncFrameRef = useRef(null)", review_stage)
+        self.assertIn("if (reviewScrollSyncFrameRef.current != null) return", review_stage)
+        self.assertIn("reviewScrollSyncFrameRef.current = window.requestAnimationFrame", review_stage)
+        self.assertIn("reviewWheelDeltaRef.current += evt.deltaY", review_stage)
+        self.assertIn("if (reviewWheelFrameRef.current != null) return", review_stage)
+        self.assertIn("cancelSmoothScroll(reviewWrapRef.current)", review_stage)
+        self.assertIn("width={Math.max(1, Number(page.width) || 1)}", review_stage)
+        self.assertIn("height={Math.max(1, Number(page.height) || 1)}", review_stage)
+        self.assertIn("loading={pageIndex < 2 ? 'eager' : 'lazy'}", review_stage)
+        self.assertIn('decoding="async"', review_stage)
+        self.assertIn("scrollbar-gutter: stable", board)
+
     def test_large_upload_is_rejected_before_base64_encoding(self) -> None:
         post_export = self.source.split("async function postExport", 1)[1]
         post_export = post_export.split("function formatApiError", 1)[0]

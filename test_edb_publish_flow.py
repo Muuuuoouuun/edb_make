@@ -929,6 +929,24 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertLess(left_column.right, 180.0)
         self.assertGreater(right_column.left, 180.0)
 
+    def test_passage_source_bounds_use_explicit_column_when_text_box_straddles_divider(self):
+        left_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(120, 40, 100, 320),
+            image_width=400,
+            column_divider_x=180.0,
+            column_index=1,
+        )
+        right_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(160, 40, 100, 320),
+            image_width=400,
+            column_divider_x=180.0,
+            column_index=2,
+        )
+
+        self.assertEqual(174.0, left_column.right)
+        self.assertEqual(186.0, right_column.left)
+        self.assertLess(left_column.right, right_column.left)
+
     def test_passage_segment_source_bounds_recover_vertical_edge_glyphs(self):
         expanded = problem_board._expand_passage_segment_source_bounds(
             Box(100, 8, 200, 380),

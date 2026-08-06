@@ -2257,6 +2257,8 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual([1, 2], [segment["fragmentIndex"] for segment in problem["sourceSegments"]])
             self.assertTrue(problem["passageFragmentsMerged"])
             self.assertTrue(problem["manualStitch"])
+            self.assertEqual(1, problem["manualStitchDiagnostics"]["join_count"])
+            self.assertEqual(1, problem["manualStitchDiagnostics"]["trimmedSourceFragmentCount"])
             self.assertEqual([], problem["riskFlags"])
             self.assertEqual("normal", problem["reviewStatus"])
             self.assertEqual(["p0", "passage", "p1"], updated["pages"][0]["problemIds"])
@@ -2312,6 +2314,156 @@ class TestSessionCropMutation(unittest.TestCase):
                 app_server._mutate_stitch_crop(make_session(), "passage", [
                     {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 7, "height": 50}},
                 ])
+
+    def test_stitch_crop_clamps_manual_regions_away_from_center_divider(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 140), "white").save(page_path)
+            Image.new("RGB", (80, 60), "white").save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["passage"],
+                }],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 20, "top": 20, "width": 80, "height": 60},
+                    "passageRole": "passage_fragment",
+                }],
+            }
+            original_lazy_call = app_server._lazy_call
+
+            def fake_lazy_call(module_name, attr_name, *args, **kwargs):
+                if module_name == "segment" and attr_name == "detect_pdf_visual_column_divider_x":
+                    return 90.0
+                return original_lazy_call(module_name, attr_name, *args, **kwargs)
+
+            with patch.object(app_server, "_lazy_call", side_effect=fake_lazy_call):
+                updated = app_server._mutate_stitch_crop(session, "passage", [
+                    {
+                        "pageId": "page-1",
+                        "order": 1,
+                        "columnIndex": 1,
+                        "bbox": {"left": 20, "top": 10, "width": 85, "height": 70},
+                    },
+                    {
+                        "pageId": "page-1",
+                        "order": 2,
+                        "columnIndex": 2,
+                        "bbox": {"left": 75, "top": 80, "width": 85, "height": 50},
+                    },
+                ])
+
+            segments = updated["problems"][0]["sourceSegments"]
+            self.assertEqual([1, 2], [segment["columnIndex"] for segment in segments])
+            self.assertEqual(84.0, segments[0]["bbox"]["left"] + segments[0]["bbox"]["width"])
+            self.assertEqual(96.0, segments[1]["bbox"]["left"])
+
+    def test_stitch_crop_corrects_legacy_left_hint_for_right_column_region(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 160), "white").save(page_path)
+            Image.new("RGB", (60, 60), "white").save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["passage"],
+                }],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 100, "top": 20, "width": 60, "height": 60},
+                    "passageRole": "passage_fragment",
+                }],
+            }
+            original_lazy_call = app_server._lazy_call
+
+            def fake_lazy_call(module_name, attr_name, *args, **kwargs):
+                if module_name == "segment" and attr_name == "detect_pdf_visual_column_divider_x":
+                    return 90.0
+                return original_lazy_call(module_name, attr_name, *args, **kwargs)
+
+            with patch.object(app_server, "_lazy_call", side_effect=fake_lazy_call):
+                updated = app_server._mutate_stitch_crop(session, "passage", [{
+                    "pageId": "page-1",
+                    "order": 1,
+                    "columnIndex": 1,
+                    "bbox": {"left": 100, "top": 20, "width": 60, "height": 60},
+                }])
+
+            segment = updated["problems"][0]["sourceSegments"][0]
+            self.assertEqual(2, segment["columnIndex"])
+            self.assertGreaterEqual(segment["bbox"]["left"], 96.0)
+
+    def test_stitch_crop_persists_effective_bounds_after_join_cleanup(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 220), "white").save(page_path)
+            Image.new("RGB", (60, 80), "white").save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["passage"],
+                }],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 20, "top": 20, "width": 60, "height": 80},
+                    "passageRole": "passage_fragment",
+                }],
+            }
+
+            def fake_stitch(_paths, output_path, **kwargs):
+                kwargs["source_crop_boxes_output"].extend([
+                    (0, 0, 60, 50),
+                    (0, 12, 60, 60),
+                ])
+                kwargs["stitch_diagnostics_output"].update({
+                    "join_count": 1,
+                    "max_join_blank_band_px": 4,
+                })
+                Image.new("RGB", (60, 114), "white").save(output_path)
+                return 60, 114
+
+            with patch.object(app_server, "_stitch_passage_image_files", side_effect=fake_stitch):
+                updated = app_server._mutate_stitch_crop(session, "passage", [
+                    {
+                        "pageId": "page-1",
+                        "order": 1,
+                        "bbox": {"left": 20, "top": 20, "width": 60, "height": 80},
+                    },
+                    {
+                        "pageId": "page-1",
+                        "order": 2,
+                        "bbox": {"left": 100, "top": 100, "width": 60, "height": 80},
+                    },
+                ])
+
+            problem = updated["problems"][0]
+            first, second = problem["sourceSegments"]
+            self.assertEqual({"left": 20, "top": 20, "width": 60, "height": 50}, first["bbox"])
+            self.assertEqual({"left": 100, "top": 112, "width": 60, "height": 48}, second["bbox"])
+            self.assertEqual(2, problem["manualStitchDiagnostics"]["trimmedSourceFragmentCount"])
+            self.assertEqual(4, problem["manualStitchDiagnostics"]["max_join_blank_band_px"])
 
     def test_http_session_recovers_legacy_passage_source_segments_from_pages_json(self):
         with TemporaryDirectory() as raw_tmp:

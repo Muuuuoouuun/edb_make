@@ -14,6 +14,7 @@ import preprocess as preprocess_module
 from preprocess import prepare_source_pages
 from segment import (
     PDF_CHOICE_MARKERS,
+    _build_pdf_passage_range_blocks,
     _looks_like_pdf_page_header_text_line,
     segment_page,
 )
@@ -30,6 +31,37 @@ def _problem_block_ids(problem):
 
 
 class TestPdfTextMarkerSegmentation(unittest.TestCase):
+    def test_passage_text_box_cannot_expand_across_center_divider(self):
+        image = Image.new("RGB", (600, 800), "white")
+        ImageDraw.Draw(image).rectangle((40, 130, 285, 180), outline="black")
+        text_lines = [
+            {
+                "text": "[1~2] 다음 글을 읽고 물음에 답하시오.",
+                "bbox": {"left": 40, "top": 90, "right": 350, "bottom": 116},
+            },
+            {
+                "text": "지문 본문이 중앙선 가까이 이어집니다.",
+                "bbox": {"left": 40, "top": 136, "right": 355, "bottom": 168},
+            },
+        ]
+        right_markers = [
+            {"number": 1, "bbox": {"left": 330, "top": 240, "right": 350, "bottom": 265}},
+            {"number": 2, "bbox": {"left": 330, "top": 420, "right": 350, "bottom": 445}},
+        ]
+
+        blocks = _build_pdf_passage_range_blocks(
+            image,
+            "page-1",
+            text_lines,
+            [(1, [], (40.0, 285.0)), (2, right_markers, (315.0, 560.0))],
+            page_area=float(image.width * image.height),
+            start_index=1,
+        )
+
+        self.assertTrue(blocks)
+        self.assertEqual(294.0, blocks[0].bbox.right)
+        self.assertEqual(300.0, blocks[0].metadata.get("passage_center_divider_x"))
+
     def test_compact_exam_page_headers_are_not_passage_text(self):
         top_box = Box(left=330, top=10, width=220, height=30)
 
@@ -312,7 +344,22 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             self.assertEqual(1, len(passage_blocks))
             display_title = passage_blocks[0].metadata.get("display_title", "").replace("\xa0", " ")
             self.assertIn("건의문의 초고", display_title)
-            self.assertEqual(1.0, passage_blocks[0].metadata.get("passage_text_bounds_score"))
+            divider_x = passage_blocks[0].metadata.get("passage_center_divider_x")
+            divider_exclusion = passage_blocks[0].metadata.get(
+                "passage_center_divider_exclusion_px"
+            )
+            self.assertIsNotNone(divider_x)
+            self.assertLessEqual(
+                passage_blocks[0].bbox.right,
+                float(divider_x) - float(divider_exclusion),
+            )
+            # The deliberately long two-line heading reaches into the center
+            # gutter.  Clipping that gutter is intentional, while the retained
+            # text coverage must remain high enough to preserve recognition.
+            self.assertGreater(
+                passage_blocks[0].metadata.get("passage_text_bounds_score"),
+                0.65,
+            )
 
     def test_pdf_shared_style_header_inside_started_problem_is_not_a_passage(self):
         with tempfile.TemporaryDirectory() as temp_dir:

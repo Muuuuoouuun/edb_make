@@ -1008,6 +1008,7 @@ def _expand_passage_source_bounds_horizontally(
     image_width: int,
     padding_px: int = PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX,
     column_divider_x: float | None = None,
+    column_index: int | None = None,
 ) -> Box:
     """Recover glyphs that sit just outside PDF-derived column bounds."""
     padding = max(0.0, float(padding_px))
@@ -1022,18 +1023,23 @@ def _expand_passage_source_bounds_horizontally(
     divider_exclusion = float(PASSAGE_CENTER_DIVIDER_EXCLUSION_PX)
     bounds_left = float(bounds.left)
     bounds_right = float(bounds.right)
-    if bounds_right <= midpoint:
+    resolved_column_index = int(column_index) if column_index in {1, 2} else None
+    if resolved_column_index == 1 or (resolved_column_index is None and bounds_right <= midpoint):
+        safe_right = max(1.0, midpoint - divider_exclusion)
         left = max(0.0, bounds_left - padding)
+        left = min(left, safe_right - 1.0)
         right = min(
-            max(0.0, midpoint - divider_exclusion),
+            safe_right,
             bounds_right + max(padding, float(PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX)),
         )
-    elif bounds_left >= midpoint:
+    elif resolved_column_index == 2 or (resolved_column_index is None and bounds_left >= midpoint):
+        safe_left = min(float(image_width) - 1.0, midpoint + divider_exclusion)
         left = max(
-            min(float(image_width), midpoint + divider_exclusion),
+            safe_left,
             bounds_left - max(padding, float(PASSAGE_SOURCE_INNER_EDGE_RECOVERY_PX)),
         )
         right = min(float(image_width), bounds_right + padding)
+        right = max(right, left + 1.0)
     else:
         left = max(0.0, bounds_left - padding)
         right = min(float(image_width), bounds_right + padding)
@@ -1053,6 +1059,7 @@ def _expand_passage_segment_source_bounds(
     horizontal_padding_px: int = PASSAGE_SOURCE_HORIZONTAL_RECOVERY_PX,
     vertical_padding_px: int = PASSAGE_SOURCE_VERTICAL_RECOVERY_PX,
     column_divider_x: float | None = None,
+    column_index: int | None = None,
 ) -> Box:
     """Recover glyph strokes at every edge of an explicit passage segment.
 
@@ -1066,6 +1073,7 @@ def _expand_passage_segment_source_bounds(
         image_width=image_width,
         padding_px=horizontal_padding_px,
         column_divider_x=column_divider_x,
+        column_index=column_index,
     )
     vertical_padding = max(0.0, float(vertical_padding_px))
     top = max(0.0, float(expanded.top) - vertical_padding)
@@ -1817,6 +1825,7 @@ class _ProblemAssetTask:
     board_render_path: Path
     chalk_color: tuple[int, int, int]
     segment_bounds: tuple[Box, ...] | None = None
+    segment_column_indices: tuple[int | None, ...] | None = None
     text_payload: str | None = None
     text_title: str | None = None
     trim_edge_guides: bool = True
@@ -2225,6 +2234,7 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         bounds: Box,
         *,
         recover_vertical_edges: bool = False,
+        column_index: int | None = None,
     ) -> tuple[Image.Image, list[dict[str, Any]]]:
         if task.preserve_horizontal_bounds:
             source_bounds = _expand_passage_segment_source_bounds(
@@ -2237,6 +2247,7 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
                     else 0
                 ),
                 column_divider_x=passage_column_divider_x,
+                column_index=column_index,
             )
         elif task.text_priority:
             source_bounds = _expand_text_priority_source_bounds_horizontally(
@@ -2314,8 +2325,16 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             # Passage segmenters already leave explicit top/bottom safety
             # space. A second unconditional +/-12 px recovery can reach above
             # the continuation text or below the lower separator/next problem.
-            crop_segment(bounds, recover_vertical_edges=False)
-            for bounds in task.segment_bounds
+            crop_segment(
+                bounds,
+                recover_vertical_edges=False,
+                column_index=(
+                    task.segment_column_indices[index]
+                    if task.segment_column_indices and index < len(task.segment_column_indices)
+                    else None
+                ),
+            )
+            for index, bounds in enumerate(task.segment_bounds)
         ]
         stitch_placements: list[dict[str, int]] = []
         crop = _compose_passage_segments(
@@ -2328,7 +2347,10 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             stitch_placements,
         )
     else:
-        crop, task.rendered_media_regions = crop_segment(task.bounds)
+        crop, task.rendered_media_regions = crop_segment(
+            task.bounds,
+            column_index=(task.segment_column_indices or (None,))[0],
+        )
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(
         task.crop_path,
@@ -2362,6 +2384,7 @@ def _problem_asset_task_dedup_key(task: _ProblemAssetTask) -> tuple[Any, ...]:
         task.source_image.size,
         box_key(task.bounds),
         tuple(box_key(bounds) for bounds in (task.segment_bounds or ())),
+        tuple(task.segment_column_indices or ()),
         task.text_payload,
         task.text_title,
         task.chalk_color,
@@ -5613,6 +5636,7 @@ def _stitch_passage_image_files(
     source_region_groups: Sequence[Sequence[Mapping[str, Any]]] | None = None,
     stitched_regions_output: list[dict[str, Any]] | None = None,
     stitch_diagnostics_output: dict[str, Any] | None = None,
+    source_crop_boxes_output: list[tuple[int, int, int, int]] | None = None,
 ) -> tuple[int, int]:
     images: list[Image.Image] = []
     for path in paths:
@@ -5630,6 +5654,17 @@ def _stitch_passage_image_files(
         transparent=transparent,
         placements_output=placements,
     )
+    if source_crop_boxes_output is not None:
+        source_crop_boxes_output.clear()
+        source_crop_boxes_output.extend(
+            (
+                int(placement.get("crop_left", 0)),
+                int(placement.get("crop_top", 0)),
+                int(placement.get("crop_right", images[index].width)),
+                int(placement.get("crop_bottom", images[index].height)),
+            )
+            for index, placement in enumerate(placements)
+        )
     if stitched_regions_output is not None:
         stitched_regions_output.clear()
         if source_region_groups is not None:
@@ -6010,6 +6045,11 @@ def build_problem_entries(
                 and len(passage_segment_blocks) > 1
                 else None
             )
+            passage_segment_column_indices = (
+                tuple(_coerce_int(block.metadata.get("column_index")) for block in passage_segment_blocks)
+                if passage_segment_blocks
+                else None
+            )
             passage_source_segments = [
                 {
                     "source_page_id": page.page_id,
@@ -6204,6 +6244,7 @@ def build_problem_entries(
                         source_image=prepared_page.image,
                         bounds=merged_box,
                         segment_bounds=stitched_segment_bounds,
+                        segment_column_indices=passage_segment_column_indices,
                         crop_path=crop_path,
                         board_render_path=board_render_path,
                         chalk_color=chalk_color,

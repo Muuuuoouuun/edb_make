@@ -4157,6 +4157,7 @@
     overflow: auto;
     min-height: 0;
     overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     padding: 14px 14px 60px 18px;
     background: var(--bg);
   }
@@ -6276,6 +6277,25 @@
   }
 
   /* Cross-view transition notice */
+  .workspace-stage-surface{
+    view-transition-name: workspace-stage;
+  }
+  ::view-transition-group(workspace-stage){
+    animation-duration: .28s;
+    animation-timing-function: cubic-bezier(.22,.8,.26,1);
+  }
+  ::view-transition-old(workspace-stage){
+    animation: workspace-stage-out .18s ease-in both;
+  }
+  ::view-transition-new(workspace-stage){
+    animation: workspace-stage-in .28s cubic-bezier(.22,.8,.26,1) both;
+  }
+  @keyframes workspace-stage-out{
+    to{ opacity: 0; transform: translateY(-5px) scale(.995); }
+  }
+  @keyframes workspace-stage-in{
+    from{ opacity: 0; transform: translateY(8px) scale(.995); }
+  }
   .view-transition-banner{
     position: fixed;
     top: 68px;
@@ -6550,6 +6570,11 @@
       transition: none;
       animation: none;
     }
+    ::view-transition-group(workspace-stage),
+    ::view-transition-old(workspace-stage),
+    ::view-transition-new(workspace-stage){
+      animation-duration: 0s;
+    }
   }
   @keyframes pop{
     from { opacity: 0; transform: translate(-50%, 8px); }
@@ -6600,6 +6625,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-2a3a401036b9b5f442a64813f5036ad09ff750dd7542f75eb2c1a2e51e442947"></script>
+<script src="app.bundle.js?v=frontend-bundle-1215a9188a46cffc33ca9b3101c1c6741f16a38860ff652d89d409458602fd5f"></script>
 </body>
 </html>

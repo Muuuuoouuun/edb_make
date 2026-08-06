@@ -47,7 +47,7 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertIn("const beforeFlow = reviewFlowState(sessionReviewSummary(session));", on_confirm)
         self.assertIn("const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));", on_confirm)
         self.assertIn("if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk))", on_confirm)
-        self.assertIn("setView('board');", on_confirm)
+        self.assertIn("requestViewChange('board', { force: true });", on_confirm)
         self.assertIn("검수 완료 · 칠판 미리보기로 이동했어요", on_confirm)
         self.assertIn("일괄 확인 완료 · 칠판 미리보기로 이동했어요", on_confirm)
 
@@ -101,18 +101,39 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
         self.assertIn("const confirmSelectedAndAdvance = useCallback(async () => {", review_stage)
-        self.assertIn("sessionReviewSummary(confirmedSession).unresolvedReviewProblemIds", review_stage)
+        self.assertIn("nextUnresolvedReviewTargetAfter(confirmedSession, anchorPageId", review_stage)
+        self.assertIn("nextUnresolvedReviewTargetAfter(\n      confirmedSession,\n      normalizedPageId", review_stage)
+        self.assertIn("pendingReviewSelectionProblemIdRef.current = nextProblemId || ''", review_stage)
+        self.assertIn("pendingReviewSelectionProblemIdRef.current = nextTargetId || ''", review_stage)
         self.assertIn("focusReviewProblem(nextProblemId)", review_stage)
         self.assertIn("normalizedProblemId.startsWith('page:')", review_stage)
+        self.assertIn("const focusedUnresolvedPageTarget", review_stage)
+        self.assertIn("target.id === focusedPageReviewTargetId", review_stage)
+        self.assertIn("const nextUnresolvedTarget = focusedUnresolvedPageTarget", review_stage)
         self.assertIn("페이지 검수 시작", review_stage)
         self.assertIn("지문 없음 확인하고 다음", review_stage)
         self.assertIn("mutateSession?.('confirm-page'", review_stage)
         self.assertIn("reviewFlowState(confirmedSummary).complete", review_stage)
         self.assertIn("onOpenBoard?.()", review_stage)
+        self.assertIn("setPendingReviewNavigation", review_stage)
+        self.assertIn("useLayoutEffect(() =>", review_stage)
+        self.assertIn("const navigationDeadline = performance.now() + 1500", review_stage)
+        self.assertIn("performance.now() < navigationDeadline", review_stage)
+        self.assertIn("cancelSmoothScroll(reviewWrapRef.current)", review_stage)
         self.assertIn("evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey)", review_stage)
         self.assertIn('aria-keyshortcuts="Meta+Enter Control+Enter"', review_stage)
         self.assertIn("review-completion-shortcut", review_stage)
         self.assertNotIn("그대로 확인", review_stage)
+
+    def test_review_target_navigation_uses_page_order_instead_of_payload_order(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        helper = source.split("function nextUnresolvedReviewTargetAfter", 1)[1]
+        helper = helper.split("function ReviewStage", 1)[0]
+
+        self.assertIn("let nextTargetIndex = Number.POSITIVE_INFINITY", helper)
+        self.assertIn("targetIndex < nextTargetIndex", helper)
+        self.assertIn("let wrapTargetIndex = Number.POSITIVE_INFINITY", helper)
+        self.assertIn("nextTarget?.id || wrapTarget?.id", helper)
 
     def test_review_screen_has_only_one_confirmation_domain(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

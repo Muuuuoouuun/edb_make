@@ -72,6 +72,7 @@ PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX = 3.0
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO = 0.001
 PDF_CHOICE_MARKERS = ("①", "②", "③", "④", "⑤")
 PDF_PASSAGE_TEXT_EDGE_PADDING_PX = 4.0
+PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
 PDF_PASSAGE_RANGE_BRACKET_RE = re.compile(
     r"^\s*[\[［（(<]"
     r"(?P<start>[0-9０-９]{1,3})\s*[~\-〜－]\s*(?P<end>[0-9０-９]{1,3})\s*(?:번)?"
@@ -1853,6 +1854,11 @@ def _build_pdf_passage_range_blocks(
             column_entries,
             key=lambda entry: (float(entry[2][0]), float(entry[2][1]), entry[0]),
         )
+        passage_divider_x: float | None = None
+        if len(ordered_columns) == 2:
+            passage_divider_x = (
+                float(ordered_columns[0][2][1]) + float(ordered_columns[1][2][0])
+            ) * 0.5
         current_column_markers = next(
             (
                 markers
@@ -1910,6 +1916,14 @@ def _build_pdf_passage_range_blocks(
             column_markers,
             (fragment_left, fragment_right),
         ) in enumerate(ordered_columns[header_column_position:], start=1):
+            fragment_column_position = next(
+                (
+                    position
+                    for position, (entry_column_index, _markers, _bounds) in enumerate(ordered_columns)
+                    if entry_column_index == fragment_column_index
+                ),
+                0,
+            )
             marker_boundaries: list[Box] = []
             for marker in column_markers:
                 marker_box = _marker_bbox(marker)
@@ -2020,6 +2034,17 @@ def _build_pdf_passage_range_blocks(
                 fragment_right,
                 *(candidate_box.right for candidate_box in fragment_text_boxes),
             ) if fragment_text_boxes else fragment_right
+            if passage_divider_x is not None:
+                if fragment_column_position == 0:
+                    box_right = min(
+                        box_right,
+                        passage_divider_x - PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                    )
+                elif fragment_column_position == 1:
+                    box_left = max(
+                        box_left,
+                        passage_divider_x + PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                    )
             box_bottom = max(
                 fragment_bottom,
                 *(
@@ -2068,6 +2093,12 @@ def _build_pdf_passage_range_blocks(
                         for fragment_text in fragment_texts
                     ),
                     "passage_text_bounds_score": text_bounds_score,
+                    "passage_center_divider_x": passage_divider_x,
+                    "passage_center_divider_exclusion_px": (
+                        PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX
+                        if passage_divider_x is not None
+                        else 0.0
+                    ),
                     "display_title": text[:120],
                     "force_image_record": True,
                     "shared_passage": True,

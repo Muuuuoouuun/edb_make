@@ -779,25 +779,56 @@ const freshInitialItems = () => INITIAL_ITEMS.map(item => ({ ...item }));
 
 // ─── icons ────────────────────────────────────────────────────────────────
 // smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
+function cancelSmoothScroll(el){
+  if (!el) return false;
+  if (el.__scrollRaf) cancelAnimationFrame(el.__scrollRaf);
+  const resolve = el.__scrollResolve;
+  el.__scrollRaf = null;
+  el.__scrollResolve = null;
+  if (typeof resolve === 'function') resolve(false);
+  return Boolean(resolve);
+}
+
+function clampedScrollTop(el, top){
+  const maximum = Math.max(0, finiteNumber(el?.scrollHeight, 0) - finiteNumber(el?.clientHeight, 0));
+  return Math.max(0, Math.min(maximum, finiteNumber(top, 0)));
+}
+
 function smoothScrollTo(el, top, duration = 380){
-  if (!el) return;
+  if (!el) return Promise.resolve(false);
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
     duration = 0;
   }
-  if (duration <= 0){ el.scrollTop = top; return; }
+  cancelSmoothScroll(el);
+  const target = clampedScrollTop(el, top);
+  if (duration <= 0){
+    el.scrollTop = target;
+    return Promise.resolve(true);
+  }
   const start = el.scrollTop;
-  const delta = top - start;
-  if (Math.abs(delta) < 4){ el.scrollTop = top; return; }
-  if (el.__scrollRaf) cancelAnimationFrame(el.__scrollRaf);
-  const t0 = performance.now();
-  const ease = u => 1 - Math.pow(1 - u, 3);
-  const step = (now) => {
-    const u = Math.min(1, (now - t0) / duration);
-    el.scrollTop = start + delta * ease(u);
-    if (u < 1) el.__scrollRaf = requestAnimationFrame(step);
-    else el.__scrollRaf = null;
-  };
-  el.__scrollRaf = requestAnimationFrame(step);
+  const delta = target - start;
+  if (Math.abs(delta) < 4){
+    el.scrollTop = target;
+    return Promise.resolve(true);
+  }
+  return new Promise(resolve => {
+    el.__scrollResolve = resolve;
+    const t0 = performance.now();
+    const ease = u => 1 - Math.pow(1 - u, 3);
+    const step = (now) => {
+      const u = Math.min(1, (now - t0) / duration);
+      el.scrollTop = start + delta * ease(u);
+      if (u < 1) {
+        el.__scrollRaf = requestAnimationFrame(step);
+        return;
+      }
+      el.scrollTop = target;
+      el.__scrollRaf = null;
+      el.__scrollResolve = null;
+      resolve(true);
+    };
+    el.__scrollRaf = requestAnimationFrame(step);
+  });
 }
 
 const Icon = {
@@ -918,6 +949,9 @@ function editableSourceSegmentsForProblem(problem){
       id: `passage-segment-${index + 1}`,
       pageId,
       order: index + 1,
+      columnIndex: [1, 2].includes(Number(segment?.columnIndex ?? segment?.column_index))
+        ? Number(segment?.columnIndex ?? segment?.column_index)
+        : null,
       bbox: {
         left: finiteNumber(bbox.left, 0),
         top: finiteNumber(bbox.top, 0),
@@ -934,6 +968,9 @@ function editableSourceSegmentsForProblem(problem){
     id: 'passage-segment-1',
     pageId: fallbackPageId,
     order: 1,
+    // Legacy passages do not always retain their physical column. Let the
+    // server infer it from the current page divider instead of forcing left.
+    columnIndex: null,
     bbox: {
       left: finiteNumber(fallbackBox.left, 0),
       top: finiteNumber(fallbackBox.top, 0),
@@ -960,6 +997,7 @@ function serializeBoxEditSegments(segments){
   return renumberBoxEditSegments(segments).map(segment => ({
     pageId: segment.pageId,
     order: segment.order,
+    columnIndex: segment.columnIndex,
     bbox: {
       left: Math.round(finiteNumber(segment.bbox?.left, 0)),
       top: Math.round(finiteNumber(segment.bbox?.top, 0)),
@@ -1972,6 +2010,34 @@ function ReviewFilterTabs({ options, value, onChange }){
   );
 }
 
+function nextUnresolvedReviewTargetAfter(session, anchorPageId, { includeAnchorPage = false } = {}){
+  const targets = sessionReviewSummary(session).unresolvedReviewTargets || [];
+  if (!targets.length) return null;
+  const pageOrder = new Map(
+    (session?.pages || []).map((page, index) => [String(page?.id || ''), index])
+  );
+  const anchorIndex = pageOrder.get(String(anchorPageId || ''));
+  if (!Number.isInteger(anchorIndex)) return targets[0]?.id || null;
+  let nextTarget = null;
+  let nextTargetIndex = Number.POSITIVE_INFINITY;
+  let wrapTarget = null;
+  let wrapTargetIndex = Number.POSITIVE_INFINITY;
+  targets.forEach(target => {
+    const targetIndex = pageOrder.get(String(target?.pageId || ''));
+    if (!Number.isInteger(targetIndex)) return;
+    if (targetIndex < wrapTargetIndex) {
+      wrapTarget = target;
+      wrapTargetIndex = targetIndex;
+    }
+    const followsAnchor = includeAnchorPage ? targetIndex >= anchorIndex : targetIndex > anchorIndex;
+    if (followsAnchor && targetIndex < nextTargetIndex) {
+      nextTarget = target;
+      nextTargetIndex = targetIndex;
+    }
+  });
+  return nextTarget?.id || wrapTarget?.id || targets[0]?.id || null;
+}
+
 function ReviewStage({
   session, items, activeId, setActive, mutateSession, retryAiSession, mutating,
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
@@ -2002,6 +2068,7 @@ function ReviewStage({
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
   const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
   const [focusedPageReviewTargetId, setFocusedPageReviewTargetId] = useState('');
+  const [pendingReviewNavigation, setPendingReviewNavigation] = useState(null);
   const reviewFilter = reviewUi?.filter || 'all';
   const reviewRiskFilter = reviewUi?.riskFilter || null;
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
@@ -2025,8 +2092,14 @@ function ReviewStage({
   const manualSplitSeqRef = useRef(1);
   const manualSplitFocusRef = useRef('');
   const pendingReviewSelectionProblemIdRef = useRef('');
+  const reviewNavigationSeqRef = useRef(0);
   const reviewSelectionAnchorRef = useRef(null);
   const reviewWrapRef = useRef(null);
+  const reviewScrollSyncFrameRef = useRef(null);
+  const reviewZoomCenterFrameRef = useRef(null);
+  const reviewZoomCenterSecondFrameRef = useRef(null);
+  const reviewWheelFrameRef = useRef(null);
+  const reviewWheelDeltaRef = useRef(0);
   const reviewScrollTopRef = useRef(Number(reviewUi?.scrollTop) || 0);
   const [reviewPageNav, setReviewPageNav] = useState({ current: 1, total: pages.length });
   const reviewEditorActive = Boolean(boxEdit || manualSplit);
@@ -2062,10 +2135,35 @@ function ReviewStage({
     smoothScrollTo(wrap, targetTop, 220);
   }, [manualSplit]);
 
+  const handleReviewScroll = useCallback((event) => {
+    const wrap = event.currentTarget;
+    reviewScrollTopRef.current = wrap.scrollTop;
+    if (reviewScrollSyncFrameRef.current != null) return;
+    reviewScrollSyncFrameRef.current = window.requestAnimationFrame(() => {
+      reviewScrollSyncFrameRef.current = null;
+      syncReviewPageNavigation(wrap);
+    });
+  }, [syncReviewPageNavigation]);
+
   useEffect(() => {
     onEditorModeChange?.(reviewEditorActive);
   }, [onEditorModeChange, reviewEditorActive]);
   useEffect(() => () => onEditorModeChange?.(false), [onEditorModeChange]);
+  useEffect(() => () => {
+    cancelSmoothScroll(reviewWrapRef.current);
+    if (reviewScrollSyncFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewScrollSyncFrameRef.current);
+    }
+    if (reviewZoomCenterFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterFrameRef.current);
+    }
+    if (reviewZoomCenterSecondFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterSecondFrameRef.current);
+    }
+    if (reviewWheelFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewWheelFrameRef.current);
+    }
+  }, []);
 
   // Reset transient editors if the session changes underneath after a mutation.
   useEffect(() => {
@@ -2078,19 +2176,19 @@ function ReviewStage({
     const pendingProblemId = String(pendingReviewSelectionProblemIdRef.current || '').trim();
     pendingReviewSelectionProblemIdRef.current = '';
     if (pendingProblemId) {
+      setReviewFilter('all');
+      setReviewRiskFilter(null);
+      setReviewScopeProblemIds([]);
+      setReviewScopePageIds([]);
       if (pendingProblemId.startsWith('page:')) {
         const pendingPageId = pendingProblemId.slice(5);
         setSelectedIds(new Set());
         setFocusedPageReviewTargetId(pendingProblemId);
-        window.requestAnimationFrame(() => {
-          const wrap = reviewWrapRef.current;
-          const target = wrap?.querySelector?.(`.review-page[data-page-id="${CSS.escape(pendingPageId)}"]`);
-          if (!wrap || !target) return;
-          const wrapRect = wrap.getBoundingClientRect();
-          const targetRect = target.getBoundingClientRect();
-          const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
-          reviewScrollTopRef.current = targetTop;
-          smoothScrollTo(wrap, targetTop, 220);
+        reviewNavigationSeqRef.current += 1;
+        setPendingReviewNavigation({
+          requestId: reviewNavigationSeqRef.current,
+          pageId: pendingPageId,
+          targetId: pendingProblemId,
         });
         setBoxEdit(null);
         return;
@@ -2100,6 +2198,12 @@ function ReviewStage({
         setFocusedPageReviewTargetId('');
         setSelectedIds(new Set([pendingProblemId]));
         if (setActive) setActive(pendingProblemId);
+        reviewNavigationSeqRef.current += 1;
+        setPendingReviewNavigation({
+          requestId: reviewNavigationSeqRef.current,
+          pageId: String(nextProblem.sourcePageId || nextProblem.source_page_id || ''),
+          targetId: pendingProblemId,
+        });
         setBoxEdit(null);
         return;
       }
@@ -2329,7 +2433,14 @@ function ReviewStage({
     () => selectedActionIds.filter(id => unresolvedProblemIdSet.has(id)),
     [selectedActionIds, unresolvedProblemIdSet]
   );
-  const nextUnresolvedTarget = (reviewSummary.unresolvedReviewTargets || [])[0] || null;
+  const focusedUnresolvedPageTarget = (reviewSummary.unresolvedReviewTargets || [])
+    .find(target => (
+      target?.type === 'page'
+      && target.id === focusedPageReviewTargetId
+    )) || null;
+  const nextUnresolvedTarget = focusedUnresolvedPageTarget
+    || (reviewSummary.unresolvedReviewTargets || [])[0]
+    || null;
   const nextUnresolvedProblemId = nextUnresolvedTarget?.id
     || (reviewSummary.unresolvedReviewProblemIds || [])[0]
     || null;
@@ -2513,8 +2624,16 @@ function ReviewStage({
   }, [reviewFocus, pages]);
 
   const centerReviewZoomScrollers = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
+    if (reviewZoomCenterFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterFrameRef.current);
+    }
+    if (reviewZoomCenterSecondFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterSecondFrameRef.current);
+    }
+    reviewZoomCenterFrameRef.current = window.requestAnimationFrame(() => {
+      reviewZoomCenterFrameRef.current = null;
+      reviewZoomCenterSecondFrameRef.current = window.requestAnimationFrame(() => {
+        reviewZoomCenterSecondFrameRef.current = null;
         reviewWrapRef.current?.querySelectorAll?.('.review-canvas-scroll').forEach(scroller => {
           const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
           if (maxScrollLeft > 1) scroller.scrollLeft = maxScrollLeft / 2;
@@ -2547,10 +2666,22 @@ function ReviewStage({
   }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
-    if (!evt.ctrlKey && !evt.metaKey) return;
+    if (!evt.ctrlKey && !evt.metaKey) {
+      cancelSmoothScroll(reviewWrapRef.current);
+      return;
+    }
     if (!evt.target?.closest?.('.review-canvas-scroll')) return;
     evt.preventDefault();
-    adjustReviewZoom(evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
+    reviewWheelDeltaRef.current += evt.deltaY;
+    if (reviewWheelFrameRef.current != null) return;
+    reviewWheelFrameRef.current = window.requestAnimationFrame(() => {
+      reviewWheelFrameRef.current = null;
+      const delta = reviewWheelDeltaRef.current;
+      reviewWheelDeltaRef.current = 0;
+      if (delta !== 0) {
+        adjustReviewZoom(delta > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
+      }
+    });
   }, [adjustReviewZoom]);
 
   const cancelManualPageSplit = () => {
@@ -3169,53 +3300,122 @@ function ReviewStage({
     setSelectedIds(new Set(visibleReviewScope.problemIds));
     if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
-  const scrollReviewPageIntoView = useCallback((pageId) => {
+  const scrollReviewPageIntoView = useCallback((pageId, targetId = '') => {
     const normalizedPageId = String(pageId || '').trim();
-    if (!normalizedPageId) return;
-    window.requestAnimationFrame(() => {
+    if (!normalizedPageId) return false;
+    reviewNavigationSeqRef.current += 1;
+    setPendingReviewNavigation({
+      requestId: reviewNavigationSeqRef.current,
+      pageId: normalizedPageId,
+      targetId: String(targetId || '').trim(),
+    });
+    return true;
+  }, []);
+  useLayoutEffect(() => {
+    if (!pendingReviewNavigation?.pageId) return undefined;
+    const navigation = pendingReviewNavigation;
+    let cancelled = false;
+    let frameId = 0;
+    const navigationDeadline = performance.now() + 1500;
+    const finish = () => {
+      if (cancelled) return;
+      setPendingReviewNavigation(current => (
+        current?.requestId === navigation.requestId ? null : current
+      ));
+    };
+    const findAndScroll = () => {
+      if (cancelled) return;
       const wrap = reviewWrapRef.current;
-      if (!wrap) return;
-      const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+      const pageNodes = wrap ? Array.from(wrap.querySelectorAll('.review-page')) : [];
       const targetIndex = pageNodes.findIndex(
-        node => String(node.dataset?.pageId || '') === normalizedPageId
+        node => String(node.dataset?.pageId || '') === navigation.pageId
       );
-      if (targetIndex < 0) return;
+      if (!wrap || targetIndex < 0) {
+        if (performance.now() < navigationDeadline) {
+          frameId = window.requestAnimationFrame(findAndScroll);
+          return;
+        }
+        reportRuntimeDiagnostic(new Error('검수 페이지 이동 대상을 찾지 못했습니다.'), {
+          type: 'review-navigation',
+          pageId: navigation.pageId,
+          targetId: navigation.targetId,
+        });
+        finish();
+        return;
+      }
       const target = pageNodes[targetIndex];
       const wrapRect = wrap.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
       const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
       reviewScrollTopRef.current = targetTop;
       setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
-      smoothScrollTo(wrap, targetTop, 220);
-    });
-  }, []);
+      void smoothScrollTo(wrap, targetTop, 300).then(finish);
+    };
+    frameId = window.requestAnimationFrame(findAndScroll);
+    return () => {
+      cancelled = true;
+      if (frameId) window.cancelAnimationFrame(frameId);
+      cancelSmoothScroll(reviewWrapRef.current);
+    };
+  }, [
+    pages,
+    pendingReviewNavigation,
+    reviewFilter,
+    reviewRiskFilter,
+    reviewScopePageIds,
+    reviewScopeProblemIds,
+  ]);
   const focusReviewProblem = useCallback((problemId) => {
     const normalizedProblemId = String(problemId || '').trim();
     if (!normalizedProblemId) return;
+    setReviewFilter('all');
+    setReviewRiskFilter(null);
+    clearReviewScope();
     if (normalizedProblemId.startsWith('page:')) {
       setSelectedIds(new Set());
       setFocusedPageReviewTargetId(normalizedProblemId);
-      scrollReviewPageIntoView(normalizedProblemId.slice(5));
+      scrollReviewPageIntoView(normalizedProblemId.slice(5), normalizedProblemId);
       return;
     }
     setFocusedPageReviewTargetId('');
     setSelectedIds(new Set([normalizedProblemId]));
     if (setActive) setActive(normalizedProblemId);
-    scrollReviewPageIntoView(problemsById.get(normalizedProblemId)?.sourcePageId);
-  }, [problemsById, scrollReviewPageIntoView, setActive, setSelectedIds]);
+    scrollReviewPageIntoView(
+      problemsById.get(normalizedProblemId)?.sourcePageId,
+      normalizedProblemId
+    );
+  }, [
+    clearReviewScope,
+    problemsById,
+    scrollReviewPageIntoView,
+    setActive,
+    setReviewFilter,
+    setReviewRiskFilter,
+    setSelectedIds,
+  ]);
   const selectNextUnresolvedProblem = useCallback(() => {
     focusReviewProblem(nextUnresolvedProblemId);
   }, [focusReviewProblem, nextUnresolvedProblemId]);
   const confirmSelectedAndAdvance = useCallback(async () => {
     if (mutating || selectedUnresolvedProblemIds.length === 0) return false;
+    const pageOrder = new Map(pages.map((page, index) => [String(page?.id || ''), index]));
+    const anchorPageId = selectedUnresolvedProblemIds
+      .map(problemId => String(
+        problemsById.get(problemId)?.sourcePageId
+        || problemsById.get(problemId)?.source_page_id
+        || ''
+      ))
+      .filter(Boolean)
+      .sort((left, right) => (pageOrder.get(right) ?? -1) - (pageOrder.get(left) ?? -1))[0] || '';
     const confirmedSession = await onConfirm?.(null, {
       problemIds: selectedUnresolvedProblemIds,
       bulk: true,
     });
     if (!confirmedSession) return false;
     const nextProblemId = Array.isArray(confirmedSession?.problems)
-      ? (sessionReviewSummary(confirmedSession).unresolvedReviewProblemIds || [])[0]
+      ? nextUnresolvedReviewTargetAfter(confirmedSession, anchorPageId, { includeAnchorPage: true })
       : nextUnresolvedAfterSelectionId;
+    pendingReviewSelectionProblemIdRef.current = nextProblemId || '';
     if (nextProblemId) focusReviewProblem(nextProblemId);
     return true;
   }, [
@@ -3223,6 +3423,8 @@ function ReviewStage({
     mutating,
     nextUnresolvedAfterSelectionId,
     onConfirm,
+    pages,
+    problemsById,
     selectedUnresolvedProblemIds,
   ]);
   const confirmPageAndAdvance = useCallback(async (pageId) => {
@@ -3234,7 +3436,11 @@ function ReviewStage({
     });
     if (!confirmedSession) return false;
     const confirmedSummary = sessionReviewSummary(confirmedSession);
-    const nextTargetId = confirmedSummary.unresolvedReviewTargets?.[0]?.id || null;
+    const nextTargetId = nextUnresolvedReviewTargetAfter(
+      confirmedSession,
+      normalizedPageId,
+    );
+    pendingReviewSelectionProblemIdRef.current = nextTargetId || '';
     setFocusedPageReviewTargetId('');
     if (nextTargetId) {
       focusReviewProblem(nextTargetId);
@@ -3927,7 +4133,7 @@ function ReviewStage({
   );
 
   return (
-    <div className="col center">
+    <div className="col center workspace-stage-surface">
       <div className="stage">
         <div className="stage-toolbar review-stage-toolbar">
           <div className="review-stage-heading">
@@ -4011,11 +4217,10 @@ function ReviewStage({
           className={`review-wrap ${manualSplit ? 'manual-split-open' : ''}`}
           style={{ '--review-zoom': String(reviewZoom) }}
           onWheel={handleReviewWheel}
-          onScroll={event => {
-            reviewScrollTopRef.current = event.currentTarget.scrollTop;
-            syncReviewPageNavigation(event.currentTarget);
-          }}
+          onPointerDown={() => cancelSmoothScroll(reviewWrapRef.current)}
+          onScroll={handleReviewScroll}
           ref={reviewWrapRef}
+          aria-busy={mutating || Boolean(pendingReviewNavigation)}
         >
           {actionBar}
           <div className="review-summary-strip">
@@ -4185,7 +4390,7 @@ function ReviewStage({
               <span className="review-summary-note">{reviewSummary.warningPreview}</span>
             )}
           </div>
-          {pages.map(page => {
+          {pages.map((page, pageIndex) => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
               .filter(Boolean)
@@ -4326,7 +4531,16 @@ function ReviewStage({
                           : undefined}
                       >
                     {page.sourceImageUri ? (
-                      <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} draggable={false} />
+                      <img
+                        src={filePreviewUrl(page.sourceImageUri)}
+                        alt={page.id}
+                        width={Math.max(1, Number(page.width) || 1)}
+                        height={Math.max(1, Number(page.height) || 1)}
+                        loading={pageIndex < 2 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
+                        draggable={false}
+                      />
                     ) : (
                       <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                         페이지 이미지를 불러올 수 없어요.
@@ -6430,7 +6644,7 @@ function BoardStage({
   }
 
   return (
-    <div className="col center">
+    <div className="col center workspace-stage-surface">
       <div className="stage">
         <div className="stage-toolbar">
           <span className="name">실시간 칠판 미리보기</span>
@@ -12086,6 +12300,7 @@ function App(){
   const moveSequenceRef = useRef(0);
   const actionToastTimerRef = useRef(null);
   const viewTransitionTimerRef = useRef(null);
+  const activeViewTransitionRef = useRef(null);
   const jobControllersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
   const pendingFileKeysRef = useRef(new Set());
@@ -12121,6 +12336,7 @@ function App(){
     if (moveFeedbackTimerRef.current) window.clearTimeout(moveFeedbackTimerRef.current);
     if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
     if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    activeViewTransitionRef.current?.skipTransition?.();
   }, []);
   const canUndo = historyStack.length > 0 && !mutating;
 
@@ -12164,12 +12380,42 @@ function App(){
 
   const requestViewChange = useCallback((nextView, options = {}) => {
     const target = nextView === 'review' ? 'review' : 'board';
-    if (target === view) return true;
+    if (target === view && typeof options.beforeCommit !== 'function') return true;
     if (reviewEditorActive && !options.force) {
       showToast('영역 편집을 적용하거나 취소한 뒤 화면을 이동해 주세요');
       return false;
     }
-    setView(target);
+    const commitView = () => {
+      if (typeof ReactDOM.flushSync === 'function') {
+        ReactDOM.flushSync(() => {
+          options.beforeCommit?.();
+          setView(target);
+        });
+      } else {
+        options.beforeCommit?.();
+        setView(target);
+      }
+    };
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const canAnimate = !reduceMotion && typeof document.startViewTransition === 'function';
+    if (canAnimate) {
+      activeViewTransitionRef.current?.skipTransition?.();
+      try {
+        const transition = document.startViewTransition(commitView);
+        activeViewTransitionRef.current = transition;
+        void transition.finished
+          .catch(() => {})
+          .finally(() => {
+            if (activeViewTransitionRef.current === transition) {
+              activeViewTransitionRef.current = null;
+            }
+          });
+      } catch (_error) {
+        commitView();
+      }
+    } else {
+      commitView();
+    }
     const selectedCount = selectedProblemIds.size;
     setViewTransitionBanner(
       target === 'review'
@@ -13314,6 +13560,7 @@ function App(){
       review.incomingSession || review.session,
       destination
     );
+    let destinationView = null;
     setConfirmingRecognition(true);
     try {
       if (review.kind === 'session-passage-reextract') {
@@ -13350,14 +13597,14 @@ function App(){
           .filter(Boolean);
         if (resolvedDestination === 'board') {
           setReviewFocus(null);
-          setView('board');
+          destinationView = 'board';
         } else {
           setReviewFocus({
             filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
             problemIds: reextractedIds,
             source: 'session-passage-reextract',
           });
-          setView('review');
+          destinationView = 'review';
         }
         refreshSessionHistory();
         showToast(
@@ -13383,14 +13630,14 @@ function App(){
         const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
         if (resolvedDestination === 'board') {
           setReviewFocus(null);
-          setView('board');
+          destinationView = 'board';
         } else {
           setReviewFocus({
             ...(nextScope || {}),
             filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
             source: 'queue-recognition',
           });
-          setView('review');
+          destinationView = 'review';
         }
         refreshSessionHistory();
         const appliedKeys = new Set(review.fileKeys || []);
@@ -13429,19 +13676,19 @@ function App(){
             problemIds: review.problemIds || [],
             source: 'partial-retry',
           });
-          setView('review');
+          destinationView = 'review';
           showToast('영역 재인식 적용 · 번호와 순서를 유지했어요');
         } else {
           if (resolvedDestination === 'board') {
             setReviewFocus(null);
-            setView('board');
+            destinationView = 'board';
           } else {
             setReviewFocus({
               filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
               problemIds: review.problemIds || [],
               source: 'retry-ai',
             });
-            setView('review');
+            destinationView = 'review';
           }
           const summary = summarizeRecognitionSession(restored, review.pageIds);
           showToast(
@@ -13451,7 +13698,14 @@ function App(){
           );
         }
       }
-      setRecognitionReview(null);
+      if (destinationView) {
+        requestViewChange(destinationView, {
+          force: true,
+          beforeCommit: () => setRecognitionReview(null),
+        });
+      } else {
+        setRecognitionReview(null);
+      }
     } catch (e) {
       showSimpleErrorToast(e, '적용 실패');
     } finally {
@@ -13469,6 +13723,7 @@ function App(){
     adoptMutatedSession,
     refreshSessionHistory,
     queueRequestIsCurrent,
+    requestViewChange,
     setPendingFilesTracked,
     showSimpleErrorToast,
   ]);
@@ -13745,7 +14000,7 @@ function App(){
       setPublished(false);
       if (allItemsConfirmedByBulk) {
         setReviewFocus(null);
-        setView('board');
+        requestViewChange('board', { force: true });
         showToast('일괄 확인 완료 · 칠판 미리보기로 이동했어요');
       } else {
         showToast(options.bulk
@@ -13760,7 +14015,7 @@ function App(){
     const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));
     if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk)) {
       setReviewFocus(null);
-      setView('board');
+      requestViewChange('board', { force: true });
       showToast(options.bulk
         ? '일괄 확인 완료 · 칠판 미리보기로 이동했어요'
         : '검수 완료 · 칠판 미리보기로 이동했어요');
