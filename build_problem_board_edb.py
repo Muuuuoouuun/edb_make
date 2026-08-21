@@ -9716,6 +9716,26 @@ def resolve_font_size(block: ContentBlock, scale: float) -> int:
     return int(max(10, min(40, round(scaled))))
 
 
+def _validate_problem_entry_ids(problem_entries: Sequence[ProblemEntry]) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    missing_indices: list[int] = []
+    for index, entry in enumerate(problem_entries):
+        problem_id = str(entry.problem_id or "").strip()
+        if not problem_id:
+            missing_indices.append(index)
+            continue
+        if problem_id in seen and problem_id not in duplicates:
+            duplicates.append(problem_id)
+        seen.add(problem_id)
+    if missing_indices:
+        preview = ", ".join(str(index) for index in missing_indices[:3])
+        raise ValueError(f"Problem ID must not be empty (entry index: {preview})")
+    if duplicates:
+        preview = ", ".join(duplicates[:3])
+        raise ValueError(f"Duplicate problem ID is not allowed: {preview}")
+
+
 def placement_inputs(
     problem_entries: list[ProblemEntry],
     *,
@@ -9896,6 +9916,7 @@ def split_problem_entries_for_classin_page_limit(
     max_pages = max(1, int(max_page_count))
     if not problem_entries:
         return []
+    _validate_problem_entry_ids(problem_entries)
     limited_template = template_with_board_page_count(template, max_pages)
     chunks: list[list[ProblemEntry]] = []
     current: list[ProblemEntry] = []
@@ -9914,6 +9935,12 @@ def split_problem_entries_for_classin_page_limit(
             chunks.append(current)
             current = []
             placement = place_problems([layout_input], template=limited_template)[0]
+            end_pages = max(placement.actual_bottom_y_pages, placement.snapped_next_start_y_pages)
+        if end_pages > max_pages + 1e-6:
+            raise ValueError(
+                f"Problem '{entry.problem_id}' exceeds ClassIn's {max_pages}-page limit "
+                f"({end_pages:.3f} pages); split the source before publishing"
+            )
         current.append(entry)
         cursor_pages = placement.snapped_next_start_y_pages
 
@@ -10267,6 +10294,7 @@ def build_image_only_records(
     generate_records: bool = True,
     expand_board_capacity: bool = True,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
+    _validate_problem_entry_ids(problem_entries)
     layout_heights = (
         _image_only_layout_heights_by_problem_id(
             problem_entries,
@@ -10471,6 +10499,7 @@ def build_mixed_records(
     dark_board: bool = True,
     board_theme: str = DEFAULT_BOARD_THEME,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
+    _validate_problem_entry_ids(problem_entries)
     placements = place_problems(placement_inputs(problem_entries), template=template)
     _ensure_template_board_capacity(template, placements)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
@@ -10763,6 +10792,12 @@ def write_classin_limited_edb_files(
             render_chunk(chunk_entries[:split_index], from_recursive_split=True)
             render_chunk(chunk_entries[split_index:], from_recursive_split=True)
             return
+        if flow_end_pages > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+            problem_id = chunk_entries[0].problem_id if chunk_entries else "unknown"
+            raise ValueError(
+                f"Problem '{problem_id}' exceeds ClassIn's {CLASSIN_MAX_BOARD_PAGE_COUNT}-page limit "
+                f"after rendering ({flow_end_pages:.3f} pages); split the source before publishing"
+            )
 
         rendered_chunk["from_recursive_split"] = from_recursive_split
         rendered_chunks.append(rendered_chunk)

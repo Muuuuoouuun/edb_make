@@ -34,6 +34,7 @@ from build_problem_board_edb import (
     build_image_only_records,
     run_problem_export,
     split_problem_entries_for_classin_page_limit,
+    write_classin_limited_edb_files,
     _pad_problem_crop_edges,
     _pad_problem_crop_bottom,
     _hwp_conversion_has_pdf_problem_markers,
@@ -56,6 +57,29 @@ def _path_from_file_uri(value: str) -> Path:
 
 
 class TestEdbPublishFlow(unittest.TestCase):
+    def test_edb_builder_rejects_empty_record_set(self):
+        with self.assertRaisesRegex(ValueError, "at least one record"):
+            edb_builder.build_edb([], header_flag=3)
+
+    def test_session_publish_preflight_blocks_duplicate_problem_ids(self):
+        problems = [
+            {"id": "same-id", "title": "1.", "riskFlags": []},
+            {"id": "same-id", "title": "2.", "riskFlags": []},
+        ]
+
+        preflight, _duplicate_number_groups = _session_publish_blocking_preflight(
+            problems,
+            session={"input_intent": "page-as-is"},
+        )
+
+        self.assertFalse(preflight["passed"])
+        duplicate_id_issues = [
+            issue for issue in preflight["issues"] if issue["type"] == "duplicate_problem_id"
+        ]
+        self.assertEqual(1, len(duplicate_id_issues))
+        self.assertEqual("same-id", duplicate_id_issues[0]["problemId"])
+        self.assertEqual(2, duplicate_id_issues[0]["occurrenceCount"])
+
     def test_hwp_layout_problem_markers_count_as_marker_document_signal(self):
         self.assertTrue(
             _hwp_conversion_has_pdf_problem_markers(
@@ -1400,6 +1424,59 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertEqual([41, 1], [len(chunk) for chunk in chunks])
+
+    def test_record_assembly_rejects_duplicate_problem_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self._make_problem_entry(root, "duplicate-id", Box(0, 0, 640, 640))
+            second = self._make_problem_entry(root, "second", Box(0, 0, 640, 640))
+            second.problem_id = first.problem_id
+
+            with self.assertRaisesRegex(ValueError, "Duplicate problem ID.*duplicate-id"):
+                build_image_only_records(
+                    [first, second],
+                    LayoutTemplate(name="academy-default"),
+                )
+
+    def test_classin_split_rejects_single_problem_over_fifty_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "oversized", Box(0, 0, 640, 640))
+            entry.actual_height_pages = 50.1
+
+            with self.assertRaisesRegex(ValueError, "oversized.*50-page limit"):
+                split_problem_entries_for_classin_page_limit(
+                    [entry],
+                    LayoutTemplate(name="academy-default", board_page_count=80),
+                )
+
+    def test_classin_writer_rejects_single_rendered_record_over_fifty_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "rendered-oversized", Box(0, 0, 640, 640))
+            placement = {
+                "problem_id": entry.problem_id,
+                "actual_bottom_y_pages": 0.72,
+                "snapped_next_start_y_pages": 1.2,
+                "record_bottom_y_pages": 50.5,
+                "recordPageCountHint": 50,
+            }
+
+            with self.assertRaisesRegex(ValueError, "rendered-oversized.*50-page limit"):
+                write_classin_limited_edb_files(
+                    [entry],
+                    LayoutTemplate(name="academy-default", board_page_count=50),
+                    root,
+                    "lesson.edb",
+                    record_mode="image-only",
+                    text_confidence_threshold=0.78,
+                    dark_board=True,
+                    board_theme="charcoal",
+                    crop_format=edb_builder.CROP_FORMAT_V2,
+                    existing_records=[b"placeholder"],
+                    existing_placements=[placement],
+                    existing_header_flag=0,
+                )
 
     def test_classin_split_does_not_rebuild_each_candidate_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:

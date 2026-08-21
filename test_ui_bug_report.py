@@ -21,6 +21,9 @@ class BugReportUiTests(unittest.TestCase):
         self.assertIn("사용 중 문제가 있었나요?", settings)
         self.assertIn('htmlFor="bug-report-description"', settings)
         self.assertIn('id="bug-report-description"', settings)
+        self.assertIn('htmlFor="bug-report-contact"', settings)
+        self.assertIn('id="bug-report-contact"', settings)
+        self.assertIn("이 문제에 관한 회신에 동의", settings)
         self.assertIn("진단 정보 포함", settings)
         self.assertIn("리포트 보내기", settings)
         self.assertIn("원본 시험지, 세션 내용, API 키, 전체 로컬 경로", settings)
@@ -44,8 +47,11 @@ class BugReportUiTests(unittest.TestCase):
             "pendingCount",
             "hangul",
             "runtimeErrors",
+            "lastOperationError",
         ):
             self.assertIn(field, handler)
+        self.assertIn("contact: bugReportContact.trim()", handler)
+        self.assertIn("consentToContact", handler)
         self.assertNotIn("session,", handler)
         self.assertNotIn("pendingFile,", handler)
 
@@ -56,6 +62,9 @@ class BugReportUiTests(unittest.TestCase):
         self.assertIn("entries.slice(-10)", helper)
         self.assertIn("message: String(message).slice(0, 1500)", helper)
         self.assertIn("safe.filename", helper)
+        self.assertIn("safe.operation", helper)
+        self.assertIn("safe.code", helper)
+        self.assertIn("safe.status", helper)
         self.assertNotIn("error: rawError", helper)
 
     def test_report_card_styles_match_existing_settings_panel(self):
@@ -67,8 +76,33 @@ class BugReportUiTests(unittest.TestCase):
             ".bug-report-privacy",
             ".bug-report-status.success",
             ".bug-report-actions",
+            ".bug-report-contact",
         ):
             self.assertIn(selector, self.board)
+
+    def test_publish_failure_has_persistent_recovery_actions(self):
+        banner = self.app.split("function OperationRecoveryBanner", 1)[1].split(
+            "function LoadingOverlay", 1
+        )[0]
+        for label in (
+            "EDB 다시 제작",
+            "최근 저장본 열기",
+            "PNG로 대체 저장",
+            "오류 내용 복사",
+        ):
+            self.assertIn(label, banner)
+        self.assertIn("편집 내용은 안전합니다", banner)
+        self.assertIn("수업 자료로 사용할 수 있습니다", banner)
+        self.assertIn("operationRecoverySummary(error)", banner)
+        publish = self.app.split("const onPublish = async", 1)[1].split(
+            "return (", 1
+        )[0]
+        self.assertIn("operationErrorFromResponse", publish)
+        self.assertIn("setLastOperationError(diagnostic)", publish)
+        self.assertIn("setLastOperationError(null)", publish)
+        self.assertIn("captureRecoverableDiagnostic", self.app)
+        self.assertIn("EDB_CAPTURE_RUNTIME_DIAGNOSTIC", self.board)
+        self.assertIn(".operation-recovery-banner", self.board)
 
 
 if __name__ == "__main__":

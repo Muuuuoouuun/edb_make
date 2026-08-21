@@ -15,8 +15,8 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
         self.assertIn("onConfirm", review_stage)
         self.assertIn("actionableProblemIds", review_stage)
-        self.assertIn("확인 필요 전체 확인", review_stage)
-        self.assertIn("표시 항목 확인 완료", review_stage)
+        self.assertIn("모두 확인", review_stage)
+        self.assertIn("표시 항목 확인", review_stage)
         self.assertIn("onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })", review_stage)
         self.assertIn("onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })", review_stage)
 
@@ -147,27 +147,57 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertNotIn("<button className=\"btn\" disabled={!item}>건너뛰기</button>", side_panel)
         self.assertIn("합치고 다음 검수", box_editor)
 
-    def test_review_top_toolbars_use_grouped_reusable_components(self) -> None:
+    def test_review_top_toolbar_prioritizes_status_remaining_and_quick_actions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
-        self.assertIn("function ReviewToolbarGroup", source)
         self.assertIn("function ReviewFilterTabs", source)
-        self.assertIn('label="상태 보기"', source)
-        self.assertIn('label="일괄 작업"', source)
         self.assertIn('aria-pressed={value === filterValue}', source)
         self.assertIn('className="stage-toolbar review-stage-toolbar"', source)
         self.assertIn('className="review-view-control-group"', source)
-        self.assertIn(".review-toolbar-group", html)
+        self.assertIn("`남은 확인 ${reviewFlow.remaining}`", review_stage)
+        self.assertIn('className="review-toolbar-actions"', review_stage)
+        self.assertNotIn('label="상태 보기"', review_stage)
+        self.assertNotIn('label="일괄 작업"', review_stage)
+        self.assertNotIn("review-toolbar-guidance", review_stage)
+        self.assertNotIn("표시 항목 선택", review_stage)
+        self.assertIn(".review-toolbar-actions", html)
         self.assertIn(".review-toolbar-action:focus-visible", html)
         self.assertIn(".review-stage-heading", html)
+
+    def test_review_diagnostics_are_collapsed_behind_one_disclosure(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1]
+        review_stage = review_stage.split("// ─── LEFT:", 1)[0]
+
+        self.assertIn("const [reviewDiagnosticsOpen, setReviewDiagnosticsOpen] = useState(false)", review_stage)
+        self.assertIn("aria-expanded={reviewDiagnosticsOpen}", review_stage)
+        self.assertIn('aria-controls="review-diagnostics-detail"', review_stage)
+        self.assertIn("상세 진단", review_stage)
+        self.assertIn('id="review-diagnostics-detail" className="review-summary-details"', review_stage)
+        self.assertIn(".review-summary-overview", html)
+        self.assertIn(".review-summary-details", html)
 
     def test_board_uses_review_bulk_confirm_cache_bust(self) -> None:
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
 
-        self.assertIn("review_filters.js?v=passage-filter-20260614", html)
+        self.assertIn("review_filters.js?v=review-mode-copy-20260818", html)
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
+
+    def test_items_rail_uses_session_mode_for_filters_and_recent_counts(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        rail = source.split("function ItemsRail", 1)[1]
+        rail = rail.split("function StageBoard", 1)[0]
+
+        self.assertIn("sessionReviewMode?.(session)", rail)
+        self.assertIn("['questions', '페이지 원본', materialCounts.questions]", rail)
+        self.assertIn("recentSessionCountLabel(entry)", rail)
+        review_usage = source.split("<ItemsRail", 1)[1].split("/>", 1)[0]
+        self.assertIn("session={session}", review_usage)
 
 
 if __name__ == "__main__":

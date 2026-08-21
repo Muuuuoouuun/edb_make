@@ -755,7 +755,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
         summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
 
-        self.assertIn("'passage', '지문'", review_stage)
+        self.assertIn("prev === 'passage' ? 'all' : 'passage'", review_stage)
         self.assertIn("지문 묶음", review_stage)
         self.assertIn("이어짐", review_stage)
         self.assertIn("passageGroupCount", review_stage)

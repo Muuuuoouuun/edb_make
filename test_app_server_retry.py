@@ -5265,6 +5265,25 @@ class TestSessionHistory(unittest.TestCase):
         self.assertEqual(2, history[0]["coreProblemCount"])
         self.assertEqual(["new-1", "new-2"], [problem["id"] for problem in history[0]["session"]["problems"]])
 
+    def test_session_history_exposes_review_mode_without_full_session_payload(self):
+        session = {
+            "session_name": "페이지 원본",
+            "generated_at": "2026-08-18T14:00:00+09:00",
+            "output_dir": "/tmp/page-as-is-session",
+            "input_intent": "page-as-is",
+            "content_target": "all",
+            "pages": [{"id": "page-001"}, {"id": "page-002"}],
+            "problems": [{"id": "p1"}, {"id": "p2"}],
+        }
+
+        history = app_server._session_history_with_session([], session)
+        public = app_server._public_session_history(history)
+
+        self.assertNotIn("session", public[0])
+        self.assertEqual("page-as-is", public[0]["inputIntent"])
+        self.assertEqual("all", public[0]["contentTarget"])
+        self.assertEqual(2, public[0]["pageCount"])
+
     def test_public_session_history_omits_full_session_payload(self):
         session = {
             "session_name": "영어 양식",

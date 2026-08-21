@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 import webbrowser
 import zipfile
@@ -76,6 +77,36 @@ PASSAGE_REVIEW_REASON_LABELS = {
 MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
 MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO = 0.30
 MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO = 0.70
+PUBLISH_RECOVERY_STEPS = [
+    "같은 작업에서 다시 제작해 주세요. 편집 내용은 최근 작업에 보관됩니다.",
+    "계속 실패하면 PNG 묶음으로 먼저 보관한 뒤 오류 정보를 복사해 신고해 주세요.",
+]
+
+
+def _log_operation_exception(operation: str, exc: BaseException) -> None:
+    print(
+        f"[operation-error] {operation}: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+        flush=True,
+    )
+    traceback.print_exc(file=sys.stderr)
+
+
+def _publish_failure_payload(
+    *,
+    code: str,
+    message: str,
+    exc: BaseException,
+    retryable: bool = True,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"{message}: {exc}",
+        "code": code,
+        "operation": "session_publish",
+        "retryable": retryable,
+        "recoverySteps": list(PUBLISH_RECOVERY_STEPS),
+    }
 
 
 @lru_cache(maxsize=None)
@@ -1690,6 +1721,12 @@ def _write_classin_limited_edb_files_local(
             render_chunk(chunk_entries[:split_index])
             render_chunk(chunk_entries[split_index:])
             return
+        if flow_end_pages > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+            problem_id = str(getattr(chunk_entries[0], "problem_id", "unknown") or "unknown")
+            raise ValueError(
+                f"Problem '{problem_id}' exceeds ClassIn's {CLASSIN_MAX_BOARD_PAGE_COUNT}-page limit "
+                f"after rendering ({flow_end_pages:.3f} pages); split the source before publishing"
+            )
 
         rendered_chunks.append(rendered_chunk)
 
@@ -2200,6 +2237,59 @@ def _session_passage_review_queue_issues(
     return issues
 
 
+def _session_problem_id_issues(problems: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    problems_by_id: dict[str, list[dict[str, Any]]] = {}
+    issues: list[dict[str, Any]] = []
+    for index, problem in enumerate(problems):
+        if not isinstance(problem, dict):
+            continue
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
+        if not problem_id:
+            issues.append(
+                {
+                    "type": "missing_problem_id",
+                    "severity": "error",
+                    "message": "문항 내부 식별자가 비어 있어 EDB 제작을 중단했습니다.",
+                    "problemId": "",
+                    "problemTitle": str(problem.get("title") or problem.get("problemNumber") or ""),
+                    "entryIndex": index,
+                    "entry_index": index,
+                }
+            )
+            continue
+        problems_by_id.setdefault(problem_id, []).append(problem)
+
+    for problem_id, matches in problems_by_id.items():
+        if len(matches) < 2:
+            continue
+        source_page_ids = list(
+            dict.fromkeys(
+                str(problem.get("sourcePageId") or problem.get("source_page_id") or "").strip()
+                for problem in matches
+                if str(problem.get("sourcePageId") or problem.get("source_page_id") or "").strip()
+            )
+        )
+        issues.append(
+            {
+                "type": "duplicate_problem_id",
+                "severity": "error",
+                "message": (
+                    "서로 다른 문항이 같은 내부 식별자를 사용하고 있어 EDB 제작을 중단했습니다. "
+                    "문항을 다시 인식하거나 분할한 뒤 재시도해 주세요."
+                ),
+                "problemId": problem_id,
+                "problemTitle": str(matches[0].get("title") or matches[0].get("problemNumber") or ""),
+                "problemIds": [problem_id],
+                "problem_ids": [problem_id],
+                "occurrenceCount": len(matches),
+                "occurrence_count": len(matches),
+                "sourcePageIds": source_page_ids,
+                "source_page_ids": source_page_ids,
+            }
+        )
+    return issues
+
+
 def _session_publish_blocking_preflight(
     problems: list[dict[str, Any]],
     session: dict[str, Any] | None = None,
@@ -2229,6 +2319,7 @@ def _session_publish_blocking_preflight(
     )
     if not page_as_is:
         issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
+    issues.extend(_session_problem_id_issues(problems))
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
     issues.extend(
@@ -2677,6 +2768,15 @@ def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = 
     review_summary = session_snapshot.get("reviewSummary")
     if not isinstance(review_summary, dict):
         review_summary = session_snapshot.get("review_summary")
+    input_intent = str(
+        session_snapshot.get("inputIntent") or session_snapshot.get("input_intent") or ""
+    ).strip()
+    content_target = str(
+        session_snapshot.get("contentTarget") or session_snapshot.get("content_target") or ""
+    ).strip()
+    page_count = len([
+        page for page in (session_snapshot.get("pages") or []) if isinstance(page, dict)
+    ])
     updated_value = updated_at or datetime.now().astimezone().isoformat(timespec="seconds")
     return {
         "id": entry_id,
@@ -2691,6 +2791,12 @@ def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = 
         "detectedProblemCount": counts["detected_problem_count"],
         "coreProblemCount": counts["core_problem_count"],
         "supplementalItemCount": counts["supplemental_item_count"],
+        "inputIntent": input_intent,
+        "input_intent": input_intent,
+        "contentTarget": content_target,
+        "content_target": content_target,
+        "pageCount": page_count,
+        "page_count": page_count,
         "publishSummary": publish_summary or None,
         "reviewSummary": review_summary or None,
         "inputFileCount": int(session_snapshot.get("input_file_count") or len(session_snapshot.get("input_files") or [])),
@@ -7638,7 +7744,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # run_problem_export so mvp_board.edb and the published EDB agree.
         template.board_page_count = max(50, len(entries) * 2)
         output_dir = Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            _log_operation_exception("session_publish.prepare_output", exc)
+            self._send_json(
+                _publish_failure_payload(
+                    code="publish_output_unavailable",
+                    message="제작 파일을 저장할 폴더를 준비하지 못했습니다",
+                    exc=exc,
+                ),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
 
         crop_format = _normalize_crop_format(session.get("crop_format"))
 
@@ -7653,9 +7771,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
                 crop_format=crop_format,
             )
-        except Exception as exc:  # noqa: BLE001 — bubble up pipeline errors verbatim
-            self._send_json({"ok": False, "error": f"publish build failed: {exc}"},
-                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        except Exception as exc:  # noqa: BLE001 — report the exact pipeline stage
+            _log_operation_exception("session_publish.build_records", exc)
+            self._send_json(
+                _publish_failure_payload(
+                    code="publish_build_failed",
+                    message="EDB 제작 데이터 생성에 실패했습니다",
+                    exc=exc,
+                ),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -7686,8 +7811,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             edb_validation, edb_parts = _validate_edb_parts(edb_parts)
             edb_path = Path(str(edb_parts[0]["edbPath"]))
         except Exception as exc:  # noqa: BLE001
-            self._send_json({"ok": False, "error": f"failed to write edb: {exc}"},
-                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            _log_operation_exception("session_publish.write_edb", exc)
+            self._send_json(
+                _publish_failure_payload(
+                    code="edb_write_failed",
+                    message="EDB 파일 저장에 실패했습니다",
+                    exc=exc,
+                ),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
 
         core_problem_count = sum(1 for problem in sequence if not _session_problem_is_supplemental(problem))

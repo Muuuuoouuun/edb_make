@@ -1,5 +1,6 @@
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_DESCRIPTION_CHARS = 4_000;
+const MAX_CONTACT_CHARS = 240;
 const MAX_JSON_CHARS = 48_000;
 const ALLOWED_APP_IDS = new Set(["ClassInEDBMVP"]);
 
@@ -93,6 +94,14 @@ function validateReport(payload) {
   if (payload.diagnostics != null && boundedJson(payload.diagnostics, "").length === 0) {
     return "invalid_diagnostics";
   }
+  const contact = cleanText(payload.reporter?.contact, MAX_CONTACT_CHARS);
+  const consentToContact = payload.reporter?.consentToContact === true;
+  if (contact && !consentToContact) {
+    return "contact_consent_required";
+  }
+  if (consentToContact && !contact) {
+    return "contact_required";
+  }
   return "";
 }
 
@@ -107,11 +116,15 @@ async function createReport(request, env) {
   const payload = parsed.value;
   const createdAt = new Date().toISOString();
   const id = reportId(new Date(createdAt));
+  const reporterContact = cleanText(payload.reporter?.contact, MAX_CONTACT_CHARS);
+  const consentToContact = reporterContact && payload.reporter?.consentToContact === true;
+  const operationError = payload.context?.lastOperationError;
   const statement = env.REPORTS_DB.prepare(
     `INSERT INTO bug_reports (
       id, created_at, app_id, app_version, platform, category,
-      description, context_json, diagnostics_json, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')`
+      description, context_json, diagnostics_json, status,
+      reporter_contact, consent_to_contact, error_code, failed_operation
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)`
   ).bind(
     id,
     createdAt,
@@ -122,9 +135,18 @@ async function createReport(request, env) {
     cleanText(payload.description, MAX_DESCRIPTION_CHARS),
     boundedJson(payload.context),
     payload.diagnostics == null ? null : boundedJson(payload.diagnostics),
+    reporterContact || null,
+    consentToContact ? 1 : 0,
+    cleanText(operationError?.code, 120) || null,
+    cleanText(operationError?.operation, 80) || null,
   );
   await statement.run();
-  return json({ ok: true, reportId: id, receivedAt: createdAt }, 201);
+  return json({
+    ok: true,
+    reportId: id,
+    receivedAt: createdAt,
+    contactAccepted: Boolean(reporterContact && consentToContact),
+  }, 201);
 }
 
 export default {

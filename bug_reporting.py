@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_BUG_REPORT_URL = "https://reports.classin.cloud/v1/edb-reports"
 MAX_DESCRIPTION_CHARS = 4_000
+MAX_CONTACT_CHARS = 240
 MAX_LOG_CHARS = 24_000
 MAX_REMOTE_RESPONSE_BYTES = 64_000
 MAX_RUNTIME_ERRORS = 10
@@ -82,6 +83,22 @@ def _bounded_text(value: Any, limit: int) -> str:
     return redact_sensitive_text(value).strip()[:limit]
 
 
+def _safe_contact(value: Any) -> str:
+    """Preserve an explicitly consented reply address while removing secrets."""
+
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    for pattern in _SECRET_PATTERNS[:2]:
+        text = pattern.sub("[redacted-secret]", text)
+    text = _SECRET_PATTERNS[2].sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[redacted-secret]",
+        text,
+    )
+    text = _POSIX_LOCAL_PATH_PATTERN.sub("[local-path]", text)
+    text = _WINDOWS_LOCAL_PATH_PATTERN.sub("[local-path]", text)
+    text = _DOCUMENT_NAME_PATTERN.sub("[document]", text)
+    return " ".join(text.split())[:MAX_CONTACT_CHARS]
+
+
 def _safe_runtime_errors(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -94,21 +111,40 @@ def _safe_runtime_errors(value: Any) -> list[dict[str, Any]]:
             "message": _bounded_text(raw.get("message"), 1_500),
         }
         for field, limit in (
+            ("operation", 80),
+            ("code", 120),
+            ("timestamp", 100),
+        ):
+            text = _bounded_text(raw.get(field), limit)
+            if text:
+                entry[field] = text
+        for field, limit in (
             ("filename", 240),
             ("componentStack", 4_000),
         ):
             text = _bounded_text(raw.get(field), limit)
             if text:
                 entry[field] = text
-        for field in ("lineno", "colno"):
+        for field in ("lineno", "colno", "status"):
             try:
                 number = int(raw.get(field))
             except (TypeError, ValueError):
                 continue
             if 0 <= number <= 10_000_000:
                 entry[field] = number
+        if "retryable" in raw:
+            entry["retryable"] = bool(raw.get("retryable"))
         safe.append(entry)
     return safe
+
+
+def _safe_operation_error(value: Any) -> dict[str, Any] | None:
+    errors = _safe_runtime_errors([value])
+    if not errors:
+        return None
+    entry = errors[0]
+    entry["type"] = "operation"
+    return entry
 
 
 def _safe_context(value: Any) -> dict[str, Any]:
@@ -133,6 +169,9 @@ def _safe_context(value: Any) -> dict[str, Any]:
     errors = _safe_runtime_errors(raw.get("runtimeErrors"))
     if errors:
         safe["runtimeErrors"] = errors
+    last_operation_error = _safe_operation_error(raw.get("lastOperationError"))
+    if last_operation_error:
+        safe["lastOperationError"] = last_operation_error
     return safe
 
 
@@ -163,6 +202,12 @@ def build_bug_report(
         raise BugReportValidationError("무슨 문제가 있었는지 5자 이상 적어 주세요.")
     include_diagnostics = bool(request_payload.get("includeDiagnostics", True))
     context = _safe_context(request_payload.get("context"))
+    contact = _safe_contact(request_payload.get("contact"))
+    consent_to_contact = bool(request_payload.get("consentToContact"))
+    if contact and not consent_to_contact:
+        raise BugReportValidationError("회신 연락처를 보내려면 연락 동의에 체크해 주세요.")
+    if consent_to_contact and not contact:
+        raise BugReportValidationError("회신 받을 연락처를 입력해 주세요.")
     app_id = _bounded_text(app_config.get("appId"), 80) or "ClassInEDBMVP"
     version = _bounded_text(app_config.get("version"), 80) or "unknown"
     app_platform = _bounded_text(app_config.get("platform"), 40) or sys.platform
@@ -179,6 +224,11 @@ def build_bug_report(
         },
         "context": context,
     }
+    if contact:
+        report["reporter"] = {
+            "contact": contact,
+            "consentToContact": True,
+        }
     if include_diagnostics:
         diagnostics: dict[str, Any] = {
             "system": _bounded_text(platform.system(), 80),
@@ -237,4 +287,5 @@ def deliver_bug_report(
         "ok": True,
         "reportId": _bounded_text(payload.get("reportId"), 100),
         "receivedAt": _bounded_text(payload.get("receivedAt"), 100),
+        "contactAccepted": bool(payload.get("contactAccepted")),
     }

@@ -82,6 +82,49 @@ class BugReportingTests(unittest.TestCase):
         )
         self.assertNotIn("diagnostics", report)
 
+    def test_report_preserves_only_explicitly_consented_contact(self):
+        report = bug_reporting.build_bug_report(
+            {
+                "description": "EDB 제작이 1초 뒤 실패합니다.",
+                "contact": "customer@example.com",
+                "consentToContact": True,
+                "includeDiagnostics": False,
+                "context": {
+                    "lastOperationError": {
+                        "type": "operation",
+                        "operation": "session_publish",
+                        "code": "edb_write_failed",
+                        "status": 500,
+                        "retryable": True,
+                        "timestamp": "2026-08-21T08:25:48Z",
+                        "message": "failed C:\\Users\\customer\\exam.pdf",
+                    }
+                },
+            },
+            app_config={"appId": "ClassInEDBMVP", "version": "1.3.5"},
+        )
+
+        self.assertEqual(report["reporter"]["contact"], "customer@example.com")
+        self.assertTrue(report["reporter"]["consentToContact"])
+        operation_error = report["context"]["lastOperationError"]
+        self.assertEqual(operation_error["operation"], "session_publish")
+        self.assertEqual(operation_error["code"], "edb_write_failed")
+        self.assertEqual(operation_error["status"], 500)
+        self.assertNotIn("C:\\Users\\customer", operation_error["message"])
+
+    def test_contact_requires_matching_consent(self):
+        app_config = {"appId": "ClassInEDBMVP"}
+        with self.assertRaisesRegex(bug_reporting.BugReportValidationError, "연락 동의"):
+            bug_reporting.build_bug_report(
+                {"description": "제작 중 오류가 발생했습니다.", "contact": "customer@example.com"},
+                app_config=app_config,
+            )
+        with self.assertRaisesRegex(bug_reporting.BugReportValidationError, "연락처를 입력"):
+            bug_reporting.build_bug_report(
+                {"description": "제작 중 오류가 발생했습니다.", "consentToContact": True},
+                app_config=app_config,
+            )
+
     def test_short_description_is_rejected(self):
         with self.assertRaisesRegex(bug_reporting.BugReportValidationError, "5자"):
             bug_reporting.build_bug_report(
@@ -96,6 +139,7 @@ class BugReportingTests(unittest.TestCase):
                 "ok": True,
                 "reportId": "EDB-20260727-ABCDEF0123",
                 "receivedAt": "2026-07-27T00:00:00Z",
+                "contactAccepted": True,
             }
         )
         receipt = bug_reporting.deliver_bug_report(
@@ -105,6 +149,7 @@ class BugReportingTests(unittest.TestCase):
             }
         )
         self.assertEqual(receipt["reportId"], "EDB-20260727-ABCDEF0123")
+        self.assertTrue(receipt["contactAccepted"])
         request = mocked_urlopen.call_args.args[0]
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(
@@ -146,6 +191,19 @@ class BugReportingTests(unittest.TestCase):
         )[0]
         self.assertIn('parsed.path == "/api/bug-report"', dispatch)
         self.assertIn("self._handle_bug_report()", dispatch)
+
+    def test_publish_failure_payload_is_actionable_and_machine_readable(self):
+        payload = app_server._publish_failure_payload(
+            code="edb_write_failed",
+            message="EDB 파일 저장에 실패했습니다",
+            exc=OSError("access denied"),
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], "edb_write_failed")
+        self.assertEqual(payload["operation"], "session_publish")
+        self.assertTrue(payload["retryable"])
+        self.assertGreaterEqual(len(payload["recoverySteps"]), 2)
+        self.assertIn("access denied", payload["error"])
 
 
 if __name__ == "__main__":

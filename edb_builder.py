@@ -179,6 +179,8 @@ def build_edb(
     terminal_eof_plus_one: bool = True,
     page_count_hint: int = DEFAULT_PAGE_COUNT_HINT,
 ) -> bytes:
+    if not records:
+        raise ValueError("EDB requires at least one record")
     final_records = list(records)
     if len(final_records) > 1:
         final_records[:-1] = [_append_record_separator(record) for record in final_records[:-1]]

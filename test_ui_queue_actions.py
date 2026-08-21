@@ -105,7 +105,7 @@ class TestUiQueueActions(unittest.TestCase):
         queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
 
         self.assertIn("function simpleToastErrorMessage", source)
-        self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage) => {", source)
+        self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {", source)
         self.assertIn("showSimpleErrorToast(error, '미리보기 실패')", source)
         self.assertIn(
             "showSimpleErrorToast(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패')",
@@ -299,8 +299,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const scopedProblems = useMemo", review_stage)
         self.assertIn("countReviewFilters?.(scopedProblems)", review_stage)
         self.assertIn(".filter(problemInReviewScope)", review_stage)
-        self.assertIn("최근 추가 묶음", review_stage)
-        self.assertIn("전체 세션 보기", review_stage)
+        self.assertIn("최근 묶음", review_stage)
+        self.assertIn("전체 보기", review_stage)
 
     def test_review_filter_counts_match_the_problems_the_filter_will_show(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

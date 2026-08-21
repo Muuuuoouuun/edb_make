@@ -104,6 +104,47 @@ test("valid reports are inserted and receive a receipt", async () => {
 });
 
 
+test("consented contact and structured operation errors are stored", async () => {
+  const database = new FakeD1();
+  const payload = validPayload();
+  payload.reporter = {
+    contact: "customer@example.com",
+    consentToContact: true,
+  };
+  payload.context.lastOperationError = {
+    operation: "session_publish",
+    code: "edb_write_failed",
+    status: 500,
+  };
+  const response = await worker.fetch(
+    new Request("https://reports.classin.cloud/v1/edb-reports", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+    { REPORTS_DB: database },
+  );
+  assert.equal(response.status, 201);
+  const receipt = await response.json();
+  assert.equal(receipt.contactAccepted, true);
+  assert.equal(database.rows[0].values[9], "customer@example.com");
+  assert.equal(database.rows[0].values[10], 1);
+  assert.equal(database.rows[0].values[11], "edb_write_failed");
+  assert.equal(database.rows[0].values[12], "session_publish");
+});
+
+
+test("contact is rejected unless consent and value are both present", () => {
+  const missingConsent = validPayload();
+  missingConsent.reporter = { contact: "customer@example.com" };
+  assert.equal(validateReport(missingConsent), "contact_consent_required");
+
+  const missingContact = validPayload();
+  missingContact.reporter = { consentToContact: true };
+  assert.equal(validateReport(missingContact), "contact_required");
+});
+
+
 test("collector rejects short descriptions and oversized payloads", async () => {
   const short = validPayload();
   short.description = "짧음";

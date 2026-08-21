@@ -28,6 +28,29 @@ function reportRuntimeDiagnostic(error, detail = {}) {
   return payload;
 }
 
+function captureRecoverableDiagnostic(error, detail = {}) {
+  const payload = {
+    type: detail.type || 'operation',
+    message: error?.message || String(error || '알 수 없는 오류'),
+    timestamp: detail.timestamp || new Date().toISOString(),
+    ...detail,
+  };
+  try {
+    console.warn('[board-operation]', payload.message, payload);
+  } catch (_err) {
+    // Console logging is best-effort.
+  }
+  if (typeof window.EDB_CAPTURE_RUNTIME_DIAGNOSTIC === 'function') {
+    window.EDB_CAPTURE_RUNTIME_DIAGNOSTIC(payload);
+  } else if (Array.isArray(window.EDB_RUNTIME_DIAGNOSTICS)) {
+    window.EDB_RUNTIME_DIAGNOSTICS.push(payload);
+    if (window.EDB_RUNTIME_DIAGNOSTICS.length > 50) {
+      window.EDB_RUNTIME_DIAGNOSTICS.splice(0, window.EDB_RUNTIME_DIAGNOSTICS.length - 50);
+    }
+  }
+  return payload;
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -2067,6 +2090,7 @@ function ReviewStage({
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
   const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
+  const [reviewDiagnosticsOpen, setReviewDiagnosticsOpen] = useState(false);
   const [focusedPageReviewTargetId, setFocusedPageReviewTargetId] = useState('');
   const [pendingReviewNavigation, setPendingReviewNavigation] = useState(null);
   const reviewFilter = reviewUi?.filter || 'all';
@@ -2348,6 +2372,12 @@ function ReviewStage({
   const sessionCounts = useMemo(
     () => reviewScopeActive ? countSessionProblems(scopedProblems) : sessionProblemCounts(session),
     [reviewScopeActive, scopedProblems, session]
+  );
+  const reviewStageCopy = reviewStageCopyFor(session, sessionCounts, pages.length);
+  const formatCurrentReviewCount = (counts, options = {}) => formatReviewStageCount(
+    reviewStageCopy.mode,
+    counts,
+    options
   );
   const passageReviewProblemIds = useMemo(
     () => new Set(reviewSummary.passageReviewProblemIds || []),
@@ -3833,12 +3863,6 @@ function ReviewStage({
     ['check_needed', '확인 필요', statusCounts.check_needed],
     ['failed', '실패', statusCounts.failed],
   ];
-  if (sessionCounts.supplemental > 0) {
-    filterOptions.push(['supplemental', '자료', sessionCounts.supplemental]);
-  }
-  if (statusCounts.passage > 0) {
-    filterOptions.push(['passage', '지문', statusCounts.passage]);
-  }
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
     : aiBusy
@@ -3964,53 +3988,42 @@ function ReviewStage({
     </div>
   ) : selectedList.length === 0 ? (
     <div className="review-actionbar review-overview-toolbar">
-      <ReviewToolbarGroup label="상태 보기" className="review-toolbar-view-group">
-        <ReviewFilterTabs options={filterOptions} value={reviewFilter} onChange={setReviewFilter} />
-        {reviewRiskFilter && (
-          <span className="review-risk-filter-active">
-            원인 필터 · {riskFlagLabel(reviewRiskFilter)}
-            <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
-          </span>
-        )}
-        {reviewScopeActive && (
-          <span className="review-risk-filter-active">
-            최근 추가 묶음 · {formatProblemCount(sessionCounts)}
-            <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
-          </span>
-        )}
-      </ReviewToolbarGroup>
-      <span className="review-toolbar-guidance">의심 항목만 골라 확인하거나 필요한 페이지만 다시 인식하세요.</span>
+      <ReviewFilterTabs options={filterOptions} value={reviewFilter} onChange={setReviewFilter} />
+      {reviewRiskFilter && (
+        <span className="review-risk-filter-active">
+          원인 · {riskFlagLabel(reviewRiskFilter)}
+          <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
+        </span>
+      )}
+      {reviewScopeActive && (
+        <span className="review-risk-filter-active">
+          최근 묶음 · {formatCurrentReviewCount(sessionCounts)}
+          <button type="button" onClick={clearReviewScope}>전체 보기</button>
+        </span>
+      )}
       <div className="spacer" />
       {showOverviewBatchActions && (
-        <ReviewToolbarGroup label="일괄 작업" className="review-toolbar-batch-group">
+        <div className="review-toolbar-actions" role="toolbar" aria-label="검수 빠른 작업">
           {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
-            <>
-              <button
-                className="btn review-toolbar-action"
-                type="button"
-                onClick={selectVisibleProblems}
-                disabled={mutating}
-              >
-                표시 항목 선택 <span className="review-toolbar-count">{visibleReviewScope.problemIds.length}</span>
-              </button>
-              <button
-                className="btn review-toolbar-action"
-                type="button"
-                onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
-                disabled={mutating}
-              >
-                {Icon.check} 표시 항목 확인 완료 <span className="review-toolbar-count">{visibleReviewScope.problemIds.length}</span>
-              </button>
-            </>
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              title={`${visibleReviewScope.problemIds.length}개 표시 항목 확인`}
+              onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
+              disabled={mutating}
+            >
+              {Icon.check} 표시 항목 확인
+            </button>
           )}
           {!activeReviewFilter && actionableProblemIds.length > 0 && (
             <button
               className="btn review-toolbar-action"
               type="button"
+              title={`${actionableProblemIds.length}개 확인 필요 항목 확인`}
               onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
               disabled={mutating}
             >
-              {Icon.check} 확인 필요 전체 확인 <span className="review-toolbar-count">{actionableProblemIds.length}</span>
+              {Icon.check} 모두 확인
             </button>
           )}
           {showBulkRetry && (
@@ -4021,10 +4034,10 @@ function ReviewStage({
               onClick={() => doRetryAi(bulkRetryPageIds)}
               disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
             >
-              {Icon.wand} 페이지 전체 AI 재인식 <span className="review-toolbar-count">{bulkRetryProblemCount}</span>
+              {Icon.wand} 재인식
             </button>
           )}
-        </ReviewToolbarGroup>
+        </div>
       )}
     </div>
   ) : (
@@ -4137,10 +4150,10 @@ function ReviewStage({
       <div className="stage">
         <div className="stage-toolbar review-stage-toolbar">
           <div className="review-stage-heading">
-            <span className="name">문항 검수</span>
-            <span className="review-stage-subtitle">검출 영역</span>
+            <span className="name">{reviewStageCopy.title}</span>
+            <span className="review-stage-subtitle">{reviewStageCopy.subtitle}</span>
           </div>
-          <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {formatProblemCount(sessionCounts)}</span>
+          <span className="pill"><span className="dotc" /> {reviewStageCopy.headerCountLabel}</span>
           <div className="spacer" />
           <div className="review-page-jump" role="group" aria-label="검수 페이지 이동">
             <button
@@ -4154,7 +4167,7 @@ function ReviewStage({
               {Icon.arrowLeft}
             </button>
             <span className="review-page-jump-status" aria-live="polite">
-              <b>{reviewPageNav.current || 0}</b> / {reviewPageNav.total} 페이지
+              <b>{reviewPageNav.current || 0}</b> / {reviewPageNav.total}
             </span>
             <button
               type="button"
@@ -4168,7 +4181,6 @@ function ReviewStage({
             </button>
           </div>
           <div className="review-view-control-group" role="group" aria-label="검수 화면 배율">
-            <span className="review-view-control-label">배율</span>
             <div className="review-zoom-controls">
               <button
                 type="button"
@@ -4224,8 +4236,41 @@ function ReviewStage({
         >
           {actionBar}
           <div className="review-summary-strip">
+            <div className="review-summary-overview">
+              <span className="review-summary-title">검수 현황</span>
+              <span className={`review-summary-chip ${reviewFlow.complete ? 'ok' : 'warn'}`}>
+                {reviewFlow.complete ? '검수 완료' : `남은 확인 ${reviewFlow.remaining}`}
+              </span>
+              {reviewSummary.passageReviewItemCount > 0 && (
+                <button
+                  type="button"
+                  className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
+                  title="확인이 필요한 지문만 보기"
+                  aria-pressed={reviewFilter === 'passage-review'}
+                  onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
+                >
+                  지문 확인 {reviewSummary.passageReviewItemCount}
+                </button>
+              )}
+              {reviewSummary.warningCount > 0 && (
+                <span className="review-summary-chip warn">주의 {reviewSummary.warningCount}</span>
+              )}
+              <div className="spacer" />
+              <button
+                className="btn ghost-action review-summary-toggle"
+                type="button"
+                aria-expanded={reviewDiagnosticsOpen}
+                aria-controls="review-diagnostics-detail"
+                onClick={() => setReviewDiagnosticsOpen(open => !open)}
+              >
+                {reviewDiagnosticsOpen ? '진단 접기' : '상세 진단'}
+                {reviewDiagnosticsOpen ? Icon.chevronUp : Icon.chevronDown}
+              </button>
+            </div>
+            {reviewDiagnosticsOpen && (
+            <div id="review-diagnostics-detail" className="review-summary-details">
             <span className="review-summary-title">검수 요약</span>
-            <span className="review-summary-chip">{formatProblemCount(reviewSummary.counts)}</span>
+            <span className="review-summary-chip">{formatCurrentReviewCount(reviewSummary.counts, { pageCount: pages.length })}</span>
             <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
               주의 {reviewSummary.warningCount}
             </span>
@@ -4389,6 +4434,8 @@ function ReviewStage({
             {reviewSummary.warningPreview && (
               <span className="review-summary-note">{reviewSummary.warningPreview}</span>
             )}
+            </div>
+            )}
           </div>
           {pages.map((page, pageIndex) => {
             const allPageProblems = (page.problemIds || [])
@@ -4444,7 +4491,7 @@ function ReviewStage({
                       : passageOnlyReview && !allPageProblems.length
                         ? '지문 없음'
                       : reviewFilter === 'all' && !reviewRiskFilter
-                      ? formatProblemCount(pageCounts)
+                      ? formatCurrentReviewCount(pageCounts, { pageCount: 1, compact: true })
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
                   </span>
                   <span className={`status-badge ${reviewStatusClass(pageStatus)}`}>
@@ -4782,7 +4829,7 @@ function ReviewStage({
 
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
 function ItemsRail({
-  items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
+  session, items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, selectedPendingFileKey, onSelectPendingFile,
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
@@ -4822,11 +4869,27 @@ function ItemsRail({
     }
   });
   const hasSessionItems = items.length > 0;
+  const railReviewMode = globalThis.EDB_REVIEW_FILTERS?.sessionReviewMode?.(session) || 'problems';
   const materialCounts = useMemo(() => ({
     all: items.length,
     questions: items.filter(item => !isPassageFragmentProblem(item)).length,
     passages: items.filter(isPassageFragmentProblem).length,
   }), [items]);
+  const materialFilterOptions = railReviewMode === 'page-as-is'
+    ? [
+        ['all', '전체', materialCounts.all],
+        ['questions', '페이지 원본', materialCounts.questions],
+      ]
+    : railReviewMode === 'shared-passages'
+      ? [
+          ['all', '전체', materialCounts.all],
+          ['passages', '공통 지문', materialCounts.passages],
+        ]
+      : [
+          ['all', '전체', materialCounts.all],
+          ['questions', '문항', materialCounts.questions],
+          ['passages', '공통 지문', materialCounts.passages],
+        ];
   const visibleItemRows = useMemo(() => items
     .map((item, index) => ({ item, index }))
     .filter(({ item }) => materialFilter === 'all'
@@ -4859,6 +4922,11 @@ function ItemsRail({
   const dragPreviewItem = dragPreview
     ? itemsById.get(String(dragPreview.id))
     : null;
+
+  useEffect(() => {
+    if (materialFilterOptions.some(([value]) => value === materialFilter)) return;
+    setMaterialFilter('all');
+  }, [railReviewMode, materialFilter]);
 
   useEffect(() => {
     const validIds = new Set(items.map(item => String(item.id)));
@@ -5412,11 +5480,7 @@ function ItemsRail({
       {hasSessionItems && (
         <>
           <div className="material-filter" role="group" aria-label="자료 모아보기">
-            {[
-              ['all', '전체', materialCounts.all],
-              ['questions', '문항', materialCounts.questions],
-              ['passages', '공통 지문', materialCounts.passages],
-            ].map(([value, label, count]) => (
+            {materialFilterOptions.map(([value, label, count]) => (
               <button
                 key={value}
                 type="button"
@@ -5537,10 +5601,7 @@ function ItemsRail({
                       <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
                         <div className="name">{entry.sessionName || '이름 없는 작업'}</div>
                         <div className="meta">
-                          {formatProblemCount({
-                            core: entry.coreProblemCount,
-                            supplemental: entry.supplementalItemCount,
-                          })}
+                          {recentSessionCountLabel(entry)}
                           {entry.updatedAt ? ` · ${formatPublishTime(entry.updatedAt)}` : ''}
                           {publish?.recordCountLabel ? ` · ${publish.recordCountLabel}` : ''}
                           {publish?.classinReviewStatusLabel ? ` · ${publish.classinReviewStatusLabel}` : ''}
@@ -7071,7 +7132,7 @@ function SidePanel({
   boardColor, setBoardColor,
   accent, setAccent,
   onConfirm,
-  userSettings, runtimeDiagnostics, onSaveGeminiKey,
+  userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
   onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
   aiEnabled, onToggleAi, aiToggleBusy,
   inputIntent, setInputIntent,
@@ -7102,6 +7163,8 @@ function SidePanel({
   const [placementApplied, setPlacementApplied] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [bugReportDescription, setBugReportDescription] = useState('');
+  const [bugReportContact, setBugReportContact] = useState('');
+  const [bugReportConsentToContact, setBugReportConsentToContact] = useState(false);
   const [bugReportIncludeDiagnostics, setBugReportIncludeDiagnostics] = useState(true);
   const [bugReportBusy, setBugReportBusy] = useState(false);
   const [bugReportResult, setBugReportResult] = useState(null);
@@ -7251,7 +7314,10 @@ function SidePanel({
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
-  const canSubmitBugReport = bugReportDescription.trim().length >= 5 && !bugReportBusy;
+  const hasBugReportContact = bugReportContact.trim().length > 0;
+  const canSubmitBugReport = bugReportDescription.trim().length >= 5
+    && !bugReportBusy
+    && (!hasBugReportContact || bugReportConsentToContact);
   const handleBugReportSubmit = async event => {
     event?.preventDefault?.();
     if (!canSubmitBugReport) return;
@@ -7261,6 +7327,8 @@ function SidePanel({
     try {
       const receipt = await submitBugReport({
         description: bugReportDescription.trim(),
+        contact: bugReportContact.trim(),
+        consentToContact: hasBugReportContact && bugReportConsentToContact,
         includeDiagnostics: bugReportIncludeDiagnostics,
         context: {
           view,
@@ -7274,9 +7342,12 @@ function SidePanel({
             summary: hangulRuntimeSummary(hangulDiagnostics),
           },
           runtimeErrors: runtimeErrorsForBugReport(),
+          lastOperationError,
         },
       });
       setBugReportDescription('');
+      setBugReportContact('');
+      setBugReportConsentToContact(false);
       setBugReportResult(receipt);
     } catch (error) {
       setBugReportError(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
@@ -8272,7 +8343,7 @@ function SidePanel({
                 <span className="bug-report-icon" aria-hidden="true">{Icon.bug}</span>
                 <span>
                   <strong>사용 중 문제가 있었나요?</strong>
-                  <small>설명과 선택한 진단 정보만 안전하게 전송합니다.</small>
+                  <small>설명, 선택한 진단 정보와 동의한 연락처만 전송합니다.</small>
                 </span>
                 <button
                   className="btn"
@@ -8304,6 +8375,35 @@ function SidePanel({
                   />
                   <div className="bug-report-counter">{bugReportDescription.length.toLocaleString()} / 4,000</div>
 
+                  <label htmlFor="bug-report-contact">회신 받을 연락처 <small>(선택)</small></label>
+                  <input
+                    id="bug-report-contact"
+                    className="bug-report-contact"
+                    type="text"
+                    value={bugReportContact}
+                    maxLength={240}
+                    autoComplete="email"
+                    placeholder="이메일 또는 고객을 확인할 수 있는 ID"
+                    onChange={event => {
+                      setBugReportContact(event.target.value);
+                      setBugReportError('');
+                      setBugReportResult(null);
+                    }}
+                  />
+
+                  <label className="bug-report-diagnostics">
+                    <input
+                      type="checkbox"
+                      checked={bugReportConsentToContact}
+                      disabled={!hasBugReportContact}
+                      onChange={event => setBugReportConsentToContact(event.target.checked)}
+                    />
+                    <span>
+                      <strong>이 문제에 관한 회신에 동의</strong>
+                      <small>입력한 연락처는 이 신고의 확인과 해결 안내에만 사용합니다.</small>
+                    </span>
+                  </label>
+
                   <label className="bug-report-diagnostics">
                     <input
                       type="checkbox"
@@ -8317,7 +8417,7 @@ function SidePanel({
                   </label>
 
                   <p className="bug-report-privacy">
-                    원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.
+                    원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다. 연락처는 동의한 경우에만 보냅니다.
                   </p>
 
                   {bugReportError && (
@@ -8326,6 +8426,7 @@ function SidePanel({
                   {bugReportResult?.reportId && (
                     <div className="bug-report-status success" role="status" aria-live="polite">
                       접수됐습니다. 번호 <strong>{bugReportResult.reportId}</strong>
+                      {bugReportResult.contactAccepted ? ' · 입력한 연락처로 회신할 수 있습니다.' : ''}
                     </div>
                   )}
 
@@ -8352,6 +8453,50 @@ function SidePanel({
         </>
       )}
     </div>
+  );
+}
+
+function OperationRecoveryBanner({
+  error,
+  onRetry,
+  onRestore,
+  onExport,
+  onCopy,
+  onDismiss,
+  retryBusy,
+  restoreBusy,
+  exportBusy,
+  canRestore,
+  canExport,
+}){
+  if (!error) return null;
+  const summary = operationRecoverySummary(error);
+  return (
+    <section className="operation-recovery-banner" role="alert" aria-live="assertive">
+      <div className="operation-recovery-copy">
+        <strong>제작을 마치지 못했지만 편집 내용은 안전합니다</strong>
+        <span>{summary}</span>
+        <small>EDB 제작을 다시 시도하세요. 계속 실패하면 최근 저장본을 다시 열거나 PNG 묶음으로 먼저 저장해 수업 자료로 사용할 수 있습니다.</small>
+        {error.code && <code>오류 코드 · {error.code}</code>}
+      </div>
+      <div className="operation-recovery-actions" aria-label="제작 실패 복구 작업">
+        <button className="btn primary" type="button" onClick={onRetry} disabled={retryBusy}>
+          {Icon.refresh} {retryBusy ? '제작 중…' : 'EDB 다시 제작'}
+        </button>
+        <button className="btn" type="button" onClick={onRestore} disabled={!canRestore || restoreBusy}>
+          {Icon.folder} {restoreBusy ? '여는 중…' : '최근 저장본 열기'}
+        </button>
+        <button className="btn" type="button" onClick={onExport} disabled={!canExport || exportBusy}>
+          {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
+        </button>
+        <button className="btn" type="button" onClick={onCopy}>
+          {Icon.copy} 오류 내용 복사
+        </button>
+      </div>
+      <button className="operation-recovery-dismiss" type="button" onClick={onDismiss} aria-label="제작 실패 안내 닫기">
+        {Icon.close}
+      </button>
+    </section>
   );
 }
 
@@ -9865,8 +10010,10 @@ const RISK_FLAG_META = {
 
 const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   board_placement_overlap: '판서 배치 겹침',
+  duplicate_problem_id: '문항 ID 중복',
   duplicate_problem_number: '중복 번호',
   low_ink_problem_image: '이미지 내용 부족',
+  missing_problem_id: '문항 ID 누락',
   missing_problem_image: '문항 이미지 없음',
   passage_missing_child_questions: '문항 누락',
   passage_quality_review: '지문 품질 확인',
@@ -11621,6 +11768,46 @@ function formatProblemCount(counts){
   return `${core}문항`;
 }
 
+function formatReviewStageCount(mode, counts, options = {}){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.formatReviewModeCount;
+  if (typeof helper === 'function') return helper(mode, counts, options);
+  if (mode === 'shared-passages') {
+    const total = Number(counts?.total ?? counts?.all ?? 0);
+    return `${options.compact ? '지문' : '공통 지문'} ${Number.isFinite(total) ? Math.max(0, total) : 0}개`;
+  }
+  if (mode === 'page-as-is') {
+    const pageCount = Number(options.pageCount ?? counts?.total ?? counts?.all ?? 0);
+    return options.compact ? '페이지 원본' : `${Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0}페이지`;
+  }
+  return formatProblemCount(counts);
+}
+
+function reviewStageCopyFor(session, counts, pageCount){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.reviewModeCopy;
+  if (typeof helper === 'function') return helper(session, counts, { pageCount });
+  const passageOnly = normalizeContentTarget(session?.contentTarget || session?.content_target) === 'shared-passages';
+  const pageAsIs = normalizeInputIntent(session?.inputIntent || session?.input_intent) === 'page-as-is';
+  const mode = passageOnly ? 'shared-passages' : pageAsIs ? 'page-as-is' : 'problems';
+  const countLabel = formatReviewStageCount(mode, counts, { pageCount });
+  const compactCountLabel = formatReviewStageCount(mode, counts, { pageCount, compact: true });
+  if (mode === 'shared-passages') {
+    return { mode, title: '지문 검수', subtitle: '공통 지문 영역', countLabel, headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}` };
+  }
+  if (mode === 'page-as-is') {
+    return { mode, title: '페이지 검수', subtitle: '원본 보존', countLabel, headerCountLabel: `${pageCount}페이지 원본` };
+  }
+  return { mode, title: '문항 검수', subtitle: '검출 영역', countLabel, headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}` };
+}
+
+function recentSessionCountLabel(entry){
+  const pageCount = Number(entry?.pageCount ?? entry?.page_count ?? 0);
+  return reviewStageCopyFor(entry, {
+    core: entry?.coreProblemCount ?? entry?.core_problem_count,
+    supplemental: entry?.supplementalItemCount ?? entry?.supplemental_item_count,
+    total: entry?.detectedProblemCount ?? entry?.detected_problem_count,
+  }, Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0).countLabel;
+}
+
 function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
 }
@@ -11991,6 +12178,42 @@ function formatApiError(payload, fallbackMessage){
   return `${baseMessage}\n\n다음 조치:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`;
 }
 
+function operationErrorFromResponse(payload, response, operation, fallbackMessage){
+  const error = new Error(formatApiError(payload, fallbackMessage));
+  error.code = String(payload?.code || `http_${response?.status || 'unknown'}`).slice(0, 120);
+  error.operation = String(payload?.operation || operation || 'ui_action').slice(0, 80);
+  error.status = Number(response?.status) || 0;
+  error.retryable = payload?.retryable !== false;
+  error.recoverySteps = Array.isArray(payload?.recoverySteps) ? payload.recoverySteps.slice(0, 5) : [];
+  return error;
+}
+
+function operationErrorClipboardText(error){
+  if (!error) return '';
+  return [
+    'ClassIn EDB 제작 오류',
+    `시각: ${error.timestamp || new Date().toISOString()}`,
+    `작업: ${error.operation || 'session_publish'}`,
+    `코드: ${error.code || 'unknown'}`,
+    error.status ? `HTTP: ${error.status}` : '',
+    `내용: ${String(error.message || '알 수 없는 오류').trim()}`,
+  ].filter(Boolean).join('\n');
+}
+
+const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
+  publish_output_unavailable: '제작 파일을 저장할 폴더를 사용할 수 없습니다.',
+  publish_build_failed: '자료를 EDB 형식으로 구성하는 중 문제가 발생했습니다.',
+  edb_write_failed: '완성된 EDB 파일을 저장하는 중 문제가 발생했습니다.',
+  publish_connection_failed: '앱과의 연결이 끊겨 제작 요청을 완료하지 못했습니다.',
+  publish_unknown_failed: '예상하지 못한 오류로 EDB 제작을 완료하지 못했습니다.',
+});
+
+function operationRecoverySummary(error){
+  const knownSummary = OPERATION_RECOVERY_SUMMARIES[String(error?.code || '')];
+  if (knownSummary) return knownSummary;
+  return String(error?.message || 'EDB 제작 중 예상하지 못한 오류가 발생했습니다.').split('\n')[0];
+}
+
 function isNetworkRequestError(error){
   const raw = String(error?.message || error || '').trim();
   return /failed to fetch|networkerror|load failed|network/i.test(raw);
@@ -12043,8 +12266,13 @@ function runtimeErrorsForBugReport(entries = window.EDB_RUNTIME_DIAGNOSTICS){
     };
     if (detail.filename) safe.filename = String(detail.filename).slice(0, 240);
     if (detail.componentStack) safe.componentStack = String(detail.componentStack).slice(0, 4000);
+    if (detail.operation) safe.operation = String(detail.operation).slice(0, 80);
+    if (detail.code) safe.code = String(detail.code).slice(0, 120);
+    if (detail.timestamp) safe.timestamp = String(detail.timestamp).slice(0, 100);
     if (Number.isFinite(Number(detail.lineno))) safe.lineno = Number(detail.lineno);
     if (Number.isFinite(Number(detail.colno))) safe.colno = Number(detail.colno);
+    if (Number.isFinite(Number(detail.status))) safe.status = Number(detail.status);
+    if ('retryable' in detail) safe.retryable = Boolean(detail.retryable);
     return safe;
   });
 }
@@ -12278,6 +12506,7 @@ function App(){
   const [boardScrollTop, setBoardScrollTop] = useState(0);
   const [actionToast, setActionToast] = useState(null);
   const [viewTransitionBanner, setViewTransitionBanner] = useState(null);
+  const [lastOperationError, setLastOperationError] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -12373,9 +12602,15 @@ function App(){
     actionToastTimerRef.current = window.setTimeout(() => setActionToast(null), 6500);
   }, []);
 
-  const showSimpleErrorToast = useCallback((error, fallbackMessage) => {
-    console.warn(`[board] ${fallbackMessage || '작업 실패'}:`, error);
+  const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {
+    const diagnostic = captureRecoverableDiagnostic(error, {
+      operation: detail.operation || error?.operation || 'ui_action',
+      code: detail.code || error?.code || 'ui_action_failed',
+      status: detail.status ?? error?.status ?? 0,
+      retryable: detail.retryable ?? error?.retryable ?? true,
+    });
     showToast(simpleToastErrorMessage(error, fallbackMessage));
+    return diagnostic;
   }, [showToast]);
 
   const requestViewChange = useCallback((nextView, options = {}) => {
@@ -14158,7 +14393,12 @@ function App(){
           );
           return;
         }
-        throw new Error(json.error || `publish 실패 (${resp.status})`);
+        throw operationErrorFromResponse(
+          json,
+          resp,
+          'session_publish',
+          `EDB 제작 실패 (${resp.status})`
+        );
       }
       if (sessionResponseRevisionIsStale(json)) {
         throw new Error('더 최신 작업이 완료되어 늦게 도착한 제작 결과를 적용하지 않았습니다.');
@@ -14172,12 +14412,38 @@ function App(){
         downloadPublishSummary(normalizedPublishSummary);
       }
       setPublished(true);
+      setLastOperationError(null);
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
       showToast(`${publishLabel}로 EDB 제작 완료 · 다운로드 시작`);
     } catch (e) {
-      showSimpleErrorToast(e, '제작 실패');
+      const diagnostic = showSimpleErrorToast(e, '제작 실패', {
+        operation: 'session_publish',
+        code: e?.code || (isNetworkRequestError(e) ? 'publish_connection_failed' : 'publish_unknown_failed'),
+      });
+      setPublished(false);
+      setLastOperationError(diagnostic);
     } finally {
       setLoading(null);
+    }
+  };
+
+  const reopenLatestAfterPublishError = () => {
+    const latest = recentSessions[0];
+    if (!latest?.id) {
+      showToast('열 수 있는 최근 작업이 없습니다');
+      return;
+    }
+    void restoreRecentSession(latest.id);
+  };
+
+  const copyLastOperationError = async () => {
+    const text = operationErrorClipboardText(lastOperationError);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('오류 정보를 복사했습니다');
+    } catch (error) {
+      showSimpleErrorToast(error, '오류 정보 복사 실패', { operation: 'copy_operation_error' });
     }
   };
 
@@ -14213,6 +14479,19 @@ function App(){
           {viewTransitionBanner}
         </div>
       )}
+      <OperationRecoveryBanner
+        error={lastOperationError}
+        onRetry={() => void onPublish()}
+        onRestore={reopenLatestAfterPublishError}
+        onExport={() => void exportSessionImages()}
+        onCopy={() => void copyLastOperationError()}
+        onDismiss={() => setLastOperationError(null)}
+        retryBusy={Boolean(loading)}
+        restoreBusy={Boolean(restoringSessionId)}
+        exportBusy={exportingImages}
+        canRestore={Boolean(recentSessions[0]?.id)}
+        canExport={!!session && items.some(item => item?.id && !item.excluded)}
+      />
       <div className={`main ${recognitionReview ? 'recognition-page-review-mode' : (view === 'review' && reviewEditorActive ? 'review-editor-focus' : '')}`}>
         {recognitionReview ? (
           <RecognitionPageReviewStage
@@ -14223,7 +14502,8 @@ function App(){
           />
         ) : (
           <>
-            <ItemsRail
+        <ItemsRail
+          session={session}
           items={items}
           activeId={activeId}
           setActive={selectBoardItem}
@@ -14324,6 +14604,7 @@ function App(){
           onConfirm={onConfirm}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
+          lastOperationError={lastOperationError}
           onSaveGeminiKey={onSaveGeminiKey}
           onSaveOpenAiKey={onSaveOpenAiKey}
           onEnhanceImage={enhanceImageSession}
