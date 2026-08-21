@@ -88,12 +88,17 @@ class BugReportUiTests(unittest.TestCase):
             "EDB 다시 제작",
             "최근 저장본 열기",
             "PNG로 대체 저장",
+            "초기화 후 다시 시작",
+            "버그 리포트 열기",
             "오류 내용 복사",
         ):
             self.assertIn(label, banner)
         self.assertIn("편집 내용은 안전합니다", banner)
-        self.assertIn("수업 자료로 사용할 수 있습니다", banner)
+        self.assertIn("초기화 후 원본 PDF를 다시 등록", banner)
+        self.assertIn("설정 → 문제 신고 → 버그 리포트", banner)
         self.assertIn("operationRecoverySummary(error)", banner)
+        self.assertIn("onReset", banner)
+        self.assertIn("onReport", banner)
         publish = self.app.split("const onPublish = async", 1)[1].split(
             "return (", 1
         )[0]
@@ -103,6 +108,25 @@ class BugReportUiTests(unittest.TestCase):
         self.assertIn("captureRecoverableDiagnostic", self.app)
         self.assertIn("EDB_CAPTURE_RUNTIME_DIAGNOSTIC", self.board)
         self.assertIn(".operation-recovery-banner", self.board)
+
+    def test_recovery_report_action_opens_settings_report_form(self):
+        panel = self.app.split("function SidePanel", 1)[1].split(
+            "function OperationRecoveryBanner", 1
+        )[0]
+        self.assertIn("bugReportOpenRequestId", panel)
+        self.assertIn("setTab('board')", panel)
+        self.assertIn("setBugReportOpen(true)", panel)
+        self.assertIn(".bug-report-card", panel)
+        self.assertIn("bug-report-description", panel)
+        self.assertIn("EDB 제작 중 오류가 발생했습니다", panel)
+
+        app = self.app.split("function App()", 1)[1]
+        self.assertIn("setBugReportOpenRequestId(requestId => requestId + 1)", app)
+        self.assertIn("setOperationRecoveryDismissed(true)", app)
+        self.assertIn("error={operationRecoveryDismissed ? null : lastOperationError}", app)
+        self.assertIn("onDismiss={() => setOperationRecoveryDismissed(true)}", app)
+        self.assertIn("onReport={openBugReportAfterPublishError}", app)
+        self.assertIn("onReset={() => void resetSession()}", app)
 
 
 if __name__ == "__main__":

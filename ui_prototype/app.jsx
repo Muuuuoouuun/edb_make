@@ -7132,7 +7132,7 @@ function SidePanel({
   boardColor, setBoardColor,
   accent, setAccent,
   onConfirm,
-  userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
+  userSettings, runtimeDiagnostics, lastOperationError, bugReportOpenRequestId, onSaveGeminiKey,
   onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
   aiEnabled, onToggleAi, aiToggleBusy,
   inputIntent, setInputIntent,
@@ -7192,6 +7192,24 @@ function SidePanel({
       window.removeEventListener('mouseup', onUp);
     };
   }, []);
+
+  useEffect(() => {
+    if (!bugReportOpenRequestId) return undefined;
+    setTab('board');
+    setBugReportOpen(true);
+    setBugReportError('');
+    setBugReportResult(null);
+    setBugReportDescription(current => {
+      if (current.trim()) return current;
+      const errorCode = String(lastOperationError?.code || '').trim();
+      return `EDB 제작 중 오류가 발생했습니다.${errorCode ? ` 오류 코드: ${errorCode}` : ''}`;
+    });
+    const frame = window.requestAnimationFrame(() => {
+      document.querySelector('.bug-report-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('bug-report-description')?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [bugReportOpenRequestId]);
 
   useEffect(() => {
     if (hangulDiagnostics) setHangulDetailsExpanded(hangulDetailsOpen);
@@ -8461,6 +8479,8 @@ function OperationRecoveryBanner({
   onRetry,
   onRestore,
   onExport,
+  onReset,
+  onReport,
   onCopy,
   onDismiss,
   retryBusy,
@@ -8476,7 +8496,7 @@ function OperationRecoveryBanner({
       <div className="operation-recovery-copy">
         <strong>제작을 마치지 못했지만 편집 내용은 안전합니다</strong>
         <span>{summary}</span>
-        <small>EDB 제작을 다시 시도하세요. 계속 실패하면 최근 저장본을 다시 열거나 PNG 묶음으로 먼저 저장해 수업 자료로 사용할 수 있습니다.</small>
+        <small>먼저 EDB를 다시 제작하세요. 계속 실패하면 PNG로 대체 저장하거나 초기화 후 원본 PDF를 다시 등록해 주세요. 해결되지 않으면 <b>설정 → 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</small>
         {error.code && <code>오류 코드 · {error.code}</code>}
       </div>
       <div className="operation-recovery-actions" aria-label="제작 실패 복구 작업">
@@ -8488,6 +8508,18 @@ function OperationRecoveryBanner({
         </button>
         <button className="btn" type="button" onClick={onExport} disabled={!canExport || exportBusy}>
           {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={onReset}
+          disabled={retryBusy || exportBusy || restoreBusy}
+          title="확인 후 현재 작업을 비우고 원본 PDF부터 다시 시작합니다"
+        >
+          {Icon.reset} 초기화 후 다시 시작
+        </button>
+        <button className="btn" type="button" onClick={onReport}>
+          {Icon.bug} 버그 리포트 열기
         </button>
         <button className="btn" type="button" onClick={onCopy}>
           {Icon.copy} 오류 내용 복사
@@ -12507,6 +12539,8 @@ function App(){
   const [actionToast, setActionToast] = useState(null);
   const [viewTransitionBanner, setViewTransitionBanner] = useState(null);
   const [lastOperationError, setLastOperationError] = useState(null);
+  const [operationRecoveryDismissed, setOperationRecoveryDismissed] = useState(false);
+  const [bugReportOpenRequestId, setBugReportOpenRequestId] = useState(0);
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -13493,6 +13527,8 @@ function App(){
       setPendingFilesTracked([]);
       setReviewFocus(null);
       hideMockItems('초기화 완료 · 빈 세션');
+      setLastOperationError(null);
+      setOperationRecoveryDismissed(false);
     } catch (e) {
       showSimpleErrorToast(e, '초기화 실패');
     }
@@ -14413,6 +14449,7 @@ function App(){
       }
       setPublished(true);
       setLastOperationError(null);
+      setOperationRecoveryDismissed(false);
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
       showToast(`${publishLabel}로 EDB 제작 완료 · 다운로드 시작`);
     } catch (e) {
@@ -14421,6 +14458,7 @@ function App(){
         code: e?.code || (isNetworkRequestError(e) ? 'publish_connection_failed' : 'publish_unknown_failed'),
       });
       setPublished(false);
+      setOperationRecoveryDismissed(false);
       setLastOperationError(diagnostic);
     } finally {
       setLoading(null);
@@ -14445,6 +14483,11 @@ function App(){
     } catch (error) {
       showSimpleErrorToast(error, '오류 정보 복사 실패', { operation: 'copy_operation_error' });
     }
+  };
+
+  const openBugReportAfterPublishError = () => {
+    setOperationRecoveryDismissed(true);
+    setBugReportOpenRequestId(requestId => requestId + 1);
   };
 
   return (
@@ -14480,12 +14523,14 @@ function App(){
         </div>
       )}
       <OperationRecoveryBanner
-        error={lastOperationError}
+        error={operationRecoveryDismissed ? null : lastOperationError}
         onRetry={() => void onPublish()}
         onRestore={reopenLatestAfterPublishError}
         onExport={() => void exportSessionImages()}
+        onReset={() => void resetSession()}
+        onReport={openBugReportAfterPublishError}
         onCopy={() => void copyLastOperationError()}
-        onDismiss={() => setLastOperationError(null)}
+        onDismiss={() => setOperationRecoveryDismissed(true)}
         retryBusy={Boolean(loading)}
         restoreBusy={Boolean(restoringSessionId)}
         exportBusy={exportingImages}
@@ -14605,6 +14650,7 @@ function App(){
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
           lastOperationError={lastOperationError}
+          bugReportOpenRequestId={bugReportOpenRequestId}
           onSaveGeminiKey={onSaveGeminiKey}
           onSaveOpenAiKey={onSaveOpenAiKey}
           onEnhanceImage={enhanceImageSession}
