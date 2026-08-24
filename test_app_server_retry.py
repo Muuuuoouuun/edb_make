@@ -38,6 +38,91 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("https://example.test/update.json", app_server._normalize_update_url("https://example.test/update.json"))
         self.assertEqual("http://127.0.0.1:9999/update.json", app_server._normalize_update_url("http://127.0.0.1:9999/update.json"))
 
+    def test_frozen_app_home_uses_redirected_windows_documents_directory(self):
+        redirected_documents = Path("C:/Users/test/OneDrive/문서")
+        with (
+            patch.object(app_server.sys, "platform", "win32"),
+            patch.object(
+                app_server,
+                "_windows_documents_directory",
+                return_value=redirected_documents,
+            ),
+            patch.dict(os.environ, {"EDB_APP_HOME": ""}),
+        ):
+            app_home = app_server.default_frozen_app_home()
+
+        self.assertEqual(
+            (redirected_documents / "ClassInEDBMVP").resolve(),
+            app_home,
+        )
+
+    def test_frozen_app_home_expands_environment_override(self):
+        with TemporaryDirectory() as raw_tmp:
+            configured_root = Path(raw_tmp) / "사용자 지정"
+            with patch.dict(
+                os.environ,
+                {
+                    "EDB_APP_HOME": "$EDB_TEST_APP_HOME/runtime",
+                    "EDB_TEST_APP_HOME": str(configured_root),
+                },
+            ):
+                app_home = app_server.default_frozen_app_home()
+
+        self.assertEqual((configured_root / "runtime").resolve(), app_home)
+
+    def test_local_health_check_rejects_another_service(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read():
+                return b'{"ok": true, "app": "another-service"}'
+
+        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+            self.assertFalse(app_server._local_server_is_healthy("127.0.0.1", 8765))
+
+        FakeResponse.read = staticmethod(
+            lambda: json.dumps({"ok": True, "app": app_server.APP_NAME}).encode("utf-8")
+        )
+        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+            self.assertTrue(app_server._local_server_is_healthy("127.0.0.1", 8765))
+
+    @unittest.skipUnless(os.name == "nt", "exclusive bind semantics are Windows-specific")
+    def test_windows_app_server_rejects_shared_port_binding(self):
+        foreign_server = app_server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            app_server.SimpleHTTPRequestHandler,
+        )
+        foreign_address = foreign_server.server_address
+        try:
+            with self.assertRaises(OSError):
+                app_server.AppHTTPServer(
+                    foreign_address,
+                    app_server.AppRequestHandler,
+                )
+        finally:
+            foreign_server.server_close()
+
+        app_http_server = app_server.AppHTTPServer(
+            ("127.0.0.1", 0),
+            app_server.AppRequestHandler,
+        )
+        app_address = app_http_server.server_address
+        try:
+            with self.assertRaises(OSError):
+                app_server.ThreadingHTTPServer(
+                    app_address,
+                    app_server.SimpleHTTPRequestHandler,
+                )
+        finally:
+            app_http_server.server_close()
+
     def test_update_config_normalizes_local_snake_case_overrides(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -130,8 +215,8 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertTrue(app_server.sanitize_upload_file_name("NUL.pdf").startswith("_NUL_"))
         self.assertEqual("_LPT1", app_server.sanitize_output_dir_name("LPT1"))
         self.assertEqual(
-            "//fileserver/shared/Lesson 1.pdf",
-            str(app_server.decode_file_reference("file://fileserver/shared/Lesson%201.pdf")),
+            Path("//fileserver/shared/Lesson 1.pdf"),
+            app_server.decode_file_reference("file://fileserver/shared/Lesson%201.pdf"),
         )
 
     def test_upload_cache_component_reserves_bytes_for_content_digest_prefix(self):
@@ -418,6 +503,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
                     patch.object(app_server, "BASE_DIR", tmpdir), \
                     patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.object(app_server.platform, "machine", return_value="arm64"), \
                     patch.dict(os.environ, {
                         "EDB_APP_VERSION": "",
                         "EDB_UPDATE_FEED_URL": "",
@@ -4135,8 +4221,12 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertTrue(body["publishSummary"]["outputDirExists"])
             self.assertTrue(body["publishSummary"]["readyForClassIn"])
             self.assertTrue(body["publishSummary"]["canDownload"])
-            self.assertIn("/published/", body["publishSummary"]["edbFileUri"])
-            self.assertNotIn(".publish-staging", body["publishSummary"]["edbFileUri"])
+            published_path = app_server.decode_file_reference(
+                body["publishSummary"]["edbFileUri"]
+            )
+            self.assertIsNotNone(published_path)
+            self.assertIn("published", published_path.parts)
+            self.assertNotIn(".publish-staging", published_path.parts)
             self.assertEqual(50, body["publishSummary"]["pageCountHint"])
             self.assertTrue(body["publishSummary"]["edbSplit"])
             self.assertEqual(2, body["publishSummary"]["edbPartCount"])

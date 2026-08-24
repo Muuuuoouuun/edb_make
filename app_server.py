@@ -17,6 +17,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -375,11 +376,36 @@ def is_frozen_app() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def _windows_documents_directory() -> Path | None:
+    """Return the redirected Windows Documents known folder when available."""
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+
+        # CSIDL_PERSONAL remains supported and, unlike ``Path.home() / Documents``,
+        # follows OneDrive and administrator-configured known-folder redirection.
+        buffer = ctypes.create_unicode_buffer(32_768)
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0005, None, 0, buffer)
+        if result == 0 and buffer.value.strip():
+            return Path(buffer.value).resolve()
+    except (AttributeError, OSError, ValueError):
+        pass
+
+    user_profile = os.environ.get("USERPROFILE", "").strip()
+    if user_profile:
+        return (Path(user_profile).expanduser() / "Documents").resolve()
+    return None
+
+
 def default_frozen_app_home() -> Path:
     configured = os.environ.get("EDB_APP_HOME", "").strip()
     if configured:
-        return Path(configured).expanduser().resolve()
-    return (Path.home() / "Documents" / "ClassInEDBMVP").resolve()
+        return Path(os.path.expandvars(configured)).expanduser().resolve()
+    documents_directory = _windows_documents_directory()
+    if documents_directory is None:
+        documents_directory = (Path.home() / "Documents").resolve()
+    return (documents_directory / "ClassInEDBMVP").resolve()
 
 
 def app_root() -> Path:
@@ -1448,7 +1474,11 @@ def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> 
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
         return False
-    return bool(isinstance(payload, dict) and payload.get("ok"))
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("ok") is True
+        and payload.get("app") == APP_NAME
+    )
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -7702,8 +7732,18 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 class AppHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
+    # Windows SO_REUSEADDR permits unrelated processes to bind the same port,
+    # which can split requests between two local services. Keep quick restart
+    # behavior on POSIX, but require exclusive ownership on Windows.
+    allow_reuse_address = not sys.platform.startswith("win")
     daemon_threads = True
+
+    def server_bind(self) -> None:
+        if sys.platform.startswith("win"):
+            exclusive_address_use = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive_address_use is not None:
+                self.socket.setsockopt(socket.SOL_SOCKET, exclusive_address_use, 1)
+        super().server_bind()
 
     def __init__(self, server_address, RequestHandlerClass):
         super().__init__(server_address, RequestHandlerClass)
