@@ -253,10 +253,15 @@ class TestStaticAssetCaching(unittest.TestCase):
         stamp = "20260824_123456_1234567890_stampabcdef"
         with patch.object(app_server, "_unique_artifact_stamp", return_value=stamp):
             preview = handler._resolve_preview_output_dir({}, [long_source])
+            budget = app_server._managed_path_component_max_bytes(
+                app_server.default_output_root() / "previews",
+                reserved_descendants=app_server.MANAGED_PREVIEW_RESERVED_DESCENDANTS,
+                max_bytes=app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+            )
             generation = app_server.sanitize_output_dir_name(
                 long_source.stem,
                 suffix=stamp,
-                max_bytes=app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+                max_bytes=budget,
             )
         self.assertEqual(preview.name, generation)
         self.assertTrue(generation.endswith(f"_{stamp}"))
@@ -287,6 +292,101 @@ class TestStaticAssetCaching(unittest.TestCase):
             len(preview.name.encode("utf-8")),
             app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
         )
+
+    def test_long_onedrive_hangul_root_dynamically_budgets_preview_and_publish(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        runtime_dir = Path(
+            "C:/Users/"
+            + ("LongProfileName" * 3)
+            + "/OneDrive - International Academy/문서/ClassInEDBMVP/.app_runtime"
+        )
+        source = Path(("긴_한글_시험자료" * 80) + ".pdf")
+        stamp = "20260824_143057_1787549457154522500_67513cd0436a"
+        with (
+            patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+            patch.object(app_server, "_unique_artifact_stamp", return_value=stamp),
+        ):
+            preview = handler._resolve_preview_output_dir({}, [source])
+
+        crop_path = preview / app_server.MANAGED_CROP_RELATIVE_PATH
+        future_publish_path = (
+            preview
+            / ".publish-staging"
+            / app_server.MANAGED_GENERATION_PLACEHOLDER
+            / "classin_handoff.json"
+        )
+        self.assertLessEqual(
+            app_server._windows_path_units(crop_path),
+            app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+        )
+        self.assertLessEqual(
+            app_server._windows_path_units(future_publish_path),
+            app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+        )
+        self.assertLess(
+            len(preview.name.encode("utf-8")),
+            app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+        )
+
+    def test_long_onedrive_root_budgets_upload_digest_and_hangul_filename(self):
+        upload_dir = Path(
+            "C:/Users/"
+            + ("LongProfileName" * 3)
+            + "/OneDrive - International Academy/Documents/ClassInEDBMVP/.app_runtime/uploads"
+        )
+        target_name = app_server._managed_upload_target_name(
+            ("한글자료" * 100) + ".pdf",
+            "a" * 64,
+            upload_dir=upload_dir,
+        )
+        target_path = upload_dir / target_name
+
+        self.assertTrue(target_name.startswith(("a" * 64) + "_"))
+        self.assertTrue(target_name.endswith(".pdf"))
+        self.assertLessEqual(
+            app_server._windows_path_units(target_path),
+            app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+        )
+
+    def test_long_runtime_root_budgets_export_and_publish_descendants(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        runtime_dir = Path(
+            "C:/Users/"
+            + ("LongProfileName" * 2)
+            + "/OneDrive - International Academy/Shared Documents/문서/"
+            "ClassInEDBMVP/.app_runtime"
+        )
+        source = Path(("수학영역_문제지" * 80) + ".pdf")
+        stamps = iter(
+            (
+                "20260824_143057_1787549457154522500_exportstamp",
+                "20260824_143058_1787549457154522501_publishstamp",
+            )
+        )
+        with (
+            patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+            patch.object(app_server, "_unique_artifact_stamp", side_effect=lambda: next(stamps)),
+        ):
+            output_dir = handler._resolve_output_dir({}, [source])
+            export_staging, _export_final = app_server._managed_export_generation_paths(output_dir)
+            edb_name, publish_staging, _publish_final = app_server._managed_publish_artifact_paths(
+                output_dir,
+                "아주 긴 기말고사 EDB 이름" * 40,
+                fallback_stem="classin",
+            )
+
+        paths = (
+            export_staging / app_server.MANAGED_CROP_RELATIVE_PATH,
+            publish_staging / "classin_handoff.json",
+            publish_staging / app_server._edb_part_file_name(edb_name, 9998, 9999),
+        )
+        for path in paths:
+            self.assertLessEqual(
+                app_server._windows_path_units(path),
+                app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+                str(path),
+            )
+        self.assertTrue(edb_name.endswith(".edb"))
 
     def test_export_missing_crop_has_actionable_error_code(self):
         error = FileNotFoundError(
