@@ -1698,6 +1698,18 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         "error": message,
         "errorKind": "export_failed",
     }
+    if isinstance(exc, FileNotFoundError) and (
+        "problem_crops" in message or "problem_cutouts" in message
+    ):
+        payload.update({
+            "code": "recognition_asset_missing",
+            "operation": "session_export",
+            "retryable": True,
+            "recoverySteps": [
+                "같은 원본 파일로 문제 인식을 다시 시도해 주세요.",
+                "계속 실패하면 페이지 PNG로 등록한 뒤 오류 정보를 복사해 신고해 주세요.",
+            ],
+        })
     if (
         "HWP/HWPX" in message
         or "valid HWP" in message
@@ -1776,7 +1788,12 @@ _WINDOWS_RESERVED_PATH_COMPONENTS = {
 }
 SAFE_PATH_COMPONENT_MAX_BYTES = 240
 EDB_FILE_STEM_MAX_BYTES = 220
-UPLOAD_FILE_NAME_MAX_BYTES = 180
+# Managed runtime paths sit below Documents/ClassInEDBMVP/.app_runtime on
+# Windows. A component can be valid by itself and still push the complete crop
+# path over the legacy 260-character MAX_PATH boundary once digests,
+# timestamps, and problem_crops descendants are appended.
+UPLOAD_FILE_NAME_MAX_BYTES = 96
+MANAGED_OUTPUT_DIR_NAME_MAX_BYTES = 96
 
 
 def _is_windows_reserved_path_component(value: str | None) -> bool:
@@ -9982,19 +9999,37 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if requested:
             target = Path(str(requested))
             if not target.is_absolute():
-                target = output_root / sanitize_output_dir_name(str(requested))
+                target = output_root / sanitize_output_dir_name(
+                    str(requested),
+                    max_bytes=MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+                )
             return target.resolve()
         if not source_paths:
-            return (output_root / sanitize_output_dir_name(None)).resolve()
+            return (
+                output_root
+                / sanitize_output_dir_name(
+                    None,
+                    max_bytes=MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+                )
+            ).resolve()
         identity_suffix = _source_identity_suffix(source_paths)
         if len(source_paths) == 1:
             return (
                 output_root
-                / sanitize_output_dir_name(source_paths[0].stem, suffix=identity_suffix)
+                / sanitize_output_dir_name(
+                    source_paths[0].stem,
+                    suffix=identity_suffix,
+                    max_bytes=MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+                )
             ).resolve()
         batch_name = f"{source_paths[0].stem}_{len(source_paths)}files"
         return (
-            output_root / sanitize_output_dir_name(batch_name, suffix=identity_suffix)
+            output_root
+            / sanitize_output_dir_name(
+                batch_name,
+                suffix=identity_suffix,
+                max_bytes=MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+            )
         ).resolve()
 
     def _resolve_preview_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
@@ -10014,7 +10049,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             name_hint = f"{source_paths[0].stem}_{len(source_paths)}files"
         else:
             name_hint = "preview"
-        run_name = sanitize_output_dir_name(name_hint, suffix=_unique_artifact_stamp())
+        run_name = sanitize_output_dir_name(
+            name_hint,
+            suffix=_unique_artifact_stamp(),
+            max_bytes=MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+        )
         return (default_output_root() / "previews" / run_name).resolve()
 
     def _handle_export(self) -> None:

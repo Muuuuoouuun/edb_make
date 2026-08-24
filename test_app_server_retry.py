@@ -253,13 +253,49 @@ class TestStaticAssetCaching(unittest.TestCase):
         stamp = "20260824_123456_1234567890_stampabcdef"
         with patch.object(app_server, "_unique_artifact_stamp", return_value=stamp):
             preview = handler._resolve_preview_output_dir({}, [long_source])
-            generation = app_server.sanitize_output_dir_name(long_source.stem, suffix=stamp)
+            generation = app_server.sanitize_output_dir_name(
+                long_source.stem,
+                suffix=stamp,
+                max_bytes=app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+            )
         self.assertEqual(preview.name, generation)
         self.assertTrue(generation.endswith(f"_{stamp}"))
         self.assertLessEqual(
             len(generation.encode("utf-8")),
-            app_server.SAFE_PATH_COMPONENT_MAX_BYTES,
+            app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
         )
+
+    def test_windows_preview_crop_path_stays_below_legacy_max_path_boundary(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        runtime_dir = Path(
+            "C:/Users/Administrator/Documents/ClassInEDBMVP/.app_runtime"
+        )
+        source = Path(
+            ("b17d4d83e8de7ab5479d9c53a1dc00d520a8b28a64e86bc67f8f41c20a8cd38d"
+             "__2026.08.18_23_고1B_539b127457.pdf")
+        )
+        stamp = "20260824_143057_1787549457154522500_67513cd0436a"
+        with (
+            patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+            patch.object(app_server, "_unique_artifact_stamp", return_value=stamp),
+        ):
+            preview = handler._resolve_preview_output_dir({}, [source])
+
+        crop_path = preview / "problem_crops" / "problem_001_df48bf64.png"
+        self.assertLess(len(str(crop_path)), 240)
+        self.assertLessEqual(
+            len(preview.name.encode("utf-8")),
+            app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+        )
+
+    def test_export_missing_crop_has_actionable_error_code(self):
+        error = FileNotFoundError(
+            "C:/runtime/outputs/previews/run/problem_crops/problem_001_df48bf64.png"
+        )
+        payload = app_server._export_error_payload(error)
+        self.assertEqual("recognition_asset_missing", payload["code"])
+        self.assertEqual("session_export", payload["operation"])
+        self.assertTrue(payload["retryable"])
 
     def test_image_generation_names_are_byte_safe_and_distinct_for_long_ids(self):
         output_dir = Path("/tmp")
