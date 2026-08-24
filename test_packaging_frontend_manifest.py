@@ -3,6 +3,7 @@ from __future__ import annotations
 import plistlib
 import hashlib
 import json
+import shutil
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -10,11 +11,13 @@ from pathlib import Path
 from scripts.verify_frontend_package import (
     REQUIRED_RUNTIME_SOURCE_FILES,
     REQUIRED_UI_FILES,
+    collect_deterministic_bundle_errors,
     collect_errors,
     frontend_bundle_source_digest,
 )
 from scripts.verify_packaged_app import collect_package_errors
 from scripts.verify_packaged_app import REQUIRED_SOURCE_PACKAGE_FILES
+from scripts.smoke_packaged_app import _validate_ui_assets, _validate_update_metadata
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -204,6 +207,32 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("source digest is stale" in error for error in errors))
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for deterministic bundle checking")
+    def test_deterministic_bundle_check_rejects_tracked_bundle_body_tampering(self) -> None:
+        required_files = (
+            "ui_prototype/art.jsx",
+            "ui_prototype/tweaks-panel.jsx",
+            "ui_prototype/app.jsx",
+            "ui_prototype/app.bundle.js",
+            "ui_prototype/board.html",
+            "scripts/build_frontend_bundle.mjs",
+            "scripts/vendor/babel.min.js",
+        )
+        with TemporaryDirectory() as raw_tmp:
+            project_root = Path(raw_tmp)
+            for rel_path in required_files:
+                target = project_root / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(PROJECT_ROOT / rel_path, target)
+
+            self.assertEqual([], collect_deterministic_bundle_errors(project_root))
+            bundle_path = project_root / "ui_prototype" / "app.bundle.js"
+            bundle_path.write_bytes(bundle_path.read_bytes() + b"\n// preserved-header tamper\n")
+
+            errors = collect_deterministic_bundle_errors(project_root)
+
+        self.assertTrue(any("deterministic frontend bundle check failed" in error for error in errors))
+
     def test_frontend_package_rejects_bundle_built_with_old_bundler(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             project_root = Path(raw_tmp)
@@ -317,6 +346,18 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             errors = collect_package_errors(package_root)
 
         self.assertTrue(any("release metadata" in error for error in errors))
+
+    def test_packaged_app_rejects_expected_commit_mismatch(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            self._write_packaged_runtime(package_root)
+
+            errors = collect_package_errors(
+                package_root,
+                expected_git_commit="a" * 40,
+            )
+
+        self.assertTrue(any("git commit mismatch" in error for error in errors))
 
     def test_packaged_app_layout_accepts_custom_install_directory(self) -> None:
         with TemporaryDirectory() as raw_tmp:
@@ -642,6 +683,76 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
         self.assertTrue(any("missing source-package runtime file: pipeline_cache.py" in error for error in errors))
 
+    def test_source_package_layout_requires_bug_reporting_module(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "source-package"
+            self._write_packaged_runtime(package_root, "")
+            for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
+                target = package_root / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# runtime\n", encoding="utf-8")
+            (package_root / "bug_reporting.py").unlink()
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("missing source-package runtime file: bug_reporting.py" in error for error in errors))
+
+    def test_source_package_can_smoke_import_real_entrypoint(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "source-package"
+            self._write_packaged_runtime(package_root, "")
+            for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
+                target = package_root / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# runtime\n", encoding="utf-8")
+            (package_root / "app_server.py").write_text(
+                "import bug_reporting\n\ndef main():\n    return 0\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root, smoke_source_import=True)
+
+        self.assertEqual([], errors)
+
+    def test_packaged_app_rejects_frontend_built_from_other_source(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            temp_root = Path(raw_tmp)
+            project_root = temp_root / "project"
+            project_root.mkdir()
+            self._write_frontend_project(project_root)
+            package_root = project_root / "dist" / "ClassInEDBMVP"
+            self._write_packaged_runtime(package_root)
+
+            errors = collect_package_errors(package_root, source_root=project_root)
+
+        self.assertTrue(any("does not match current source" in error for error in errors))
+
+    def test_packaged_app_rejects_bundle_byte_tampering_with_valid_header(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            temp_root = Path(raw_tmp)
+            project_root = temp_root / "project"
+            project_root.mkdir()
+            self._write_frontend_project(project_root)
+            package_root = project_root / "dist" / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            source_bundle = project_root / "ui_prototype" / "app.bundle.js"
+            packaged_bundle = resource_root / "ui_prototype" / "app.bundle.js"
+            digest = frontend_bundle_source_digest(project_root)
+            (resource_root / "ui_prototype" / "board.html").write_text(
+                f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{digest}"></script>\n',
+                encoding="utf-8",
+            )
+            packaged_bundle.write_bytes(source_bundle.read_bytes())
+            self.assertEqual(
+                [],
+                collect_package_errors(package_root, source_root=project_root),
+            )
+            packaged_bundle.write_bytes(source_bundle.read_bytes() + b"\n// tampered after header\n")
+
+            errors = collect_package_errors(package_root, source_root=project_root)
+
+        self.assertTrue(any("bytes do not match current source bundle" in error for error in errors))
+
     def test_packaged_app_layout_rejects_build_time_frontend_tools(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -753,6 +864,15 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         source = (PROJECT_ROOT / "scripts" / "build_frontend_bundle.mjs").read_text(encoding="utf-8")
         self.assertIn("board.html", source)
         self.assertIn("frontend-bundle-${sourceDigest}", source)
+        self.assertIn('args.delete("--check")', source)
+
+    def test_packaging_requires_node_for_deterministic_frontend_verification(self) -> None:
+        macos = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        windows = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        spec = (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8")
+        self.assertIn("build or deterministically verify", macos)
+        self.assertIn("build or deterministically verify", windows)
+        self.assertIn("collect_deterministic_bundle_errors", spec)
 
     def test_packaging_scripts_run_built_artifact_verifier(self) -> None:
         for rel_path in ("package_macos_app.sh", "package_mvp.ps1", "package_windows_installer.ps1"):
@@ -762,6 +882,68 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     "scripts/verify_packaged_app.py".replace("/", "\\" if rel_path.endswith(".ps1") else "/"),
                     source,
                 )
+
+    def test_windows_source_fallback_smokes_import_and_compares_source(self) -> None:
+        source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn('"bug_reporting.py"', source)
+        self.assertIn('"--source-root"', source)
+        self.assertIn('"--smoke-source-import"', source)
+        self.assertIn("-SmokeSourceImport", source)
+
+    def test_windows_onefile_runs_isolated_health_smoke(self) -> None:
+        source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        smoke = source.split("function Invoke-EDBOneFileHealthSmoke", 1)[1].split(
+            "if (-not $SkipFrontendBuild)", 1
+        )[0]
+        smoke_script = (PROJECT_ROOT / "scripts" / "smoke_packaged_app.py").read_text(encoding="utf-8")
+        onefile_branch = source.split(
+            'Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"',
+            1,
+        )[1].split("} else {", 1)[0]
+
+        self.assertIn("scripts\\smoke_packaged_app.py", smoke)
+        self.assertIn('"EDB_APP_HOME"', smoke_script)
+        self.assertIn('"--no-open-browser"', smoke_script)
+        for endpoint in ("/api/health", "/board.html", "/api/app/update"):
+            self.assertIn(endpoint, smoke_script)
+        self.assertIn(r"app\.bundle\.js", smoke_script)
+        self.assertIn("Invoke-EDBOneFileHealthSmoke -ExecutablePath $PackageRoot", onefile_branch)
+
+    def test_packaged_runtime_smoke_validates_ui_and_update_contracts(self) -> None:
+        digest = "a" * 64
+        board = f'<script src="app.bundle.js?v=frontend-bundle-{digest}"></script>'
+        bundle = (
+            "/* Generated by scripts/build_frontend_bundle.mjs.\n"
+            f" * Source SHA256: {digest}\n */\n/* app.jsx */\n"
+        )
+        self.assertEqual(digest, _validate_ui_assets(board, bundle))
+        with self.assertRaisesRegex(RuntimeError, "cache bust"):
+            _validate_ui_assets(board, bundle.replace(digest, "b" * 64))
+
+        update = {
+            "ok": True,
+            "appId": "ClassInEDBMVP",
+            "currentVersion": "1.2.3",
+            "platform": "windows",
+            "arch": "x64",
+            "channelStatus": "up_to_date",
+            "configured": True,
+            "updateAvailable": False,
+        }
+        _validate_update_metadata(update)
+        _validate_update_metadata(
+            {**update, "appId": "CustomEDB"},
+            expected_app_id="CustomEDB",
+        )
+        with self.assertRaisesRegex(RuntimeError, "configured must be boolean"):
+            _validate_update_metadata({**update, "configured": "true"})
+
+    def test_packaging_wrappers_pass_explicit_source_root_to_verifier(self) -> None:
+        macos = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        windows = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        self.assertIn('--source-root "$PROJECT_ROOT"', macos)
+        self.assertIn('"--source-root"', windows)
+        self.assertIn("$ProjectRoot", windows)
 
     def test_packaging_manifests_include_optional_upscayl_runtime(self) -> None:
         expected_resource = "resources/upscayl"

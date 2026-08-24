@@ -3,6 +3,14 @@ main = "src/index.js"
 compatibility_date = "2026-07-27"
 workers_dev = false
 
+[[ratelimits]]
+name = "REPORT_RATE_LIMITER"
+namespace_id = "2026082401"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
 [[routes]]
 pattern = "reports.classin.cloud"
 custom_domain = true

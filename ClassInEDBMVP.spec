@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.verify_frontend_package import collect_errors
+from scripts.verify_frontend_package import collect_deterministic_bundle_errors
 from scripts.build_app_update_config import build_config, write_config
 from scripts.build_release_metadata import build_release_metadata
 from scripts.verify_release_licenses import (
@@ -29,6 +30,7 @@ def pyinstaller_work_path() -> Path:
 
 def verify_frontend_package() -> None:
     errors = collect_errors(PROJECT_ROOT)
+    errors.extend(collect_deterministic_bundle_errors(PROJECT_ROOT))
     if errors:
         message = "\n".join(f"[frontend-package] ERROR: {error}" for error in errors)
         raise SystemExit(message)

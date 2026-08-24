@@ -57,6 +57,23 @@ def _path_from_file_uri(value: str) -> Path:
 
 
 class TestEdbPublishFlow(unittest.TestCase):
+    def test_atomic_edb_write_preserves_existing_file_when_replace_fails(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            target = Path(raw_tmp) / "lesson.edb"
+            target.write_bytes(b"known-good")
+            with mock.patch.object(edb_builder.os, "replace", side_effect=OSError("locked")):
+                with self.assertRaises(OSError):
+                    edb_builder.write_edb(target, b"new")
+            self.assertEqual(b"known-good", target.read_bytes())
+            self.assertEqual([target], list(target.parent.iterdir()))
+
+    def test_atomic_edb_write_uses_short_staging_name_for_long_destination(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            target = Path(raw_tmp) / f"{'a' * 250}.edb"
+            edb_builder.write_edb(target, b"complete-edb")
+            self.assertEqual(b"complete-edb", target.read_bytes())
+            self.assertEqual([target], list(target.parent.iterdir()))
+
     def test_edb_builder_rejects_empty_record_set(self):
         with self.assertRaisesRegex(ValueError, "at least one record"):
             edb_builder.build_edb([], header_flag=3)

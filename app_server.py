@@ -98,6 +98,7 @@ def _publish_failure_payload(
     message: str,
     exc: BaseException,
     retryable: bool = True,
+    recovery_steps: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": False,
@@ -105,8 +106,43 @@ def _publish_failure_payload(
         "code": code,
         "operation": "session_publish",
         "retryable": retryable,
-        "recoverySteps": list(PUBLISH_RECOVERY_STEPS),
+        "recoverySteps": list(recovery_steps or PUBLISH_RECOVERY_STEPS),
     }
+
+
+def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, Any]:
+    text = str(exc).lower()
+    if isinstance(exc, FileNotFoundError):
+        return _publish_failure_payload(
+            code="publish_asset_missing",
+            message="EDB 제작에 필요한 원본 파일을 찾지 못했습니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=[
+                "최근 작업에서 원본 PDF 또는 이미지가 열리는지 확인해 주세요.",
+                "파일이 이동되었다면 원본 PDF를 다시 등록하고 제작해 주세요.",
+            ],
+        )
+    if isinstance(exc, ValueError) and ("page limit" in text or "50" in text and "page" in text):
+        return _publish_failure_payload(
+            code="publish_page_limit_exceeded",
+            message="ClassIn 보드 페이지 제한을 초과했습니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=[
+                "문항을 나누거나 일부 문항을 제외한 뒤 다시 제작해 주세요.",
+                "계속 필요하면 여러 EDB로 나누어 제작해 주세요.",
+            ],
+        )
+    definitions = {
+        "prepare": ("publish_output_unavailable", "제작 파일을 저장할 폴더를 준비하지 못했습니다"),
+        "build": ("publish_build_failed", "EDB 제작 데이터 생성에 실패했습니다"),
+        "write": ("edb_write_failed", "EDB 파일 저장 또는 검증에 실패했습니다"),
+        "handoff": ("publish_handoff_failed", "ClassIn 전달 파일 생성에 실패했습니다"),
+        "commit": ("publish_session_commit_failed", "완성 파일을 현재 작업에 반영하지 못했습니다"),
+    }
+    code, message = definitions.get(stage, ("publish_failed", "EDB 제작에 실패했습니다"))
+    return _publish_failure_payload(code=code, message=message, exc=exc)
 
 
 @lru_cache(maxsize=None)
@@ -404,13 +440,28 @@ def default_output_root() -> Path:
     return RUNTIME_DIR / DEFAULT_OUTPUT_ROOT_NAME
 
 
+def _fsync_parent_directory(path: Path) -> None:
+    """Best-effort durability for a file-system entry created by rename."""
+    try:
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+    except (AttributeError, OSError):
+        return
+    try:
+        try:
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+    finally:
+        os.close(directory_fd)
+
+
 def _atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> None:
     """Durably replace a text file without exposing a partially-written JSON file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
         descriptor, raw_temporary_path = tempfile.mkstemp(
-            prefix=f".{path.name}.",
+            prefix=".atomic-write.",
             suffix=".tmp",
             dir=str(path.parent),
         )
@@ -426,24 +477,250 @@ def _atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> 
         # after a sudden power failure on POSIX filesystems. Windows does not
         # generally allow opening directories this way, so it keeps the safe
         # atomic-replace behavior and skips only this extra durability step.
-        try:
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-        except (AttributeError, OSError):
-            directory_fd = None
-        if directory_fd is not None:
-            try:
-                try:
-                    os.fsync(directory_fd)
-                except OSError:
-                    pass
-            finally:
-                os.close(directory_fd)
+        _fsync_parent_directory(path)
     finally:
         if temporary_path is not None:
             try:
                 temporary_path.unlink()
             except OSError:
                 pass
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Durably replace a binary file without exposing partial cache entries."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=".atomic-write.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        temporary_path = Path(raw_temporary_path)
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        _fsync_parent_directory(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def _write_zip_atomically(path: Path, *, compression: int, populate) -> None:
+    """Build a ZIP beside its destination and expose it only after close/fsync."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=".atomic-zip.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        os.close(descriptor)
+        temporary_path = Path(raw_temporary_path)
+        with zipfile.ZipFile(temporary_path, "w", compression=compression) as archive:
+            populate(archive)
+        # Windows FlushFileBuffers requires a handle opened with write access.
+        # ``r+b`` keeps the completed archive unchanged while providing that
+        # writable handle for os.fsync on every supported platform.
+        with temporary_path.open("r+b") as archive_file:
+            os.fsync(archive_file.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        _fsync_parent_directory(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def _file_matches_digest(
+    path: Path,
+    expected_digest: str,
+    expected_size: int,
+    *,
+    algorithm: str = "sha256",
+) -> bool:
+    """Validate a managed upload cache hit before reusing its digest-named path."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != expected_size:
+            return False
+        digest = hashlib.new(algorithm)
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == expected_digest
+
+
+def _session_reset_transaction_path() -> Path:
+    return LATEST_SESSION_JSON.parent / ".session_reset_transaction.json"
+
+
+def _valid_session_reset_entries(payload: dict[str, Any]) -> list[tuple[Path, Path]] | None:
+    allowed_targets = {str(path): path for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)}
+    entries: list[tuple[Path, Path]] = []
+    stamp = str(payload.get("stamp") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", stamp):
+        return None
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        return None
+    seen_targets: set[Path] = set()
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            return None
+        target = allowed_targets.get(str(raw_entry.get("target") or ""))
+        tombstone = Path(str(raw_entry.get("tombstone") or ""))
+        if target is None or target in seen_targets:
+            return None
+        expected_tombstone = target.with_name(f".{target.name}.{stamp}.reset")
+        if tombstone != expected_tombstone:
+            return None
+        seen_targets.add(target)
+        entries.append((target, tombstone))
+    return entries
+
+
+def _quarantine_reset_tombstone(tombstone: Path, *, marker: Path, stamp: str) -> Path:
+    quarantine_dir = marker.parent / ".session-reset-recovery-conflicts" / stamp
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    destination = quarantine_dir / tombstone.name
+    if destination.exists():
+        destination = quarantine_dir / f"{tombstone.name}.{uuid.uuid4().hex[:12]}"
+    os.replace(tombstone, destination)
+    _fsync_parent_directory(destination)
+    print(
+        f"[app-server] preserved stale reset tombstone without overwriting newer state: {destination}",
+        file=sys.stderr,
+    )
+    return destination
+
+
+def _recover_interrupted_session_reset() -> bool:
+    """Finish or roll back a reset interrupted by process termination."""
+    marker = _session_reset_transaction_path()
+    with _session_storage_lock:
+        if not marker.exists():
+            return False
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[app-server] session reset recovery marker unreadable: {exc}", file=sys.stderr)
+            return False
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            print("[app-server] session reset recovery marker is invalid", file=sys.stderr)
+            return False
+        entries = _valid_session_reset_entries(payload)
+        if entries is None:
+            print("[app-server] session reset recovery marker identity is invalid", file=sys.stderr)
+            return False
+        stamp = str(payload.get("stamp") or "")
+        phase = str(payload.get("phase") or "")
+        try:
+            if phase == "committed":
+                for _target, tombstone in entries:
+                    if tombstone.exists():
+                        tombstone.unlink()
+            elif phase == "preparing":
+                for target, tombstone in reversed(entries):
+                    if tombstone.exists():
+                        if target.exists():
+                            _quarantine_reset_tombstone(
+                                tombstone,
+                                marker=marker,
+                                stamp=stamp,
+                            )
+                        else:
+                            os.replace(tombstone, target)
+                    elif not target.exists():
+                        raise FileNotFoundError(
+                            f"reset recovery lost both target and tombstone: {target}"
+                        )
+            else:
+                print(f"[app-server] session reset recovery phase is invalid: {phase}", file=sys.stderr)
+                return False
+            marker.unlink()
+            _fsync_parent_directory(marker)
+        except OSError as exc:
+            print(f"[app-server] interrupted session reset recovery deferred: {exc}", file=sys.stderr)
+            return False
+    print(f"[app-server] recovered interrupted session reset ({phase})", file=sys.stderr)
+    return True
+
+
+def _atomically_clear_persisted_session_state() -> None:
+    """Clear all persisted session pointers as one recoverable transaction."""
+    targets = (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)
+    stamp = uuid.uuid4().hex
+    moved: list[tuple[Path, Path]] = []
+    marker = _session_reset_transaction_path()
+    with _session_storage_lock:
+        _recover_interrupted_session_reset()
+        generated_existed_before = GENERATED_SESSION_JS.exists()
+        planned = [
+            (target, target.with_name(f".{target.name}.{stamp}.reset"))
+            for target in targets
+            if target.exists()
+        ]
+        marker_payload: dict[str, Any] = {
+            "version": 1,
+            "stamp": stamp,
+            "phase": "preparing",
+            "generatedExistedBefore": generated_existed_before,
+            "entries": [
+                {"target": str(target), "tombstone": str(tombstone)}
+                for target, tombstone in planned
+            ],
+        }
+        try:
+            _atomic_write_text(marker, json.dumps(marker_payload, ensure_ascii=False, indent=2))
+            for target, tombstone in planned:
+                os.replace(target, tombstone)
+                moved.append((target, tombstone))
+            _atomic_write_text(GENERATED_SESSION_JS, EMPTY_GENERATED_SESSION_JS)
+            marker_payload["phase"] = "committed"
+            _atomic_write_text(marker, json.dumps(marker_payload, ensure_ascii=False, indent=2))
+        except BaseException:
+            try:
+                generated_was_moved = any(target == GENERATED_SESSION_JS for target, _ in moved)
+                if GENERATED_SESSION_JS.exists() and (
+                    generated_was_moved or not generated_existed_before
+                ):
+                    GENERATED_SESSION_JS.unlink()
+            except OSError:
+                pass
+            for target, tombstone in reversed(moved):
+                if tombstone.exists():
+                    os.replace(tombstone, target)
+            try:
+                marker.unlink()
+                _fsync_parent_directory(marker)
+            except OSError:
+                pass
+            raise
+        tombstone_cleanup_failed = False
+        for _target, tombstone in moved:
+            try:
+                tombstone.unlink()
+            except OSError as exc:
+                tombstone_cleanup_failed = True
+                print(f"[app-server] reset tombstone cleanup failed: {exc}", file=sys.stderr)
+        if not tombstone_cleanup_failed:
+            try:
+                marker.unlink()
+                _fsync_parent_directory(marker)
+            except OSError as exc:
+                print(f"[app-server] reset transaction marker cleanup failed: {exc}", file=sys.stderr)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -499,6 +776,25 @@ def _app_platform_key() -> str:
     if sys.platform.startswith("linux"):
         return "linux"
     return sys.platform
+
+
+def _normalized_app_arch(value: Any) -> str:
+    arch = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "amd64": "x64",
+        "x86-64": "x64",
+        "x86_64": "x64",
+        "aarch64": "arm64",
+        "arm64-v8a": "arm64",
+        "universal2": "universal",
+        "all": "universal",
+        "any": "universal",
+    }
+    return aliases.get(arch, arch)
+
+
+def _app_arch_key() -> str:
+    return _normalized_app_arch(platform.machine())
 
 
 def _app_update_config_alias_conflict_error(label: str, source: dict[str, Any], *field_names: str) -> str:
@@ -939,10 +1235,12 @@ def build_app_update_status() -> dict[str, Any]:
     fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
     app_name = str(config.get("appName") or "ClassInEDBMVP")
     app_id = str(config.get("appId") or config.get("app_id") or app_name).strip() or app_name
+    current_arch = _app_arch_key()
     cache_key = (
         app_id,
         app_name,
         platform_key,
+        current_arch,
         current_version,
         feed_url,
         fallback_download_url,
@@ -957,6 +1255,7 @@ def build_app_update_status() -> dict[str, Any]:
         "appId": app_id,
         "appName": app_name,
         "platform": platform_key,
+        "arch": current_arch,
         "currentVersion": current_version,
         "configured": bool(feed_url or fallback_download_url),
         "updateAvailable": False,
@@ -1064,6 +1363,23 @@ def build_app_update_status() -> dict[str, Any]:
         status["updateAvailable"] = False
         status["channelStatus"] = "invalid_feed"
         status["error"] = artifact_metadata_error
+        return _remember_update_status(cache_key, status)
+    feed_arch = _normalized_app_arch(selected.get("arch"))
+    if feed_arch and current_arch and feed_arch != "universal" and feed_arch != current_arch:
+        status["updateAvailable"] = False
+        status["channelStatus"] = "unsupported_architecture"
+        status["code"] = "update_architecture_mismatch"
+        status["error"] = (
+            f"update architecture {feed_arch!r} is not compatible with this device ({current_arch!r})"
+        )
+        status["availableDownloadUrl"] = status.get("downloadUrl") or ""
+        status["downloadUrl"] = ""
+        if isinstance(status.get("latest"), dict):
+            status["latest"]["downloadUrl"] = ""
+        status["recoverySteps"] = [
+            f"{current_arch}용 설치 파일을 선택해 주세요.",
+            "지원 파일이 보이지 않으면 오류 정보와 함께 신고해 주세요.",
+        ]
         return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     if comparison > 0 and not download_url:
@@ -1420,12 +1736,68 @@ def _extract_input_notes(payload: dict[str, Any]) -> str:
     return str(raw or "").strip()
 
 
-def sanitize_output_dir_name(value: str | None) -> str:
+_WINDOWS_RESERVED_PATH_COMPONENTS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+SAFE_PATH_COMPONENT_MAX_BYTES = 240
+EDB_FILE_STEM_MAX_BYTES = 220
+UPLOAD_FILE_NAME_MAX_BYTES = 180
+
+
+def _is_windows_reserved_path_component(value: str | None) -> bool:
+    component = str(value or "").strip().rstrip(" .")
+    if not component:
+        return False
+    return component.split(".", 1)[0].upper() in _WINDOWS_RESERVED_PATH_COMPONENTS
+
+
+def _truncate_utf8_bytes(value: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _sanitize_path_component_token(value: str | None) -> str:
+    raw = str(value or "").strip()
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
+    return safe.rstrip(" .")
+
+
+def _finalize_safe_path_component(value: str, *, max_bytes: int) -> str:
+    safe = _truncate_utf8_bytes(value, max_bytes).rstrip(" .")
+    if _is_windows_reserved_path_component(safe):
+        safe = "_" + _truncate_utf8_bytes(safe, max(0, max_bytes - 1))
+    safe = _truncate_utf8_bytes(safe, max_bytes).rstrip(" .")
+    return safe
+
+
+def sanitize_output_dir_name(
+    value: str | None,
+    *,
+    suffix: str | None = None,
+    max_bytes: int = SAFE_PATH_COMPONENT_MAX_BYTES,
+) -> str:
     raw = (value or "").strip()
     if not raw:
-        return f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
-    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
-    return safe or f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
+        raw = f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
+    safe = _sanitize_path_component_token(raw)
+    suffix_token = _sanitize_path_component_token(suffix)
+    if suffix_token:
+        suffix_tail = _truncate_utf8_bytes(f"_{suffix_token}", max_bytes)
+        available_bytes = max(0, max_bytes - len(suffix_tail.encode("utf-8")))
+        safe = f"{_truncate_utf8_bytes(safe, available_bytes).rstrip(' ._')}{suffix_tail}"
+    safe = _finalize_safe_path_component(safe, max_bytes=max_bytes)
+    if safe:
+        return safe
+    return _finalize_safe_path_component("mvp_export", max_bytes=max_bytes) or "export"
 
 
 def _unique_artifact_stamp() -> str:
@@ -1441,11 +1813,18 @@ def sanitize_upload_file_name(value: str | None) -> str:
         return "upload.bin"
 
     path = Path(safe)
-    extension = path.suffix[:12]
+    extension = _truncate_utf8_bytes(path.suffix[:12], 32).rstrip(" .")
     stem = path.stem or "upload"
     digest = hashlib.sha1(safe.encode("utf-8", errors="ignore")).hexdigest()[:10]
-    trimmed_stem = stem[:48].rstrip(" ._") or "upload"
-    return f"{trimmed_stem}_{digest}{extension}"
+    suffix_tail = f"_{digest}{extension}"
+    available_bytes = max(1, UPLOAD_FILE_NAME_MAX_BYTES - len(suffix_tail.encode("utf-8")))
+    trimmed_stem = _truncate_utf8_bytes(stem, available_bytes).rstrip(" ._") or "upload"
+    if _is_windows_reserved_path_component(trimmed_stem):
+        trimmed_stem = f"_{_truncate_utf8_bytes(trimmed_stem, max(1, available_bytes - 1))}"
+    return _truncate_utf8_bytes(
+        f"{trimmed_stem}{suffix_tail}",
+        UPLOAD_FILE_NAME_MAX_BYTES,
+    ).rstrip(" .")
 
 
 def sanitize_edb_file_name(value: str | None, *, fallback_stem: str = "classin") -> str:
@@ -1456,8 +1835,14 @@ def sanitize_edb_file_name(value: str | None, *, fallback_stem: str = "classin")
         candidate = candidate.strip(" .")
         if not candidate:
             return fallback
-        safe = sanitize_output_dir_name(candidate).strip(" ._")
-        return (safe[:150].rstrip(" ._") or fallback)
+        safe = sanitize_output_dir_name(
+            candidate,
+            max_bytes=EDB_FILE_STEM_MAX_BYTES,
+        ).strip(" ._")
+        safe = _truncate_utf8_bytes(safe, EDB_FILE_STEM_MAX_BYTES).rstrip(" ._") or fallback
+        if _is_windows_reserved_path_component(safe):
+            safe = f"_{_truncate_utf8_bytes(safe, EDB_FILE_STEM_MAX_BYTES - 1)}"
+        return _finalize_safe_path_component(safe, max_bytes=EDB_FILE_STEM_MAX_BYTES)
 
     fallback = _clean_stem(fallback_stem, "classin")
     stem = _clean_stem(value, fallback) if value is not None else fallback
@@ -1836,14 +2221,32 @@ def _annotate_session_with_edb_part_metadata(session: dict[str, Any], edb_parts:
             problem["edb_local_record_bottom_y_pages"] = placement.get("record_bottom_y_pages")
 
 
+def _path_from_file_uri(value: str) -> tuple[Path, bool]:
+    parsed = urlparse(value)
+    host = unquote(parsed.netloc or "").strip()
+    raw_path = url2pathname(unquote(parsed.path or ""))
+    if host and host.lower() != "localhost":
+        unc_suffix = raw_path if raw_path.startswith(("/", "\\")) else f"/{raw_path}"
+        unc_path = f"//{host}{unc_suffix}"
+        return Path(unc_path), True
+    return Path(raw_path), False
+
+
 def decode_file_reference(value: str | None) -> Path | None:
     if not value:
         return None
-    parsed = urlparse(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.startswith("/api/file"):
+        parsed = urlparse(text)
+        raw = parse_qs(parsed.query).get("path", [None])[0]
+        return decode_file_reference(raw)
+    parsed = urlparse(text)
     if parsed.scheme == "file":
-        path = Path(url2pathname(unquote(parsed.path)))
-        return path.resolve()
-    path = Path(value)
+        path, is_unc = _path_from_file_uri(text)
+        return path if is_unc else path.resolve()
+    path = Path(text)
     if not path.is_absolute():
         path = (BASE_DIR / path).resolve()
     return path
@@ -1856,6 +2259,99 @@ def path_to_api_url(path: str | Path | None) -> str | None:
     if resolved is None:
         return None
     return f"/api/file?path={quote(str(resolved))}"
+
+
+def _path_as_file_uri(path: Path) -> str:
+    normalized = str(path).replace("\\", "/")
+    if normalized.startswith("//"):
+        return f"file://{quote(normalized[2:], safe='/:')}"
+    return path.resolve().as_uri()
+
+
+def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> Any:
+    source_text = str(source_root.resolve())
+    target_text = str(target_root.resolve())
+    source_uri = _path_as_file_uri(source_root)
+    target_uri = _path_as_file_uri(target_root)
+    if isinstance(value, str):
+        if value.startswith("/api/file"):
+            parsed = urlparse(value)
+            raw_path = parse_qs(parsed.query).get("path", [None])[0]
+            if raw_path:
+                remapped_path = _remap_artifact_paths(
+                    str(decode_file_reference(raw_path) or raw_path),
+                    source_root,
+                    target_root,
+                )
+                if isinstance(remapped_path, str) and remapped_path != str(
+                    decode_file_reference(raw_path) or raw_path
+                ):
+                    return f"/api/file?path={quote(remapped_path)}"
+        if value == source_text or value.startswith(f"{source_text}{os.sep}"):
+            return f"{target_text}{value[len(source_text):]}"
+        if value == source_uri or value.startswith(f"{source_uri}/"):
+            return f"{target_uri}{value[len(source_uri):]}"
+        return value
+    if isinstance(value, Path):
+        remapped = _remap_artifact_paths(str(value), source_root, target_root)
+        return Path(remapped) if isinstance(remapped, str) else value
+    if isinstance(value, list):
+        return [_remap_artifact_paths(item, source_root, target_root) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _remap_artifact_paths(item, source_root, target_root)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _discard_staged_publish(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[app-server] staged publish cleanup failed for {path}: {exc}", file=sys.stderr)
+
+
+def _source_identity_suffix(source_paths: list[Path]) -> str:
+    identity = hashlib.sha256()
+    for source_path in source_paths:
+        resolved = source_path.resolve()
+        identity.update(str(resolved).encode("utf-8", errors="surrogatepass"))
+        identity.update(b"\0")
+        try:
+            with resolved.open("rb") as source_file:
+                while chunk := source_file.read(1024 * 1024):
+                    identity.update(chunk)
+        except OSError:
+            try:
+                stat = resolved.stat()
+            except OSError:
+                continue
+            identity.update(f"{stat.st_size}\0{stat.st_mtime_ns}".encode("ascii"))
+        identity.update(b"\0")
+    return identity.hexdigest()[:10]
+
+
+def _rewrite_staged_artifact_references(staging_dir: Path, final_dir: Path) -> None:
+    staging_text = str(staging_dir.resolve())
+    final_text = str(final_dir.resolve())
+    staging_uri = _path_as_file_uri(staging_dir)
+    final_uri = _path_as_file_uri(final_dir)
+    for path in staging_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            remapped = _remap_artifact_paths(payload, staging_dir, final_dir)
+            _atomic_write_text(path, json.dumps(remapped, ensure_ascii=False, indent=2))
+        elif path.suffix.lower() in {".md", ".js"}:
+            payload = path.read_text(encoding="utf-8")
+            _atomic_write_text(
+                path,
+                payload.replace(staging_text, final_text).replace(staging_uri, final_uri),
+            )
 
 
 def _parse_file_preview_max_dimension(query: dict[str, list[str]]) -> int | None:
@@ -2237,11 +2733,24 @@ def _session_passage_review_queue_issues(
     return issues
 
 
-def _session_problem_id_issues(problems: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _session_problem_id_issues(problems: list[Any]) -> list[dict[str, Any]]:
     problems_by_id: dict[str, list[dict[str, Any]]] = {}
     issues: list[dict[str, Any]] = []
     for index, problem in enumerate(problems):
         if not isinstance(problem, dict):
+            issues.append(
+                {
+                    "type": "missing_problem_id",
+                    "severity": "error",
+                    "message": "문항 데이터가 손상되어 내부 식별자를 확인할 수 없습니다.",
+                    "problemId": "",
+                    "problemTitle": "",
+                    "entryIndex": index,
+                    "entry_index": index,
+                    "malformedEntry": True,
+                    "malformed_entry": True,
+                }
+            )
             continue
         problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
         if not problem_id:
@@ -2382,6 +2891,9 @@ def _session_publish_preflight_blocked_payload(
                 blocking_problem_ids.append(problem_id)
     return {
         "ok": False,
+        "code": "publish_preflight_blocked",
+        "operation": "session_publish",
+        "retryable": False,
         "error": "ClassIn 사전점검에서 제작 전 확인 문제가 발견되어 EDB publish를 중단했습니다.",
         "errorKind": "publish_preflight_blocked",
         "error_kind": "publish_preflight_blocked",
@@ -2393,6 +2905,10 @@ def _session_publish_preflight_blocked_payload(
         "classin_preflight_passed": False,
         "classinPreflightIssueCount": int(preflight.get("issueCount") or 0),
         "classin_preflight_issue_count": int(preflight.get("issueCount") or 0),
+        "recoverySteps": [
+            "표시된 문항 오류를 수정하거나 원본 PDF를 다시 등록해 주세요.",
+            "수정 후 같은 작업에서 다시 제작해 주세요.",
+        ],
         "blockingDuplicateProblemNumberGroups": duplicate_groups,
         "blocking_duplicate_problem_number_groups": duplicate_groups,
         "blockingIssueTypes": issue_types,
@@ -2582,6 +3098,13 @@ def _session_publish_summary(
         "publishedAt": published_at,
         "edbValidation": dict(edb_validation),
     }
+    summary["canDownload"] = bool(
+        summary["edbFileExists"]
+        or any(
+            bool(part.get("edbFileExists") or part.get("edb_file_exists"))
+            for part in normalized_edb_parts
+        )
+    )
     summary.update({
         "status_label": summary["statusLabel"],
         "edb_file_name": summary["edbFileName"],
@@ -2630,6 +3153,7 @@ def _session_publish_summary(
         "inner_size": summary["innerSize"],
         "published_at": summary["publishedAt"],
         "edb_validation": summary["edbValidation"],
+        "can_download": summary["canDownload"],
     })
     return summary
 
@@ -2854,6 +3378,7 @@ def content_disposition_attachment(filename: str) -> str:
 
 def load_latest_session() -> dict[str, Any] | None:
     with _session_storage_lock:
+        _recover_interrupted_session_reset()
         if not LATEST_SESSION_JSON.exists():
             return None
         try:
@@ -2867,12 +3392,16 @@ def save_latest_session(session: dict[str, Any], path: Path | None = None) -> No
     target = path or LATEST_SESSION_JSON
     payload = json.dumps(session, ensure_ascii=False, indent=2)
     with _session_storage_lock:
+        if path is None or target == LATEST_SESSION_JSON:
+            _recover_interrupted_session_reset()
         _atomic_write_text(target, payload)
 
 
 def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
     target = path or SESSION_HISTORY_JSON
     with _session_storage_lock:
+        if path is None or target == SESSION_HISTORY_JSON:
+            _recover_interrupted_session_reset()
         if not target.exists():
             return []
         try:
@@ -2888,6 +3417,8 @@ def save_session_history(history: list[dict[str, Any]], path: Path | None = None
     target = path or SESSION_HISTORY_JSON
     payload = json.dumps(history, ensure_ascii=False, indent=2)
     with _session_storage_lock:
+        if path is None or target == SESSION_HISTORY_JSON:
+            _recover_interrupted_session_reset()
         _atomic_write_text(target, payload)
 
 
@@ -2902,6 +3433,8 @@ def remember_session_history(
     # Keep read/merge/write inside one re-entrant critical section so concurrent
     # requests cannot silently discard another request's history entry.
     with _session_storage_lock:
+        if path is None or target == SESSION_HISTORY_JSON:
+            _recover_interrupted_session_reset()
         history = _session_history_with_session(
             load_session_history(target),
             session,
@@ -2926,6 +3459,10 @@ def persist_latest_session_with_history(
     """
 
     with _session_storage_lock:
+        # Recover before reading history. Recovering only inside the later
+        # save_latest_session call can restore an OLD history tombstone after
+        # this merge was already calculated, then overwrite it with [NEW].
+        _recover_interrupted_session_reset()
         history = _session_history_with_session(
             load_session_history(),
             session,
@@ -3192,24 +3729,7 @@ def cleanup_runtime_artifacts(
 
 
 def _file_uri_to_path(value: Any) -> Path | None:
-    if not value:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.startswith("file://"):
-        parsed = urlparse(text)
-        # url2pathname expects a path with a leading slash for absolute paths;
-        # urlparse preserves that on Windows (`/C:/...`).
-        return Path(url2pathname(parsed.path))
-    if text.startswith("/api/file"):
-        # session was already rewritten; pull the underlying path back out.
-        parsed = urlparse(text)
-        params = parse_qs(parsed.query)
-        raw = params.get("path", [None])[0]
-        return Path(unquote(raw)) if raw else None
-    # bare filesystem path
-    return Path(text)
+    return decode_file_reference(str(value)) if value else None
 
 
 def _target_within_allowed_roots(target: Path) -> bool:
@@ -3599,18 +4119,7 @@ def _find_page(session: dict[str, Any], page_id: str) -> dict[str, Any]:
 def _resolve_session_path(value: Any) -> Path | None:
     """Coerce a session-stored value (file URI, /api/file URL, raw path) to a
     real filesystem path. Returns None if the value cannot be resolved."""
-    if not value:
-        return None
-    text = str(value)
-    if text.startswith("file://"):
-        parsed = urlparse(text)
-        return Path(url2pathname(parsed.path))
-    if text.startswith("/api/file"):
-        parsed = urlparse(text)
-        params = parse_qs(parsed.query)
-        raw = params.get("path", [None])[0]
-        return Path(unquote(raw)) if raw else None
-    return Path(text)
+    return decode_file_reference(str(value)) if value else None
 
 
 def _session_reextract_source_paths(session: dict[str, Any] | None) -> list[Path]:
@@ -5561,10 +6070,13 @@ def _write_session_image_export_zip(
     session_name = str(session.get("session_name") or session.get("sessionName") or "session")
     export_dir = RUNTIME_DIR / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
-    safe_session_name = sanitize_output_dir_name(session_name or "session")
     stamp = _unique_artifact_stamp()
-    digest = hashlib.sha1(f"{safe_session_name}|{stamp}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
-    zip_path = (export_dir / f"{safe_session_name}_images_{stamp}_{digest}.zip").resolve()
+    digest = hashlib.sha1(f"{session_name}|{stamp}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
+    zip_stem = sanitize_output_dir_name(
+        session_name or "session",
+        suffix=f"images_{stamp}_{digest}",
+    )
+    zip_path = (export_dir / f"{zip_stem}.zip").resolve()
 
     manifest: dict[str, Any] = {
         "sessionName": session_name,
@@ -5582,7 +6094,7 @@ def _write_session_image_export_zip(
     if normalized_mode in {"raw", "both"}:
         folders.append(("raw", "raw_crops", "rawCrop"))
 
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    def populate_archive(archive) -> None:
         for index, problem in enumerate(items, start=1):
             problem_id = str(problem.get("id") or "")
             filename = _safe_export_filename(index, problem.get("title"), problem_id)
@@ -5643,6 +6155,12 @@ def _write_session_image_export_zip(
         manifest["count"] = len(exported_problem_ids)
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
+    _write_zip_atomically(
+        zip_path,
+        compression=zipfile.ZIP_DEFLATED,
+        populate=populate_archive,
+    )
+
     return {
         "zipPath": str(zip_path),
         "fileName": zip_path.name,
@@ -5661,22 +6179,34 @@ def _write_edb_export_zip(edb_paths: list[Path], bundle_name: str | None = None)
         raise ValueError("EDB bundle contains a missing or invalid file")
 
     requested_name = sanitize_edb_file_name(bundle_name, fallback_stem=resolved_paths[0].stem)
-    safe_stem = sanitize_output_dir_name(Path(requested_name).stem or "classin").strip(" ._") or "classin"
     export_dir = RUNTIME_DIR / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     digest_source = "|".join(str(path) for path in resolved_paths)
     digest = hashlib.sha1(f"{digest_source}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
-    zip_path = (export_dir / f"{safe_stem}_files_{stamp}_{digest}.zip").resolve()
+    zip_stem = sanitize_output_dir_name(
+        Path(requested_name).stem or "classin",
+        suffix=f"files_{stamp}_{digest}",
+    )
+    zip_path = (export_dir / f"{zip_stem}.zip").resolve()
 
     used_names: set[str] = set()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+
+    def populate_archive(archive) -> None:
         for index, path in enumerate(resolved_paths, start=1):
             arcname = path.name
-            if arcname.casefold() in used_names:
-                arcname = f"{Path(path.name).stem}_part{index:02d}.edb"
+            collision_index = index
+            while arcname.casefold() in used_names:
+                arcname = f"{Path(path.name).stem}_part{collision_index:02d}.edb"
+                collision_index += 1
             used_names.add(arcname.casefold())
             archive.write(path, arcname)
+
+    _write_zip_atomically(
+        zip_path,
+        compression=zipfile.ZIP_STORED,
+        populate=populate_archive,
+    )
 
     return {
         "zipPath": str(zip_path),
@@ -6156,6 +6686,16 @@ def _image_attempt_summary(result: Any, *, attempt: int, mode: str) -> dict[str,
     }
 
 
+def _image_generation_output_path(output_dir: Path, problem_id: str, suffix: str) -> Path:
+    problem_token = problem_id or "problem"
+    problem_digest = hashlib.sha1(problem_token.encode("utf-8", errors="surrogatepass")).hexdigest()[:10]
+    stem = sanitize_output_dir_name(
+        problem_token,
+        suffix=f"{problem_digest}_{suffix}",
+    )
+    return output_dir / f"{stem}.png"
+
+
 def _content_safe_primary_batch(
     session: dict[str, Any],
     problem_ids: list[str],
@@ -6175,8 +6715,11 @@ def _content_safe_primary_batch(
         source_path = _original_problem_image_path(problem, session)
         if source_path is None or not source_path.exists():
             continue
-        safe_problem = sanitize_output_dir_name(problem_id) or "problem"
-        output_path = output_dir / f"{safe_problem}_{stamp}_text-preserve-2x.png"
+        output_path = _image_generation_output_path(
+            output_dir,
+            problem_id,
+            f"{stamp}_text-preserve-2x",
+        )
         jobs.append((problem_id, source_path, output_path))
 
     if not jobs:
@@ -6322,10 +6865,13 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             })
             continue
 
-        safe_problem = sanitize_output_dir_name(problem_id) or "problem"
         output_model = "text-preserve-2x" if resolved_mode == "preserve" else model
-        safe_model = sanitize_output_dir_name(output_model) or resolved_mode
-        output_path = preserve_row.get("output_path") if preserve_row else output_dir / f"{safe_problem}_{stamp}_{safe_model}.png"
+        safe_model = sanitize_output_dir_name(output_model, max_bytes=80) or resolved_mode
+        output_path = preserve_row.get("output_path") if preserve_row else _image_generation_output_path(
+            output_dir,
+            problem_id,
+            f"{stamp}_{safe_model}",
+        )
         attempts: list[dict[str, Any]] = []
         result: Any | None = None
         delivery_mode = "content_safe_primary" if resolved_mode == "preserve" else "ai_primary"
@@ -6374,7 +6920,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 })
 
         if resolved_mode == "ai" and result is not None and not _result_passes_content_gate(result):
-            retry_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}_retry.png"
+            retry_path = _image_generation_output_path(
+                output_dir,
+                problem_id,
+                f"{stamp}_{safe_model}_retry",
+            )
             retry_prompt = _content_recovery_prompt(problem_prompt, _result_content_preservation(result))
             try:
                 retry_result = reconstruct_problem_image(
@@ -6407,7 +6957,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 })
 
         if resolved_mode == "ai" and (result is None or not _result_passes_content_gate(result)):
-            fallback_path = output_dir / f"{safe_problem}_{stamp}_content_safe.png"
+            fallback_path = _image_generation_output_path(
+                output_dir,
+                problem_id,
+                f"{stamp}_content_safe",
+            )
             try:
                 fallback_result = build_content_safe_upscale(
                     source_path,
@@ -6746,7 +7300,7 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                     image_width=source_image.width,
                     image_height=source_image.height,
                 )
-            retry_dir = output_root / sanitize_output_dir_name(f"{problem_id}_{stamp}")
+            retry_dir = output_root / sanitize_output_dir_name(problem_id, suffix=stamp)
             partial_source_path = retry_dir / "partial_source.png"
             _crop_image_by_bbox(source_path, crop_box, partial_source_path)
             result = run_problem_export(
@@ -6952,7 +7506,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
             retry_jobs.append({
                 "pageId": page_id,
                 "sourcePath": source_path,
-                "retryDir": output_root / sanitize_output_dir_name(f"{page_id}_{stamp}"),
+                "retryDir": output_root / sanitize_output_dir_name(page_id, suffix=stamp),
             })
 
     def _run_retry_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -7128,11 +7682,9 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, str):
             return value
         if value.startswith("/api/file"):
-            parsed = urlparse(value)
-            params = parse_qs(parsed.query)
-            raw = params.get("path", [None])[0]
-            if raw:
-                return Path(unquote(raw)).resolve().as_uri()
+            decoded = decode_file_reference(value)
+            if decoded is not None:
+                return _path_as_file_uri(decoded)
         return value
 
     for problem in cloned.get("problems", []) or []:
@@ -7155,6 +7707,7 @@ class AppHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, server_address, RequestHandlerClass):
         super().__init__(server_address, RequestHandlerClass)
+        _recover_interrupted_session_reset()
         self._state_lock = threading.RLock()
         # Artifact-producing handlers write files before committing session
         # metadata. Serialize the entire handler so a stale CAS loser cannot
@@ -7245,6 +7798,49 @@ class AppHTTPServer(ThreadingHTTPServer):
                 )
             return self._session_revision
 
+    def adopt_staged_publish_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        staging_dir: Path,
+        final_dir: Path,
+        expected_revision: int | None = None,
+    ) -> int | None:
+        """CAS-check first, then atomically expose one immutable publish generation."""
+        expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
+        updated_snapshot = _clone_jsonish(updated_session)
+        with self._state_lock:
+            if expected_revision is not None and self._session_revision != expected_revision:
+                return None
+            if self.latest_session != expected_snapshot:
+                return None
+            final_dir.parent.mkdir(parents=True, exist_ok=True)
+            if final_dir.exists():
+                raise FileExistsError(f"publish generation already exists: {final_dir}")
+            os.replace(staging_dir, final_dir)
+            try:
+                history, history_error = persist_latest_session_with_history(updated_snapshot)
+            except BaseException:
+                try:
+                    os.replace(final_dir, staging_dir)
+                except OSError as rollback_exc:
+                    print(
+                        f"[app-server] publish adoption rollback failed: {rollback_exc}",
+                        file=sys.stderr,
+                    )
+                raise
+            self.latest_session = updated_snapshot
+            self._session_revision += 1
+            self.allowed_files.update(collect_session_file_paths(updated_snapshot))
+            self.allowed_files.update(collect_session_history_file_paths(history))
+            if history_error is not None:
+                print(
+                    f"[app-server] latest session committed but history update failed: {history_error}",
+                    file=sys.stderr,
+                )
+            return self._session_revision
+
     def begin_artifact_job(self) -> None:
         self._artifact_job_lock.acquire()
         try:
@@ -7260,6 +7856,17 @@ class AppHTTPServer(ThreadingHTTPServer):
                 self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
         finally:
             self._artifact_job_lock.release()
+
+    def begin_artifact_read(self) -> None:
+        # Reads may run concurrently with each other and with immutable
+        # generation writes, but reset/retention cleanup must not unlink their
+        # backing files until the response stream has finished.
+        with self._state_lock:
+            self._active_artifact_jobs += 1
+
+    def end_artifact_read(self) -> None:
+        with self._state_lock:
+            self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
 
     def register_current_session(self, session: dict[str, Any]) -> bool:
         """Persist history only if ``session`` is still the current snapshot."""
@@ -7293,7 +7900,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         with self._state_lock:
             if not dry_run and self._active_artifact_jobs:
                 raise ArtifactCleanupBusy(
-                    f"artifact cleanup paused while {self._active_artifact_jobs} job(s) are writing files"
+                    f"artifact cleanup paused while {self._active_artifact_jobs} request(s) are using files"
                 )
             return cleanup_runtime_artifacts(
                 active_session=_clone_jsonish(self.latest_session) if self.latest_session is not None else {},
@@ -7334,32 +7941,34 @@ class AppHTTPServer(ThreadingHTTPServer):
                 )
             if self._active_artifact_jobs:
                 raise ArtifactCleanupBusy(
-                    f"session reset paused while {self._active_artifact_jobs} job(s) are writing files"
+                    f"session reset paused while {self._active_artifact_jobs} request(s) are using files"
                 )
-            with _session_storage_lock:
-                if SESSION_HISTORY_JSON.exists():
-                    SESSION_HISTORY_JSON.unlink()
-                if LATEST_SESSION_JSON.exists():
-                    LATEST_SESSION_JSON.unlink()
+            _atomically_clear_persisted_session_state()
             self.latest_session = None
             self._session_revision += 1
             cleared_revision = self._session_revision
             self.allowed_files.clear()
-            try:
-                _atomic_write_text(GENERATED_SESSION_JS, EMPTY_GENERATED_SESSION_JS)
-            except OSError as exc:
-                print(
-                    f"[app-server] session cleared but generated UI state refresh failed: {exc}",
-                    file=sys.stderr,
-                )
             if cleanup_artifacts:
-                return (
-                    cleanup_runtime_artifacts(
+                try:
+                    cleanup_result = cleanup_runtime_artifacts(
                         active_session={},
                         history=[],
                         dry_run=dry_run,
                         min_age_seconds=min_age_seconds,
-                    ),
+                    )
+                except Exception as exc:  # reset is complete even if optional cleanup fails
+                    _log_operation_exception("session_reset.artifact_cleanup", exc)
+                    cleanup_result = {
+                        "ok": False,
+                        "code": "artifact_cleanup_failed",
+                        "operation": "artifact_cleanup",
+                        "retryable": True,
+                        "dryRun": bool(dry_run),
+                        "error": str(exc),
+                        "errors": [{"error": str(exc)}],
+                    }
+                return (
+                    cleanup_result,
                     cleared_revision,
                 )
         return None, cleared_revision
@@ -7462,6 +8071,47 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.app_server.remember_session(updated_session)
         return True, None
 
+    def _adopt_staged_publish_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        staging_dir: Path,
+        final_dir: Path,
+        expected_revision: int | None = None,
+    ) -> tuple[bool, int | None]:
+        adopter = getattr(self.app_server, "adopt_staged_publish_if_current", None)
+        if callable(adopter):
+            result = adopter(
+                expected_session,
+                updated_session,
+                staging_dir=staging_dir,
+                final_dir=final_dir,
+                expected_revision=expected_revision,
+            )
+            if type(result) is int:
+                return True, result
+            return bool(result), None
+        # Compatibility for lightweight embedding hosts. The generation path
+        # is unique, so exposing it cannot overwrite an older successful EDB.
+        final_dir.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging_dir, final_dir)
+        try:
+            committed = self._remember_session_if_current(
+                expected_session,
+                updated_session,
+                expected_revision=expected_revision,
+            )
+        except BaseException:
+            os.replace(final_dir, staging_dir)
+            raise
+        if not committed[0]:
+            try:
+                os.replace(final_dir, staging_dir)
+            except OSError:
+                _discard_staged_publish(final_dir)
+        return committed
+
     def _send_session_conflict(self) -> None:
         current, current_revision = self._current_session_state()
         payload: dict[str, Any] = {
@@ -7485,6 +8135,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         server = getattr(self, "server", None)
         starter = getattr(server, "begin_artifact_job", None)
         finisher = getattr(server, "end_artifact_job", None)
+        if not callable(starter) or not callable(finisher):
+            handler()
+            return
+        starter()
+        try:
+            handler()
+        finally:
+            finisher()
+
+    def _run_artifact_read(self, handler) -> None:
+        server = getattr(self, "server", None)
+        starter = getattr(server, "begin_artifact_read", None)
+        finisher = getattr(server, "end_artifact_read", None)
         if not callable(starter) or not callable(finisher):
             handler()
             return
@@ -7555,13 +8218,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._handle_latest_session()
             return
         if parsed.path == "/api/session/history":
-            self._handle_session_history()
+            self._run_artifact_read(self._handle_session_history)
             return
         if parsed.path == "/api/session/problem-image":
-            self._handle_session_problem_image(parsed)
+            self._run_artifact_read(lambda: self._handle_session_problem_image(parsed))
             return
         if parsed.path == "/api/file":
-            self._handle_file(parsed)
+            self._run_artifact_read(lambda: self._handle_file(parsed))
             return
         if parsed.path == "/api/user-settings":
             self._handle_user_settings_get()
@@ -7630,10 +8293,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._run_artifact_job(self._handle_session_export_images)
             return
         if parsed.path == "/api/session/export-edb":
-            self._handle_session_export_edb()
+            self._run_artifact_job(self._handle_session_export_edb)
             return
         if parsed.path == "/api/session/problem-image":
-            self._handle_session_problem_image_post()
+            self._run_artifact_read(self._handle_session_problem_image_post)
             return
         if parsed.path == "/api/session/retry-ai":
             self._run_artifact_job(self._handle_session_retry_ai)
@@ -7642,10 +8305,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._run_artifact_job(self._handle_session_enhance_image)
             return
         if parsed.path == "/api/session/restore":
-            self._handle_session_restore()
+            self._run_artifact_job(self._handle_session_restore)
             return
         if parsed.path == "/api/session/history/restore":
-            self._handle_session_history_restore()
+            self._run_artifact_job(self._handle_session_history_restore)
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
@@ -7680,7 +8343,34 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not isinstance(placement_payload, dict):
             placement_payload = {}
 
-        by_id = {p["id"]: p for p in session.get("problems", []) if isinstance(p, dict) and p.get("id")}
+        raw_problem_values = session.get("problems")
+        if not isinstance(raw_problem_values, list):
+            raw_problem_values = []
+        raw_id_issues = _session_problem_id_issues(raw_problem_values)
+        raw_problems = [problem for problem in raw_problem_values if isinstance(problem, dict)]
+        if raw_id_issues:
+            raw_id_preflight = {
+                "status": "blocked",
+                "passed": False,
+                "checkedProblemCount": len(raw_problem_values),
+                "checked_problem_count": len(raw_problem_values),
+                "issueCount": len(raw_id_issues),
+                "issue_count": len(raw_id_issues),
+                "issues": [{**issue, "blocking": True} for issue in raw_id_issues],
+                "gate": "session_publish",
+                "gateLabel": "EDB publish",
+                "gate_label": "EDB publish",
+            }
+            self._send_json(
+                _session_publish_preflight_blocked_payload(raw_id_preflight, []),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        by_id = {
+            str(p.get("id") or p.get("problem_id") or "").strip(): p
+            for p in raw_problems
+        }
         sequence: list[dict[str, Any]] = []
         seen: set[str] = set()
         for pid in order:
@@ -7694,8 +8384,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             seen.add(pid)
 
         if not sequence:
-            self._send_json({"ok": False, "error": "after exclusion nothing remains to publish"},
-                            status=HTTPStatus.BAD_REQUEST)
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "publish_empty_selection",
+                    "operation": "session_publish",
+                    "retryable": False,
+                    "error": "제외 후 제작할 문항이 남아 있지 않습니다.",
+                    "recoverySteps": ["제작할 문항을 하나 이상 포함한 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
             return
 
         sequence_with_placements: list[dict[str, Any]] = []
@@ -7732,11 +8431,22 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             entries = _problems_to_entries(sequence, template=template)
         except FileNotFoundError as exc:
-            self._send_json({"ok": False, "error": f"missing asset: {exc}"}, status=HTTPStatus.CONFLICT)
+            self._send_json(_publish_stage_failure_payload("build", exc), status=HTTPStatus.CONFLICT)
             return
         except (KeyError, ValueError) as exc:
-            self._send_json({"ok": False, "error": f"session is missing fields needed for publish: {exc}"},
-                            status=HTTPStatus.CONFLICT)
+            self._send_json(
+                _publish_failure_payload(
+                    code="publish_session_invalid",
+                    message="현재 작업에 EDB 제작 필수 정보가 없습니다",
+                    exc=exc,
+                    retryable=False,
+                    recovery_steps=[
+                        "원본 PDF를 다시 등록해 새 작업을 만든 뒤 제작해 주세요.",
+                        "반복되면 오류 정보를 복사해 신고해 주세요.",
+                    ],
+                ),
+                status=HTTPStatus.CONFLICT,
+            )
             return
 
         # Resize the logical canvas to match the actual problem count after the
@@ -7744,16 +8454,24 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # run_problem_export so mvp_board.edb and the published EDB agree.
         template.board_page_count = max(50, len(entries) * 2)
         output_dir = Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve()
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        requested_edb_name = payload.get("edbName") if "edbName" in payload else payload.get("edb_name")
+        edb_name = sanitize_edb_file_name(
+            str(requested_edb_name) if requested_edb_name is not None else None,
+            fallback_stem=f"{session.get('session_name') or 'classin'}-published-{stamp}",
+        )
+        generation_name = sanitize_output_dir_name(
+            Path(edb_name).stem,
+            suffix=_unique_artifact_stamp(),
+        )
+        staging_dir = output_dir / ".publish-staging" / generation_name
+        final_dir = output_dir / "published" / generation_name
         try:
-            output_dir.mkdir(parents=True, exist_ok=True)
+            staging_dir.mkdir(parents=True, exist_ok=False)
         except OSError as exc:
             _log_operation_exception("session_publish.prepare_output", exc)
             self._send_json(
-                _publish_failure_payload(
-                    code="publish_output_unavailable",
-                    message="제작 파일을 저장할 폴더를 준비하지 못했습니다",
-                    exc=exc,
-                ),
+                _publish_stage_failure_payload("prepare", exc),
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             return
@@ -7765,37 +8483,27 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 entries,
                 template,
                 record_mode="image-only",
-                output_dir=output_dir,
+                output_dir=staging_dir,
                 text_confidence_threshold=0.78,
                 dark_board=True,
                 board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
                 crop_format=crop_format,
             )
         except Exception as exc:  # noqa: BLE001 — report the exact pipeline stage
+            _discard_staged_publish(staging_dir)
             _log_operation_exception("session_publish.build_records", exc)
             self._send_json(
-                _publish_failure_payload(
-                    code="publish_build_failed",
-                    message="EDB 제작 데이터 생성에 실패했습니다",
-                    exc=exc,
-                ),
+                _publish_stage_failure_payload("build", exc),
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             return
-
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        requested_edb_name = payload.get("edbName") if "edbName" in payload else payload.get("edb_name")
-        edb_name = sanitize_edb_file_name(
-            str(requested_edb_name) if requested_edb_name is not None else None,
-            fallback_stem=f"{session.get('session_name') or 'classin'}-published-{stamp}",
-        )
         edb_parts: list[dict[str, Any]] = []
         edb_path: Path | None = None
         try:
-            edb_parts = write_classin_limited_edb_files(
+            staged_edb_parts = write_classin_limited_edb_files(
                 entries,
                 template,
-                output_dir,
+                staging_dir,
                 edb_name,
                 record_mode="image-only",
                 text_confidence_threshold=0.78,
@@ -7806,18 +8514,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 existing_placements=placements,
                 existing_header_flag=header_flag,
             )
-            if not edb_parts:
+            if not staged_edb_parts:
                 raise ValueError("no EDB parts were generated")
-            edb_validation, edb_parts = _validate_edb_parts(edb_parts)
+            staged_edb_validation, staged_edb_parts = _validate_edb_parts(staged_edb_parts)
+            edb_parts = _remap_artifact_paths(staged_edb_parts, staging_dir, final_dir)
+            edb_validation = _remap_artifact_paths(
+                staged_edb_validation,
+                staging_dir,
+                final_dir,
+            )
             edb_path = Path(str(edb_parts[0]["edbPath"]))
         except Exception as exc:  # noqa: BLE001
+            _discard_staged_publish(staging_dir)
             _log_operation_exception("session_publish.write_edb", exc)
             self._send_json(
-                _publish_failure_payload(
-                    code="edb_write_failed",
-                    message="EDB 파일 저장에 실패했습니다",
-                    exc=exc,
-                ),
+                _publish_stage_failure_payload("write", exc),
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             return
@@ -7825,19 +8536,33 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         core_problem_count = sum(1 for problem in sequence if not _session_problem_is_supplemental(problem))
         supplemental_item_count = sum(1 for problem in sequence if _session_problem_is_supplemental(problem))
 
-        new_session = build_ui_session(
-            prepared_pages=[],
-            placements=placements,
-            output_dir=output_dir,
-            edb_path=edb_path,
-            source_paths=session.get("input_files") or [],
-            record_mode="image-only",
-            ai_fallback_config=session.get("ai_fallback"),
-            ai_summary=session.get("ai_summary"),
-            template=template,
-            board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
-            crop_format=crop_format,
-        )
+        try:
+            new_session = build_ui_session(
+                prepared_pages=[],
+                placements=placements,
+                output_dir=output_dir,
+                edb_path=edb_path,
+                source_paths=session.get("input_files") or [],
+                record_mode="image-only",
+                ai_fallback_config=session.get("ai_fallback"),
+                ai_summary=session.get("ai_summary"),
+                template=template,
+                board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
+                crop_format=crop_format,
+            )
+            new_session = _remap_artifact_paths(new_session, staging_dir, final_dir)
+        except Exception as exc:  # noqa: BLE001
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.build_session", exc)
+            self._send_json(
+                _publish_stage_failure_payload("build", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        # Keep the stable working root for the next publish; all generated
+        # artifact references themselves point at this immutable generation.
+        new_session["output_dir"] = str(output_dir)
+        new_session["outputDir"] = str(output_dir)
         # carry over user-facing labels so the rename doesn't get lost
         if session.get("session_name"):
             new_session["session_name"] = session["session_name"]
@@ -7914,8 +8639,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if path is not None
         ]
         try:
-            classin_handoff_path, classin_handoff_markdown_path = write_classin_handoff_manifest(
-                output_dir,
+            staged_handoff_path, staged_handoff_markdown_path = write_classin_handoff_manifest(
+                staging_dir,
                 source_paths=source_paths_for_handoff,
                 edb_path=edb_path,
                 edb_parts=edb_parts,
@@ -7932,19 +8657,43 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 template=template,
             )
         except Exception as exc:  # noqa: BLE001 — keep publish failures explicit for the UI.
-            self._send_json({"ok": False, "error": f"failed to write ClassIn handoff: {exc}"},
-                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.write_handoff", exc)
+            self._send_json(
+                _publish_stage_failure_payload("handoff", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
 
         classin_preflight: dict[str, Any] = {}
         handoff_payload: dict[str, Any] = {}
         try:
-            raw_handoff_payload = json.loads(classin_handoff_path.read_text(encoding="utf-8"))
+            raw_handoff_payload = json.loads(staged_handoff_path.read_text(encoding="utf-8"))
             handoff_payload = raw_handoff_payload if isinstance(raw_handoff_payload, dict) else {}
+            handoff_payload = _remap_artifact_paths(handoff_payload, staging_dir, final_dir)
+            _atomic_write_text(
+                staged_handoff_path,
+                json.dumps(handoff_payload, ensure_ascii=False, indent=2),
+            )
+            markdown_payload = staged_handoff_markdown_path.read_text(encoding="utf-8")
+            markdown_payload = markdown_payload.replace(
+                str(staging_dir.resolve()),
+                str(final_dir.resolve()),
+            ).replace(_path_as_file_uri(staging_dir), _path_as_file_uri(final_dir))
+            _atomic_write_text(staged_handoff_markdown_path, markdown_payload)
             if isinstance(handoff_payload.get("classinPreflight"), dict):
                 classin_preflight = dict(handoff_payload["classinPreflight"])
-        except (OSError, json.JSONDecodeError):
-            classin_preflight = {}
+        except (OSError, json.JSONDecodeError) as exc:
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.validate_handoff", exc)
+            self._send_json(
+                _publish_stage_failure_payload("handoff", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        classin_handoff_path = final_dir / staged_handoff_path.relative_to(staging_dir)
+        classin_handoff_markdown_path = final_dir / staged_handoff_markdown_path.relative_to(staging_dir)
 
         new_session["classin_handoff_path"] = str(classin_handoff_path)
         new_session["classinHandoffPath"] = str(classin_handoff_path)
@@ -8049,15 +8798,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if layout_diagnostics is not None:
                 break
 
-        publish_summary = _session_publish_summary(
-            edb_path=edb_path,
-            output_dir=output_dir,
-            edb_validation=edb_validation,
+        staged_publish_summary = _session_publish_summary(
+            edb_path=Path(str(staged_edb_parts[0]["edbPath"])),
+            output_dir=staging_dir,
+            edb_validation=staged_edb_validation,
             record_count=len(records),
             core_problem_count=core_problem_count,
             supplemental_item_count=supplemental_item_count,
-            classin_handoff_path=classin_handoff_path,
-            classin_handoff_markdown_path=classin_handoff_markdown_path,
+            classin_handoff_path=staged_handoff_path,
+            classin_handoff_markdown_path=staged_handoff_markdown_path,
             classin_preflight=classin_preflight,
             passage_groups=(
                 handoff_payload.get("passageGroups")
@@ -8104,19 +8853,36 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             source_problem_overlap_groups=source_problem_overlap_groups,
             source_problem_overlap_group_count=source_problem_overlap_group_count,
             layout_diagnostics=layout_diagnostics,
-            edb_parts=edb_parts,
+            edb_parts=staged_edb_parts,
+        )
+        publish_summary = _remap_artifact_paths(
+            staged_publish_summary,
+            staging_dir,
+            final_dir,
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
         new_session["publishSummary"] = publish_summary
         new_session["publish_history"] = publish_history
         new_session["publishHistory"] = publish_history
-        committed, committed_revision = self._remember_session_if_current(
-            base_session,
-            new_session,
-            expected_revision=current_revision,
-        )
+        try:
+            committed, committed_revision = self._adopt_staged_publish_if_current(
+                base_session,
+                new_session,
+                staging_dir=staging_dir,
+                final_dir=final_dir,
+                expected_revision=current_revision,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.commit_generation", exc)
+            self._send_json(
+                _publish_stage_failure_payload("commit", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
         if not committed:
+            _discard_staged_publish(staging_dir)
             self._send_session_conflict()
             return
         response = {
@@ -8302,7 +9068,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "invalid EDB file path"}, status=HTTPStatus.BAD_REQUEST)
                 return
             normalized = str(path.resolve())
-            if normalized not in self.app_server.allowed_files:
+            if not self._file_is_allowed(normalized):
                 self._send_json({"ok": False, "error": "EDB file not allowed"}, status=HTTPStatus.FORBIDDEN)
                 return
             if not path.is_file():
@@ -8333,7 +9099,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         zip_path = Path(result["zipPath"]).resolve()
-        self.app_server.allowed_files.add(str(zip_path))
+        self._allow_session_files({str(zip_path)})
         self._send_json({
             "ok": True,
             "downloadUrl": path_to_api_url(zip_path),
@@ -8675,8 +9441,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 {
                     "ok": False,
                     "code": "artifact_cleanup_busy",
+                    "operation": "artifact_cleanup",
+                    "retryable": True,
                     "error": str(exc),
-                    "recoverySteps": ["진행 중인 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                    "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
                 },
                 status=HTTPStatus.CONFLICT,
             )
@@ -8735,11 +9503,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     clearer(**clear_kwargs)
                     cleanup_result = None
             else:
-                with _session_storage_lock:
-                    for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON):
-                        if path.exists():
-                            path.unlink()
-                    _atomic_write_text(GENERATED_SESSION_JS, EMPTY_GENERATED_SESSION_JS)
+                _atomically_clear_persisted_session_state()
                 self.app_server.latest_session = None
                 self.app_server.allowed_files = set()
                 cleanup_result = (
@@ -8760,11 +9524,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             busy_payload: dict[str, Any] = {
                 "ok": False,
                 "code": "artifact_cleanup_busy",
+                "operation": "session_reset",
+                "retryable": True,
+                "artifactCleanupRequested": cleanup_requested,
                 "error": str(exc),
                 "session": rewrite_session_for_http(current_session)
                 if isinstance(current_session, dict)
                 else None,
-                "recoverySteps": ["진행 중인 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
             }
             if busy_revision is not None:
                 busy_payload["sessionRevision"] = busy_revision
@@ -8774,9 +9541,36 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
         except (OSError, TypeError, ValueError) as exc:
-            self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "reset_failed",
+                    "operation": "session_reset",
+                    "retryable": True,
+                    "error": f"failed to clear: {exc}",
+                    "recoverySteps": [
+                        "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
+                        "계속 실패하면 최근 작업을 유지한 채 오류 정보를 신고해 주세요.",
+                    ],
+                },
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
-        response: dict[str, Any] = {"ok": True, "history": [], "session": None}
+        response: dict[str, Any] = {
+            "ok": True,
+            "history": [],
+            "session": None,
+            "artifactCleanupRequested": cleanup_requested,
+            "artifactCleanupDryRun": dry_run if cleanup_requested else None,
+            "artifactCleanupPerformed": bool(
+                cleanup_requested and not dry_run and cleanup_result is not None
+            ),
+            "artifactCleanupSucceeded": (
+                bool(cleanup_result.get("ok"))
+                if cleanup_requested and isinstance(cleanup_result, dict)
+                else None
+            ),
+        }
         if cleared_revision is not None:
             response["sessionRevision"] = cleared_revision
         if cleanup_result is not None:
@@ -9074,15 +9868,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             file_bytes = base64.b64decode(file_data_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise ValueError("fileDataBase64 is not valid base64") from exc
-        content_digest = hashlib.sha1(file_bytes).hexdigest()
+        content_digest = hashlib.sha256(file_bytes).hexdigest()
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         suffix = Path(safe_name).suffix
         for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{suffix}")):
-            if candidate.is_file():
+            if _file_matches_digest(candidate, content_digest, len(file_bytes)):
                 return candidate
+        # Older sessions may still reference SHA-1-prefixed cache files. Keep
+        # those files in place, but every new upload is materialized under a
+        # SHA-256 identity so a chosen-prefix SHA-1 collision cannot alias it.
         target_path = UPLOAD_DIR / f"{content_digest}_{safe_name}"
-        if not target_path.exists():
-            target_path.write_bytes(file_bytes)
+        _atomic_write_bytes(target_path, file_bytes)
         return target_path
 
     def _resolve_source_paths(
@@ -9150,10 +9946,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return target.resolve()
         if not source_paths:
             return (output_root / sanitize_output_dir_name(None)).resolve()
+        identity_suffix = _source_identity_suffix(source_paths)
         if len(source_paths) == 1:
-            return (output_root / sanitize_output_dir_name(source_paths[0].stem)).resolve()
+            return (
+                output_root
+                / sanitize_output_dir_name(source_paths[0].stem, suffix=identity_suffix)
+            ).resolve()
         batch_name = f"{source_paths[0].stem}_{len(source_paths)}files"
-        return (output_root / sanitize_output_dir_name(batch_name)).resolve()
+        return (
+            output_root / sanitize_output_dir_name(batch_name, suffix=identity_suffix)
+        ).resolve()
 
     def _resolve_preview_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
         """Keep speculative exports immutable and separate from active output.
@@ -9172,11 +9974,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             name_hint = f"{source_paths[0].stem}_{len(source_paths)}files"
         else:
             name_hint = "preview"
-        run_name = sanitize_output_dir_name(f"{name_hint}_{_unique_artifact_stamp()}")
+        run_name = sanitize_output_dir_name(name_hint, suffix=_unique_artifact_stamp())
         return (default_output_root() / "previews" / run_name).resolve()
 
     def _handle_export(self) -> None:
         base_session, current_revision = self._current_session_state()
+        export_staging_dir: Path | None = None
+        export_final_dir: Path | None = None
+        export_working_dir: Path | None = None
         try:
             payload = self._read_json_body()
             preview_only = _coerce_bool(
@@ -9201,11 +10006,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             ):
                 return
             source_paths = self._resolve_source_paths(payload, session=base_session)
-            output_dir = (
-                self._resolve_preview_output_dir(payload, source_paths)
-                if preview_only
-                else self._resolve_output_dir(payload, source_paths)
-            )
+            if preview_only:
+                output_dir = self._resolve_preview_output_dir(payload, source_paths)
+            else:
+                export_working_dir = self._resolve_output_dir(payload, source_paths)
+                generation_name = sanitize_output_dir_name(
+                    "export",
+                    suffix=_unique_artifact_stamp(),
+                )
+                export_staging_dir = export_working_dir / ".export-staging" / generation_name
+                export_final_dir = export_working_dir / "exports" / generation_name
+                export_staging_dir.mkdir(parents=True, exist_ok=False)
+                output_dir = export_staging_dir
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
             input_intent = _extract_input_intent(payload)
             content_target = _extract_content_target(payload)
@@ -9282,8 +10094,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["ai_enabled"] = ai_enabled
                 result["aiEnabled"] = ai_enabled
         except RequestPayloadTooLarge:
+            if export_staging_dir is not None:
+                _discard_staged_publish(export_staging_dir)
             raise
         except Exception as exc:
+            if export_staging_dir is not None:
+                _discard_staged_publish(export_staging_dir)
             self._send_json(_export_error_payload(exc), status=HTTPStatus.BAD_REQUEST)
             return
 
@@ -9306,6 +10122,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["edb_parts"] = normalized_parts
                 result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
+                if export_staging_dir is not None:
+                    _discard_staged_publish(export_staging_dir)
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
         elif edb_path:
@@ -9322,7 +10140,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["edb_parts"] = normalized_parts
                 result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
+                if export_staging_dir is not None:
+                    _discard_staged_publish(export_staging_dir)
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        if export_staging_dir is not None and export_final_dir is not None:
+            result = _remap_artifact_paths(result, export_staging_dir, export_final_dir)
+            edb_validation = _remap_artifact_paths(
+                edb_validation,
+                export_staging_dir,
+                export_final_dir,
+            )
+            normalized_parts = result.get("edb_parts") or []
+            session = result["ui_session"]
+            if export_working_dir is not None:
+                session["output_dir"] = str(export_working_dir)
+                session["outputDir"] = str(export_working_dir)
+            result["ui_session"] = session
+            try:
+                _rewrite_staged_artifact_references(export_staging_dir, export_final_dir)
+                final_ui_session_path = Path(str(result["ui_session_path"]))
+                staged_ui_session_path = export_staging_dir / final_ui_session_path.relative_to(
+                    export_final_dir
+                )
+                _atomic_write_text(
+                    staged_ui_session_path,
+                    json.dumps(session, ensure_ascii=False, indent=2),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _discard_staged_publish(export_staging_dir)
+                _log_operation_exception("session_export.rewrite_generation", exc)
+                self._send_json(
+                    _export_error_payload(exc),
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
                 return
         if normalized_parts:
             session["edb_parts"] = normalized_parts
@@ -9336,12 +10187,30 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if preview_only:
             self._allow_session_files(collect_session_file_paths(session))
         else:
-            committed, committed_revision = self._remember_session_if_current(
-                base_session,
-                session,
-                expected_revision=current_revision,
-            )
+            if export_staging_dir is None or export_final_dir is None:
+                self._send_json(
+                    _export_error_payload(RuntimeError("export generation paths are missing")),
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            try:
+                committed, committed_revision = self._adopt_staged_publish_if_current(
+                    base_session,
+                    session,
+                    staging_dir=export_staging_dir,
+                    final_dir=export_final_dir,
+                    expected_revision=current_revision,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _discard_staged_publish(export_staging_dir)
+                _log_operation_exception("session_export.commit_generation", exc)
+                self._send_json(
+                    _export_error_payload(exc),
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
             if not committed:
+                _discard_staged_publish(export_staging_dir)
                 self._send_session_conflict()
                 return
             response_revision = committed_revision
@@ -9391,6 +10260,29 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json(response)
 
 
+def _run_startup_artifact_cleanup(server: AppHTTPServer) -> dict[str, Any] | None:
+    # Deletion is deliberately stricter than general boolean settings: only
+    # an explicit administrator opt-in of exactly ``1`` may mutate artifacts
+    # during startup. Any other value remains a non-destructive audit.
+    delete_enabled = str(os.environ.get("EDB_AUTO_ARTIFACT_CLEANUP") or "").strip() == "1"
+    try:
+        result = server.cleanup_artifacts(
+            dry_run=not delete_enabled,
+            min_age_seconds=DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        )
+    except Exception as exc:  # startup cleanup is maintenance, never availability-critical
+        print(f"[app-server] startup artifact cleanup skipped: {exc}", file=sys.stderr)
+        return None
+    print(
+        "[app-server] startup artifact cleanup "
+        f"({'delete' if delete_enabled else 'dry-run'}): "
+        f"selected={result.get('selectedFileCount', 0)} "
+        f"deleted={result.get('deletedFileCount', 0)} freed={result.get('deletedBytes', 0)}",
+        file=sys.stderr,
+    )
+    return result
+
+
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
     ensure_runtime_dirs()
     hydrate_user_settings_env()
@@ -9412,6 +10304,7 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
                 webbrowser.open(url)
             return
         raise
+    _run_startup_artifact_cleanup(server)
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)

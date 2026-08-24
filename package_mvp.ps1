@@ -216,7 +216,6 @@ foreach ($StalePath in @($WorkPath, $PackageDirPath, $PackageExePath, $SourcePac
 }
 $SpecDir = Join-Path $ResolvedOutputDir "_pyinstaller_spec"
 New-Item -ItemType Directory -Force -Path $SpecDir | Out-Null
-$FrontendBundle = Join-Path $ProjectRoot "ui_prototype\app.bundle.js"
 $BuildUpdateConfig = Join-Path $SpecDir "app_update_config.json"
 $ReleaseMetadataDir = Join-Path $ResolvedOutputDir "release-metadata"
 $ProjectUpdateConfig = Join-Path $ProjectRoot "app_update_config.json"
@@ -265,7 +264,10 @@ if ($env:EDB_RELEASE_GIT_COMMIT) {
 Assert-EDBNativeCommandSucceeded "Release metadata generation"
 
 function Invoke-EDBPackagedAppVerifier {
-    param([Parameter(Mandatory = $true)] [string]$PackageRoot)
+    param(
+        [Parameter(Mandatory = $true)] [string]$PackageRoot,
+        [switch]$SmokeSourceImport
+    )
 
     $VerifierArgs = @(
         (Join-Path $ProjectRoot "scripts\verify_packaged_app.py"),
@@ -275,7 +277,9 @@ function Invoke-EDBPackagedAppVerifier {
         "--expected-app-name",
         $EffectiveAppName,
         "--expected-version",
-        $EffectiveAppVersion
+        $EffectiveAppVersion,
+        "--source-root",
+        $ProjectRoot
     )
     if ($EffectiveUpdateFeedUrl) {
         $VerifierArgs += @("--expected-update-feed-url", $EffectiveUpdateFeedUrl)
@@ -289,20 +293,32 @@ function Invoke-EDBPackagedAppVerifier {
     if ($env:EDB_RELEASE_GIT_COMMIT) {
         $VerifierArgs += @("--expected-git-commit", $env:EDB_RELEASE_GIT_COMMIT)
     }
+    if ($SmokeSourceImport) {
+        $VerifierArgs += "--smoke-source-import"
+    }
     & $PythonExe @VerifierArgs
     Assert-EDBNativeCommandSucceeded "Packaged app verification"
 }
 
+function Invoke-EDBOneFileHealthSmoke {
+    param([Parameter(Mandatory = $true)] [string]$ExecutablePath)
+
+    Assert-EDBNonEmptyFile -Path $ExecutablePath -Label "PyInstaller one-file executable"
+    & $PythonExe `
+        (Join-Path $ProjectRoot "scripts\smoke_packaged_app.py") `
+        $ExecutablePath `
+        --startup-timeout 60 `
+        --expected-app-id $EffectiveAppId
+    Assert-EDBNativeCommandSucceeded "PyInstaller one-file runtime smoke"
+}
+
+$NodeCommand = Get-Command node -ErrorAction SilentlyContinue
+if (-not $NodeCommand) {
+    throw "Node.js is required to build or deterministically verify ui_prototype\app.bundle.js."
+}
 if (-not $SkipFrontendBuild) {
-    $NodeCommand = Get-Command node -ErrorAction SilentlyContinue
-    if ($NodeCommand) {
-        & $NodeCommand.Source (Join-Path $ProjectRoot "scripts\build_frontend_bundle.mjs")
-        Assert-EDBNativeCommandSucceeded "Frontend bundle build"
-    } elseif (-not (Test-Path $FrontendBundle)) {
-        throw "Node.js is required to build ui_prototype\app.bundle.js. Install Node or run with -SkipFrontendBuild after creating the bundle."
-    } else {
-        Write-Warning "Node.js was not found; using existing ui_prototype\app.bundle.js."
-    }
+    & $NodeCommand.Source (Join-Path $ProjectRoot "scripts\build_frontend_bundle.mjs")
+    Assert-EDBNativeCommandSucceeded "Frontend bundle build"
 }
 
 & $PythonExe (Join-Path $ProjectRoot "scripts\verify_frontend_package.py") --root $ProjectRoot
@@ -385,6 +401,7 @@ if ($HasPyInstaller) {
 
     if ($OneFile) {
         Assert-EDBNonEmptyFile -Path $PackageRoot -Label "PyInstaller one-file executable"
+        Invoke-EDBOneFileHealthSmoke -ExecutablePath $PackageRoot
     } else {
         Invoke-EDBPackagedAppVerifier -PackageRoot $PackageRoot
     }
@@ -399,6 +416,7 @@ if ($HasPyInstaller) {
 
     $ItemsToCopy = @(
         "app_server.py",
+        "bug_reporting.py",
         "build_mvp_export.py",
         "build_problem_board_edb.py",
         "build_structured_page_json.py",
@@ -461,7 +479,7 @@ if ($HasPyInstaller) {
     Copy-Item -Force $BuildUpdateConfig (Join-Path $PackageRoot "app_update_config.json")
     Copy-Item -Recurse -Force $ReleaseMetadataDir (Join-Path $PackageRoot "release_metadata")
 
-    Invoke-EDBPackagedAppVerifier -PackageRoot $PackageRoot
+    Invoke-EDBPackagedAppVerifier -PackageRoot $PackageRoot -SmokeSourceImport
     Write-Warning "PyInstaller is not installed. Created source-package fallback instead."
 }
 

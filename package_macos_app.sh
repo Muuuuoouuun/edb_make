@@ -57,7 +57,7 @@ Options:
   --dmg                    Create a drag-and-drop DMG installer
   --console                Keep a console build for debugging
   --install-pyinstaller    Install PyInstaller before packaging
-  --skip-frontend-build     Use existing ui_prototype/app.bundle.js
+  --skip-frontend-build     Skip rebuild; Node still verifies deterministic bundle output
   --bundle-upscayl         Bundle resources/upscayl after license-compliance validation
   -h, --help               Show this help
 EOF
@@ -118,7 +118,8 @@ verify_packaged_app_root() {
     --expected-update-feed-url "$EFFECTIVE_UPDATE_FEED_URL" \
     --expected-download-url "$EFFECTIVE_DOWNLOAD_URL" \
     --expected-release-notes-url "$EFFECTIVE_RELEASE_NOTES_URL" \
-    --expected-bundle-id "$BUNDLE_ID"
+    --expected-bundle-id "$BUNDLE_ID" \
+    --source-root "$PROJECT_ROOT"
   )
   if [[ -n "${EDB_RELEASE_GIT_COMMIT:-}" ]]; then
     verify_args+=(--expected-git-commit "$EDB_RELEASE_GIT_COMMIT")
@@ -464,16 +465,12 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" \
   --git-commit "${EDB_RELEASE_GIT_COMMIT:-}" \
   --strict-environment
 
-FRONTEND_BUNDLE="$PROJECT_ROOT/ui_prototype/app.bundle.js"
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js is required to build or deterministically verify ui_prototype/app.bundle.js." >&2
+  exit 1
+fi
 if [[ "$SKIP_FRONTEND_BUILD" == "0" ]]; then
-  if command -v node >/dev/null 2>&1; then
-    node "$PROJECT_ROOT/scripts/build_frontend_bundle.mjs"
-  elif [[ ! -f "$FRONTEND_BUNDLE" ]]; then
-    echo "Node.js is required to build ui_prototype/app.bundle.js. Install Node or pass --skip-frontend-build after creating the bundle." >&2
-    exit 1
-  else
-    echo "Node.js was not found; using existing ui_prototype/app.bundle.js." >&2
-  fi
+  node "$PROJECT_ROOT/scripts/build_frontend_bundle.mjs"
 fi
 
 "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_frontend_package.py" --root "$PROJECT_ROOT"

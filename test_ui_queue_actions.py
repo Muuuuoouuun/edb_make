@@ -99,7 +99,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("<PendingFilePreview", source)
         self.assertIn("pendingFile={selectedPendingFile}", source)
 
-    def test_queue_and_preview_errors_use_short_toast_helper(self) -> None:
+    def test_queue_errors_use_persistent_recovery_and_preview_keeps_short_toast(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
         queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
@@ -108,10 +108,12 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {", source)
         self.assertIn("showSimpleErrorToast(error, '미리보기 실패')", source)
         self.assertIn(
-            "showSimpleErrorToast(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패')",
+            "activateOperationRecovery(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패'",
             queue_source,
         )
-        self.assertIn("showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패')", queue_source)
+        self.assertIn("activateOperationRecovery(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패'", queue_source)
+        self.assertIn("kind: 'recognition'", queue_source)
+        self.assertIn("kind: 'registration'", queue_source)
         self.assertNotIn("문제 인식 실패: ${e.message}", queue_source)
         self.assertNotIn("등록'} 실패: ${e.message}", queue_source)
 
@@ -378,7 +380,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const requestId = sessionHistoryRequestRef.current + 1;", refresh_source)
         self.assertIn("if (requestId === sessionHistoryRequestRef.current)", refresh_source)
 
-    def test_reset_aborts_background_jobs_and_clears_stale_review_state(self) -> None:
+    def test_reset_blocks_running_jobs_and_only_clears_job_ui_after_server_success(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         reset_source = source.split("const resetSession = useCallback(async () => {", 1)[1]
         reset_source = reset_source.split("const shutdownApp", 1)[0]
@@ -387,6 +389,23 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("setBackgroundJobs([]);", reset_source)
         self.assertIn("setRecognitionReview(null);", reset_source)
         self.assertIn("setPendingFilesTracked([]);", reset_source)
+        self.assertIn("backgroundJobs.some(job => job.status === 'running')", reset_source)
+        self.assertIn("진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요", reset_source)
+        self.assertIn("이미 만든 EDB·PNG 출력 파일은 보관됩니다", reset_source)
+        self.assertLess(reset_source.index("await clearSession()"), reset_source.index("setBackgroundJobs([]);"))
+        self.assertIn("resetBlocked={hasRunningBackgroundJobs}", source)
+        self.assertIn("진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다", source)
+        self.assertIn("downloadInFlightRef.current || downloadBusy", reset_source)
+        self.assertIn("EDB 다운로드 준비가 끝난 뒤 초기화해 주세요", reset_source)
+        self.assertIn(
+            "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            source,
+        )
+        self.assertIn(
+            "!resetBusy && !publishBusy && !downloadBusy && !hasRunningBackgroundJobs && !hasPendingSessionConflict",
+            source,
+        )
+        self.assertIn("recognitionInFlightRef.current || queueRegistrationInFlightRef.current", reset_source)
 
     def test_queue_recognition_review_copy_points_to_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -394,7 +413,7 @@ class TestUiQueueActions(unittest.TestCase):
         queue_review_setup = queue_review_setup.split("session: incomingSession,", 1)[0]
         stage_source = source.split("function RecognitionPageReviewStage", 1)[1]
         stage_source = stage_source.split("function TileImage", 1)[0]
-        app_render = source.split("<div className={`main ${recognitionReview", 1)[1]
+        app_render = source.split("className={`main ${recognitionReview", 1)[1]
         app_render = app_render.split("<BackgroundJobsPanel", 1)[0]
 
         self.assertIn("문제 목록에 적용하기 전에", queue_review_setup)
@@ -411,6 +430,24 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertNotIn("<span>{page.id}</span>", stage_source)
         self.assertLess(app_render.index("<RecognitionPageReviewStage"), app_render.index("<ItemsRail"))
         self.assertIn(") : (", app_render.split("<RecognitionPageReviewStage", 1)[1].split("<ItemsRail", 1)[0])
+
+    def test_queue_registration_and_recognition_share_a_synchronous_single_flight_boundary(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        queue_source = source.split("const processQueuedFiles = useCallback", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview", 1)[0]
+
+        self.assertIn("const queueRegistrationInFlightRef = useRef(false);", source)
+        self.assertIn(
+            "recognitionInFlightRef.current || queueRegistrationInFlightRef.current",
+            queue_source,
+        )
+        self.assertIn("queueRegistrationInFlightRef.current = true;", queue_source)
+        self.assertIn("queueRegistrationInFlightRef.current = false;", queue_source)
+        self.assertLess(
+            queue_source.index("queueRegistrationInFlightRef.current = true;"),
+            queue_source.index("const s = await postExport"),
+        )
+        self.assertIn("if (operationRecovery?.conflict)", queue_source)
 
     def test_review_stage_exposes_crop_frame_fast_surrounding_crop_and_continuation(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

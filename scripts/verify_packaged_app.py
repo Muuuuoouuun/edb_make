@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import plistlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,6 +17,7 @@ try:
         REQUIRED_UI_FILES,
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
+        frontend_bundle_source_digest,
     )
     from .verify_release_licenses import (
         UPSCAYL_MODEL_NAME,
@@ -28,6 +31,7 @@ except ImportError:  # pragma: no cover - direct script execution
         REQUIRED_UI_FILES,
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
+        frontend_bundle_source_digest,
     )
     from verify_release_licenses import (
         UPSCAYL_MODEL_NAME,
@@ -44,6 +48,7 @@ REQUIRED_RUNTIME_FILES = (
 
 REQUIRED_SOURCE_PACKAGE_FILES = (
     "app_server.py",
+    "bug_reporting.py",
     "build_mvp_export.py",
     "build_problem_board_edb.py",
     "build_structured_page_json.py",
@@ -337,6 +342,51 @@ def _looks_like_source_package(package_root: Path) -> bool:
     )
 
 
+def _discover_source_root(package_root: Path) -> Path | None:
+    """Find the checkout that owns a local package under (usually) ``dist``."""
+
+    for candidate in (package_root, *package_root.parents):
+        if (
+            (candidate / "ui_prototype" / "app.jsx").is_file()
+            and (candidate / "scripts" / "build_frontend_bundle.mjs").is_file()
+        ):
+            return candidate
+    return None
+
+
+def _collect_source_package_import_errors(package_root: Path) -> list[str]:
+    """Actually import the source fallback entrypoint in an isolated process."""
+
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-c",
+        (
+            "import sys; "
+            "sys.path.insert(0, sys.argv[1]); "
+            "import app_server; "
+            "assert callable(getattr(app_server, 'main', None))"
+        ),
+        str(package_root),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=package_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"source-package app_server import smoke could not run: {exc}"]
+    if completed.returncode == 0:
+        return []
+    detail = (completed.stderr or completed.stdout or "unknown import failure").strip()
+    return [f"source-package app_server import smoke failed: {detail[-2_000:]}"]
+
+
 def _collect_windows_onedir_errors(
     package_root: Path,
     resource_root: Path,
@@ -387,6 +437,8 @@ def collect_package_errors(
     expected_release_notes_url: str = "",
     expected_bundle_id: str = "",
     expected_git_commit: str = "",
+    source_root: Path | None = None,
+    smoke_source_import: bool = False,
 ) -> list[str]:
     root = package_root.resolve()
     errors: list[str] = []
@@ -420,6 +472,8 @@ def collect_package_errors(
         for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
             if not (root / rel_path).is_file():
                 errors.append(f"missing source-package runtime file: {rel_path}")
+        if smoke_source_import:
+            errors.extend(_collect_source_package_import_errors(root))
     else:
         errors.extend(
             _collect_windows_onedir_errors(
@@ -604,6 +658,39 @@ def collect_package_errors(
             packaged_bundle_digest = digest_match.group(1)
         if "/* app.jsx */" not in bundle:
             errors.append("packaged app.bundle.js does not include the app.jsx section")
+        if source_root is not None:
+            resolved_source_root = source_root.expanduser().resolve()
+            source_bundle_path = resolved_source_root / "ui_prototype" / "app.bundle.js"
+            if not source_bundle_path.is_file():
+                errors.append(f"current source bundle is missing: {source_bundle_path}")
+            else:
+                try:
+                    source_bundle_hash = hashlib.sha256(source_bundle_path.read_bytes()).hexdigest()
+                    packaged_bundle_hash = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    errors.append(f"could not hash frontend bundle bytes: {exc}")
+                else:
+                    if source_bundle_hash != packaged_bundle_hash:
+                        errors.append(
+                            "packaged app.bundle.js bytes do not match current source bundle: "
+                            f"packaged {packaged_bundle_hash}, source {source_bundle_hash}"
+                        )
+            if packaged_bundle_digest:
+                try:
+                    source_digest = frontend_bundle_source_digest(resolved_source_root)
+                except OSError as exc:
+                    errors.append(f"could not calculate frontend source digest under {resolved_source_root}: {exc}")
+                else:
+                    if source_digest is None:
+                        errors.append(
+                            "could not calculate frontend source digest under "
+                            f"{resolved_source_root}"
+                        )
+                    elif source_digest != packaged_bundle_digest:
+                        errors.append(
+                            "packaged frontend source digest does not match current source: "
+                            f"packaged {packaged_bundle_digest}, source {source_digest}"
+                        )
 
     board_path = resource_root / "ui_prototype" / "board.html"
     if board_path.is_file():
@@ -666,7 +753,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-release-notes-url", default="", help="Expected releaseNotesUrl in packaged metadata")
     parser.add_argument("--expected-bundle-id", default="", help="Expected macOS CFBundleIdentifier")
     parser.add_argument("--expected-git-commit", default="", help="Expected full git commit in release provenance")
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=None,
+        help="Checkout root whose current frontend source digest must match the package",
+    )
+    parser.add_argument(
+        "--smoke-source-import",
+        action="store_true",
+        help="Import app_server from a source-package fallback in an isolated process",
+    )
     args = parser.parse_args(argv)
+
+    source_root = args.source_root or _discover_source_root(args.package_root.resolve())
 
     errors = collect_package_errors(
         args.package_root,
@@ -678,6 +778,8 @@ def main(argv: list[str] | None = None) -> int:
         expected_release_notes_url=args.expected_release_notes_url,
         expected_bundle_id=args.expected_bundle_id,
         expected_git_commit=args.expected_git_commit,
+        source_root=source_root,
+        smoke_source_import=args.smoke_source_import,
     )
     if errors:
         for error in errors:

@@ -24,6 +24,212 @@ class _Response:
 
 
 class BugReportingTests(unittest.TestCase):
+    def test_redaction_covers_cross_platform_paths_without_damaging_web_urls(self):
+        web_url = "https://docs.classin.cloud/help/retry.pdf?next=/guide&name=sample.pdf"
+        sensitive_text = (
+            "D:\\School\\2026\\학생A\\중간고사.pdf | "
+            "\\\\NAS01\\Academy\\학생B\\시험지.hwp | "
+            "file:///Volumes/Academy/학생C/기말고사.pdf | "
+            "file://NAS02/Shared/학생D/모의고사.hwpx | "
+            "/opt/academy/private/학생E/진단.png | "
+            "'/Volumes/Academy/학생 이름/띄어쓰기 시험.pdf' | "
+            "학생F-수행평가.pdf | "
+            f"{web_url}"
+        )
+
+        redacted = bug_reporting.redact_sensitive_text(sensitive_text)
+
+        for private_value in (
+            "D:\\School",
+            "NAS01",
+            "NAS02",
+            "/Volumes",
+            "/opt/academy",
+            "학생A",
+            "학생B",
+            "학생C",
+            "학생D",
+            "학생E",
+            "학생 이름",
+            "띄어쓰기 시험.pdf",
+            "학생F-수행평가.pdf",
+            "중간고사.pdf",
+            "시험지.hwp",
+        ):
+            self.assertNotIn(private_value, redacted)
+        self.assertGreaterEqual(redacted.count("[local-path]"), 5)
+        self.assertIn("[document]", redacted)
+        self.assertIn("https://docs.classin.cloud/help/retry.pdf", redacted)
+        self.assertIn("next=/guide", redacted)
+        self.assertIn("name=[document]", redacted)
+
+    def test_redaction_removes_spaced_and_url_encoded_local_identifiers(self):
+        raw_url = (
+            "https://reports.classin.cloud/help/retry.pdf"
+            "?source=/Users/Alice/Student Name/시험.pdf&mode=retry"
+        )
+        encoded_url = (
+            "https://reports.classin.cloud/help/retry.pdf"
+            "?source=%2FUsers%2FAlice%2FStudent%2520Name%2F%EC%8B%9C%ED%97%98.pdf"
+            "#fallback=D%3A%2FSchool%2FStudent%20Name"
+        )
+        sensitive_text = " | ".join(
+            (
+                raw_url,
+                encoded_url,
+                "/Users/Alice/Student Name/시험.pdf",
+                "D:/School/Student Name",
+                r"\\NAS01\Academy\Student Name\시험지.hwp",
+            )
+        )
+
+        redacted = bug_reporting.redact_sensitive_text(sensitive_text)
+
+        for private_value in (
+            "Alice",
+            "Student Name",
+            "Student%20Name",
+            "Student%2520Name",
+            "시험.pdf",
+            "%EC%8B%9C%ED%97%98.pdf",
+            "D:/School",
+            "NAS01",
+        ):
+            self.assertNotIn(private_value, redacted)
+        self.assertEqual(redacted.count("https://reports.classin.cloud/help/retry.pdf"), 2)
+        self.assertIn("?source=[local-path]&mode=retry", redacted)
+        self.assertIn("#fallback=[local-path]", redacted)
+        self.assertGreaterEqual(redacted.count("[local-path]"), 5)
+
+    def test_redaction_handles_path_filename_delimiters_without_hiding_non_paths(self):
+        sensitive_text = " | ".join(
+            (
+                "/Users/Alice/Class/exam?draft#1&copy.pdf",
+                "/custom/Alice/exam?draft#1&copy.pdf",
+                "D:/School/Student Name/exam?draft#1&copy.pdf",
+                r"\\NAS01\Academy\Student Name\exam?draft#1&copy.pdf",
+                "/Users/Alice/Student & Parent/cache?draft#1",
+                "/api/health",
+                "ratio 1 / 2",
+            )
+        )
+
+        redacted = bug_reporting.redact_sensitive_text(sensitive_text)
+
+        self.assertEqual(redacted.count("[local-path]"), 5)
+        self.assertNotIn("Alice", redacted)
+        self.assertNotIn("Student Name", redacted)
+        self.assertNotIn("Student & Parent", redacted)
+        self.assertNotIn("cache?draft#1", redacted)
+        self.assertNotIn("draft#1&copy.pdf", redacted)
+        self.assertIn("/api/health", redacted)
+        self.assertIn("ratio 1 / 2", redacted)
+
+    def test_redaction_decodes_url_secrets_email_and_masks_userinfo(self):
+        sensitive_text = " | ".join(
+            (
+                "https://alice@example.com:secret-value@docs.classin.cloud/api/health",
+                (
+                    "https://docs.classin.cloud/api/health"
+                    "?payload=token%253Dsk-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234"
+                ),
+                "https://docs.classin.cloud/user/%2561lice%2540example.com",
+                (
+                    "https://docs.classin.cloud/api/health"
+                    "?source=%252FUsers%252FAlice%252FClass%252Fexam.pdf"
+                ),
+            )
+        )
+
+        redacted = bug_reporting.redact_sensitive_text(sensitive_text)
+
+        for private_value in (
+            "alice@example.com",
+            "secret-value",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234",
+            "%2561lice%2540example.com",
+            "%252FUsers%252FAlice",
+        ):
+            self.assertNotIn(private_value, redacted)
+        self.assertIn("https://[redacted-userinfo]@docs.classin.cloud/api/health", redacted)
+        self.assertIn("payload=[redacted-secret]", redacted)
+        self.assertIn("/user/[redacted-email]", redacted)
+        self.assertIn("source=[local-path]", redacted)
+
+    def test_redaction_privacy_closes_ambiguous_raw_local_url_suffixes(self):
+        ambiguous_ampersand = (
+            "https://x.test/?source=/Users/Alice/Student & Parent/cache?draft#1"
+        )
+        clear_parameter = (
+            "https://x.test/?source=/Users/Alice/Student&mode=retry"
+        )
+        ambiguous_fragment = (
+            "https://x.test/?source=/Users/Alice/Student#Parent/cache?draft"
+        )
+        fragment_parameter = (
+            "https://x.test/#file=/Users/Alice/Student & Parent/cache?draft#1"
+        )
+        clear_fragment_parameter = (
+            "https://x.test/#file=/Users/Alice/Student&mode=retry"
+        )
+
+        ampersand_redacted = bug_reporting.redact_sensitive_text(ambiguous_ampersand)
+        parameter_redacted = bug_reporting.redact_sensitive_text(clear_parameter)
+        fragment_redacted = bug_reporting.redact_sensitive_text(ambiguous_fragment)
+        fragment_parameter_redacted = bug_reporting.redact_sensitive_text(fragment_parameter)
+        clear_fragment_redacted = bug_reporting.redact_sensitive_text(clear_fragment_parameter)
+
+        self.assertEqual(
+            "https://x.test/?source=[local-path]#[local-path]",
+            ampersand_redacted,
+        )
+        self.assertEqual(
+            "https://x.test/?source=[local-path]&mode=retry",
+            parameter_redacted,
+        )
+        self.assertEqual(
+            "https://x.test/?source=[local-path]#[local-path]",
+            fragment_redacted,
+        )
+        self.assertEqual(
+            "https://x.test/#file=[local-path]",
+            fragment_parameter_redacted,
+        )
+        self.assertEqual(
+            "https://x.test/#file=[local-path]&mode=retry",
+            clear_fragment_redacted,
+        )
+        for private_value in ("Alice", "Student", "Parent", "cache", "draft"):
+            self.assertNotIn(
+                private_value,
+                ampersand_redacted + fragment_redacted + fragment_parameter_redacted,
+            )
+
+    def test_redaction_sanitizes_sensitive_url_parameter_keys_and_fragment_keys(self):
+        sensitive_url = (
+            "https://x.test/api/health"
+            "?alice%2540example.com=1&token%253Dsecretvalue=1"
+            "#bob%2540example.com=2"
+        )
+
+        redacted = bug_reporting.redact_sensitive_text(sensitive_url)
+
+        for private_value in (
+            "alice",
+            "bob",
+            "example.com",
+            "secretvalue",
+            "%2540",
+            "token%253D",
+        ):
+            self.assertNotIn(private_value, redacted)
+        self.assertEqual(
+            "https://x.test/api/health"
+            "?[redacted-email]=1&[redacted-secret]=1"
+            "#[redacted-email]=2",
+            redacted,
+        )
+
     def test_report_redacts_secrets_documents_email_and_local_paths(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             log_file = Path(raw_tmp) / "app.log"

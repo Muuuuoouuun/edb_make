@@ -141,12 +141,15 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             "const cancelRecognitionReview", 1
         )[0]
         self.assertIn("if (!initialSessionLoaded)", process_queue)
-        self.assertIn("queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition}", app)
+        self.assertIn(
+            "queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}",
+            app,
+        )
 
     def test_side_panel_exposes_four_edge_manual_crop_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
-        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        side_panel = side_panel.split("function BugReportDialog", 1)[0]
 
         self.assertIn("여백 자르기", side_panel)
         self.assertIn("mutateSession?.('crop'", side_panel)
@@ -206,7 +209,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         board_stage = source.split("function BoardStage", 1)[1]
         board_stage = board_stage.split("function downloadPublishSummary", 1)[0]
         side_panel = source.split("function SidePanel", 1)[1]
-        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        side_panel = side_panel.split("function BugReportDialog", 1)[0]
 
         self.assertIn("topbar-actions", topbar)
         self.assertIn("topbar-more-menu", topbar)
@@ -571,6 +574,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || ''", side_panel)
         self.assertIn("updateStatus === 'invalid_feed'", side_panel)
         self.assertIn("피드 오류", side_panel)
+        self.assertIn("isUpdateArchitectureMismatch(updateInfo)", side_panel)
+        self.assertIn("이 기기용 업데이트 파일 없음", side_panel)
+        self.assertIn("현재 아키텍처용 설치 파일을 선택해 주세요", source)
+        self.assertIn("updateArchitectureSteps.map", side_panel)
+        self.assertIn("unsupported_architecture", source)
+        self.assertIn("update_architecture_mismatch", source)
+        self.assertIn("updateArchitectureNotice(info)", source)
         self.assertIn("disabled={updateBusy || !updateDownloadUrl}", side_panel)
         self.assertIn("if (updateBusy)", source)
         self.assertIn("fetch('/api/app/update')", source)

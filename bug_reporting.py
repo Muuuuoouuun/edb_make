@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 
@@ -37,18 +38,217 @@ _SECRET_PATTERNS = (
     ),
 )
 _EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-_POSIX_LOCAL_PATH_PATTERN = re.compile(
-    r"(?<!https:)(?<!http:)(?:file://)?"
-    r"(?:/Users/|/home/|/private/var/|/var/folders/|/tmp/)"
-    r"[^\s\"'<>]+"
+_WEB_URL_START_PATTERN = re.compile(r"(?i)\bhttps?://")
+_DOCUMENT_EXTENSION = r"(?:pdf|hwp|hwpx|png|jpe?g|webp|bmp|tiff?)"
+_KNOWN_POSIX_PATH_ROOT = r"/(?:Users|home|private|var|tmp|Volumes|opt|mnt|media|srv)(?:/|(?=$))"
+_STRONG_LOCAL_PATH_ROOT = (
+    r"(?:file://|[A-Z]:[\\/]|\\\\(?:\?\\)?|//|" + _KNOWN_POSIX_PATH_ROOT + r")"
 )
-_WINDOWS_LOCAL_PATH_PATTERN = re.compile(
-    r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:\\Users\\|[A-Z]:\\Temp\\)[^\s\"'<>]+"
+_LOCAL_DOCUMENT_PATH_PATTERN = re.compile(
+    r"(?i)(?<![A-Za-z0-9:/\\])"
+    + _STRONG_LOCAL_PATH_ROOT
+    + r"[^\r\n\"'<>`|]*?\."
+    + _DOCUMENT_EXTENSION
+    + r"\b"
+)
+_GENERIC_POSIX_DOCUMENT_PATH_PATTERN = re.compile(
+    r"(?i)(?<![A-Za-z0-9:/\\=?#&])/"
+    r"[^\r\n\"'<>`|]*?\."
+    + _DOCUMENT_EXTENSION
+    + r"\b"
+)
+_KNOWN_LOCAL_PATH_PATTERN = re.compile(
+    r"(?i)(?<![A-Za-z0-9:/\\])"
+    + _STRONG_LOCAL_PATH_ROOT
+    + r"[^\r\n\"'<>`|]*"
 )
 _DOCUMENT_NAME_PATTERN = re.compile(
     r"(?i)(?<![/\\])\b[^\s\"'<>/\\]+"
-    r"\.(?:pdf|hwp|hwpx|png|jpe?g|webp|bmp|tiff?)\b"
+    + r"\."
+    + _DOCUMENT_EXTENSION
+    + r"\b"
 )
+_SECRET_FIELD_PATTERN = re.compile(
+    r"(?i)^(?:api[_ -]?key|authorization|bearer|password|secret|token)$"
+)
+
+
+def _decoded_url_component(value: str) -> str:
+    """Decode nested URL escaping enough to expose encoded local references."""
+
+    decoded = value
+    for _ in range(3):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    return decoded
+
+
+def _contains_local_path(value: str) -> bool:
+    return bool(
+        _LOCAL_DOCUMENT_PATH_PATTERN.search(value)
+        or _GENERIC_POSIX_DOCUMENT_PATH_PATTERN.search(value)
+        or _KNOWN_LOCAL_PATH_PATTERN.search(value)
+    )
+
+
+def _sensitive_url_component_marker(value: str, *, include_document_name: bool) -> str | None:
+    decoded = _decoded_url_component(value)
+    if any(pattern.search(decoded) for pattern in _SECRET_PATTERNS):
+        return "[redacted-secret]"
+    if _EMAIL_PATTERN.search(decoded):
+        return "[redacted-email]"
+    if _contains_local_path(decoded):
+        return "[local-path]"
+    if include_document_name and _DOCUMENT_NAME_PATTERN.search(decoded):
+        return "[document]"
+    return None
+
+
+def _redact_url_parameters(component: str) -> str:
+    """Preserve parameter names/delimiters while replacing sensitive values."""
+
+    ambiguous_tail = _ambiguous_local_parameter_tail(component)
+    if ambiguous_tail is not None:
+        component = component[:ambiguous_tail]
+    parts = re.split(r"([&;])", component)
+    for index in range(0, len(parts), 2):
+        part = parts[index]
+        if not part:
+            continue
+        key, separator, value = part.partition("=")
+        decoded_key = _decoded_url_component(key).strip()
+        key_marker = _sensitive_url_component_marker(key, include_document_name=True)
+        marker = None
+        if separator and _SECRET_FIELD_PATTERN.fullmatch(decoded_key):
+            marker = "[redacted-secret]"
+        if marker is None:
+            marker = _sensitive_url_component_marker(
+                value if separator else key,
+                include_document_name=True,
+            )
+        if separator and (key_marker or marker):
+            parts[index] = f"{key_marker or key}={marker or value}"
+        elif marker:
+            parts[index] = marker
+    return "".join(parts)
+
+
+def _parameter_value_has_local_path(part: str) -> bool:
+    _key, separator, value = part.partition("=")
+    return bool(separator and _contains_local_path(_decoded_url_component(value)))
+
+
+def _ambiguous_local_parameter_tail(component: str) -> int | None:
+    """Find a raw delimiter that is more likely part of a local path value.
+
+    A syntactically clear ``&mode=retry`` remains a parameter.  Once a strong
+    local value is followed by ``&`` plus free-form text, privacy wins and the
+    ambiguous remainder is dropped rather than risking a student/path suffix.
+    """
+
+    part_start = 0
+    local_value_seen = False
+    for delimiter in re.finditer(r"[&;]", component):
+        current = component[part_start:delimiter.start()]
+        tail = component[delimiter.end():]
+        clear_parameter = re.match(r"[A-Za-z][A-Za-z0-9_.-]*=", tail) is not None
+        local_value_seen = local_value_seen or _parameter_value_has_local_path(current)
+        if local_value_seen and not clear_parameter:
+            return delimiter.start()
+        part_start = delimiter.end()
+    return None
+
+
+def _query_has_local_path(component: str) -> bool:
+    return any(_parameter_value_has_local_path(part) for part in re.split(r"[&;]", component))
+
+
+def _redact_url_path(path: str) -> str:
+    segments = path.split("/")
+    for index, segment in enumerate(segments):
+        marker = _sensitive_url_component_marker(segment, include_document_name=False)
+        if marker:
+            segments[index] = marker
+    return "/".join(segments)
+
+
+def _redact_web_url(value: str) -> str:
+    """Keep the remote location useful but scrub query/fragment identifiers."""
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value
+    netloc = parsed.netloc
+    if "@" in netloc:
+        netloc = f"[redacted-userinfo]@{netloc.rsplit('@', 1)[1]}"
+    path = _redact_url_path(parsed.path)
+    query = _redact_url_parameters(parsed.query)
+    fragment = (
+        "[local-path]"
+        if (
+            parsed.fragment
+            and _query_has_local_path(parsed.query)
+            and "=" not in parsed.fragment
+        )
+        else _redact_url_parameters(parsed.fragment)
+    )
+    return urlunsplit((parsed.scheme, netloc, path, query, fragment))
+
+
+def _url_tail_has_strong_local_root(value: str) -> bool:
+    if "?" not in value and "#" not in value:
+        return False
+    tail = re.split(r"[?&#=]", value)[-1]
+    decoded = _decoded_url_component(tail).lstrip()
+    return re.match(r"(?i)^" + _STRONG_LOCAL_PATH_ROOT, decoded) is not None
+
+
+def _url_has_local_parameter_value(value: str) -> bool:
+    components: list[str] = []
+    if "?" in value:
+        components.append(value.split("?", 1)[1].split("#", 1)[0])
+    if "#" in value:
+        components.append(value.split("#", 1)[1])
+    return any(_query_has_local_path(component) for component in components)
+
+
+def _protect_web_urls(value: str) -> tuple[str, list[str]]:
+    """Replace URLs with markers before standalone path processing.
+
+    Spaces are not valid in an ordinary URL, but diagnostics sometimes contain
+    an unescaped local path in a query value.  Continue across such spaces only
+    while the current query/fragment value starts with a strong local root.
+    """
+
+    protected: list[str] = []
+    parts: list[str] = []
+    cursor = 0
+    for match in _WEB_URL_START_PATTERN.finditer(value):
+        if match.start() < cursor:
+            continue
+        end = match.end()
+        while end < len(value):
+            character = value[end]
+            if character in "\r\n\"'<>`|":
+                break
+            if character.isspace():
+                current_url = value[match.start():end]
+                if not (
+                    _url_tail_has_strong_local_root(current_url)
+                    or _url_has_local_parameter_value(current_url)
+                ):
+                    break
+            end += 1
+        parts.append(value[cursor:match.start()])
+        marker = f"\x00edb-web-url-{len(protected)}\x00"
+        protected.append(_redact_web_url(value[match.start():end]))
+        parts.append(marker)
+        cursor = end
+    parts.append(value[cursor:])
+    return "".join(parts), protected
 
 
 class BugReportValidationError(ValueError):
@@ -59,10 +259,28 @@ class BugReportDeliveryError(RuntimeError):
     """Raised when the remote report collector cannot accept a report."""
 
 
+def _redact_filesystem_references(value: str) -> str:
+    """Remove local paths/documents without mistaking web URLs for files."""
+
+    # Protect and sanitize complete URLs first so standalone path rules cannot
+    # damage their scheme, host, or normal remote path.
+    text, protected_urls = _protect_web_urls(value)
+    text = _LOCAL_DOCUMENT_PATH_PATTERN.sub("[local-path]", text)
+    text = _GENERIC_POSIX_DOCUMENT_PATH_PATTERN.sub("[local-path]", text)
+    text = _KNOWN_LOCAL_PATH_PATTERN.sub("[local-path]", text)
+    text = _DOCUMENT_NAME_PATTERN.sub("[document]", text)
+    for index, url in enumerate(protected_urls):
+        text = text.replace(f"\x00edb-web-url-{index}\x00", url)
+    return text
+
+
 def redact_sensitive_text(value: Any) -> str:
     """Return bounded text with common secrets and local identifiers removed."""
 
-    text = str(value or "")
+    # Sanitize complete URLs before generic email/secret replacement can make
+    # their authority unparsable (for example user:password@host).  The URL
+    # sanitizer also decodes nested escaping in path/query/fragment values.
+    text = _redact_filesystem_references(str(value or ""))
     for pattern in _SECRET_PATTERNS[:2]:
         text = pattern.sub("[redacted-secret]", text)
     text = _SECRET_PATTERNS[2].sub(
@@ -70,9 +288,6 @@ def redact_sensitive_text(value: Any) -> str:
         text,
     )
     text = _EMAIL_PATTERN.sub("[redacted-email]", text)
-    text = _POSIX_LOCAL_PATH_PATTERN.sub("[local-path]", text)
-    text = _WINDOWS_LOCAL_PATH_PATTERN.sub("[local-path]", text)
-    text = _DOCUMENT_NAME_PATTERN.sub("[document]", text)
     home = str(Path.home())
     if home:
         text = text.replace(home, "[home]")
@@ -86,16 +301,15 @@ def _bounded_text(value: Any, limit: int) -> str:
 def _safe_contact(value: Any) -> str:
     """Preserve an explicitly consented reply address while removing secrets."""
 
-    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    text = _redact_filesystem_references(
+        str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    )
     for pattern in _SECRET_PATTERNS[:2]:
         text = pattern.sub("[redacted-secret]", text)
     text = _SECRET_PATTERNS[2].sub(
         lambda match: f"{match.group(1)}{match.group(2)}[redacted-secret]",
         text,
     )
-    text = _POSIX_LOCAL_PATH_PATTERN.sub("[local-path]", text)
-    text = _WINDOWS_LOCAL_PATH_PATTERN.sub("[local-path]", text)
-    text = _DOCUMENT_NAME_PATTERN.sub("[document]", text)
     return " ".join(text.split())[:MAX_CONTACT_CHARS]
 
 

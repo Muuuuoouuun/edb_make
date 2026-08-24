@@ -53,11 +53,18 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("publish.canOpenEdbFile", rail)
         self.assertIn("publish.canOpenOutputDir", rail)
         self.assertIn("publish.canOpenClassinHandoff", rail)
-        self.assertIn("downloadPublishSummary(publish)", rail)
+        self.assertIn("onDownloadPublish?.(publish)", rail)
+        self.assertIn("publishDownloadBusy", rail)
         self.assertIn("openPublishedEdb(publish)", rail)
         self.assertIn("openOutputFolder(publish.outputDir)", rail)
         self.assertIn("openClassinHandoff(publish)", rail)
         self.assertIn("publish.classinReviewStatusLabel", rail)
+
+        app = source.split("const handlePublishDownload = async", 1)[1]
+        app = app.split("const reopenLatestAfterPublishError", 1)[0]
+        self.assertIn("await downloadPublishSummary(target)", app)
+        self.assertIn("activateOperationRecovery(error, '다운로드 실패'", app)
+        self.assertIn("downloadInFlightRef.current", app)
 
     def test_app_fallback_publish_summary_normalizes_artifact_availability(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

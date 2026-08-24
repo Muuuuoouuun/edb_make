@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -79,6 +81,33 @@ def bundle_cache_bust_digest(script_src: str) -> str | None:
     if match is None:
         return None
     return match.group(1)
+
+
+def collect_deterministic_bundle_errors(project_root: Path) -> list[str]:
+    """Rebuild in memory through Node and reject any tracked bundle drift."""
+
+    root = project_root.resolve()
+    node = shutil.which("node")
+    if node is None:
+        return ["Node.js is required to deterministically verify app.bundle.js"]
+    builder = root / "scripts" / "build_frontend_bundle.mjs"
+    if not builder.is_file():
+        return ["missing deterministic frontend builder: scripts/build_frontend_bundle.mjs"]
+    try:
+        completed = subprocess.run(
+            [node, str(builder), "--check"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"could not run deterministic frontend bundle check: {exc}"]
+    if completed.returncode == 0:
+        return []
+    detail = (completed.stderr or completed.stdout or "unknown Node.js failure").strip()
+    return [f"deterministic frontend bundle check failed: {detail[-2_000:]}"]
 
 
 def collect_errors(project_root: Path) -> list[str]:
@@ -161,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     errors = collect_errors(args.root)
+    errors.extend(collect_deterministic_bundle_errors(args.root))
     if errors:
         for error in errors:
             print(f"[frontend-package] ERROR: {error}", file=sys.stderr)
