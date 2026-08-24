@@ -9,6 +9,11 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const uiRoot = path.join(projectRoot, "ui_prototype");
 const buildVendorRoot = path.join(projectRoot, "scripts", "vendor");
 const Babel = require(path.join(buildVendorRoot, "babel.min.js"));
+const args = new Set(process.argv.slice(2));
+const checkOnly = args.delete("--check");
+if (args.size) {
+  throw new Error(`Unknown argument(s): ${Array.from(args).join(", ")}`);
+}
 
 const inputFiles = ["art.jsx", "tweaks-panel.jsx", "app.jsx"];
 const outputFile = path.join(uiRoot, "app.bundle.js");
@@ -55,8 +60,7 @@ const banner = [
   " */",
   "",
 ].join("\n");
-
-await fs.writeFile(outputFile, banner + sections.join("\n"), "utf8");
+const expectedBundle = banner + sections.join("\n");
 
 const boardHtml = await fs.readFile(boardFile, "utf8");
 const bundleSrc = `app.bundle.js?v=frontend-bundle-${sourceDigest}`;
@@ -64,7 +68,26 @@ const matches = boardHtml.match(bundleCacheBustPattern) || [];
 if (matches.length !== 1) {
   throw new Error(`Expected exactly one cache-busted app.bundle.js reference in ${path.relative(projectRoot, boardFile)}`);
 }
-await fs.writeFile(boardFile, boardHtml.replace(bundleCacheBustPattern, bundleSrc), "utf8");
+const expectedBoardHtml = boardHtml.replace(bundleCacheBustPattern, bundleSrc);
 
-console.log(`Built ${path.relative(projectRoot, outputFile)} from ${inputFiles.join(", ")}`);
-console.log(`Updated ${path.relative(projectRoot, boardFile)} cache bust to frontend-bundle-${sourceDigest}`);
+if (checkOnly) {
+  const currentBundle = await fs.readFile(outputFile, "utf8");
+  if (currentBundle !== expectedBundle) {
+    throw new Error(
+      `${path.relative(projectRoot, outputFile)} is not the deterministic output of the current frontend sources; rebuild it`,
+    );
+  }
+  if (boardHtml !== expectedBoardHtml) {
+    throw new Error(
+      `${path.relative(projectRoot, boardFile)} does not reference the current frontend source digest; rebuild it`,
+    );
+  }
+  console.log(`Checked deterministic ${path.relative(projectRoot, outputFile)} output`);
+  console.log(`Checked ${path.relative(projectRoot, boardFile)} cache bust frontend-bundle-${sourceDigest}`);
+} else {
+  await fs.writeFile(outputFile, expectedBundle, "utf8");
+  await fs.writeFile(boardFile, expectedBoardHtml, "utf8");
+
+  console.log(`Built ${path.relative(projectRoot, outputFile)} from ${inputFiles.join(", ")}`);
+  console.log(`Updated ${path.relative(projectRoot, boardFile)} cache bust to frontend-bundle-${sourceDigest}`);
+}

@@ -16,25 +16,176 @@
     return item && item.id != null ? String(item.id) : "";
   }
 
-  function reorderItemsForDrop(items, fromId, toId, position) {
+  function orderedItemIds(items, ids) {
+    if (!Array.isArray(items)) return [];
+    const requested = new Set((Array.isArray(ids) ? ids : [ids])
+      .map(value => value == null ? "" : String(value))
+      .filter(Boolean));
+    return items.map(itemId).filter(id => requested.has(id));
+  }
+
+  function normalizeSelectionId(value) {
+    return value == null ? "" : String(value);
+  }
+
+  function orderedSelectionIds(orderedIds, selectedIds) {
+    if (!Array.isArray(orderedIds)) return [];
+    const requested = new Set((Array.isArray(selectedIds) ? selectedIds : [selectedIds])
+      .map(normalizeSelectionId)
+      .filter(Boolean));
+    const seen = new Set();
+    return orderedIds
+      .map(normalizeSelectionId)
+      .filter(id => id && requested.has(id) && !seen.has(id) && seen.add(id));
+  }
+
+  function selectionRange(orderedIds, anchorId, targetId) {
+    if (!Array.isArray(orderedIds)) return [];
+    const ids = orderedSelectionIds(orderedIds, orderedIds);
+    const anchor = normalizeSelectionId(anchorId);
+    const target = normalizeSelectionId(targetId);
+    const anchorIndex = ids.indexOf(anchor);
+    const targetIndex = ids.indexOf(target);
+    if (targetIndex < 0) return [];
+    if (anchorIndex < 0) return [target];
+    const start = Math.min(anchorIndex, targetIndex);
+    const end = Math.max(anchorIndex, targetIndex);
+    return ids.slice(start, end + 1);
+  }
+
+  function selectAllItems(orderedIds) {
+    return orderedSelectionIds(orderedIds, orderedIds);
+  }
+
+  function clearItemSelection() {
+    return [];
+  }
+
+  function applySelectionClick(orderedIds, selectedIds, anchorId, targetId, modifiers = {}) {
+    const ids = selectAllItems(orderedIds);
+    const current = orderedSelectionIds(ids, selectedIds);
+    const target = normalizeSelectionId(targetId);
+    const previousAnchor = normalizeSelectionId(anchorId);
+    const hasTarget = ids.includes(target);
+    if (!hasTarget) {
+      return {
+        selectedIds: current,
+        anchorId: ids.includes(previousAnchor) ? previousAnchor : null,
+      };
+    }
+
+    const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
+    const extending = Boolean(modifiers.shiftKey);
+    if (extending) {
+      const rangeAnchor = ids.includes(previousAnchor) ? previousAnchor : target;
+      const rangeIds = selectionRange(ids, rangeAnchor, target);
+      const nextIds = additive
+        ? orderedSelectionIds(ids, [...current, ...rangeIds])
+        : rangeIds;
+      return { selectedIds: nextIds, anchorId: rangeAnchor };
+    }
+
+    if (additive) {
+      const selected = new Set(current);
+      if (selected.has(target)) selected.delete(target);
+      else selected.add(target);
+      return {
+        selectedIds: orderedSelectionIds(ids, [...selected]),
+        anchorId: target,
+      };
+    }
+
+    return { selectedIds: [target], anchorId: target };
+  }
+
+  function selectionKeyboardCommand(
+    orderedIds,
+    selectedIds,
+    anchorId,
+    focusId,
+    key,
+    modifiers = {},
+  ) {
+    const ids = selectAllItems(orderedIds);
+    const current = orderedSelectionIds(ids, selectedIds);
+    const previousAnchor = normalizeSelectionId(anchorId);
+    const previousFocus = normalizeSelectionId(focusId);
+    const commandKey = String(key || "");
+    const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
+    const extending = Boolean(modifiers.shiftKey);
+    const validAnchor = ids.includes(previousAnchor) ? previousAnchor : "";
+    const validFocus = ids.includes(previousFocus)
+      ? previousFocus
+      : current[current.length - 1] || ids[0] || "";
+
+    if (commandKey.toLowerCase() === "a" && additive) {
+      if (extending) {
+        return { selectedIds: [], anchorId: null, focusId: validFocus || null };
+      }
+      return {
+        selectedIds: ids,
+        anchorId: validAnchor || validFocus || null,
+        focusId: validFocus || null,
+      };
+    }
+
+    if (commandKey === "Escape") {
+      return { selectedIds: [], anchorId: null, focusId: validFocus || null };
+    }
+
+    const delta = commandKey === "ArrowUp" ? -1 : commandKey === "ArrowDown" ? 1 : 0;
+    if (!delta || !ids.length) {
+      return {
+        selectedIds: current,
+        anchorId: validAnchor || null,
+        focusId: validFocus || null,
+      };
+    }
+
+    const currentIndex = Math.max(0, ids.indexOf(validFocus));
+    const targetIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + delta));
+    const target = ids[targetIndex];
+    if (extending) {
+      const rangeAnchor = validAnchor || validFocus || target;
+      const rangeIds = selectionRange(ids, rangeAnchor, target);
+      return {
+        selectedIds: additive
+          ? orderedSelectionIds(ids, [...current, ...rangeIds])
+          : rangeIds,
+        anchorId: rangeAnchor,
+        focusId: target,
+      };
+    }
+
+    return { selectedIds: [target], anchorId: target, focusId: target };
+  }
+
+  function reorderItemGroupForDrop(items, fromIds, toId, position) {
     if (!Array.isArray(items)) return items;
-    const sourceId = fromId == null ? "" : String(fromId);
+    const sourceIds = orderedItemIds(items, fromIds);
     const targetId = toId == null ? "" : String(toId);
-    if (!sourceId || !targetId || sourceId === targetId) return items;
+    if (!sourceIds.length || !targetId) return items;
 
-    const fromIndex = items.findIndex(item => itemId(item) === sourceId);
-    const targetIndex = items.findIndex(item => itemId(item) === targetId);
-    if (fromIndex < 0 || targetIndex < 0) return items;
+    const sourceIdSet = new Set(sourceIds);
+    if (sourceIdSet.has(targetId)) return items;
 
-    const next = items.slice();
-    const moved = next.splice(fromIndex, 1)[0];
-    const withoutSourceTargetIndex = next.findIndex(item => itemId(item) === targetId);
-    if (withoutSourceTargetIndex < 0) return items;
+    const moved = items.filter(item => sourceIdSet.has(itemId(item)));
+    const remaining = items.filter(item => !sourceIdSet.has(itemId(item)));
+    const targetIndex = remaining.findIndex(item => itemId(item) === targetId);
+    if (targetIndex < 0) return items;
 
     const insertAfterTarget = normalizeDropPosition(position) === AFTER;
-    const insertIndex = withoutSourceTargetIndex + (insertAfterTarget ? 1 : 0);
-    next.splice(insertIndex, 0, moved);
-    return next;
+    const insertIndex = targetIndex + (insertAfterTarget ? 1 : 0);
+    const next = remaining.slice();
+    next.splice(insertIndex, 0, ...moved);
+
+    const unchanged = next.length === items.length
+      && next.every((item, index) => itemId(item) === itemId(items[index]));
+    return unchanged ? items : next;
+  }
+
+  function reorderItemsForDrop(items, fromId, toId, position) {
+    return reorderItemGroupForDrop(items, [fromId], toId, position);
   }
 
   function dropPositionFromClientY(rect, clientY) {
@@ -42,6 +193,14 @@
     const top = Number(rect.top) || 0;
     const height = Math.max(0, Number(rect.height) || 0);
     return Number(clientY) > top + height / 2 ? AFTER : BEFORE;
+  }
+
+  function scrollContainerContentTop(itemRect, containerRect, scrollTop = 0) {
+    if (!itemRect || !containerRect) return 0;
+    const itemTop = Number(itemRect.top) || 0;
+    const containerTop = Number(containerRect.top) || 0;
+    const containerScrollTop = Number(scrollTop) || 0;
+    return itemTop - containerTop + containerScrollTop;
   }
 
   function edgeAutoScrollDelta(rect, clientY, edgePx = 64, maxPx = 22) {
@@ -64,6 +223,25 @@
     if (!direction || strength <= 0 || safeMax <= 0) return 0;
     const accelerated = Math.min(1, strength) ** 2;
     return direction * Math.max(1, Math.ceil(accelerated * safeMax));
+  }
+
+  function acceleratedEdgeAutoScrollDelta(
+    rect,
+    clientY,
+    edgePx = 64,
+    maxPx = 22,
+    holdDurationMs = 0,
+    frameDurationMs = 1000 / 60
+  ) {
+    const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
+    if (!baseDelta) return 0;
+    const safeHoldMs = Math.max(0, Number(holdDurationMs) || 0);
+    const holdProgress = Math.min(1, safeHoldMs / 900);
+    const holdMultiplier = 1 + holdProgress;
+    const safeFrameMs = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60)));
+    const frameMultiplier = safeFrameMs / (1000 / 60);
+    const magnitude = Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));
+    return Math.sign(baseDelta) * magnitude;
   }
 
   function appendBoundedHistory(history, entry, limit = 20) {
@@ -91,6 +269,56 @@
     const previousTop = Number(positions[low - 1]?.top) || 0;
     const nextTop = Number(positions[low]?.top) || 0;
     return target - previousTop <= nextTop - target ? low - 1 : low;
+  }
+
+  function adjacentReorderCommand(items, itemIdValue, direction) {
+    if (!Array.isArray(items) || !items.length) return null;
+    const sourceId = itemIdValue == null ? '' : String(itemIdValue);
+    const sourceIndex = items.findIndex(item => itemId(item) === sourceId);
+    if (sourceIndex < 0) return null;
+    const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+    if (!delta) return null;
+    const targetIndex = sourceIndex + delta;
+    if (targetIndex < 0 || targetIndex >= items.length) return null;
+    return {
+      sourceId,
+      targetId: itemId(items[targetIndex]),
+      position: delta < 0 ? BEFORE : AFTER,
+      nextIndex: targetIndex,
+    };
+  }
+
+  function adjacentGroupReorderCommand(items, itemIds, direction) {
+    if (!Array.isArray(items) || !items.length) return null;
+    const sourceIds = orderedItemIds(items, itemIds);
+    if (!sourceIds.length) return null;
+
+    const sourceIdSet = new Set(sourceIds);
+    const selectedIndexes = items
+      .map((item, index) => sourceIdSet.has(itemId(item)) ? index : -1)
+      .filter(index => index >= 0);
+    const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+    if (!delta) return null;
+
+    const edgeIndex = delta < 0
+      ? Math.min(...selectedIndexes)
+      : Math.max(...selectedIndexes);
+    const targetIndex = edgeIndex + delta;
+    if (targetIndex < 0 || targetIndex >= items.length) return null;
+
+    const targetId = itemId(items[targetIndex]);
+    if (!targetId || sourceIdSet.has(targetId)) return null;
+    const position = delta < 0 ? BEFORE : AFTER;
+    const reordered = reorderItemGroupForDrop(items, sourceIds, targetId, position);
+    if (reordered === items) return null;
+
+    return {
+      sourceId: sourceIds[0],
+      sourceIds,
+      targetId,
+      position,
+      nextIndex: reordered.findIndex(item => itemId(item) === sourceIds[0]),
+    };
   }
 
   function problemDisplayName(item, index) {
@@ -123,13 +351,24 @@
   return {
     AFTER,
     BEFORE,
+    acceleratedEdgeAutoScrollDelta,
+    adjacentGroupReorderCommand,
+    adjacentReorderCommand,
+    applySelectionClick,
     appendBoundedHistory,
+    clearItemSelection,
     dropPositionFromClientY,
     edgeAutoScrollDelta,
     nearestPlacementIndex,
     normalizeDropPosition,
+    orderedSelectionIds,
     problemDisplayName,
     problemSourceLabel,
+    reorderItemGroupForDrop,
     reorderItemsForDrop,
+    scrollContainerContentTop,
+    selectAllItems,
+    selectionKeyboardCommand,
+    selectionRange,
   };
 });

@@ -8,6 +8,29 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TestUiPublishGuard(unittest.TestCase):
+    def test_publish_uses_synchronous_single_flight_guard(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        on_publish = source.split("const onPublish = async () => {", 1)[1]
+        on_publish = on_publish.split("const handlePublishDownload", 1)[0]
+
+        self.assertIn("const publishInFlightRef = useRef(false);", source)
+        self.assertIn("if (publishInFlightRef.current)", on_publish)
+        self.assertIn("이미 EDB를 제작 중입니다", on_publish)
+        self.assertIn("publishInFlightRef.current = true;", on_publish)
+        self.assertIn("setPublishBusy(true);", on_publish)
+        self.assertIn("publishInFlightRef.current = false;", on_publish)
+        self.assertIn("setPublishBusy(false);", on_publish)
+        self.assertLess(on_publish.index("const placements ="), on_publish.index("publishInFlightRef.current = true;"))
+        self.assertIn(
+            "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            source,
+        )
+        self.assertIn("if (operationRecovery?.conflict)", on_publish)
+        self.assertLess(
+            on_publish.index("if (operationRecovery?.conflict)"),
+            on_publish.index("clearOperationRecovery();"),
+        )
+
     def test_publish_warns_and_returns_to_review_when_actionable_items_remain(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         on_publish = source.split("const onPublish = async () => {", 1)[1]
@@ -138,7 +161,7 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
-        self.assertIn("publish_guard.js?v=preflight-scaled-reflow-20260702", html)
+        self.assertIn("publish_guard.js?v=preflight-passage-envelope-20260803", html)
 
 
 if __name__ == "__main__":

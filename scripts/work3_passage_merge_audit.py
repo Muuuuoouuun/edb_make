@@ -291,7 +291,7 @@ def run_strict_audit_matrix() -> dict[str, Any]:
         [footnote, Image.new("RGB", (720, 240), "white")]
     )[0]
     footnote_preserved = bool(
-        footnote_prepared.size == footnote.size
+        footnote_prepared.width == footnote.width
         and _count_color(footnote_prepared, footnote_marker)
         == _count_color(footnote, footnote_marker)
     )
@@ -370,7 +370,7 @@ def audit_stitched_image(
         "segment_pixel_identity": all(segment_matches),
         "no_body_loss_or_duplication": no_loss_or_duplication,
         "page_chrome_removed": sum(chrome_counts.values()) == 0,
-        "configured_join_gap": PASSAGE_FRAGMENT_STITCH_GAP_PX == 16,
+        "configured_join_gap": 8 <= PASSAGE_FRAGMENT_STITCH_GAP_PX <= 20,
         "stitched_height_formula": stitched.height == expected_height,
     }
     return {

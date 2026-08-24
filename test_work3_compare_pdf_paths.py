@@ -20,7 +20,11 @@ class TestWork3ComparePdfPaths(unittest.TestCase):
         # Keep the synthetic range header inside the left column. A header
         # deliberately crossing the divider is a separate malformed-layout
         # case and should not lower this path-equivalence fixture's recall.
-        page.insert_text((48, 82), "[1~2] Read passage.", fontsize=12)
+        page.insert_text(
+            (48, 82),
+            "[1~2] Read the following passage and answer the questions.",
+            fontsize=9,
+        )
         for row, y in enumerate(range(120, 730, 28), start=1):
             page.insert_text((48, y), f"left passage line {row:02d}", fontsize=11)
         for row, y in enumerate(range(82, 300, 28), start=1):

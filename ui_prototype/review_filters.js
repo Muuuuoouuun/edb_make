@@ -45,6 +45,101 @@
     return Boolean(passageGroupIdFor(problem));
   }
 
+  function passageRoleFor(problem) {
+    if (!problem || typeof problem !== "object") return "";
+    return String(
+      problem.passageRole
+      || problem.passage_role
+      || problem.metadata?.passageRole
+      || problem.metadata?.passage_role
+      || ""
+    ).trim();
+  }
+
+  function sessionReviewMode(session) {
+    const contentTarget = String(
+      session?.contentTarget
+      || session?.content_target
+      || ""
+    ).trim().toLowerCase().replace(/_/g, "-");
+    if (contentTarget === "shared-passages") return "shared-passages";
+
+    const inputIntent = String(
+      session?.inputIntent
+      || session?.input_intent
+      || ""
+    ).trim().toLowerCase().replace(/_/g, "-");
+    if (inputIntent === "page-as-is") return "page-as-is";
+
+    const problems = Array.isArray(session?.problems) ? session.problems : [];
+    if (problems.length && problems.every(problem => passageRoleFor(problem) === "passage_fragment")) {
+      return "shared-passages";
+    }
+    return "problems";
+  }
+
+  function nonnegativeCount(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, number) : 0;
+  }
+
+  function reviewCountParts(counts) {
+    const supplemental = nonnegativeCount(counts?.supplemental ?? counts?.supplementalItems);
+    const core = nonnegativeCount(counts?.core ?? counts?.problems ?? counts?.total);
+    const explicitTotal = Number(counts?.total ?? counts?.all);
+    const total = Number.isFinite(explicitTotal)
+      ? Math.max(0, explicitTotal)
+      : core + supplemental;
+    return { core, supplemental, total };
+  }
+
+  function formatReviewModeCount(mode, counts, options = {}) {
+    const normalizedMode = String(mode || "problems").trim();
+    const parts = reviewCountParts(counts);
+    if (normalizedMode === "shared-passages") {
+      return `${options.compact ? "지문" : "공통 지문"} ${parts.total}개`;
+    }
+    if (normalizedMode === "page-as-is") {
+      const explicitPageCount = Number(options.pageCount);
+      const pageCount = Number.isFinite(explicitPageCount) ? Math.max(0, explicitPageCount) : parts.total;
+      return options.compact ? "페이지 원본" : `${pageCount}페이지`;
+    }
+    if (parts.supplemental > 0) return `${parts.core}문항 + 자료 ${parts.supplemental}`;
+    return `${parts.core}문항`;
+  }
+
+  function reviewModeCopy(session, counts, options = {}) {
+    const mode = sessionReviewMode(session);
+    const pageCount = nonnegativeCount(options.pageCount ?? session?.pages?.length);
+    const countLabel = formatReviewModeCount(mode, counts, { pageCount });
+    const compactCountLabel = formatReviewModeCount(mode, counts, { pageCount, compact: true });
+    if (mode === "shared-passages") {
+      return {
+        mode,
+        title: "지문 검수",
+        subtitle: "공통 지문 영역",
+        countLabel,
+        headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}`,
+      };
+    }
+    if (mode === "page-as-is") {
+      return {
+        mode,
+        title: "페이지 검수",
+        subtitle: "원본 보존",
+        countLabel,
+        headerCountLabel: `${pageCount}페이지 원본`,
+      };
+    }
+    return {
+      mode,
+      title: "문항 검수",
+      subtitle: "검출 영역",
+      countLabel,
+      headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}`,
+    };
+  }
+
   function problemIdFor(problem) {
     if (!problem || typeof problem !== "object") return "";
     return String(problem.id || problem.problem_id || "").trim();
@@ -114,6 +209,9 @@
     passageGroupIdFor,
     problemIdFor,
     problemMatchesReviewFilter,
+    formatReviewModeCount,
+    reviewModeCopy,
     riskFlagsFor,
+    sessionReviewMode,
   };
 });

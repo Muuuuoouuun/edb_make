@@ -285,6 +285,27 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_normalize_publish_preflight_block_labels_problem_id_issues(self) -> None:
+        run_node(
+            """
+            const { normalizePublishPreflightBlock } = require('./ui_prototype/publish_summary.js');
+            const block = normalizePublishPreflightBlock({
+              errorKind: 'publish_preflight_blocked',
+              classinPreflight: {
+                status: 'blocked',
+                issueCount: 2,
+                issues: [
+                  { type: 'missing_problem_id' },
+                  { type: 'duplicate_problem_id' },
+                ],
+              },
+            });
+            if (block.issueSummaryLabel !== '문항 ID 누락 1 · 문항 ID 중복 1') {
+              throw new Error(`unexpected problem ID labels: ${block.issueSummaryLabel}`);
+            }
+            """
+        )
+
     def test_normalize_publish_preflight_block_labels_server_rejection(self) -> None:
         run_node(
             """

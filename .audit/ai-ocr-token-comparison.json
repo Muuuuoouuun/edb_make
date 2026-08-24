@@ -1,0 +1,29 @@
+{
+  "benchmark": "synthetic_korean_exam_ocr_4_samples",
+  "before_artifact": ".audit/ai-token-benchmark-before.json",
+  "after_artifact": ".audit/ai-ocr-benchmark-current.json",
+  "models": {
+    "gemini-3.5-flash-lite": {
+      "before_total_token_count": 5877,
+      "after_total_token_count": 5019,
+      "saved_token_count": 858,
+      "reduction_percent": 14.6,
+      "after_error_count": 0
+    },
+    "gemini-3.5-flash": {
+      "before_total_token_count": 5876,
+      "after_total_token_count": 5011,
+      "saved_token_count": 865,
+      "reduction_percent": 14.7,
+      "after_error_count": 0,
+      "after_minimum_similarity_to_expected": 1.0
+    }
+  },
+  "economy_routing": {
+    "sample_count": 4,
+    "escalation_count": 1,
+    "estimated_request_count": 5,
+    "minimum_similarity_to_expected": 1.0
+  },
+  "guardrail": "Synthetic benchmark; validate on anonymized production pages before treating the percentage as a production forecast."
+}

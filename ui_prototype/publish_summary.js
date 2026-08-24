@@ -12,8 +12,10 @@
 
   const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     board_placement_overlap: "판서 배치 겹침",
+    duplicate_problem_id: "문항 ID 중복",
     duplicate_problem_number: "중복 번호",
     low_ink_problem_image: "이미지 내용 부족",
+    missing_problem_id: "문항 ID 누락",
     missing_problem_image: "문항 이미지 없음",
     passage_missing_child_questions: "문항 누락",
     passage_group_source_reuse: "지문 겹침",
@@ -651,6 +653,7 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "";
     return date.toLocaleString("ko-KR", {
+      timeZone: "Asia/Seoul",
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",

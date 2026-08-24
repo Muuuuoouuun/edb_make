@@ -10,7 +10,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.verify_frontend_package import collect_errors
+from scripts.verify_frontend_package import collect_deterministic_bundle_errors
 from scripts.build_app_update_config import build_config, write_config
+from scripts.build_release_metadata import build_release_metadata
+from scripts.verify_release_licenses import (
+    UPSCAYL_REQUIRED_COMPLIANCE_FILES,
+    collect_release_license_errors,
+    current_upscayl_platform,
+)
 
 
 def project_path(rel_path: str) -> Path:
@@ -23,6 +30,7 @@ def pyinstaller_work_path() -> Path:
 
 def verify_frontend_package() -> None:
     errors = collect_errors(PROJECT_ROOT)
+    errors.extend(collect_deterministic_bundle_errors(PROJECT_ROOT))
     if errors:
         message = "\n".join(f"[frontend-package] ERROR: {error}" for error in errors)
         raise SystemExit(message)
@@ -36,6 +44,16 @@ def resolve_icon() -> str | None:
 
 verify_frontend_package()
 resolved_icon = resolve_icon()
+bundle_upscayl = os.environ.get("EDB_BUNDLE_UPSCAYL", "").strip() == "1"
+license_errors = collect_release_license_errors(
+    PROJECT_ROOT,
+    bundle_upscayl=bundle_upscayl,
+    require_release_policy=True,
+    require_locked_environment=True,
+    reject_unlocked_environment=True,
+)
+if license_errors:
+    raise SystemExit("\n".join(f"[release-license] ERROR: {error}" for error in license_errors))
 
 
 def build_update_config() -> tuple[str, dict]:
@@ -48,6 +66,21 @@ def build_update_config() -> tuple[str, dict]:
 generated_update_config, generated_update_config_payload = build_update_config()
 bundle_version = str(generated_update_config_payload.get("version") or "0.1.0")
 bundle_identifier = os.environ.get("EDB_MACOS_BUNDLE_ID", "local.classin.edbmvp").strip() or "local.classin.edbmvp"
+
+
+def build_compliance_metadata() -> str:
+    target = pyinstaller_work_path() / "release_metadata"
+    build_release_metadata(
+        PROJECT_ROOT,
+        target,
+        version=bundle_version,
+        git_commit=os.environ.get("EDB_RELEASE_GIT_COMMIT", ""),
+        strict_environment=True,
+    )
+    return str(target)
+
+
+generated_release_metadata = build_compliance_metadata()
 
 UI_DATAS = [
     ("ui_prototype/index.html", "ui_prototype"),
@@ -68,6 +101,7 @@ ASSET_DATAS = [
 
 APP_CONFIG_DATAS = [
     (generated_update_config, "."),
+    (generated_release_metadata, "release_metadata"),
 ]
 
 SCRIPT_DATAS = [
@@ -75,8 +109,16 @@ SCRIPT_DATAS = [
 ]
 
 OPTIONAL_UPSCAYL_DATAS = [
-    ("resources/upscayl", "resources/upscayl"),
-]
+    *(
+        (f"resources/upscayl/{file_name}", "resources/upscayl")
+        for file_name in UPSCAYL_REQUIRED_COMPLIANCE_FILES
+    ),
+    ("resources/upscayl/models", "resources/upscayl/models"),
+    (
+        f"resources/upscayl/{current_upscayl_platform()}",
+        f"resources/upscayl/{current_upscayl_platform()}",
+    ),
+] if bundle_upscayl else []
 
 HIDDEN_IMPORTS = [
     "preprocess",

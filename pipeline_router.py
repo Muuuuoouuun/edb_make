@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -204,6 +205,9 @@ def _collect_segmentation_diagnostics(page: PageModel) -> dict[str, Any]:
         "max_block_area_ratio": max(block_area_ratios) if block_area_ratios else 0.0,
         "pdf_text_marker_count": pdf_text_marker_count,
         "pdf_text_markers_reliable": pdf_text_markers_reliable,
+        "pdf_passage_range_block_count": int(
+            metadata.get("pdf_passage_range_block_count") or 0
+        ),
     }
 
 
@@ -227,6 +231,11 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
     line_count = 0
     latency_values: list[float] = []
     backend_names: dict[str, int] = {}
+    fallback_reason_counts: dict[str, int] = {}
+    fallback_messages: list[str] = []
+    circuit_open_count = 0
+    retry_after_values: list[float] = []
+    cache_write_skipped_count = 0
     for block in page.blocks:
         backend = str(block.metadata.get("ocr_backend") or "none")
         backend_names[backend] = backend_names.get(backend, 0) + 1
@@ -236,8 +245,55 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
             line_count += len(block.ocr_lines)
         if isinstance(block.metadata.get("ocr_latency_ms"), (int, float)):
             latency_values.append(float(block.metadata["ocr_latency_ms"]))
+        fallback_reason = str(
+            block.metadata.get("ocr_fallback_reason")
+            or block.metadata.get("fallback_reason")
+            or ""
+        ).strip()
+        if fallback_reason:
+            fallback_reason_counts[fallback_reason] = (
+                fallback_reason_counts.get(fallback_reason, 0) + 1
+            )
+        fallback_message = str(block.metadata.get("ocr_fallback_message") or "").strip()
+        if fallback_message and fallback_message not in fallback_messages:
+            fallback_messages.append(fallback_message)
+        if block.metadata.get("ocr_circuit_open"):
+            circuit_open_count += 1
+        if isinstance(block.metadata.get("ocr_retry_after_ms"), (int, float)):
+            retry_after_values.append(float(block.metadata["ocr_retry_after_ms"]))
+        if block.metadata.get("ocr_cache_write_skipped"):
+            cache_write_skipped_count += 1
     text_block_count = len(text_blocks)
     avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else None
+    sorted_latencies = sorted(latency_values)
+    p95_latency = None
+    if sorted_latencies:
+        p95_index = min(
+            len(sorted_latencies) - 1,
+            max(0, math.ceil(len(sorted_latencies) * 0.95) - 1),
+        )
+        p95_latency = sorted_latencies[p95_index]
+    all_text_from_trusted_pdf_markers = (
+        bool(text_blocks) and trusted_pdf_marker_text_blocks == len(text_blocks)
+    )
+    trusted_pdf_passage_ranges = (
+        str(page.metadata.get("segmenter") or "") == "pdf-passage-ranges"
+        and int(page.metadata.get("pdf_passage_range_block_count") or 0) > 0
+        and bool(page.problems)
+        and all(
+            str(problem.metadata.get("passage_role") or "") == "passage_fragment"
+            or bool(problem.metadata.get("supplemental_item"))
+            for problem in page.problems
+        )
+    )
+    if all_text_from_trusted_pdf_markers:
+        semantic_text_route = "trusted_pdf_text_markers"
+    elif fallback_reason_counts or empty_blocks:
+        semantic_text_route = "review_required_image_fallback"
+    else:
+        semantic_text_route = "ocr_text"
+    recognition_timing = page.metadata.get("recognition_timing_ms")
+    recognition_timing = recognition_timing if isinstance(recognition_timing, dict) else {}
     return {
         "ocr_mode": ocr_mode,
         "text_block_count": text_block_count,
@@ -249,9 +305,19 @@ def _collect_ocr_diagnostics(page: PageModel, *, ocr_mode: str) -> dict[str, Any
         "recognized_line_count": line_count,
         "ocr_cache_hit_count": cache_hits,
         "ocr_cache_miss_count": cache_misses,
+        "ocr_cache_write_skipped_count": cache_write_skipped_count,
         "backend_counts": backend_names,
         "backend_latency_ms_avg": (sum(latency_values) / len(latency_values)) if latency_values else None,
-        "all_text_from_trusted_pdf_markers": bool(text_blocks) and trusted_pdf_marker_text_blocks == len(text_blocks),
+        "backend_latency_ms_p95": p95_latency,
+        "backend_latency_ms_max": max(latency_values) if latency_values else None,
+        "processing_time_ms": recognition_timing.get("block_ocr"),
+        "fallback_reason_counts": fallback_reason_counts,
+        "fallback_messages": fallback_messages,
+        "circuit_open_block_count": circuit_open_count,
+        "retry_after_ms_max": max(retry_after_values) if retry_after_values else 0,
+        "semantic_text_route": semantic_text_route,
+        "all_text_from_trusted_pdf_markers": all_text_from_trusted_pdf_markers,
+        "trusted_pdf_passage_ranges": trusted_pdf_passage_ranges,
     }
 
 
@@ -274,6 +340,17 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
     choice_marker_count = sum(1 for block in page.blocks if block.metadata.get("choice_marker"))
     marker_conflict_count = sum(1 for block in page.blocks if block.metadata.get("marker_conflict"))
     fallback_grouping_problem_count = sum(1 for problem in page.problems if problem.metadata.get("fallback_grouping"))
+    supplemental_problem_count = sum(
+        1
+        for problem in page.problems
+        if str(problem.metadata.get("passage_role") or "") == "passage_fragment"
+        or bool(problem.metadata.get("supplemental_item"))
+    )
+    passage_fragment_problem_count = sum(
+        1
+        for problem in page.problems
+        if str(problem.metadata.get("passage_role") or "") == "passage_fragment"
+    )
     fallback_stats_used = bool(fallback_stats.get("used"))
     excess_marker_block_count_blocks = sum(
         1
@@ -294,6 +371,9 @@ def _collect_grouping_diagnostics(page: PageModel) -> dict[str, Any]:
         "grouping_source": metadata.get("grouping_source") or "rule_based",
         "grouping_mode": metadata.get("grouping_mode") or "default",
         "problem_count": len(page.problems),
+        "core_problem_count": max(0, len(page.problems) - supplemental_problem_count),
+        "supplemental_problem_count": supplemental_problem_count,
+        "passage_fragment_problem_count": passage_fragment_problem_count,
         "block_count": len(page.blocks),
         "problem_marker_count": int(
             metadata.get("problem_marker_count")
@@ -339,19 +419,32 @@ def _score_segmentation(diagnostics: dict[str, Any]) -> tuple[float, list[str]]:
     pdf_text_markers_reliable = diagnostics.get("pdf_text_markers_reliable")
     has_pdf_text_markers = segmenter == "pdf-text-markers" and pdf_text_marker_count > 0
     trusted_pdf_text_markers = has_pdf_text_markers and pdf_text_markers_reliable is not False
+    trusted_pdf_passage_ranges = (
+        segmenter == "pdf-passage-ranges"
+        and int(diagnostics.get("pdf_passage_range_block_count") or 0) > 0
+        and not fallback_reasons
+    )
 
-    if block_count <= 1 and not has_pdf_text_markers:
+    if block_count <= 1 and not has_pdf_text_markers and not trusted_pdf_passage_ranges:
         score += 0.48
         reasons.append("sparse_segmentation")
     if pdf_text_markers_reliable is False:
         score += 0.52
         reasons.append("unreliable_pdf_text_markers")
-    if not has_pdf_text_markers and (large_block_ratio >= 0.5 or max_block_area_ratio >= 0.72):
+    if (
+        not has_pdf_text_markers
+        and not trusted_pdf_passage_ranges
+        and (large_block_ratio >= 0.5 or max_block_area_ratio >= 0.72)
+    ):
         score += 0.4
         reasons.append("large_block_dominance")
     if diagnostics.get("document_split_applied"):
         score += 0.12
-    if diagnostics.get("candidate_count") and int(diagnostics.get("candidate_count") or 0) <= 1:
+    if (
+        not trusted_pdf_passage_ranges
+        and diagnostics.get("candidate_count")
+        and int(diagnostics.get("candidate_count") or 0) <= 1
+    ):
         score += 0.18
     if fallback_reasons:
         score += 0.5
@@ -367,7 +460,11 @@ def _score_ocr(diagnostics: dict[str, Any], *, ocr_mode: str) -> tuple[float, li
     empty_text_ratio = float(diagnostics.get("empty_text_ratio") or 0.0)
     avg_confidence = diagnostics.get("avg_confidence")
 
-    if (ocr_mode or "").strip().lower() in {"none", "noop"} and not diagnostics.get("all_text_from_trusted_pdf_markers"):
+    if (
+        (ocr_mode or "").strip().lower() in {"none", "noop"}
+        and not diagnostics.get("all_text_from_trusted_pdf_markers")
+        and not diagnostics.get("trusted_pdf_passage_ranges")
+    ):
         score += 0.34
         reasons.append("ocr_disabled")
     if empty_text_ratio >= 0.5:
@@ -387,6 +484,10 @@ def _score_grouping(diagnostics: dict[str, Any], page: PageModel) -> tuple[float
     score = 0.0
     reasons: list[str] = []
     problem_count = int(diagnostics.get("problem_count") or len(page.problems))
+    core_problem_count = int(diagnostics.get("core_problem_count") or 0)
+    passage_fragment_problem_count = int(
+        diagnostics.get("passage_fragment_problem_count") or 0
+    )
     block_count = int(diagnostics.get("block_count") or len(page.blocks))
     problem_marker_count = int(diagnostics.get("problem_marker_count") or 0)
     marker_conflict_count = int(diagnostics.get("marker_conflict_count") or 0)
@@ -398,21 +499,30 @@ def _score_grouping(diagnostics: dict[str, Any], page: PageModel) -> tuple[float
     pdf_text_prefix_problem_count = int(marker_sources.get("text_prefix") or 0)
     trusted_pdf_marker_grouping = (
         str(diagnostics.get("segmenter") or "") == "pdf-text-markers"
+        and core_problem_count > 0
         and marker_conflict_count == 0
-        and problem_marker_count >= max(problem_count, 1)
-        and (pdf_marker_problem_count + pdf_text_prefix_problem_count) >= max(problem_count, 1)
+        and problem_marker_count >= core_problem_count
+        and (pdf_marker_problem_count + pdf_text_prefix_problem_count) >= core_problem_count
     )
+    trusted_pdf_passage_grouping = (
+        str(diagnostics.get("segmenter") or "") == "pdf-passage-ranges"
+        and core_problem_count == 0
+        and passage_fragment_problem_count > 0
+        and marker_conflict_count == 0
+        and fallback_grouping_problem_count == 0
+    )
+    trusted_pdf_grouping = trusted_pdf_marker_grouping or trusted_pdf_passage_grouping
 
-    if block_count > 1 and problem_marker_count == 0 and not trusted_pdf_marker_grouping:
+    if block_count > 1 and problem_marker_count == 0 and not trusted_pdf_grouping:
         score += 0.45
         reasons.append("no_problem_markers")
     if marker_conflict_count > 0:
         score += 0.48
         reasons.append("marker_conflicts")
-    if fallback_grouping_problem_count > 0 and not trusted_pdf_marker_grouping:
+    if fallback_grouping_problem_count > 0 and not trusted_pdf_grouping:
         score += 0.52
         reasons.append("fallback_grouping")
-    if block_count > 1 and problem_count == block_count and not trusted_pdf_marker_grouping:
+    if block_count > 1 and problem_count == block_count and not trusted_pdf_grouping:
         score += 0.42
         reasons.append("problem_per_block")
     if excess_marker_block_count > 0:

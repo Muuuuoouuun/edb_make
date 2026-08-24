@@ -12,8 +12,13 @@ from layout_template_schema import LayoutTemplate
 from page_repair import build_ai_fallback_config
 import preprocess as preprocess_module
 from preprocess import prepare_source_pages
-from segment import PDF_CHOICE_MARKERS, segment_page
-from structured_schema import Subject
+from segment import (
+    PDF_CHOICE_MARKERS,
+    _build_pdf_passage_range_blocks,
+    _looks_like_pdf_page_header_text_line,
+    segment_page,
+)
+from structured_schema import Box, Subject
 
 
 def _problem_block_ids(problem):
@@ -26,6 +31,63 @@ def _problem_block_ids(problem):
 
 
 class TestPdfTextMarkerSegmentation(unittest.TestCase):
+    def test_passage_text_box_cannot_expand_across_center_divider(self):
+        image = Image.new("RGB", (600, 800), "white")
+        ImageDraw.Draw(image).rectangle((40, 130, 285, 180), outline="black")
+        text_lines = [
+            {
+                "text": "[1~2] 다음 글을 읽고 물음에 답하시오.",
+                "bbox": {"left": 40, "top": 90, "right": 350, "bottom": 116},
+            },
+            {
+                "text": "지문 본문이 중앙선 가까이 이어집니다.",
+                "bbox": {"left": 40, "top": 136, "right": 355, "bottom": 168},
+            },
+        ]
+        right_markers = [
+            {"number": 1, "bbox": {"left": 330, "top": 240, "right": 350, "bottom": 265}},
+            {"number": 2, "bbox": {"left": 330, "top": 420, "right": 350, "bottom": 445}},
+        ]
+
+        blocks = _build_pdf_passage_range_blocks(
+            image,
+            "page-1",
+            text_lines,
+            [(1, [], (40.0, 285.0)), (2, right_markers, (315.0, 560.0))],
+            page_area=float(image.width * image.height),
+            start_index=1,
+        )
+
+        self.assertTrue(blocks)
+        self.assertEqual(294.0, blocks[0].bbox.right)
+        self.assertEqual(300.0, blocks[0].metadata.get("passage_center_divider_x"))
+
+    def test_compact_exam_page_headers_are_not_passage_text(self):
+        top_box = Box(left=330, top=10, width=220, height=30)
+
+        for text in (
+            "고2",
+            "고 2",
+            "고1 11",
+            "영역",
+            "영어영역",
+            "국어 영역",
+            "홀수형",
+            "짝수형",
+            "(언어와 매체)",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(
+                    _looks_like_pdf_page_header_text_line(text, top_box, 1200)
+                )
+        self.assertFalse(
+            _looks_like_pdf_page_header_text_line(
+                "실제 지문 첫 문장입니다.",
+                top_box,
+                1200,
+            )
+        )
+
     def test_pdf_problem_markers_drive_problem_count_without_ocr(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "two_column_exam.pdf"
@@ -61,6 +123,46 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 ai_config=build_ai_fallback_config(mode="off"),
             )
             self.assertEqual(4, len(page_model.problems))
+
+    def test_pdf_problem_markers_keep_leading_sequence_before_question_ten(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "leading_sequence_exam.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            for number in range(1, 13):
+                column = 0 if number <= 6 else 1
+                row = number - 1 if column == 0 else number - 7
+                page.insert_text(
+                    (48 + (column * 282), 90 + (row * 105)),
+                    f"{number}. problem stem",
+                    fontsize=12,
+                )
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.ENGLISH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertEqual(
+                list(range(1, 13)),
+                [
+                    problem.metadata.get("problem_number")
+                    for problem in page_model.problems
+                    if problem.metadata.get("problem_number") is not None
+                ],
+            )
+            self.assertEqual(0, page_model.metadata.get("pdf_nested_enumeration_marker_count"))
 
     def test_pdf_passage_range_block_attaches_to_child_problems_without_ocr(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -115,6 +217,181 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             self.assertEqual("pdf-passage-range", shared_block.metadata.get("segmenter"))
             self.assertLess(shared_block.bbox.top, first_problem_block.bbox.top)
             self.assertLess(shared_block.bbox.bottom, first_problem_block.bbox.top)
+            header_line = next(
+                line
+                for line in prepared.metadata.get("pdf_text_lines") or []
+                if "[1~2]" in str(line.get("text") or "")
+            )
+            self.assertGreaterEqual(
+                shared_block.bbox.right,
+                float(header_line["bbox"]["right"]),
+            )
+            self.assertEqual(1.0, shared_block.metadata.get("passage_text_bounds_score"))
+
+            # AI grouping may annotate the supplemental passage with the first
+            # child question's bbox. Passage-only crop generation must keep the
+            # passage block bounds instead of accepting that unrelated override.
+            passage = passage_fragments[0]
+            passage.metadata["grouping_source"] = "ai_fallback"
+            passage.metadata["bbox_px"] = {
+                "left": first_problem_block.bbox.left,
+                "top": first_problem_block.bbox.top,
+                "width": first_problem_block.bbox.width,
+                "height": first_problem_block.bbox.height,
+            }
+            entries = build_problem_entries(
+                [prepared],
+                [page_model],
+                Path(temp_dir) / "passage_only_out",
+                LayoutTemplate(name="academy-default"),
+                content_target="shared-passages",
+            )
+            self.assertEqual(1, len(entries))
+            self.assertLess(entries[0].bounds.top, first_problem_block.bbox.top)
+            self.assertGreater(entries[0].bounds.height, first_problem_block.bbox.height * 2)
+            passage_quality = passage.metadata["passage_quality"]
+            self.assertNotEqual("poor", passage_quality["grade"])
+            self.assertNotIn("near_blank_passage_crop", passage_quality["warnings"])
+
+    def test_pdf_numeric_interval_without_shared_cue_is_not_a_passage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "numeric_interval.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 82), "1. first question", fontsize=14)
+            page.insert_text((48, 150), "[1~3] x value interval", fontsize=12)
+            page.insert_text((48, 320), "2. second question", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.MATH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertFalse(any(
+                problem.metadata.get("passage_role") == "passage_fragment"
+                for problem in page_model.problems
+            ))
+            self.assertEqual(0, page_model.metadata.get("pdf_passage_range_block_count", 0))
+
+    def test_pdf_multiline_korean_passage_header_is_joined(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "multiline_passage_header.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            # PyMuPDF's built-in CJK font is platform-independent. A macOS
+            # system font path made this fixture fail on Linux CI before the
+            # segmentation code was exercised.
+            font_name = "korea"
+            page.insert_text(
+                (48, 82),
+                "[24~27] (가)와 (나)는 학생이 읽은 글이고,",
+                fontname=font_name,
+                fontsize=11,
+            )
+            page.insert_text(
+                (48, 104),
+                "(다)는 이를 바탕으로 쓴 건의문의 초고이다. 물음에 답하시오.",
+                fontname=font_name,
+                fontsize=11,
+            )
+            page.insert_text((48, 145), "shared passage first line", fontsize=11)
+            page.insert_text((48, 175), "shared passage second line", fontsize=11)
+            page.insert_text((48, 330), "24. first question", fontsize=14)
+            page.insert_text((330, 330), "25. second question", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.KOREAN,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            passage_fragments = [
+                problem
+                for problem in page_model.problems
+                if problem.metadata.get("passage_role") == "passage_fragment"
+            ]
+            self.assertEqual(1, len(passage_fragments))
+            self.assertEqual(
+                {"start": 24, "end": 27},
+                passage_fragments[0].metadata.get("passage_range"),
+            )
+            passage_blocks = [
+                block
+                for block in page_model.blocks
+                if block.metadata.get("segmenter") == "pdf-passage-range"
+            ]
+            self.assertEqual(1, len(passage_blocks))
+            display_title = passage_blocks[0].metadata.get("display_title", "").replace("\xa0", " ")
+            self.assertIn("건의문의 초고", display_title)
+            divider_x = passage_blocks[0].metadata.get("passage_center_divider_x")
+            divider_exclusion = passage_blocks[0].metadata.get(
+                "passage_center_divider_exclusion_px"
+            )
+            self.assertIsNotNone(divider_x)
+            self.assertLessEqual(
+                passage_blocks[0].bbox.right,
+                float(divider_x) - float(divider_exclusion),
+            )
+            # The deliberately long two-line heading reaches into the center
+            # gutter.  Clipping that gutter is intentional, while the retained
+            # text coverage must remain high enough to preserve recognition.
+            self.assertGreater(
+                passage_blocks[0].metadata.get("passage_text_bounds_score"),
+                0.65,
+            )
+
+    def test_pdf_shared_style_header_inside_started_problem_is_not_a_passage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "internal_passage_header.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=600, height=800)
+            page.insert_text((48, 82), "35. first question", fontsize=14)
+            page.insert_text((48, 170), "[35~37] Read the passage and answer the questions.", fontsize=11)
+            page.insert_text((48, 230), "internal excerpt line", fontsize=11)
+            page.insert_text((48, 520), "36. second question", fontsize=14)
+            doc.save(pdf_path)
+            doc.close()
+
+            prepared = prepare_source_pages(
+                pdf_path,
+                pdf_dpi=144,
+                detect_perspective=False,
+                deskew=True,
+                crop_margins=True,
+            )[0]
+            page_model = build_page_model(
+                prepared,
+                subject=Subject.ENGLISH,
+                ocr_mode="none",
+                ai_config=build_ai_fallback_config(mode="off"),
+            )
+
+            self.assertFalse(any(
+                problem.metadata.get("passage_role") == "passage_fragment"
+                for problem in page_model.problems
+            ))
+            self.assertEqual(0, page_model.metadata.get("pdf_passage_range_block_count", 0))
 
     def test_pdf_passage_range_block_can_attach_to_prior_column_child_markers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -229,6 +506,28 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 block for block in shared_blocks if block.metadata.get("column_index") == 2
             )
             self.assertLess(right_fragment.bbox.bottom, first_question.bbox.top)
+            right_passage_lines = [
+                line
+                for line in prepared.metadata.get("pdf_text_lines") or []
+                if "continued passage line" in str(line.get("text") or "")
+            ]
+            last_right_line_bottom = max(
+                float(line["bbox"]["bottom"])
+                for line in right_passage_lines
+            )
+            self.assertGreaterEqual(
+                right_fragment.bbox.bottom,
+                last_right_line_bottom + 3.5,
+            )
+            first_question_marker = next(
+                marker
+                for marker in prepared.metadata.get("pdf_problem_markers") or []
+                if marker.get("number") == 1
+            )
+            self.assertGreaterEqual(
+                float(first_question_marker["bbox"]["top"]) - right_fragment.bbox.bottom,
+                8.0,
+            )
 
             entries = build_problem_entries(
                 [prepared],
@@ -237,8 +536,23 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
                 LayoutTemplate(name="academy-default"),
             )
             passage_entry = next(entry for entry in entries if entry.problem_id == passage.unit_id)
+            self.assertEqual(
+                [1, 2],
+                [segment["column_index"] for segment in passage_entry.source_segments],
+            )
+            self.assertEqual(
+                [prepared.page_id, prepared.page_id],
+                [segment["source_page_id"] for segment in passage_entry.source_segments],
+            )
+            self.assertLess(
+                passage_entry.source_segments[0]["bbox"]["left"],
+                passage_entry.source_segments[1]["bbox"]["left"],
+            )
             with Image.open(passage_entry.crop_path) as stitched:
-                self.assertLess(stitched.width, prepared.image.width * 0.7)
+                # The instruction header can be wider than the passage body;
+                # preserving its full text takes priority over forcing the
+                # stitched asset into the narrower visual column width.
+                self.assertLess(stitched.width, prepared.image.width * 0.8)
                 self.assertGreater(stitched.height, prepared.image.height * 0.75)
 
     def test_pdf_passage_range_without_same_page_questions_is_preserved(self):
@@ -298,6 +612,11 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
             passage_entry = next(
                 entry for entry in entries if entry.problem_id == passages[0].unit_id
             )
+            passage_quality = passages[0].metadata.get("passage_quality")
+            self.assertIsInstance(passage_quality, dict)
+            self.assertGreater(float(passage_quality.get("score_10") or 0), 0)
+            self.assertGreater(int(passage_quality.get("width_px") or 0), 0)
+            self.assertIn(passage_quality.get("grade"), {"good", "review", "poor"})
             shared_blocks = [
                 block
                 for block in page_model.blocks

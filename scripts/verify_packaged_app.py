@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import plistlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,14 +17,28 @@ try:
         REQUIRED_UI_FILES,
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
+        frontend_bundle_source_digest,
     )
+    from .verify_release_licenses import (
+        UPSCAYL_MODEL_NAME,
+        UPSCAYL_REQUIRED_COMPLIANCE_FILES,
+        current_upscayl_platform,
+    )
+    from .build_release_metadata import collect_release_metadata_errors
 except ImportError:  # pragma: no cover - direct script execution
     from verify_frontend_package import (
         REQUIRED_RUNTIME_SOURCE_FILES,
         REQUIRED_UI_FILES,
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
+        frontend_bundle_source_digest,
     )
+    from verify_release_licenses import (
+        UPSCAYL_MODEL_NAME,
+        UPSCAYL_REQUIRED_COMPLIANCE_FILES,
+        current_upscayl_platform,
+    )
+    from build_release_metadata import collect_release_metadata_errors
 
 
 REQUIRED_RUNTIME_FILES = (
@@ -32,6 +48,7 @@ REQUIRED_RUNTIME_FILES = (
 
 REQUIRED_SOURCE_PACKAGE_FILES = (
     "app_server.py",
+    "bug_reporting.py",
     "build_mvp_export.py",
     "build_problem_board_edb.py",
     "build_structured_page_json.py",
@@ -51,6 +68,10 @@ REQUIRED_SOURCE_PACKAGE_FILES = (
     "edb_builder.py",
     "inspect_edb.py",
     "requirements-local.txt",
+    "requirements-release-bootstrap.lock",
+    "requirements-release.lock",
+    "release/dependency_inventory.json",
+    "release/THIRD_PARTY_NOTICES.md",
     "run_local_app.ps1",
 )
 
@@ -321,6 +342,90 @@ def _looks_like_source_package(package_root: Path) -> bool:
     )
 
 
+def _discover_source_root(package_root: Path) -> Path | None:
+    """Find the checkout that owns a local package under (usually) ``dist``."""
+
+    for candidate in (package_root, *package_root.parents):
+        if (
+            (candidate / "ui_prototype" / "app.jsx").is_file()
+            and (candidate / "scripts" / "build_frontend_bundle.mjs").is_file()
+        ):
+            return candidate
+    return None
+
+
+def _collect_source_package_import_errors(package_root: Path) -> list[str]:
+    """Actually import the source fallback entrypoint in an isolated process."""
+
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-c",
+        (
+            "import sys; "
+            "sys.path.insert(0, sys.argv[1]); "
+            "import app_server; "
+            "assert callable(getattr(app_server, 'main', None))"
+        ),
+        str(package_root),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=package_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"source-package app_server import smoke could not run: {exc}"]
+    if completed.returncode == 0:
+        return []
+    detail = (completed.stderr or completed.stdout or "unknown import failure").strip()
+    return [f"source-package app_server import smoke failed: {detail[-2_000:]}"]
+
+
+def _collect_windows_onedir_errors(
+    package_root: Path,
+    resource_root: Path,
+    *,
+    expected_app_name: str = "",
+) -> list[str]:
+    if resource_root != package_root / "_internal":
+        return []
+
+    errors: list[str] = []
+    expected_launcher = package_root / f"{expected_app_name}.exe" if expected_app_name else None
+    launcher_candidates = [
+        path
+        for path in package_root.glob("*.exe")
+        if path.is_file()
+        and not path.name.lower().startswith("unins")
+        and not path.name.lower().endswith("-setup.exe")
+    ]
+    if expected_launcher is not None and not expected_launcher.is_file():
+        errors.append(f"missing Windows packaged launcher: {expected_launcher.name}")
+    elif expected_launcher is None and not launcher_candidates:
+        errors.append("missing Windows packaged launcher executable")
+
+    python_dlls = [path for path in resource_root.glob("python3*.dll") if path.is_file()]
+    if not python_dlls:
+        errors.append("missing Windows packaged Python runtime DLL under _internal")
+
+    for candidate in package_root.iterdir():
+        if not candidate.is_file():
+            continue
+        lowered_name = candidate.name.lower()
+        if lowered_name.endswith((".zip", ".dmg")) or lowered_name.endswith("-setup.exe"):
+            errors.append(
+                "forbidden nested distribution artifact exists at package root: "
+                f"{candidate.name}"
+            )
+    return errors
+
+
 def collect_package_errors(
     package_root: Path,
     *,
@@ -331,6 +436,9 @@ def collect_package_errors(
     expected_download_url: str = "",
     expected_release_notes_url: str = "",
     expected_bundle_id: str = "",
+    expected_git_commit: str = "",
+    source_root: Path | None = None,
+    smoke_source_import: bool = False,
 ) -> list[str]:
     root = package_root.resolve()
     errors: list[str] = []
@@ -351,10 +459,29 @@ def collect_package_errors(
     for rel_path in (*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_FILES):
         if not (resource_root / rel_path).is_file():
             errors.append(f"missing packaged runtime file: {rel_path}")
+    release_metadata_root = resource_root / "release_metadata"
+    errors.extend(
+        f"packaged {error}"
+        for error in collect_release_metadata_errors(
+            release_metadata_root,
+            expected_version=expected_version,
+            expected_git_commit=expected_git_commit,
+        )
+    )
     if _looks_like_source_package(root):
         for rel_path in REQUIRED_SOURCE_PACKAGE_FILES:
             if not (root / rel_path).is_file():
                 errors.append(f"missing source-package runtime file: {rel_path}")
+        if smoke_source_import:
+            errors.extend(_collect_source_package_import_errors(root))
+    else:
+        errors.extend(
+            _collect_windows_onedir_errors(
+                root,
+                resource_root,
+                expected_app_name=expected_app_name,
+            )
+        )
 
     update_config_payloads: dict[str, list[str]] = {}
     for config_path in _packaged_update_config_paths(root, resource_roots):
@@ -466,6 +593,39 @@ def collect_package_errors(
         if (resource_root / rel_path).exists():
             errors.append(f"forbidden packaged source asset exists: {rel_path}")
 
+    packaged_upscayl_root = resource_root / "resources" / "upscayl"
+    if packaged_upscayl_root.exists():
+        if not packaged_upscayl_root.is_dir():
+            errors.append("packaged Upscayl runtime path must be a directory: resources/upscayl")
+        else:
+            for compliance_name in UPSCAYL_REQUIRED_COMPLIANCE_FILES:
+                compliance_path = packaged_upscayl_root / compliance_name
+                if not compliance_path.is_file() or compliance_path.stat().st_size <= 0:
+                    errors.append(
+                        "packaged Upscayl runtime is missing compliance file: "
+                        f"resources/upscayl/{compliance_name}"
+                    )
+            if root.suffix == ".app":
+                platform_name = "mac"
+            elif any(root.glob("*.exe")):
+                platform_name = "win"
+            else:
+                platform_name = current_upscayl_platform()
+            binary_name = "upscayl-bin.exe" if platform_name == "win" else "upscayl-bin"
+            binary_path = packaged_upscayl_root / platform_name / "bin" / binary_name
+            if not binary_path.is_file() or binary_path.stat().st_size <= 0:
+                errors.append(
+                    "packaged Upscayl runtime is missing platform binary: "
+                    f"resources/upscayl/{platform_name}/bin/{binary_name}"
+                )
+            for suffix in ("bin", "param"):
+                model_path = packaged_upscayl_root / "models" / f"{UPSCAYL_MODEL_NAME}.{suffix}"
+                if not model_path.is_file() or model_path.stat().st_size <= 0:
+                    errors.append(
+                        "packaged Upscayl runtime is missing Lite model asset: "
+                        f"resources/upscayl/models/{UPSCAYL_MODEL_NAME}.{suffix}"
+                    )
+
     runtime_scan_roots = [root]
     for candidate in resource_roots:
         if candidate not in runtime_scan_roots:
@@ -498,6 +658,39 @@ def collect_package_errors(
             packaged_bundle_digest = digest_match.group(1)
         if "/* app.jsx */" not in bundle:
             errors.append("packaged app.bundle.js does not include the app.jsx section")
+        if source_root is not None:
+            resolved_source_root = source_root.expanduser().resolve()
+            source_bundle_path = resolved_source_root / "ui_prototype" / "app.bundle.js"
+            if not source_bundle_path.is_file():
+                errors.append(f"current source bundle is missing: {source_bundle_path}")
+            else:
+                try:
+                    source_bundle_hash = hashlib.sha256(source_bundle_path.read_bytes()).hexdigest()
+                    packaged_bundle_hash = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    errors.append(f"could not hash frontend bundle bytes: {exc}")
+                else:
+                    if source_bundle_hash != packaged_bundle_hash:
+                        errors.append(
+                            "packaged app.bundle.js bytes do not match current source bundle: "
+                            f"packaged {packaged_bundle_hash}, source {source_bundle_hash}"
+                        )
+            if packaged_bundle_digest:
+                try:
+                    source_digest = frontend_bundle_source_digest(resolved_source_root)
+                except OSError as exc:
+                    errors.append(f"could not calculate frontend source digest under {resolved_source_root}: {exc}")
+                else:
+                    if source_digest is None:
+                        errors.append(
+                            "could not calculate frontend source digest under "
+                            f"{resolved_source_root}"
+                        )
+                    elif source_digest != packaged_bundle_digest:
+                        errors.append(
+                            "packaged frontend source digest does not match current source: "
+                            f"packaged {packaged_bundle_digest}, source {source_digest}"
+                        )
 
     board_path = resource_root / "ui_prototype" / "board.html"
     if board_path.is_file():
@@ -559,7 +752,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-download-url", default="", help="Expected downloadUrl in packaged metadata")
     parser.add_argument("--expected-release-notes-url", default="", help="Expected releaseNotesUrl in packaged metadata")
     parser.add_argument("--expected-bundle-id", default="", help="Expected macOS CFBundleIdentifier")
+    parser.add_argument("--expected-git-commit", default="", help="Expected full git commit in release provenance")
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=None,
+        help="Checkout root whose current frontend source digest must match the package",
+    )
+    parser.add_argument(
+        "--smoke-source-import",
+        action="store_true",
+        help="Import app_server from a source-package fallback in an isolated process",
+    )
     args = parser.parse_args(argv)
+
+    source_root = args.source_root or _discover_source_root(args.package_root.resolve())
 
     errors = collect_package_errors(
         args.package_root,
@@ -570,6 +777,9 @@ def main(argv: list[str] | None = None) -> int:
         expected_download_url=args.expected_download_url,
         expected_release_notes_url=args.expected_release_notes_url,
         expected_bundle_id=args.expected_bundle_id,
+        expected_git_commit=args.expected_git_commit,
+        source_root=source_root,
+        smoke_source_import=args.smoke_source_import,
     )
     if errors:
         for error in errors:

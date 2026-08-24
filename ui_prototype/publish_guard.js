@@ -59,6 +59,26 @@
     return String(item?.passageRole || item?.passage_role || item?.metadata?.passageRole || item?.metadata?.passage_role || "").trim();
   }
 
+  function riskFlagsFor(item) {
+    const raw = item?.riskFlags
+      || item?.risk_flags
+      || item?.metadata?.riskFlags
+      || item?.metadata?.risk_flags
+      || [];
+    return new Set((Array.isArray(raw) ? raw : []).map(flag => String(flag || "").trim()).filter(Boolean));
+  }
+
+  function isSupplementalProblem(item, index) {
+    if (passageRoleFor(item) === "passage_fragment") return true;
+    if (item?.supplementalItem || item?.supplemental_item || item?.metadata?.supplementalItem || item?.metadata?.supplemental_item) {
+      return true;
+    }
+    if (riskFlagsFor(item).has("marker_document_continuation") || item?.metadata?.marker_document_continuation) {
+      return true;
+    }
+    return problemIdFor(item, index).endsWith("-continuation");
+  }
+
   function numberOrNull(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
@@ -164,11 +184,12 @@
     const groups = new Map();
     (Array.isArray(problems) ? problems : []).forEach((problem, index) => {
       if (!problem || typeof problem !== "object") return;
+      if (riskFlagsFor(problem).has("hwp_text_fallback_problem") || isSupplementalProblem(problem, index)) return;
       const sourcePageId = sourcePageIdFor(problem);
       const bbox = bboxFor(problem);
       if (!sourcePageId || !bbox) return;
       const group = groups.get(sourcePageId) || [];
-      group.push({ problem, bbox, index });
+      group.push({ problem, bbox, index, passageGroupId: passageGroupIdFor(problem) });
       groups.set(sourcePageId, group);
     });
 
@@ -185,6 +206,7 @@
         if (currentArea <= 0) continue;
         for (let nextIndex = index + 1; nextIndex < group.length; nextIndex += 1) {
           const next = group[nextIndex];
+          if (current.passageGroupId && current.passageGroupId === next.passageGroupId) continue;
           const nextArea = next.bbox.width * next.bbox.height;
           if (nextArea <= 0) continue;
           const intersectionWidth = Math.max(0, Math.min(current.bbox.right, next.bbox.right) - Math.max(current.bbox.left, next.bbox.left));
@@ -229,10 +251,8 @@
       const passageGroupId = passageGroupIdFor(problem);
       const sourcePageId = sourcePageIdFor(problem);
       const bbox = bboxFor(problem);
-      const role = passageRoleFor(problem);
-      const problemId = problemIdFor(problem, index);
       if (!passageGroupId || !sourcePageId || !bbox) return;
-      if (role === "passage_fragment" || problemId.endsWith("-continuation")) return;
+      if (riskFlagsFor(problem).has("hwp_text_fallback_problem") || isSupplementalProblem(problem, index)) return;
       const key = `${passageGroupId}\\n${sourcePageId}`;
       const group = groups.get(key) || [];
       group.push({ problem, bbox, index, passageGroupId, sourcePageId });

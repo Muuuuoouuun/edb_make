@@ -30,11 +30,12 @@ class TestWork3PdfProbe(unittest.TestCase):
         draw = ImageDraw.Draw(image)
         for row in range(20):
             draw.text((60, 70 + row * 48), f"scanned passage line {row:02d}", fill="black")
-        with tempfile.NamedTemporaryFile(suffix=".png") as handle:
-            image.save(handle.name)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "scan.png"
+            image.save(image_path)
             document = fitz.open()
             page = document.new_page(width=595, height=842)
-            page.insert_image(page.rect, filename=handle.name)
+            page.insert_image(page.rect, filename=image_path)
             document.save(path)
             document.close()
 

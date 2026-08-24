@@ -30,6 +30,7 @@ from build_structured_page_json import build_page_model
 from edb_builder import ImageRecordSpec, build_edb, build_image_record, write_edb
 from layout_template_schema import build_default_template
 from page_repair import AIFallbackConfig, DEFAULT_GEMINI_REPAIR_MODEL, build_ai_fallback_config as build_page_ai_fallback_config
+from passage_quality import assess_passage_crop_quality
 from placement_engine import build_export_plan
 from preprocess import prepare_source_pages, prepare_source_pages_batch
 from structured_schema import Box, PageModel, ProblemUnit, Subject, save_pages_json
@@ -560,6 +561,28 @@ def build_ui_session(
             problem_number = _coerce_int(problem.metadata.get("problem_number"))
             if problem_number <= 0:
                 problem_number = None
+            if (
+                str(problem.metadata.get("passage_role") or "").strip() == "passage_fragment"
+                and crop_path is not None
+                and crop_path.is_file()
+            ):
+                try:
+                    with Image.open(crop_path) as passage_image:
+                        problem.metadata["passage_quality"] = assess_passage_crop_quality(
+                            passage_image,
+                            source_dpi=page_model.metadata.get("dpi"),
+                            detection_confidence=problem.metadata.get("passage_detection_confidence"),
+                            text_line_count=int(problem.metadata.get("passage_text_line_count") or 0),
+                            text_character_count=int(problem.metadata.get("passage_text_character_count") or 0),
+                            text_bounds_score=problem.metadata.get("passage_text_bounds_score"),
+                        )
+                except (OSError, ValueError, TypeError):
+                    problem.metadata["passage_quality"] = {
+                        "overall_score": 0.0,
+                        "score_10": 0.0,
+                        "grade": "poor",
+                        "warnings": ["passage_crop_quality_unavailable"],
+                    }
             passage_payload = _problem_passage_payload(problem.metadata)
             problems_by_page_id.setdefault(page_model.page_id, []).append(problem.unit_id)
             problems.append(

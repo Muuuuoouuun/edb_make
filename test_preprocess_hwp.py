@@ -2137,7 +2137,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             def fake_run(cmd, check, stdout, stderr, text, timeout, env=None):
                 run_envs.append(dict(env or {}))
-                path_dirs = str((env or {}).get("PATH") or "").split(":")
+                path_dirs = str((env or {}).get("PATH") or "").split(os.pathsep)
                 shim = next((Path(item) / "libreoffice" for item in path_dirs if (Path(item) / "libreoffice").exists()), None)
                 if shim is not None:
                     expected_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -2153,13 +2153,14 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/local/bin/airun-hwp"]], create=True),
+                mock.patch.object(preprocess.sys, "platform", "darwin"),
                 mock.patch.object(preprocess.shutil, "which", side_effect=fake_which),
                 mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
             self.assertEqual(1, len(run_envs))
-            self.assertIn(str(output_dir / "_airun_bin"), run_envs[0]["PATH"].split(":"))
+            self.assertIn(str(output_dir / "_airun_bin"), run_envs[0]["PATH"].split(os.pathsep))
 
     def test_convert_hwp_to_pdf_uses_pyhwp_html_chrome_fallback_after_direct_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

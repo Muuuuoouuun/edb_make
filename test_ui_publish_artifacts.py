@@ -53,11 +53,18 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("publish.canOpenEdbFile", rail)
         self.assertIn("publish.canOpenOutputDir", rail)
         self.assertIn("publish.canOpenClassinHandoff", rail)
-        self.assertIn("downloadPublishSummary(publish)", rail)
+        self.assertIn("onDownloadPublish?.(publish)", rail)
+        self.assertIn("publishDownloadBusy", rail)
         self.assertIn("openPublishedEdb(publish)", rail)
         self.assertIn("openOutputFolder(publish.outputDir)", rail)
         self.assertIn("openClassinHandoff(publish)", rail)
         self.assertIn("publish.classinReviewStatusLabel", rail)
+
+        app = source.split("const handlePublishDownload = async", 1)[1]
+        app = app.split("const reopenLatestAfterPublishError", 1)[0]
+        self.assertIn("await downloadPublishSummary(target)", app)
+        self.assertIn("activateOperationRecovery(error, '다운로드 실패'", app)
+        self.assertIn("downloadInFlightRef.current", app)
 
     def test_app_fallback_publish_summary_normalizes_artifact_availability(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -124,12 +131,23 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("fetch('/api/session/problem-image'", source)
         self.assertIn("fetchProblemImageDownload(item.id, { session: sessionForDownload })", source)
         self.assertIn("result.downloadUrl", source)
-        self.assertIn("result.fileName", source)
+        self.assertIn("triggerServerFileDownload(result.downloadUrl)", source)
         self.assertIn("onExportImages", topbar)
         self.assertIn("exportingImages", topbar)
         self.assertIn("canExportImages", topbar)
         self.assertIn("이미지 다운로드", topbar)
         self.assertIn("현재 선택 단계 기준 PNG ZIP", topbar)
+
+    def test_publish_download_uses_single_server_attachment(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        helper = source.split("async function downloadPublishSummary", 1)[1]
+        helper = helper.split("async function openPublishedEdb", 1)[0]
+
+        self.assertIn("fetch('/api/session/export-edb'", helper)
+        self.assertIn("edbPaths", helper)
+        self.assertIn("triggerServerFileDownload(json.downloadUrl)", helper)
+        self.assertIn("window.location.assign(url)", helper)
+        self.assertNotIn("window.setTimeout", helper)
 
     def test_app_sends_requested_edb_name_for_export_and_publish(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -143,17 +161,17 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("edbName,", export_helper)
         self.assertIn("edbName: edbFileNameFromSessionName(fileName", publish_call)
 
-    def test_app_downloads_each_split_edb_part(self) -> None:
+    def test_app_bundles_split_edb_parts_into_one_download(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         helper = source.split("function downloadPublishSummary", 1)[1]
         helper = helper.split("async function openPublishedEdb", 1)[0]
 
         self.assertIn("Array.isArray(target.edbParts)", helper)
-        self.assertIn(".forEach((part, index)", helper)
-        self.assertIn("window.setTimeout", helper)
-        self.assertIn("index * 150", helper)
+        self.assertIn("fetch('/api/session/export-edb'", helper)
+        self.assertIn("edbPaths", helper)
+        self.assertIn("triggerServerFileDownload(json.downloadUrl)", helper)
+        self.assertNotIn("window.setTimeout", helper)
         self.assertIn("part.edbFileUri || part.edb_file_uri", helper)
-        self.assertIn("part.edbFileName || part.edb_file_name", helper)
 
     def test_served_bundle_uses_split_publish_download_path(self) -> None:
         bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")

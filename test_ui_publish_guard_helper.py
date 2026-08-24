@@ -77,6 +77,65 @@ class TestUiPublishGuardHelper(unittest.TestCase):
             """
         )
 
+    def test_ignores_shared_passage_enclosing_bbox_overlap(self) -> None:
+        run_node(
+            """
+            const { findSourceProblemOverlaps } = require('./ui_prototype/publish_guard.js');
+            const overlaps = findSourceProblemOverlaps([
+              {
+                id: 'page-008-passage-43-45',
+                title: '지문 43~45',
+                sourcePageId: 'page-008',
+                bbox: { left: 0, top: 137.24, width: 1914, height: 1477.57 },
+                passageGroupId: 'page-008-passage-43-45',
+                passageRole: 'passage_fragment',
+              },
+              {
+                id: 'page-008-passage-41-42',
+                title: '지문 41~42',
+                sourcePageId: 'page-008',
+                bbox: { left: 0, top: 141.93, width: 891, height: 1424.16 },
+                passageGroupId: 'page-008-passage-41-42',
+                passageRole: 'passage_fragment',
+              },
+            ]);
+            if (overlaps.length !== 0) {
+              throw new Error(`expected no supplemental passage overlap, got ${JSON.stringify(overlaps)}`);
+            }
+            """
+        )
+
+    def test_routes_same_passage_child_overlap_to_dedicated_guard(self) -> None:
+        run_node(
+            """
+            const {
+              findPassageGroupSourceReuse,
+              findSourceProblemOverlaps,
+            } = require('./ui_prototype/publish_guard.js');
+            const problems = [
+              {
+                id: 'p43',
+                sourcePageId: 'page-008',
+                bbox: { left: 42, top: 120, width: 520, height: 430 },
+                passageGroupId: 'page-008-passage-43-45',
+                passageRole: 'child_question',
+              },
+              {
+                id: 'p44',
+                sourcePageId: 'page-008',
+                bbox: { left: 48, top: 132, width: 510, height: 410 },
+                passageGroupId: 'page-008-passage-43-45',
+                passageRole: 'child_question',
+              },
+            ];
+            const genericIssues = findSourceProblemOverlaps(problems);
+            const passageIssues = findPassageGroupSourceReuse(problems);
+            if (genericIssues.length !== 0 || passageIssues.length !== 1) {
+              throw new Error(`unexpected generic/passage issues ${genericIssues.length}/${passageIssues.length}`);
+            }
+            """
+        )
+
     def test_detects_passage_group_source_reuse_before_publish(self) -> None:
         run_node(
             """

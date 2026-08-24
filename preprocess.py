@@ -15,13 +15,15 @@ import tempfile
 import time
 import unicodedata
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
 from PIL import Image, ImageOps
+
+from passage_detection import parse_shared_passage_range_header
 
 try:
     import fitz  # type: ignore
@@ -47,10 +49,83 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 2
+PDF_NORMALIZED_CACHE_VERSION = 3
 IMAGE_NORMALIZED_CACHE_VERSION = 1
 HWP_NORMALIZED_CACHE_VERSION = 5
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
+
+
+def _configured_path(value: str | Path) -> Path:
+    """Normalize a user-configured path without requiring shell expansion.
+
+    Windows environment variables are commonly copied from registry or shell
+    examples with surrounding quotes and ``%NAME%`` references. Passing those
+    strings directly to :class:`Path` makes an otherwise valid executable look
+    missing.
+    """
+
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    text = re.sub(
+        r"%([^%]+)%",
+        lambda match: os.environ.get(match.group(1), match.group(0)),
+        text,
+    )
+    return Path(os.path.expandvars(os.path.expanduser(text)))
+
+
+def _path_identity(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _windows_application_roots() -> list[Path]:
+    if not sys.platform.startswith("win"):
+        return []
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        raw_root = os.environ.get(env_name, "").strip()
+        if not raw_root:
+            continue
+        root = _configured_path(raw_root)
+        key = _path_identity(root)
+        if key not in seen:
+            roots.append(root)
+            seen.add(key)
+    return roots
+
+
+def _iter_libreoffice_executables() -> list[Path]:
+    raw_candidates: list[str | Path | None] = [
+        shutil.which("soffice"),
+        shutil.which("libreoffice"),
+        Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+    ]
+    for root in _windows_application_roots():
+        raw_candidates.append(root / "LibreOffice" / "program" / "soffice.exe")
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        raw_candidates.append(
+            _configured_path(local_app_data)
+            / "Programs"
+            / "LibreOffice"
+            / "program"
+            / "soffice.exe"
+        )
+
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw_candidate in raw_candidates:
+        if not raw_candidate:
+            continue
+        candidate = _configured_path(raw_candidate)
+        key = _path_identity(candidate)
+        if key in seen or not candidate.is_file():
+            continue
+        candidates.append(candidate)
+        seen.add(key)
+    return candidates
 
 
 @dataclass(slots=True)
@@ -131,12 +206,13 @@ def looks_like_decimal_continuation(text, match):
     return after_dot_index < len(text) and text[after_dot_index].isdigit()
 
 
-def extract_pdf_problem_markers(page, scale):
+def extract_pdf_problem_markers(page, scale, data=None):
     markers = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return markers
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
             continue
@@ -177,12 +253,13 @@ def extract_pdf_problem_markers(page, scale):
     return markers
 
 
-def extract_pdf_text_lines(page, scale):
+def extract_pdf_text_lines(page, scale, data=None):
     lines = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return lines
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return lines
     line_index = 0
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
@@ -219,6 +296,78 @@ def extract_pdf_text_lines(page, scale):
     return lines
 
 
+def bbox_payload(raw_bbox, scale):
+    left, top, right, bottom = [float(value) * scale for value in raw_bbox]
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": max(0.0, right - left),
+        "height": max(0.0, bottom - top),
+    }
+
+
+def extract_pdf_media_regions(page, scale, data=None):
+    regions = []
+    page_area = max(1.0, float(page.rect.width) * float(page.rect.height))
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            data = {}
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict) or block.get("type") != 1:
+            continue
+        bbox = block.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        if width < 12.0 or height < 12.0 or area_ratio < 0.0005 or area_ratio > 0.25:
+            continue
+        regions.append(
+            {
+                "kind": "image",
+                "source": "pdf_image_block",
+                "confidence": 0.99,
+                "bbox": bbox_payload(bbox, scale),
+            }
+        )
+    try:
+        tables = list(page.find_tables().tables)
+    except Exception:
+        tables = []
+    for table in tables:
+        bbox = table.bbox
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        cell_count = int(table.row_count) * int(table.col_count)
+        if (
+            int(table.row_count) < 2
+            or int(table.col_count) < 2
+            or cell_count < 6
+            or width < 24.0
+            or height < 24.0
+            or area_ratio < 0.002
+            or area_ratio > 0.15
+        ):
+            continue
+        regions.append(
+            {
+                "kind": "table",
+                "source": "pymupdf_table",
+                "confidence": 0.94,
+                "row_count": int(table.row_count),
+                "column_count": int(table.col_count),
+                "bbox": bbox_payload(bbox, scale),
+            }
+        )
+    return regions
+
+
 source_path = Path(sys.argv[1])
 target_dir = Path(sys.argv[2])
 dpi = int(sys.argv[3])
@@ -233,6 +382,10 @@ try:
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
         pix.save(out_path.as_posix())
+        try:
+            page_dict = page.get_text("dict")
+        except Exception:
+            page_dict = {}
         pages.append(
             {
                 "page_id": f"{source_path.stem}-page-{page_index + 1:03d}",
@@ -246,8 +399,9 @@ try:
                     "dpi": dpi,
                     "pdf_page_width_pt": float(page.rect.width),
                     "pdf_page_height_pt": float(page.rect.height),
-                    "pdf_problem_markers": extract_pdf_problem_markers(page, scale),
-                    "pdf_text_lines": extract_pdf_text_lines(page, scale),
+                    "pdf_problem_markers": extract_pdf_problem_markers(page, scale, page_dict),
+                    "pdf_text_lines": extract_pdf_text_lines(page, scale, page_dict),
+                    "pdf_media_regions": extract_pdf_media_regions(page, scale, page_dict),
                 },
             }
         )
@@ -278,8 +432,8 @@ def _iter_external_pymupdf_python_candidates() -> list[Path]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
-        key = str(candidate).lower()
+        candidate = _configured_path(raw_candidate)
+        key = _path_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
@@ -368,6 +522,10 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
             pix.save(out_path.as_posix())
+            try:
+                page_dict = page.get_text("dict")
+            except Exception:
+                page_dict = {}
             pages.append(
                 NormalizedPageImage(
                     page_id=f"{source_path.stem}-page-{page_index + 1:03d}",
@@ -381,9 +539,10 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                         "dpi": dpi,
                         "pdf_page_width_pt": float(page.rect.width),
                         "pdf_page_height_pt": float(page.rect.height),
-                        "pdf_problem_markers": _extract_pdf_problem_markers(page, scale),
-                        "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale),
-                        "pdf_text_lines": _extract_pdf_text_lines(page, scale),
+                        "pdf_problem_markers": _extract_pdf_problem_markers(page, scale, page_dict),
+                        "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale, page_dict),
+                        "pdf_text_lines": _extract_pdf_text_lines(page, scale, page_dict),
+                        "pdf_media_regions": _extract_pdf_media_regions(page, scale, page_dict),
                     },
                 )
             )
@@ -404,14 +563,14 @@ def _iter_rhwp_converter_commands() -> list[list[str]]:
     for raw_candidate in rhwp_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
-        candidates.append([key])
+        candidates.append([str(candidate)])
     return candidates
 
 
@@ -431,8 +590,8 @@ def _iter_rhwp_core_node_module_dirs() -> list[Path]:
         for raw_part in str(raw_candidate).split(os.pathsep):
             if not raw_part:
                 continue
-            candidate = Path(raw_part)
-            key = str(candidate)
+            candidate = _configured_path(raw_part)
+            key = _path_identity(candidate)
             if key in seen:
                 continue
             seen.add(key)
@@ -450,22 +609,18 @@ def _iter_rhwp_core_renderer_commands() -> list[list[str]]:
     script_path = Path(__file__).resolve().parent / "scripts" / "render_hwp_with_rhwp_core.mjs"
     if not node or not script_path.exists():
         return []
+    node_path = _configured_path(node)
     return [
-        [str(node), str(script_path), "--node-modules", str(module_dir)]
+        [str(node_path), str(script_path), "--node-modules", str(module_dir)]
         for module_dir in _iter_rhwp_core_node_module_dirs()
     ]
 
 
 def _iter_hwp_pdf_converter_commands() -> list[list[str]]:
-    candidates: list[list[str]] = []
-    for executable in ("soffice", "libreoffice"):
-        resolved = shutil.which(executable)
-        if resolved:
-            candidates.append([resolved, "--headless"])
-
-    mac_soffice = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
-    if mac_soffice.exists():
-        candidates.append([str(mac_soffice), "--headless"])
+    candidates: list[list[str]] = [
+        [str(executable), "--headless"]
+        for executable in _iter_libreoffice_executables()
+    ]
 
     hwp5pdf = shutil.which("hwp5pdf")
     if hwp5pdf:
@@ -482,7 +637,7 @@ def _iter_hwp_pdf_converter_commands() -> list[list[str]]:
     for raw_candidate in airun_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if candidate.exists():
             candidates.append([str(candidate)])
 
@@ -633,13 +788,14 @@ def _iter_hwp_hwpx_converter_commands() -> list[list[str]]:
         base_dir / ".app_runtime" / "hwpilot-src" / "dist" / "src" / "cli" / "main.js",
         base_dir / ".app_runtime" / "hwpilot" / "node_modules" / "hwpilot" / "dist" / "src" / "cli" / "main.js",
     ]
-    node = shutil.which("node")
+    raw_node = shutil.which("node")
+    node = str(_configured_path(raw_node)) if raw_node else None
     commands: list[list[str]] = []
     seen: set[str] = set()
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
         if candidate.suffix.lower() == ".js":
@@ -670,10 +826,10 @@ def _iter_pyhwp_html_converter_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
@@ -695,10 +851,10 @@ def _iter_pyhwp_text_converter_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
@@ -723,14 +879,14 @@ def _iter_kordoc_text_converter_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
-        candidates.append([key])
+        candidates.append([str(candidate)])
     return candidates
 
 
@@ -864,10 +1020,10 @@ def _iter_unhwp_text_converter_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen or not _python_can_import_unhwp(candidate):
             continue
         seen.add(key)
@@ -888,10 +1044,10 @@ def _iter_hwp_hwpx_parser_text_converter_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen or not _python_can_import_hwp_hwpx_parser(candidate):
             continue
         seen.add(key)
@@ -914,10 +1070,10 @@ def _iter_rhwp_python_text_converter_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen or not _python_can_import_rhwp_python(candidate):
             continue
         seen.add(key)
@@ -940,10 +1096,10 @@ def _iter_rhwp_python_renderer_commands() -> list[list[str]]:
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen or not _python_can_import_rhwp_python(candidate):
             continue
         seen.add(key)
@@ -970,16 +1126,33 @@ def _iter_chrome_pdf_commands() -> list[list[str]]:
         shutil.which("google-chrome"),
         shutil.which("chromium"),
         shutil.which("chrome"),
+        shutil.which("msedge"),
     ]
+    for root in _windows_application_roots():
+        raw_candidates.extend(
+            [
+                root / "Google" / "Chrome" / "Application" / "chrome.exe",
+                root / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            ]
+        )
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        local_root = _configured_path(local_app_data)
+        raw_candidates.extend(
+            [
+                local_root / "Programs" / "Google" / "Chrome" / "Application" / "chrome.exe",
+                local_root / "Programs" / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            ]
+        )
     candidates: list[list[str]] = []
     seen: set[str] = set()
     for raw_candidate in raw_candidates:
         if not raw_candidate:
             continue
-        candidate = Path(raw_candidate)
+        candidate = _configured_path(raw_candidate)
         if not candidate.exists():
             continue
-        key = str(candidate)
+        key = _path_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
@@ -1017,16 +1190,24 @@ def _stage_airun_hwp_source(source_path: Path, target_dir: Path) -> Path:
 
 
 def _airun_hwp_env(target_dir: Path) -> dict[str, str] | None:
+    if sys.platform.startswith("win"):
+        # airun-hwp invokes the literal ``libreoffice`` command with
+        # subprocess and shell=False. A .cmd shim is therefore not a valid
+        # CreateProcess target on Windows. Standard Windows LibreOffice
+        # installations are handled earlier by the direct soffice.exe
+        # converter; leave airun's own fallback selection unchanged here.
+        return None
+
     libreoffice = shutil.which("libreoffice")
     if libreoffice:
         return None
 
     soffice = shutil.which("soffice")
-    mac_soffice = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
-    if not soffice and mac_soffice.exists():
-        soffice = str(mac_soffice)
-    if not soffice:
+    installations = _iter_libreoffice_executables() if not soffice else []
+    if not soffice and not installations:
         return None
+    if not soffice:
+        soffice = str(installations[0])
 
     shim_dir = target_dir / "_airun_bin"
     shim_dir.mkdir(parents=True, exist_ok=True)
@@ -1629,22 +1810,10 @@ def _extract_hwp_passage_ranges(
         line = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", raw_line)).strip()
         if not line:
             continue
-        if not any(cue in line.lower() for cue in HWP_TEXT_PASSAGE_RANGE_CUES):
+        header = parse_shared_passage_range_header(line)
+        if header is None:
             continue
-        match = (
-            HWP_TEXT_PASSAGE_RANGE_BRACKET_RE.match(line)
-            or HWP_TEXT_PASSAGE_RANGE_KOREAN_RE.match(line)
-            or HWP_TEXT_PASSAGE_RANGE_COMPACT_RE.match(line)
-        )
-        if not match:
-            continue
-        try:
-            start = int(match.group("start"))
-            end = int(match.group("end"))
-        except (TypeError, ValueError):
-            continue
-        if start <= 0 or end <= start or end - start > 12:
-            continue
+        start, end = header.start, header.end
         key = (start, end)
         if key in seen:
             continue
@@ -2731,8 +2900,12 @@ def _run_hwp_pdf_converter_commands(
                 str(target_dir),
                 str(source_path),
             ]
-        before_mtime_ns = {
-            candidate: candidate.stat().st_mtime_ns
+        before_signature = {
+            candidate: (
+                candidate.stat().st_mtime_ns,
+                candidate.stat().st_size,
+                _file_sha1(candidate),
+            )
             for candidate in _hwp_pdf_candidates(target_dir, source_path)
             if candidate.exists()
         }
@@ -2754,8 +2927,13 @@ def _run_hwp_pdf_converter_commands(
         for pdf_path in _hwp_pdf_candidates(target_dir, source_path):
             if not pdf_path.exists():
                 continue
-            previous_mtime_ns = before_mtime_ns.get(pdf_path)
-            if previous_mtime_ns is None or pdf_path.stat().st_mtime_ns != previous_mtime_ns:
+            current_signature = (
+                pdf_path.stat().st_mtime_ns,
+                pdf_path.stat().st_size,
+                _file_sha1(pdf_path),
+            )
+            previous_signature = before_signature.get(pdf_path)
+            if previous_signature is None or current_signature != previous_signature:
                 return pdf_path, errors
         output = " ".join(
             part for part in [result.stdout.strip(), result.stderr.strip()] if part
@@ -2976,7 +3154,11 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     )
 
 
-def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
+def _extract_pdf_problem_markers(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Extract problem-number line anchors from a PDF text layer.
 
     Coordinates are returned in rendered-pixel space so downstream image
@@ -2985,10 +3167,11 @@ def _extract_pdf_problem_markers(page: Any, scale: float) -> list[dict[str, Any]
     import re
 
     markers: list[dict[str, Any]] = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return markers
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
 
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
@@ -3058,12 +3241,17 @@ def _looks_like_pdf_problem_stem_line(text: str) -> bool:
     return any(phrase in normalized for phrase in stem_phrases)
 
 
-def _extract_pdf_text_stem_markers(page: Any, scale: float) -> list[dict[str, Any]]:
+def _extract_pdf_text_stem_markers(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     markers: list[dict[str, Any]] = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return markers
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
 
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
@@ -3100,12 +3288,17 @@ def _extract_pdf_text_stem_markers(page: Any, scale: float) -> list[dict[str, An
     return markers
 
 
-def _extract_pdf_text_lines(page: Any, scale: float) -> list[dict[str, Any]]:
+def _extract_pdf_text_lines(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return lines
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return lines
 
     line_index = 0
     for block in data.get("blocks") or []:
@@ -3142,6 +3335,91 @@ def _extract_pdf_text_lines(page: Any, scale: float) -> list[dict[str, Any]]:
             line_index += 1
 
     return lines
+
+
+def _pdf_bbox_payload(raw_bbox: Sequence[Any], scale: float) -> dict[str, float]:
+    left, top, right, bottom = [float(value) * scale for value in raw_bbox]
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": max(0.0, right - left),
+        "height": max(0.0, bottom - top),
+    }
+
+
+def _extract_pdf_media_regions(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return only high-confidence embedded images and real table grids.
+
+    Full-page raster scans, tiny layout ornaments, and large bordered passage
+    boxes are deliberately excluded. Those regions must continue through the
+    ordinary Stage-2 chalk conversion instead of restoring the whole page.
+    """
+
+    regions: list[dict[str, Any]] = []
+    page_area = max(1.0, float(page.rect.width) * float(page.rect.height))
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            data = {}
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict) or block.get("type") != 1:
+            continue
+        bbox = block.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        if width < 12.0 or height < 12.0 or area_ratio < 0.0005 or area_ratio > 0.25:
+            continue
+        regions.append(
+            {
+                "kind": "image",
+                "source": "pdf_image_block",
+                "confidence": 0.99,
+                "bbox": _pdf_bbox_payload(bbox, scale),
+            }
+        )
+
+    try:
+        tables = list(page.find_tables().tables)
+    except Exception:
+        tables = []
+    for table in tables:
+        bbox = table.bbox
+        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+        area_ratio = width * height / page_area
+        row_count = int(table.row_count)
+        column_count = int(table.col_count)
+        if (
+            row_count < 2
+            or column_count < 2
+            or row_count * column_count < 6
+            or width < 24.0
+            or height < 24.0
+            or area_ratio < 0.002
+            or area_ratio > 0.15
+        ):
+            continue
+        regions.append(
+            {
+                "kind": "table",
+                "source": "pymupdf_table",
+                "confidence": 0.94,
+                "row_count": row_count,
+                "column_count": column_count,
+                "bbox": _pdf_bbox_payload(bbox, scale),
+            }
+        )
+    return regions
 
 
 def load_image(source: str | Path) -> Image.Image:
@@ -3267,7 +3545,12 @@ def _transform_pdf_text_geometry(
     offset_y: float = 0.0,
     scale: float = 1.0,
 ) -> None:
-    for key in ("pdf_problem_markers", "pdf_text_stem_markers", "pdf_text_lines"):
+    for key in (
+        "pdf_problem_markers",
+        "pdf_text_stem_markers",
+        "pdf_text_lines",
+        "pdf_media_regions",
+    ):
         _transform_pdf_bbox_list(metadata, key, offset_x=offset_x, offset_y=offset_y, scale=scale)
 
 

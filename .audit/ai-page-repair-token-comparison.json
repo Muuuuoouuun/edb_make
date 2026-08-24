@@ -1,0 +1,45 @@
+{
+  "benchmark": "synthetic_10_block_5_problem_page",
+  "model": "gemini-3.6-flash",
+  "before": {
+    "prompt_token_count": 2425,
+    "candidates_token_count": 800,
+    "thoughts_token_count": 1975,
+    "total_token_count": 5200,
+    "problem_start_block_ids": [
+      "p1-stem",
+      "p2-stem",
+      "p3-stem",
+      "p4-stem",
+      "p5-stem"
+    ],
+    "validation_error": null
+  },
+  "after": {
+    "prompt_token_count": 1741,
+    "candidates_token_count": 272,
+    "thoughts_token_count": 0,
+    "total_token_count": 2013,
+    "configured_max_output_tokens": 4096,
+    "effective_max_output_tokens": 752,
+    "prompt_char_count": 1576,
+    "input_block_count": 10,
+    "problem_units_requested": 0,
+    "image_max_dimension": 2048,
+    "problem_start_block_ids": [
+      "p1-stem",
+      "p2-stem",
+      "p3-stem",
+      "p4-stem",
+      "p5-stem"
+    ],
+    "validation_error": null
+  },
+  "reduction": {
+    "prompt_tokens_percent": 28.2,
+    "candidate_tokens_percent": 66.0,
+    "thought_tokens_percent": 100.0,
+    "total_tokens_percent": 61.3
+  },
+  "guardrail": "Synthetic benchmark; validate on anonymized production pages before treating the percentage as a production forecast."
+}

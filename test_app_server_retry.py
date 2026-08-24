@@ -1,7 +1,10 @@
+import copy
+import hashlib
 import json
 import os
 import base64
 import io
+import shutil
 import threading
 import unittest
 import zipfile
@@ -34,6 +37,91 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("", app_server._normalize_update_url("http://example.test/update.json"))
         self.assertEqual("https://example.test/update.json", app_server._normalize_update_url("https://example.test/update.json"))
         self.assertEqual("http://127.0.0.1:9999/update.json", app_server._normalize_update_url("http://127.0.0.1:9999/update.json"))
+
+    def test_frozen_app_home_uses_redirected_windows_documents_directory(self):
+        redirected_documents = Path("C:/Users/test/OneDrive/문서")
+        with (
+            patch.object(app_server.sys, "platform", "win32"),
+            patch.object(
+                app_server,
+                "_windows_documents_directory",
+                return_value=redirected_documents,
+            ),
+            patch.dict(os.environ, {"EDB_APP_HOME": ""}),
+        ):
+            app_home = app_server.default_frozen_app_home()
+
+        self.assertEqual(
+            (redirected_documents / "ClassInEDBMVP").resolve(),
+            app_home,
+        )
+
+    def test_frozen_app_home_expands_environment_override(self):
+        with TemporaryDirectory() as raw_tmp:
+            configured_root = Path(raw_tmp) / "사용자 지정"
+            with patch.dict(
+                os.environ,
+                {
+                    "EDB_APP_HOME": "$EDB_TEST_APP_HOME/runtime",
+                    "EDB_TEST_APP_HOME": str(configured_root),
+                },
+            ):
+                app_home = app_server.default_frozen_app_home()
+
+        self.assertEqual((configured_root / "runtime").resolve(), app_home)
+
+    def test_local_health_check_rejects_another_service(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read():
+                return b'{"ok": true, "app": "another-service"}'
+
+        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+            self.assertFalse(app_server._local_server_is_healthy("127.0.0.1", 8765))
+
+        FakeResponse.read = staticmethod(
+            lambda: json.dumps({"ok": True, "app": app_server.APP_NAME}).encode("utf-8")
+        )
+        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+            self.assertTrue(app_server._local_server_is_healthy("127.0.0.1", 8765))
+
+    @unittest.skipUnless(os.name == "nt", "exclusive bind semantics are Windows-specific")
+    def test_windows_app_server_rejects_shared_port_binding(self):
+        foreign_server = app_server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            app_server.SimpleHTTPRequestHandler,
+        )
+        foreign_address = foreign_server.server_address
+        try:
+            with self.assertRaises(OSError):
+                app_server.AppHTTPServer(
+                    foreign_address,
+                    app_server.AppRequestHandler,
+                )
+        finally:
+            foreign_server.server_close()
+
+        app_http_server = app_server.AppHTTPServer(
+            ("127.0.0.1", 0),
+            app_server.AppRequestHandler,
+        )
+        app_address = app_http_server.server_address
+        try:
+            with self.assertRaises(OSError):
+                app_server.ThreadingHTTPServer(
+                    app_address,
+                    app_server.SimpleHTTPRequestHandler,
+                )
+        finally:
+            app_http_server.server_close()
 
     def test_update_config_normalizes_local_snake_case_overrides(self):
         with TemporaryDirectory() as raw_tmp:
@@ -122,6 +210,210 @@ class TestStaticAssetCaching(unittest.TestCase):
             app_server.sanitize_edb_file_name("", fallback_stem="fallback name"),
         )
 
+    def test_windows_reserved_names_and_unc_file_uris_are_preserved_safely(self):
+        self.assertEqual("_CON.edb", app_server.sanitize_edb_file_name("CON.edb"))
+        self.assertTrue(app_server.sanitize_upload_file_name("NUL.pdf").startswith("_NUL_"))
+        self.assertEqual("_LPT1", app_server.sanitize_output_dir_name("LPT1"))
+        self.assertEqual(
+            Path("//fileserver/shared/Lesson 1.pdf"),
+            app_server.decode_file_reference("file://fileserver/shared/Lesson%201.pdf"),
+        )
+
+    def test_upload_cache_component_reserves_bytes_for_content_digest_prefix(self):
+        safe_name = app_server.sanitize_upload_file_name(("😀" * 100) + ".pdf")
+        target_name = f"{'a' * 64}_{safe_name}"
+        self.assertLessEqual(len(safe_name.encode("utf-8")), app_server.UPLOAD_FILE_NAME_MAX_BYTES)
+        self.assertLessEqual(len(target_name.encode("utf-8")), 255)
+        self.assertTrue(safe_name.endswith(".pdf"))
+
+    def test_path_components_are_utf8_byte_safe_and_preserve_suffixes(self):
+        suffix = "20260824_hash123456"
+        ascii_name = app_server.sanitize_output_dir_name("A" * 250, suffix=suffix)
+        hangul_name = app_server.sanitize_output_dir_name("수학" * 150, suffix=suffix)
+        for name in (ascii_name, hangul_name):
+            self.assertLessEqual(len(name.encode("utf-8")), app_server.SAFE_PATH_COMPONENT_MAX_BYTES)
+            self.assertTrue(name.endswith(f"_{suffix}"))
+            self.assertFalse(name.endswith((".", " ")))
+        self.assertEqual("_CON", app_server.sanitize_output_dir_name("CON"))
+
+    def test_edb_name_reserves_utf8_space_for_extension_and_part_suffix(self):
+        for raw_name in ("A" * 250, "수학" * 150):
+            edb_name = app_server.sanitize_edb_file_name(raw_name)
+            part_name = app_server._edb_part_file_name(edb_name, 9998, 9999)
+            self.assertTrue(edb_name.endswith(".edb"))
+            self.assertTrue(part_name.endswith("_part9999.edb"))
+            self.assertLessEqual(
+                len(part_name.encode("utf-8")),
+                app_server.SAFE_PATH_COMPONENT_MAX_BYTES,
+            )
+
+    def test_preview_and_generation_names_preserve_stamp_with_long_unicode_stem(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        long_source = Path(("긴자료" * 100) + ".pdf")
+        stamp = "20260824_123456_1234567890_stampabcdef"
+        with patch.object(app_server, "_unique_artifact_stamp", return_value=stamp):
+            preview = handler._resolve_preview_output_dir({}, [long_source])
+            budget = app_server._managed_path_component_max_bytes(
+                app_server.default_output_root() / "previews",
+                reserved_descendants=app_server.MANAGED_PREVIEW_RESERVED_DESCENDANTS,
+                max_bytes=app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+            )
+            generation = app_server.sanitize_output_dir_name(
+                long_source.stem,
+                suffix=stamp,
+                max_bytes=budget,
+            )
+        self.assertEqual(preview.name, generation)
+        self.assertTrue(generation.endswith(f"_{stamp}"))
+        self.assertLessEqual(
+            len(generation.encode("utf-8")),
+            app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+        )
+
+    def test_windows_preview_crop_path_stays_below_legacy_max_path_boundary(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        runtime_dir = Path(
+            "C:/Users/Administrator/Documents/ClassInEDBMVP/.app_runtime"
+        )
+        source = Path(
+            ("b17d4d83e8de7ab5479d9c53a1dc00d520a8b28a64e86bc67f8f41c20a8cd38d"
+             "__2026.08.18_23_고1B_539b127457.pdf")
+        )
+        stamp = "20260824_143057_1787549457154522500_67513cd0436a"
+        with (
+            patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+            patch.object(app_server, "_unique_artifact_stamp", return_value=stamp),
+        ):
+            preview = handler._resolve_preview_output_dir({}, [source])
+
+        crop_path = preview / "problem_crops" / "problem_001_df48bf64.png"
+        self.assertLess(len(str(crop_path)), 240)
+        self.assertLessEqual(
+            len(preview.name.encode("utf-8")),
+            app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+        )
+
+    def test_long_onedrive_hangul_root_dynamically_budgets_preview_and_publish(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        runtime_dir = Path(
+            "C:/Users/"
+            + ("LongProfileName" * 3)
+            + "/OneDrive - International Academy/문서/ClassInEDBMVP/.app_runtime"
+        )
+        source = Path(("긴_한글_시험자료" * 80) + ".pdf")
+        stamp = "20260824_143057_1787549457154522500_67513cd0436a"
+        with (
+            patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+            patch.object(app_server, "_unique_artifact_stamp", return_value=stamp),
+        ):
+            preview = handler._resolve_preview_output_dir({}, [source])
+
+        crop_path = preview / app_server.MANAGED_CROP_RELATIVE_PATH
+        future_publish_path = (
+            preview
+            / ".publish-staging"
+            / app_server.MANAGED_GENERATION_PLACEHOLDER
+            / "classin_handoff.json"
+        )
+        self.assertLessEqual(
+            app_server._windows_path_units(crop_path),
+            app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+        )
+        self.assertLessEqual(
+            app_server._windows_path_units(future_publish_path),
+            app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+        )
+        self.assertLess(
+            len(preview.name.encode("utf-8")),
+            app_server.MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+        )
+
+    def test_long_onedrive_root_budgets_upload_digest_and_hangul_filename(self):
+        upload_dir = Path(
+            "C:/Users/"
+            + ("LongProfileName" * 3)
+            + "/OneDrive - International Academy/Documents/ClassInEDBMVP/.app_runtime/uploads"
+        )
+        target_name = app_server._managed_upload_target_name(
+            ("한글자료" * 100) + ".pdf",
+            "a" * 64,
+            upload_dir=upload_dir,
+        )
+        target_path = upload_dir / target_name
+
+        self.assertTrue(target_name.startswith(("a" * 64) + "_"))
+        self.assertTrue(target_name.endswith(".pdf"))
+        self.assertLessEqual(
+            app_server._windows_path_units(target_path),
+            app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+        )
+
+    def test_long_runtime_root_budgets_export_and_publish_descendants(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        runtime_dir = Path(
+            "C:/Users/"
+            + ("LongProfileName" * 2)
+            + "/OneDrive - International Academy/Shared Documents/문서/"
+            "ClassInEDBMVP/.app_runtime"
+        )
+        source = Path(("수학영역_문제지" * 80) + ".pdf")
+        stamps = iter(
+            (
+                "20260824_143057_1787549457154522500_exportstamp",
+                "20260824_143058_1787549457154522501_publishstamp",
+            )
+        )
+        with (
+            patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+            patch.object(app_server, "_unique_artifact_stamp", side_effect=lambda: next(stamps)),
+        ):
+            output_dir = handler._resolve_output_dir({}, [source])
+            export_staging, _export_final = app_server._managed_export_generation_paths(output_dir)
+            edb_name, publish_staging, _publish_final = app_server._managed_publish_artifact_paths(
+                output_dir,
+                "아주 긴 기말고사 EDB 이름" * 40,
+                fallback_stem="classin",
+            )
+
+        paths = (
+            export_staging / app_server.MANAGED_CROP_RELATIVE_PATH,
+            publish_staging / "classin_handoff.json",
+            publish_staging / app_server._edb_part_file_name(edb_name, 9998, 9999),
+        )
+        for path in paths:
+            self.assertLessEqual(
+                app_server._windows_path_units(path),
+                app_server.WINDOWS_MANAGED_PATH_MAX_UNITS,
+                str(path),
+            )
+        self.assertTrue(edb_name.endswith(".edb"))
+
+    def test_export_missing_crop_has_actionable_error_code(self):
+        error = FileNotFoundError(
+            "C:/runtime/outputs/previews/run/problem_crops/problem_001_df48bf64.png"
+        )
+        payload = app_server._export_error_payload(error)
+        self.assertEqual("recognition_asset_missing", payload["code"])
+        self.assertEqual("session_export", payload["operation"])
+        self.assertTrue(payload["retryable"])
+
+    def test_image_generation_names_are_byte_safe_and_distinct_for_long_ids(self):
+        output_dir = Path("/tmp")
+        first = app_server._image_generation_output_path(
+            output_dir,
+            ("긴문항" * 100) + "-first",
+            ("긴모델" * 100) + "_retry",
+        )
+        second = app_server._image_generation_output_path(
+            output_dir,
+            ("긴문항" * 100) + "-second",
+            ("긴모델" * 100) + "_retry",
+        )
+        self.assertNotEqual(first.name, second.name)
+        for path in (first, second):
+            self.assertTrue(path.name.endswith(".png"))
+            self.assertLessEqual(len(path.name.encode("utf-8")), 255)
+
     def test_export_default_output_dir_lives_under_runtime_outputs(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -135,9 +427,128 @@ class TestStaticAssetCaching(unittest.TestCase):
                 relative_output = handler._resolve_output_dir({"outputDir": "../Old Session?"}, [source])
                 absolute_output = handler._resolve_output_dir({"outputDir": str(tmpdir / "custom out")}, [source])
 
-            self.assertEqual((runtime_dir / "outputs" / "Lesson_1").resolve(), default_output)
+            self.assertEqual((runtime_dir / "outputs").resolve(), default_output.parent)
+            self.assertRegex(default_output.name, r"^Lesson_1_[0-9a-f]{10}$")
             self.assertEqual((runtime_dir / "outputs" / "___Old_Session_").resolve(), relative_output)
             self.assertEqual((tmpdir / "custom out").resolve(), absolute_output)
+
+    def test_default_output_dir_distinguishes_same_stem_sources(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            runtime_dir = tmpdir / "runtime"
+            first = tmpdir / "a" / "Lesson.pdf"
+            second = tmpdir / "b" / "Lesson.pdf"
+            first.parent.mkdir()
+            second.parent.mkdir()
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            handler = object.__new__(app_server.AppRequestHandler)
+            with patch.object(app_server, "RUNTIME_DIR", runtime_dir):
+                first_output = handler._resolve_output_dir({}, [first])
+                first_again = handler._resolve_output_dir({}, [first])
+                second_output = handler._resolve_output_dir({}, [second])
+                first.write_bytes(b"changed")
+                changed_output = handler._resolve_output_dir({}, [first])
+            self.assertEqual(first_output, first_again)
+            self.assertNotEqual(first_output, second_output)
+            self.assertNotEqual(first_output, changed_output)
+
+    def test_preview_output_dir_is_unique_and_runtime_isolated(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            runtime_dir = tmpdir / "runtime"
+            source = tmpdir / "Lesson 1.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            requested_output = tmpdir / "active-output"
+            requested_output.mkdir()
+            active_sentinel = requested_output / "active.edb"
+            active_sentinel.write_bytes(b"active-session-bytes")
+            handler = object.__new__(app_server.AppRequestHandler)
+
+            with patch.object(app_server, "RUNTIME_DIR", runtime_dir):
+                first = handler._resolve_preview_output_dir(
+                    {"outputDir": str(requested_output)},
+                    [source],
+                )
+                second = handler._resolve_preview_output_dir(
+                    {"outputDir": str(requested_output)},
+                    [source],
+                )
+
+            preview_root = (runtime_dir / "outputs" / "previews").resolve()
+            self.assertNotEqual(first, second)
+            self.assertEqual(preview_root, first.parent)
+            self.assertEqual(preview_root, second.parent)
+            self.assertNotEqual(requested_output.resolve(), first)
+            self.assertNotEqual(requested_output.resolve(), second)
+            self.assertEqual(b"active-session-bytes", active_sentinel.read_bytes())
+
+    def test_repeated_preview_exports_write_unique_dirs_without_touching_active_output(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            runtime_dir = tmpdir / "runtime"
+            active_output = tmpdir / "active-output"
+            active_output.mkdir()
+            active_sentinel = active_output / "problem_crops" / "problem_001.png"
+            active_sentinel.parent.mkdir()
+            active_sentinel.write_bytes(b"current-session-image")
+            source = tmpdir / "source.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            payload = {
+                "files": [str(source)],
+                "outputDir": str(active_output),
+                "preview": True,
+                "exportEdb": False,
+            }
+            written_output_dirs: list[Path] = []
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                resolved_output = Path(kwargs["output_dir"])
+                resolved_output.mkdir(parents=True, exist_ok=True)
+                (resolved_output / "preview-marker.txt").write_text("preview", encoding="utf-8")
+                written_output_dirs.append(resolved_output)
+                return {
+                    "ok": True,
+                    "ui_session": {
+                        "pages": [],
+                        "problems": [],
+                        "output_dir": str(resolved_output),
+                    },
+                    "output_dir": str(resolved_output),
+                    "ui_session_path": str(resolved_output / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export),
+            ):
+                handler._handle_export()
+                handler._handle_export()
+
+            self.assertEqual(2, len(written_output_dirs))
+            self.assertNotEqual(written_output_dirs[0], written_output_dirs[1])
+            preview_root = (runtime_dir / "outputs" / "previews").resolve()
+            self.assertTrue(all(path.parent == preview_root for path in written_output_dirs))
+            self.assertEqual(b"current-session-image", active_sentinel.read_bytes())
+            self.assertTrue(all(body["ok"] and body["preview"] for body, _kwargs in responses))
+
+    def test_unique_artifact_stamp_does_not_collide(self):
+        stamps = {app_server._unique_artifact_stamp() for _ in range(100)}
+        self.assertEqual(100, len(stamps))
 
     def test_ensure_runtime_dirs_creates_default_output_root(self):
         with TemporaryDirectory() as raw_tmp:
@@ -165,6 +576,32 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertFalse(app_server._request_is_same_origin({
             "Host": "127.0.0.1:8765",
             "Origin": "https://example.test",
+        }))
+
+    def test_loopback_host_guard_blocks_dns_rebinding_hosts(self):
+        for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765", "127.42.1.9:8765"):
+            with self.subTest(host=host):
+                self.assertTrue(app_server._request_host_is_loopback({"Host": host}))
+        for host in ("attacker.example:8765", "127.example:8765", "0.0.0.0:8765", "127.0.0.1@attacker.example"):
+            with self.subTest(host=host):
+                self.assertFalse(app_server._request_host_is_loopback({"Host": host}))
+
+    def test_browser_write_guard_rejects_cross_site_simple_requests(self):
+        self.assertFalse(app_server._browser_write_request_is_trusted({
+            "Host": "127.0.0.1:8765",
+            "Origin": "https://attacker.example",
+            "Content-Type": "text/plain",
+        }))
+        self.assertFalse(app_server._browser_write_request_is_trusted({
+            "Host": "127.0.0.1:8765",
+            "Sec-Fetch-Site": "cross-site",
+        }))
+        self.assertTrue(app_server._browser_write_request_is_trusted({
+            "Host": "127.0.0.1:8765",
+            "Origin": "http://127.0.0.1:8765",
+        }))
+        self.assertTrue(app_server._browser_write_request_is_trusted({
+            "Host": "127.0.0.1:8765",
         }))
 
     def test_update_status_reports_platform_release_from_feed(self):
@@ -202,6 +639,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
                     patch.object(app_server, "BASE_DIR", tmpdir), \
                     patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.object(app_server.platform, "machine", return_value="arm64"), \
                     patch.dict(os.environ, {
                         "EDB_APP_VERSION": "",
                         "EDB_UPDATE_FEED_URL": "",
@@ -223,6 +661,40 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(VALID_ARTIFACT_SHA256, status["latest"]["sha256"])
             self.assertEqual(12345, status["latest"]["sizeBytes"])
             self.assertEqual("https://example.test/ClassInEDBMVP-macOS.dmg", status["downloadUrl"])
+
+    def test_update_status_blocks_incompatible_architecture_download(self):
+        config = {
+            "appId": "ClassInEDBMVP",
+            "appName": "ClassInEDBMVP",
+            "platform": "macos",
+            "version": "0.1.0",
+            "updateFeedUrl": "https://example.test/update.json",
+        }
+        feed = {
+            "appId": "ClassInEDBMVP",
+            "platforms": {
+                "macos": {
+                    "version": "0.2.0",
+                    "downloadUrl": "https://example.test/ClassInEDBMVP-arm64.dmg",
+                    "fileName": "ClassInEDBMVP-arm64.dmg",
+                    "artifactType": "dmg",
+                    "arch": "arm64",
+                    "sha256": VALID_ARTIFACT_SHA256,
+                }
+            },
+        }
+        with (
+            patch.object(app_server, "load_app_update_config", return_value=config),
+            patch.object(app_server, "_fetch_update_feed", return_value=feed),
+            patch.object(app_server.platform, "machine", return_value="x86_64"),
+        ):
+            status = app_server.build_app_update_status()
+
+        self.assertFalse(status["updateAvailable"])
+        self.assertEqual("unsupported_architecture", status["channelStatus"])
+        self.assertEqual("update_architecture_mismatch", status["code"])
+        self.assertEqual("", status["downloadUrl"])
+        self.assertEqual("", status["latest"]["downloadUrl"])
 
     def test_update_status_reports_snake_case_artifact_metadata_from_feed(self):
         with TemporaryDirectory() as raw_tmp:
@@ -934,8 +1406,24 @@ class TestStaticAssetCaching(unittest.TestCase):
         handler.headers = {"Content-Length": str(app_server.MAX_JSON_BODY_BYTES + 1)}
         handler.rfile = io.BytesIO(b"{}")
 
-        with self.assertRaises(json.JSONDecodeError):
+        with self.assertRaises(app_server.RequestPayloadTooLarge):
             handler._read_json_body()
+
+    def test_export_returns_413_with_recovery_steps_for_oversized_payload(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.path = "/api/export"
+        handler.headers = {"Content-Length": str(app_server.MAX_JSON_BODY_BYTES + 1)}
+        handler.rfile = io.BytesIO(b"")
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        handler.do_POST()
+
+        payload, kwargs = responses[0]
+        self.assertEqual(app_server.HTTPStatus.REQUEST_ENTITY_TOO_LARGE, kwargs["status"])
+        self.assertEqual("payload_too_large", payload["code"])
+        self.assertEqual(app_server.MAX_JSON_BODY_BYTES, payload["maxBytes"])
+        self.assertEqual(2, len(payload["recoverySteps"]))
 
     def test_static_responses_disable_browser_cache(self):
         handler = object.__new__(app_server.AppRequestHandler)
@@ -1051,6 +1539,132 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual([app_server.HTTPStatus.OK], statuses)
             self.assertIn(("Content-Length", str(len(payload))), headers)
             self.assertEqual(payload, handler.wfile.getvalue())
+
+    def test_file_preview_query_downscales_image_without_changing_source(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            artifact = tmpdir / "large-preview.png"
+            Image.new("RGB", (2400, 1600), (245, 245, 240)).save(artifact)
+            original_size = artifact.stat().st_size
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "allowed_files": {str(artifact.resolve())},
+            })()
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            app_server._build_file_preview_payload.cache_clear()
+            parsed = app_server.urlparse(
+                f"{app_server.path_to_api_url(artifact)}&previewMax=1024"
+            )
+            handler._handle_file(parsed)
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            response_headers = dict(headers)
+            self.assertEqual("image/jpeg", response_headers["Content-Type"])
+            self.assertEqual("1024", response_headers["X-Preview-Max-Dimension"])
+            with Image.open(io.BytesIO(handler.wfile.getvalue())) as preview:
+                self.assertEqual((1024, 683), preview.size)
+            with Image.open(artifact) as source:
+                self.assertEqual((2400, 1600), source.size)
+            self.assertEqual(original_size, artifact.stat().st_size)
+            app_server._build_file_preview_payload.cache_clear()
+
+    def test_file_download_marks_zip_as_attachment(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            artifact = tmpdir / "수업_EDB_파일.zip"
+            artifact.write_bytes(b"zip-payload")
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "allowed_files": {str(artifact.resolve())},
+            })()
+            statuses = []
+            headers = []
+            handler.wfile = io.BytesIO()
+            handler.send_response = lambda status: statuses.append(status)
+            handler.send_header = lambda name, value: headers.append((name, value))
+            handler.end_headers = lambda: None
+            handler.send_error = lambda status, message=None: statuses.append(status)
+
+            handler._handle_file(app_server.urlparse(app_server.path_to_api_url(artifact)))
+
+            self.assertEqual([app_server.HTTPStatus.OK], statuses)
+            self.assertEqual("application/zip", dict(headers)["Content-Type"])
+            disposition = dict(headers)["Content-Disposition"]
+            self.assertIn("attachment", disposition)
+            self.assertIn("filename*=UTF-8''", disposition)
+
+    def test_file_download_blocks_reset_and_destructive_cleanup_until_stream_finishes(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            export_dir = runtime_dir / "exports"
+            export_dir.mkdir(parents=True)
+            artifact = export_dir / "lesson.edb"
+            payload = b"download-in-progress"
+            artifact.write_bytes(payload)
+            os.utime(artifact, (1, 1))
+            started = threading.Event()
+            release = threading.Event()
+            real_copyfileobj = shutil.copyfileobj
+
+            def blocking_copy(source, destination, length=0):
+                started.set()
+                release.wait(timeout=5)
+                return real_copyfileobj(source, destination, length=length)
+
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "history.json"),
+                patch.object(app_server, "GENERATED_SESSION_JS", runtime_dir / "generated.js"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                server.add_allowed_files({str(artifact.resolve())})
+                handler = object.__new__(app_server.AppRequestHandler)
+                handler.server = server
+                handler.path = app_server.path_to_api_url(artifact)
+                handler.wfile = io.BytesIO()
+                handler.send_response = lambda _status: None
+                handler.send_header = lambda _name, _value: None
+                handler.end_headers = lambda: None
+                handler.send_error = lambda status, message=None: self.fail(f"unexpected {status}: {message}")
+                worker = threading.Thread(target=handler.do_GET)
+                try:
+                    with patch.object(app_server.shutil, "copyfileobj", side_effect=blocking_copy):
+                        worker.start()
+                        self.assertTrue(started.wait(timeout=5))
+                        with self.assertRaises(app_server.ArtifactCleanupBusy):
+                            server.clear_session(
+                                expected_revision=0,
+                                cleanup_artifacts=True,
+                                dry_run=False,
+                                min_age_seconds=0,
+                            )
+                        self.assertTrue(artifact.exists())
+                        release.set()
+                        worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(payload, handler.wfile.getvalue())
+                    cleanup = server.clear_session(
+                        expected_revision=0,
+                        cleanup_artifacts=True,
+                        dry_run=False,
+                        min_age_seconds=0,
+                    )
+                    self.assertEqual(1, cleanup["deletedFileCount"])
+                    self.assertFalse(artifact.exists())
+                finally:
+                    release.set()
+                    worker.join(timeout=5)
+                    server.server_close()
 
     def test_problem_image_download_streams_named_png_attachment(self):
         from PIL import Image
@@ -1310,7 +1924,7 @@ class TestRetryAiResilience(unittest.TestCase):
             for page in session["pages"]:
                 self.assertNotIn("aiRetry", page)
 
-    def test_partial_retry_replaces_only_selected_problem_and_offsets_bbox(self):
+    def test_partial_retry_preserves_selected_problem_identity_order_and_offsets_bbox(self):
         from PIL import Image
 
         with TemporaryDirectory() as raw_tmp:
@@ -1327,6 +1941,8 @@ class TestRetryAiResilience(unittest.TestCase):
                 "problems": [
                     {
                         "id": "p1",
+                        "title": "기존 1번",
+                        "problemNumber": "1",
                         "sourcePageId": "page-1",
                         "bbox": {"left": 20, "top": 30, "width": 80, "height": 90},
                         "riskFlags": ["needs_review"],
@@ -1367,18 +1983,100 @@ class TestRetryAiResilience(unittest.TestCase):
                 )
 
             problem_ids = [problem["id"] for problem in new_session["problems"]]
-            self.assertNotIn("p1", problem_ids)
-            self.assertIn("p2", problem_ids)
-            replacement = next(problem for problem in new_session["problems"] if problem["id"] != "p2")
+            self.assertEqual(["p1", "p2"], problem_ids)
+            replacement = next(problem for problem in new_session["problems"] if problem["id"] == "p1")
+            self.assertEqual("기존 1번", replacement["title"])
+            self.assertEqual("1", replacement["problemNumber"])
             self.assertEqual("page-1", replacement["sourcePageId"])
             self.assertEqual(12.0, replacement["bbox"]["left"])
             self.assertEqual(23.0, replacement["bbox"]["top"])
             self.assertEqual(40.0, replacement["bbox"]["width"])
             self.assertEqual(50.0, replacement["bbox"]["height"])
             self.assertTrue(replacement["aiRetry"]["partial"])
-            self.assertEqual([replacement["id"], "p2"], new_session["pages"][0]["problemIds"])
+            self.assertTrue(replacement["aiRetry"]["preservedProblemIdentity"])
+            self.assertEqual(["p1", "p2"], new_session["pages"][0]["problemIds"])
             self.assertEqual("applied", new_session["ai_retry_summary"][0]["status"])
             self.assertTrue(new_session["ai_retry_summary"][0]["partial"])
+            self.assertTrue(new_session["ai_retry_summary"][0]["preservedProblemIdentity"])
+
+    def test_partial_retry_collapses_multiple_candidates_into_one_preserved_problem(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page-1.png"
+            Image.new("RGB", (240, 180), "white").save(page_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1", "p2"],
+                }],
+                "problems": [
+                    {
+                        "id": "p1",
+                        "title": "기존 1번",
+                        "problemNumber": "1",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 20, "top": 30, "width": 80, "height": 90},
+                        "riskFlags": ["needs_review"],
+                    },
+                    {
+                        "id": "p2",
+                        "title": "기존 2번",
+                        "problemNumber": "2",
+                        "sourcePageId": "page-1",
+                        "bbox": {"left": 120, "top": 30, "width": 80, "height": 90},
+                        "riskFlags": [],
+                    },
+                ],
+                "ai_fallback": {"provider": "gemini"},
+            }
+
+            def fake_partial_export(_source_path, **_kwargs):
+                return {
+                    "ui_session": {
+                        "pages": [{"id": "partial", "riskFlags": []}],
+                        "problems": [
+                            {
+                                "id": "partial-p1",
+                                "sourcePageId": "partial",
+                                "bbox": {"left": 2, "top": 3, "width": 40, "height": 50},
+                                "riskFlags": [],
+                            },
+                            {
+                                "id": "partial-p2",
+                                "sourcePageId": "partial",
+                                "bbox": {"left": 44, "top": 6, "width": 20, "height": 30},
+                                "riskFlags": [],
+                            },
+                        ],
+                    }
+                }
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_partial_export):
+                new_session = app_server._mutate_retry_ai(
+                    session,
+                    {
+                        "partial": True,
+                        "problemIds": ["p1"],
+                        "cropBox": {"left": 10, "top": 20, "width": 80, "height": 90},
+                    },
+                )
+
+            self.assertEqual(["p1", "p2"], [problem["id"] for problem in new_session["problems"]])
+            self.assertEqual(["p1", "p2"], new_session["pages"][0]["problemIds"])
+            replacement = new_session["problems"][0]
+            self.assertEqual({"left": 12.0, "top": 23.0, "width": 62.0, "height": 50.0}, replacement["bbox"])
+            self.assertEqual("기존 1번", replacement["title"])
+            self.assertEqual("1", replacement["problemNumber"])
+            self.assertEqual(2, replacement["aiRetry"]["detectedProblemCount"])
+            self.assertTrue(replacement["aiRetry"]["collapsedMultipleCandidates"])
+            self.assertIn("ai_partial_retry_multiple_candidates", replacement["riskFlags"])
+            self.assertEqual("check_needed", replacement["reviewStatus"])
+            self.assertEqual(1, new_session["ai_retry_summary"][0]["replacedProblemCount"])
+            self.assertEqual(2, new_session["ai_retry_summary"][0]["detectedProblemCount"])
 
 
 class TestSessionExcludeMutation(unittest.TestCase):
@@ -1473,6 +2171,135 @@ class TestSessionExcludeMutation(unittest.TestCase):
         self.assertEqual("page-1", rewritten["problems"][0]["sourcePageId"])
 
 
+class TestSessionConfirmMutation(unittest.TestCase):
+    def test_confirm_clears_problem_and_completed_page_review_state(self):
+        session = {
+            "pages": [{
+                "id": "page-1",
+                "problemIds": ["p1", "p2"],
+                "riskFlags": ["needs_review"],
+                "reviewStatus": "check_needed",
+            }],
+            "problems": [
+                {
+                    "id": "p1",
+                    "riskFlags": ["parse_failed"],
+                    "reviewStatus": "failed",
+                    "parseFailed": True,
+                },
+                {"id": "p2", "riskFlags": [], "reviewStatus": "normal"},
+            ],
+        }
+
+        updated = app_server._mutate_confirm(session, ["p1"])
+
+        self.assertIs(updated, session)
+        self.assertEqual([], updated["problems"][0]["riskFlags"])
+        self.assertEqual([], updated["problems"][0]["risk_flags"])
+        self.assertEqual("normal", updated["problems"][0]["reviewStatus"])
+        self.assertEqual("normal", updated["problems"][0]["review_status"])
+        self.assertFalse(updated["problems"][0]["parseFailed"])
+        self.assertFalse(updated["problems"][0]["parse_failed"])
+        self.assertEqual([], updated["pages"][0]["riskFlags"])
+        self.assertEqual("normal", updated["pages"][0]["reviewStatus"])
+
+    def test_confirm_rejects_unknown_problem(self):
+        with self.assertRaisesRegex(ValueError, "problem not found: missing"):
+            app_server._mutate_confirm({"problems": [{"id": "p1"}]}, ["missing"])
+
+    def test_confirm_page_resolves_empty_page_and_preserves_review_decision(self):
+        session = {
+            "pages": [{
+                "id": "page-3",
+                "problemIds": [],
+                "riskFlags": [],
+                "reviewStatus": "failed",
+            }],
+            "problems": [],
+        }
+
+        updated = app_server._mutate_confirm_pages(session, ["page-3"])
+
+        page = updated["pages"][0]
+        self.assertEqual("normal", page["reviewStatus"])
+        self.assertEqual("normal", page["review_status"])
+        self.assertEqual([], page["riskFlags"])
+        self.assertTrue(page["pageReviewConfirmed"])
+        self.assertTrue(page["page_review_confirmed"])
+        self.assertEqual("no_passage", page["pageReviewDecision"])
+        self.assertEqual("no_passage", page["page_review_decision"])
+
+    def test_confirm_page_rejects_page_that_still_has_items(self):
+        session = {
+            "pages": [{"id": "page-1", "problemIds": ["p1"]}],
+            "problems": [{"id": "p1"}],
+        }
+
+        with self.assertRaisesRegex(ValueError, "page still has review items: page-1"):
+            app_server._mutate_confirm_pages(session, ["page-1"])
+
+    def test_review_summary_counts_unconfirmed_failed_empty_page(self):
+        session = {
+            "pages": [{"id": "page-3", "problemIds": [], "reviewStatus": "failed"}],
+            "problems": [],
+        }
+
+        self.assertEqual(1, app_server._session_review_summary(session)["actionableNeedsReviewCount"])
+
+        app_server._mutate_confirm_pages(session, ["page-3"])
+        self.assertEqual(0, app_server._session_review_summary(session)["actionableNeedsReviewCount"])
+
+
+class TestSessionClassifyMutation(unittest.TestCase):
+    def test_classify_round_trip_uses_only_separate_shared_passage_role(self):
+        session = {
+            "pages": [{"id": "page-1", "problemIds": ["p1"]}],
+            "problems": [{"id": "p1", "sourcePageId": "page-1", "metadata": {}}],
+        }
+
+        updated = app_server._mutate_classify(session, "p1", "shared-passage")
+        passage = updated["problems"][0]
+        self.assertEqual("passage_fragment", passage["passageRole"])
+        self.assertTrue(passage["supplementalItem"])
+        self.assertEqual("manual-passage-p1", passage["passageGroupId"])
+        self.assertEqual("passage_fragment", passage["metadata"]["passage_role"])
+
+        updated = app_server._mutate_classify(session, "p1", "question")
+        question = updated["problems"][0]
+        self.assertNotIn("passageRole", question)
+        self.assertNotIn("passageGroupId", question)
+        self.assertFalse(question["supplementalItem"])
+        self.assertEqual("manual", question["classificationSource"])
+
+    def test_classify_rejects_unsupported_value(self):
+        with self.assertRaisesRegex(ValueError, "classification must be"):
+            app_server._mutate_classify({"problems": [{"id": "p1"}]}, "p1", "table")
+
+    def test_classify_many_updates_each_selected_problem(self):
+        session = {
+            "pages": [{"id": "page-1", "problemIds": ["p1", "p2", "p3"]}],
+            "problems": [
+                {"id": "p1", "sourcePageId": "page-1", "metadata": {}},
+                {"id": "p2", "sourcePageId": "page-1", "metadata": {}},
+                {"id": "p3", "sourcePageId": "page-1", "metadata": {}},
+            ],
+        }
+
+        updated = app_server._mutate_classify_many(
+            session,
+            ["p1", "p2", "p1"],
+            "shared-passage",
+        )
+        by_id = {problem["id"]: problem for problem in updated["problems"]}
+        self.assertEqual("passage_fragment", by_id["p1"]["passageRole"])
+        self.assertEqual("passage_fragment", by_id["p2"]["passageRole"])
+        self.assertNotIn("passageRole", by_id["p3"])
+
+    def test_classify_many_rejects_empty_ids(self):
+        with self.assertRaisesRegex(ValueError, "non-empty list"):
+            app_server._mutate_classify_many({"problems": [{"id": "p1"}]}, [], "question")
+
+
 class TestSessionCropMutation(unittest.TestCase):
     def test_bbox_crop_wraps_fractional_edges_outward(self):
         from PIL import Image
@@ -1528,7 +2355,8 @@ class TestSessionCropMutation(unittest.TestCase):
             crop_path = app_server._resolve_session_path(problem["imagePath"])
             self.assertIsNotNone(crop_path)
             self.assertTrue(crop_path.exists())
-            self.assertEqual((140, 84), Image.open(crop_path).size)
+            with Image.open(crop_path) as crop_image:
+                self.assertEqual((140, 84), crop_image.size)
 
             reset_session = app_server._mutate_crop(cropped_session, "p1", {"leftRatio": 0})
             reset_problem = reset_session["problems"][0]
@@ -1579,7 +2407,8 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual(-0.2, problem["manualCrop"]["rightRatio"])
             crop_path = app_server._resolve_session_path(problem["imagePath"])
             self.assertIsNotNone(crop_path)
-            self.assertEqual((130, 104), Image.open(crop_path).size)
+            with Image.open(crop_path) as crop_image:
+                self.assertEqual((130, 104), crop_image.size)
 
     def test_manual_crop_accepts_absolute_crop_box(self):
         from PIL import Image
@@ -1620,7 +2449,65 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertAlmostEqual(-0.375, problem["manualCrop"]["bottomRatio"])
             crop_path = app_server._resolve_session_path(problem["imagePath"])
             self.assertIsNotNone(crop_path)
-            self.assertEqual((150, 120), Image.open(crop_path).size)
+            with Image.open(crop_path) as crop_image:
+                self.assertEqual((150, 120), crop_image.size)
+
+    def test_absolute_crop_preserves_problem_identity_number_order_and_neighbor(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            first_path = tmpdir / "problem-1.png"
+            second_path = tmpdir / "problem-2.png"
+            Image.new("RGB", (400, 300), "white").save(page_path)
+            Image.new("RGB", (120, 90), "white").save(first_path)
+            Image.new("RGB", (100, 70), "white").save(second_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["p1", "p2"],
+                }],
+                "problems": [
+                    {
+                        "id": "p1",
+                        "problemNumber": 12,
+                        "sourcePageId": "page-1",
+                        "imagePath": first_path.resolve().as_uri(),
+                        "boardRenderPath": first_path.resolve().as_uri(),
+                        "bbox": {"left": 40, "top": 30, "width": 120, "height": 90},
+                        "placementXRatio": 0.25,
+                        "placementYRatio": 0.1,
+                        "placementScaleRatio": 1.15,
+                    },
+                    {
+                        "id": "p2",
+                        "problemNumber": 13,
+                        "sourcePageId": "page-1",
+                        "imagePath": second_path.resolve().as_uri(),
+                        "boardRenderPath": second_path.resolve().as_uri(),
+                        "bbox": {"left": 200, "top": 160, "width": 100, "height": 70},
+                    },
+                ],
+            }
+            neighbor_before = copy.deepcopy(session["problems"][1])
+
+            result = app_server._mutate_crop(
+                session,
+                "p1",
+                {"cropBox": {"left": 25, "top": 20, "width": 160, "height": 110}},
+            )
+
+            self.assertEqual(["p1", "p2"], [problem["id"] for problem in result["problems"]])
+            self.assertEqual(["p1", "p2"], result["pages"][0]["problemIds"])
+            edited = result["problems"][0]
+            self.assertEqual(12, edited["problemNumber"])
+            self.assertEqual(0.25, edited["placementXRatio"])
+            self.assertEqual(0.1, edited["placementYRatio"])
+            self.assertEqual(1.15, edited["placementScaleRatio"])
+            self.assertEqual(neighbor_before, result["problems"][1])
 
     def test_manual_crop_materializes_missing_problem_image_from_source_page(self):
         from PIL import Image
@@ -1709,6 +2596,370 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual("s2", problem["step"])
             with Image.open(board_path) as board_image:
                 self.assertIn("A", board_image.getbands())
+
+    def test_stitch_crop_combines_ordered_regions_across_pages_into_one_passage(self):
+        from PIL import Image, ImageDraw
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            first_page_path = tmpdir / "page-1.png"
+            second_page_path = tmpdir / "page-2.png"
+            original_path = tmpdir / "passage.png"
+            first_page = Image.new("RGB", (180, 140), "white")
+            second_page = Image.new("RGB", (180, 140), "white")
+            ImageDraw.Draw(first_page).rectangle((20, 30, 120, 100), fill="black")
+            ImageDraw.Draw(second_page).rectangle((40, 15, 150, 85), fill="black")
+            first_page.save(first_page_path)
+            second_page.save(second_page_path)
+            first_page.crop((20, 30, 121, 101)).save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [
+                    {
+                        "id": "page-1",
+                        "sourceImageUri": first_page_path.resolve().as_uri(),
+                        "problemIds": ["p0", "passage", "p1"],
+                    },
+                    {
+                        "id": "page-2",
+                        "sourceImageUri": second_page_path.resolve().as_uri(),
+                        "problemIds": ["p2"],
+                    },
+                    {"id": "page-3", "problemIds": ["passage", "p3"]},
+                ],
+                "problems": [{
+                    "id": "passage",
+                    "title": "지문 1~3",
+                    "problemNumber": 1,
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 20, "top": 30, "width": 101, "height": 71},
+                    "passageRole": "passage_fragment",
+                    "passageGroupId": "passage-1-3",
+                    "riskFlags": ["passage_cross_page_merge_check"],
+                }],
+            }
+
+            updated = app_server._mutate_stitch_crop(
+                session,
+                "passage",
+                [
+                    {
+                        "pageId": "page-2",
+                        "order": 1,
+                        "bbox": {"left": 40, "top": 15, "width": 111, "height": 71},
+                    },
+                    {
+                        "pageId": "page-1",
+                        "order": 2,
+                        "bbox": {"left": 20, "top": 30, "width": 101, "height": 71},
+                    },
+                ],
+            )
+
+            problem = updated["problems"][0]
+            self.assertEqual("passage", problem["id"])
+            self.assertEqual(1, problem["problemNumber"])
+            self.assertEqual("page-2", problem["sourcePageId"])
+            self.assertEqual(
+                ["page-2", "page-1"],
+                [segment["sourcePageId"] for segment in problem["sourceSegments"]],
+            )
+            self.assertEqual([1, 2], [segment["fragmentIndex"] for segment in problem["sourceSegments"]])
+            self.assertTrue(problem["passageFragmentsMerged"])
+            self.assertTrue(problem["manualStitch"])
+            self.assertEqual(1, problem["manualStitchDiagnostics"]["join_count"])
+            self.assertEqual(1, problem["manualStitchDiagnostics"]["trimmedSourceFragmentCount"])
+            self.assertEqual([], problem["riskFlags"])
+            self.assertEqual("normal", problem["reviewStatus"])
+            self.assertEqual(["p0", "passage", "p1"], updated["pages"][0]["problemIds"])
+            self.assertEqual(["p2", "passage"], updated["pages"][1]["problemIds"])
+            self.assertEqual(["p3"], updated["pages"][2]["problemIds"])
+            stitched_path = app_server._resolve_session_path(problem["imagePath"])
+            self.assertIsNotNone(stitched_path)
+            self.assertTrue(stitched_path.exists())
+            with Image.open(stitched_path) as stitched:
+                self.assertGreater(stitched.height, 71)
+
+    def test_stitch_crop_rejects_ambiguous_or_duplicate_regions(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 140), "white").save(page_path)
+            Image.new("RGB", (80, 60), "white").save(original_path)
+
+            def make_session():
+                return {
+                    "output_dir": str(tmpdir / "out"),
+                    "pages": [{
+                        "id": "page-1",
+                        "sourceImageUri": page_path.resolve().as_uri(),
+                        "problemIds": ["passage"],
+                    }],
+                    "problems": [{
+                        "id": "passage",
+                        "sourcePageId": "page-1",
+                        "imagePath": original_path.resolve().as_uri(),
+                        "boardRenderPath": original_path.resolve().as_uri(),
+                        "bbox": {"left": 20, "top": 20, "width": 80, "height": 60},
+                        "passageRole": "passage_fragment",
+                    }],
+                }
+
+            with self.assertRaisesRegex(ValueError, "unique order"):
+                app_server._mutate_stitch_crop(make_session(), "passage", [
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 70, "height": 50}},
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 90, "top": 10, "width": 70, "height": 50}},
+                ])
+
+            with self.assertRaisesRegex(ValueError, "duplicate regions"):
+                app_server._mutate_stitch_crop(make_session(), "passage", [
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 70, "height": 50}},
+                    {"pageId": "page-1", "order": 2, "bbox": {"left": 10, "top": 10, "width": 70, "height": 50}},
+                ])
+
+            with self.assertRaisesRegex(ValueError, "too small"):
+                app_server._mutate_stitch_crop(make_session(), "passage", [
+                    {"pageId": "page-1", "order": 1, "bbox": {"left": 10, "top": 10, "width": 7, "height": 50}},
+                ])
+
+    def test_stitch_crop_clamps_manual_regions_away_from_center_divider(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 140), "white").save(page_path)
+            Image.new("RGB", (80, 60), "white").save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["passage"],
+                }],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 20, "top": 20, "width": 80, "height": 60},
+                    "passageRole": "passage_fragment",
+                }],
+            }
+            original_lazy_call = app_server._lazy_call
+
+            def fake_lazy_call(module_name, attr_name, *args, **kwargs):
+                if module_name == "segment" and attr_name == "detect_pdf_visual_column_divider_x":
+                    return 90.0
+                return original_lazy_call(module_name, attr_name, *args, **kwargs)
+
+            with patch.object(app_server, "_lazy_call", side_effect=fake_lazy_call):
+                updated = app_server._mutate_stitch_crop(session, "passage", [
+                    {
+                        "pageId": "page-1",
+                        "order": 1,
+                        "columnIndex": 1,
+                        "bbox": {"left": 20, "top": 10, "width": 85, "height": 70},
+                    },
+                    {
+                        "pageId": "page-1",
+                        "order": 2,
+                        "columnIndex": 2,
+                        "bbox": {"left": 75, "top": 80, "width": 85, "height": 50},
+                    },
+                ])
+
+            segments = updated["problems"][0]["sourceSegments"]
+            self.assertEqual([1, 2], [segment["columnIndex"] for segment in segments])
+            self.assertEqual(84.0, segments[0]["bbox"]["left"] + segments[0]["bbox"]["width"])
+            self.assertEqual(96.0, segments[1]["bbox"]["left"])
+
+    def test_stitch_crop_corrects_legacy_left_hint_for_right_column_region(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 160), "white").save(page_path)
+            Image.new("RGB", (60, 60), "white").save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["passage"],
+                }],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 100, "top": 20, "width": 60, "height": 60},
+                    "passageRole": "passage_fragment",
+                }],
+            }
+            original_lazy_call = app_server._lazy_call
+
+            def fake_lazy_call(module_name, attr_name, *args, **kwargs):
+                if module_name == "segment" and attr_name == "detect_pdf_visual_column_divider_x":
+                    return 90.0
+                return original_lazy_call(module_name, attr_name, *args, **kwargs)
+
+            with patch.object(app_server, "_lazy_call", side_effect=fake_lazy_call):
+                updated = app_server._mutate_stitch_crop(session, "passage", [{
+                    "pageId": "page-1",
+                    "order": 1,
+                    "columnIndex": 1,
+                    "bbox": {"left": 100, "top": 20, "width": 60, "height": 60},
+                }])
+
+            segment = updated["problems"][0]["sourceSegments"][0]
+            self.assertEqual(2, segment["columnIndex"])
+            self.assertGreaterEqual(segment["bbox"]["left"], 96.0)
+
+    def test_stitch_crop_persists_effective_bounds_after_join_cleanup(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            page_path = tmpdir / "page.png"
+            original_path = tmpdir / "passage.png"
+            Image.new("RGB", (180, 220), "white").save(page_path)
+            Image.new("RGB", (60, 80), "white").save(original_path)
+            session = {
+                "output_dir": str(tmpdir / "out"),
+                "pages": [{
+                    "id": "page-1",
+                    "sourceImageUri": page_path.resolve().as_uri(),
+                    "problemIds": ["passage"],
+                }],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "imagePath": original_path.resolve().as_uri(),
+                    "boardRenderPath": original_path.resolve().as_uri(),
+                    "bbox": {"left": 20, "top": 20, "width": 60, "height": 80},
+                    "passageRole": "passage_fragment",
+                }],
+            }
+
+            def fake_stitch(_paths, output_path, **kwargs):
+                kwargs["source_crop_boxes_output"].extend([
+                    (0, 0, 60, 50),
+                    (0, 12, 60, 60),
+                ])
+                kwargs["stitch_diagnostics_output"].update({
+                    "join_count": 1,
+                    "max_join_blank_band_px": 4,
+                })
+                Image.new("RGB", (60, 114), "white").save(output_path)
+                return 60, 114
+
+            with patch.object(app_server, "_stitch_passage_image_files", side_effect=fake_stitch):
+                updated = app_server._mutate_stitch_crop(session, "passage", [
+                    {
+                        "pageId": "page-1",
+                        "order": 1,
+                        "bbox": {"left": 20, "top": 20, "width": 60, "height": 80},
+                    },
+                    {
+                        "pageId": "page-1",
+                        "order": 2,
+                        "bbox": {"left": 100, "top": 100, "width": 60, "height": 80},
+                    },
+                ])
+
+            problem = updated["problems"][0]
+            first, second = problem["sourceSegments"]
+            self.assertEqual({"left": 20, "top": 20, "width": 60, "height": 50}, first["bbox"])
+            self.assertEqual({"left": 100, "top": 112, "width": 60, "height": 48}, second["bbox"])
+            self.assertEqual(2, problem["manualStitchDiagnostics"]["trimmedSourceFragmentCount"])
+            self.assertEqual(4, problem["manualStitchDiagnostics"]["max_join_blank_band_px"])
+
+    def test_http_session_recovers_legacy_passage_source_segments_from_pages_json(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            pages_json_path = tmpdir / "pages.json"
+            pages_json_path.write_text(json.dumps([
+                {
+                    "page_id": "page-1",
+                    "blocks": [
+                        {
+                            "block_id": "right-fragment",
+                            "reading_order": 2,
+                            "bbox": {"left": 100, "top": 10, "width": 80, "height": 90},
+                            "metadata": {
+                                "segmenter": "pdf-passage-range",
+                                "passage_range": {"start": 4, "end": 9},
+                                "passage_fragment_index": 2,
+                                "column_index": 2,
+                            },
+                        },
+                        {
+                            "block_id": "left-fragment",
+                            "reading_order": 1,
+                            "bbox": {"left": 0, "top": 20, "width": 80, "height": 100},
+                            "metadata": {
+                                "segmenter": "pdf-passage-range",
+                                "passage_range": {"start": 4, "end": 9},
+                                "passage_fragment_index": 1,
+                                "column_index": 1,
+                            },
+                        },
+                    ],
+                },
+                {
+                    "page_id": "page-2",
+                    "blocks": [{
+                        "block_id": "child-question-only",
+                        "bbox": {"left": 0, "top": 10, "width": 80, "height": 90},
+                        "metadata": {"problem_number": 5},
+                    }],
+                },
+                {
+                    "page_id": "page-3",
+                    "blocks": [{
+                        "block_id": "next-page-continuation",
+                        "reading_order": 1,
+                        "bbox": {"left": 0, "top": 5, "width": 80, "height": 45},
+                        "metadata": {
+                            "segmenter": "pdf-pre-question-passage-continuation",
+                            "passage_range": {"start": 4, "end": 9},
+                        },
+                    }],
+                },
+            ], ensure_ascii=False), encoding="utf-8")
+            session = {
+                "pages_json_path": str(pages_json_path),
+                "pages": [
+                    {"id": "page-1", "problemIds": ["passage"]},
+                    {"id": "page-2", "problemIds": []},
+                    {"id": "page-3", "problemIds": []},
+                ],
+                "problems": [{
+                    "id": "passage",
+                    "sourcePageId": "page-1",
+                    "passageRole": "passage_fragment",
+                    "passageRange": {"start": 4, "end": 9},
+                    "passageSourcePageIds": ["page-1", "page-2", "page-3"],
+                    "bbox": {"left": 0, "top": 10, "width": 180, "height": 110},
+                }],
+            }
+
+            rewritten = app_server.rewrite_session_for_http(session)
+
+            passage = rewritten["problems"][0]
+            self.assertTrue(passage["sourceSegmentsRecovered"])
+            self.assertEqual(
+                ["left-fragment", "right-fragment", "next-page-continuation"],
+                [segment["sourceBlockId"] for segment in passage["sourceSegments"]],
+            )
+            self.assertEqual(["page-1", "page-1", "page-3"], [segment["sourcePageId"] for segment in passage["sourceSegments"]])
+            self.assertEqual([0.0, 100.0, 0.0], [segment["bbox"]["left"] for segment in passage["sourceSegments"]])
+            self.assertEqual(["passage"], rewritten["pages"][0]["problemIds"])
+            self.assertEqual([], rewritten["pages"][1]["problemIds"])
+            self.assertEqual(["passage"], rewritten["pages"][2]["problemIds"])
 
     def test_bulk_crop_replaces_source_problem_with_multiple_png_entries(self):
         from PIL import Image
@@ -1859,6 +3110,119 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertEqual("edb_images/001_문항_02.png", manifest["items"][0]["edbImage"])
             self.assertEqual("raw_crops/001_문항_02.png", manifest["items"][0]["rawCrop"])
 
+    def test_atomic_zip_failure_preserves_existing_destination_and_removes_staging_file(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            destination = tmpdir / "existing.zip"
+            original_payload = b"previous-complete-zip"
+            destination.write_bytes(original_payload)
+
+            def fail_after_first_member(archive):
+                archive.writestr("partial.txt", b"partial")
+                raise OSError("disk full")
+
+            with self.assertRaises(OSError):
+                app_server._write_zip_atomically(
+                    destination,
+                    compression=zipfile.ZIP_DEFLATED,
+                    populate=fail_after_first_member,
+                )
+
+            self.assertEqual(original_payload, destination.read_bytes())
+            self.assertEqual([], list(tmpdir.glob(".*.tmp")))
+
+    def test_atomic_zip_fsync_uses_windows_writable_handle_contract(self):
+        with TemporaryDirectory() as raw_tmp:
+            destination = Path(raw_tmp) / "bundle.zip"
+            opened_modes = []
+            real_path_open = Path.open
+
+            def tracking_open(path, mode="r", *args, **kwargs):
+                if path.name.startswith(".atomic-zip."):
+                    opened_modes.append(mode)
+                return real_path_open(path, mode, *args, **kwargs)
+
+            with patch.object(Path, "open", new=tracking_open):
+                app_server._write_zip_atomically(
+                    destination,
+                    compression=zipfile.ZIP_STORED,
+                    populate=lambda archive: archive.writestr("ok.txt", b"ok"),
+                )
+
+            self.assertIn("r+b", opened_modes)
+            self.assertNotIn("rb", opened_modes)
+            with zipfile.ZipFile(destination) as archive:
+                self.assertEqual(b"ok", archive.read("ok.txt"))
+
+    def test_edb_zip_arcname_collision_resolution_rechecks_until_unique(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            first_dir = tmpdir / "first"
+            second_dir = tmpdir / "second"
+            third_dir = tmpdir / "third"
+            first_dir.mkdir()
+            second_dir.mkdir()
+            third_dir.mkdir()
+            first = first_dir / "Lesson.edb"
+            second = second_dir / "Lesson_part03.edb"
+            third = third_dir / "Lesson.edb"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            third.write_bytes(b"third")
+
+            with patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"):
+                result = app_server._write_edb_export_zip([first, second, third])
+
+            with zipfile.ZipFile(result["zipPath"]) as archive:
+                names = archive.namelist()
+                self.assertEqual(len(names), len(set(name.casefold() for name in names)))
+                self.assertEqual(
+                    ["Lesson.edb", "Lesson_part03.edb", "Lesson_part04.edb"],
+                    names,
+                )
+                self.assertEqual(b"first", archive.read("Lesson.edb"))
+                self.assertEqual(b"second", archive.read("Lesson_part03.edb"))
+                self.assertEqual(b"third", archive.read("Lesson_part04.edb"))
+
+    def test_export_zip_names_reserve_utf8_bytes_for_generated_suffixes(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            crop = tmpdir / "crop.png"
+            Image.new("RGB", (8, 6), "white").save(crop)
+            first_edb = tmpdir / "first.edb"
+            second_edb = tmpdir / "second.edb"
+            first_edb.write_bytes(b"first")
+            second_edb.write_bytes(b"second")
+
+            with patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"):
+                for session_name in ("a" * 400, "긴세션명" * 100):
+                    with self.subTest(session_name=session_name[:12]):
+                        image_result = app_server._write_session_image_export_zip(
+                            {
+                                "session_name": session_name,
+                                "problems": [{
+                                    "id": "p1",
+                                    "title": "1",
+                                    "imagePath": crop.resolve().as_uri(),
+                                    "boardRenderPath": crop.resolve().as_uri(),
+                                }],
+                            },
+                            "raw",
+                        )
+                        self.assertLessEqual(len(Path(image_result["zipPath"]).name.encode("utf-8")), 255)
+                        with zipfile.ZipFile(image_result["zipPath"]) as archive:
+                            self.assertIsNone(archive.testzip())
+
+                edb_result = app_server._write_edb_export_zip(
+                    [first_edb, second_edb],
+                    bundle_name=f"{'한글' * 200}.edb",
+                )
+                self.assertLessEqual(len(Path(edb_result["zipPath"]).name.encode("utf-8")), 255)
+                with zipfile.ZipFile(edb_result["zipPath"]) as archive:
+                    self.assertIsNone(archive.testzip())
+
     def test_session_image_export_zip_renders_s3_edb_images(self):
         from PIL import Image
 
@@ -1975,8 +3339,66 @@ class TestSessionCropMutation(unittest.TestCase):
             self.assertIn(body["zipPath"], fake_server.allowed_files)
             self.assertTrue(Path(body["zipPath"]).exists())
 
+    def test_session_export_edb_handler_bundles_multiple_allowed_files(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            first = tmpdir / "수업_part01.edb"
+            second = tmpdir / "수업_part02.edb"
+            first.write_bytes(b"first-edb")
+            second.write_bytes(b"second-edb")
+            fake_server = type("FakeServer", (), {
+                "allowed_files": {str(first.resolve()), str(second.resolve())},
+            })()
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = fake_server
+            handler._read_json_body = lambda: {
+                "edbPaths": [str(first), str(second)],
+                "fileName": "수업.edb",
+            }
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            with patch.object(app_server, "RUNTIME_DIR", tmpdir / "runtime"):
+                handler._handle_session_export_edb()
+
+            body = responses[0][0]
+            self.assertTrue(body["ok"])
+            self.assertTrue(body["bundled"])
+            self.assertEqual(2, body["count"])
+            self.assertTrue(body["downloadUrl"].startswith("/api/file?path="))
+            self.assertIn(body["zipPath"], fake_server.allowed_files)
+            with zipfile.ZipFile(body["zipPath"]) as archive:
+                self.assertEqual(b"first-edb", archive.read(first.name))
+                self.assertEqual(b"second-edb", archive.read(second.name))
+
+    def test_session_export_edb_handler_rejects_unregistered_file(self):
+        with TemporaryDirectory() as raw_tmp:
+            edb_path = Path(raw_tmp) / "blocked.edb"
+            edb_path.write_bytes(b"blocked")
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {"allowed_files": set()})()
+            handler._read_json_body = lambda: {"edbPaths": [str(edb_path)]}
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            handler._handle_session_export_edb()
+
+            self.assertFalse(responses[0][0]["ok"])
+            self.assertEqual(app_server.HTTPStatus.FORBIDDEN, responses[0][1]["status"])
+
 
 class TestExportErrorPayload(unittest.TestCase):
+    def test_publish_failure_codes_distinguish_deterministic_page_limit(self):
+        page_limit = app_server._publish_stage_failure_payload(
+            "write",
+            ValueError("EDB part page hint 51 exceeds ClassIn limit 50"),
+        )
+        transient = app_server._publish_stage_failure_payload("write", OSError("disk busy"))
+        self.assertEqual("publish_page_limit_exceeded", page_limit["code"])
+        self.assertFalse(page_limit["retryable"])
+        self.assertEqual("edb_write_failed", transient["code"])
+        self.assertTrue(transient["retryable"])
+
     def test_hangul_conversion_error_includes_recovery_steps(self):
         payload = app_server._export_error_payload(
             ValueError(
@@ -2002,6 +3424,11 @@ class TestExportErrorPayload(unittest.TestCase):
 
 
 class TestExportSourceResolution(unittest.TestCase):
+    def test_export_content_target_accepts_only_supported_values(self):
+        self.assertEqual("shared-passages", app_server._extract_content_target({"contentTarget": "shared_passages"}))
+        self.assertEqual("questions", app_server._extract_content_target({"content_target": "questions"}))
+        self.assertEqual("all", app_server._extract_content_target({"contentTarget": "tables"}))
+
     def test_files_accepts_source_path_strings_for_automation_clients(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -2012,6 +3439,163 @@ class TestExportSourceResolution(unittest.TestCase):
             resolved = handler._resolve_source_paths({"files": [str(source)]})
 
             self.assertEqual(resolved, [source.resolve()])
+
+    def test_session_reextract_sources_prefer_input_files_and_deduplicate(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            page = tmpdir / "page.png"
+            page.write_bytes(b"png")
+
+            resolved = app_server._session_reextract_source_paths({
+                "input_files": [source.resolve().as_uri(), str(source.resolve())],
+                "pages": [{"sourceImagePath": page.resolve().as_uri()}],
+            })
+
+            self.assertEqual([source.resolve()], resolved)
+
+    def test_session_reextract_sources_fall_back_to_source_pages_in_order(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            missing = tmpdir / "missing.pdf"
+            first = tmpdir / "page-1.png"
+            second = tmpdir / "page-2.png"
+            first.write_bytes(b"one")
+            second.write_bytes(b"two")
+
+            resolved = app_server._session_reextract_source_paths({
+                "input_files": [missing.resolve().as_uri()],
+                "pages": [
+                    {"sourceImagePath": first.resolve().as_uri()},
+                    {"sourceImageUri": first.resolve().as_uri()},
+                    {"sourceImageUri": second.resolve().as_uri()},
+                ],
+            })
+
+            self.assertEqual([first.resolve(), second.resolve()], resolved)
+
+    def test_session_source_reextract_preview_does_not_replace_current_session(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            current_session = {
+                "session_name": "existing",
+                "input_files": [source.resolve().as_uri()],
+                "pages": [],
+                "problems": [{"id": "question-1"}],
+            }
+            payload = {
+                "reuseSessionSources": True,
+                "preview": True,
+                "inputIntent": "multi-problem",
+                "contentTarget": "shared-passages",
+                "exportEdb": False,
+            }
+            captured: dict[str, object] = {}
+            responses = []
+
+            class FakeServer:
+                latest_session = copy.deepcopy(current_session)
+                allowed_files = set()
+
+                def remember_session(self, _session):
+                    raise AssertionError("preview re-extraction must not replace the current session")
+
+            def fake_run_problem_export(run_source, **kwargs):
+                captured["source"] = Path(run_source)
+                captured.update(kwargs)
+                output_dir = Path(kwargs["output_dir"])
+                return {
+                    "ok": True,
+                    "ui_session": {
+                        "pages": [],
+                        "problems": [{"id": "passage-1", "passageRole": "passage_fragment"}],
+                    },
+                    "output_dir": str(output_dir),
+                    "ui_session_path": str(output_dir / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: dict(payload)
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            self.assertEqual(source.resolve(), captured["source"])
+            self.assertEqual("shared-passages", captured["content_target"])
+            self.assertEqual(current_session, handler.server.latest_session)
+            self.assertTrue(responses[0][0]["ok"])
+            self.assertTrue(responses[0][0]["preview"])
+
+    def test_session_source_reextract_rejects_non_preview_export(self):
+        current_session = {"input_files": [], "pages": [], "problems": [{"id": "question-1"}]}
+        responses = []
+
+        class FakeServer:
+            latest_session = copy.deepcopy(current_session)
+            allowed_files = set()
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = FakeServer()
+        handler._read_json_body = lambda: {
+            "reuseSessionSources": True,
+            "preview": False,
+            "contentTarget": "shared-passages",
+        }
+        handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+        with patch.object(
+            app_server,
+            "run_problem_export",
+            side_effect=AssertionError("non-preview session re-extraction must not run"),
+        ):
+            handler._handle_export()
+
+        self.assertFalse(responses[0][0]["ok"])
+        self.assertIn("only allowed for preview", responses[0][0]["error"])
+        self.assertEqual(current_session, handler.server.latest_session)
+
+    def test_session_source_reextract_missing_sources_keeps_current_session(self):
+        current_session = {
+            "session_name": "existing",
+            "input_files": ["file:///definitely/missing/source.pdf"],
+            "pages": [{"id": "page-1", "sourceImagePath": "file:///definitely/missing/page.png"}],
+            "problems": [{"id": "question-1"}],
+        }
+        responses = []
+
+        class FakeServer:
+            latest_session = copy.deepcopy(current_session)
+            allowed_files = set()
+
+            def remember_session(self, _session):
+                raise AssertionError("failed preview re-extraction must not replace the current session")
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = FakeServer()
+        handler._read_json_body = lambda: {
+            "reuseSessionSources": True,
+            "preview": True,
+            "contentTarget": "shared-passages",
+        }
+        handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+        with patch.object(
+            app_server,
+            "run_problem_export",
+            side_effect=AssertionError("re-extraction must not run without a preserved source"),
+        ):
+            handler._handle_export()
+
+        self.assertFalse(responses[0][0]["ok"])
+        self.assertIn("no preserved source files", responses[0][0]["error"])
+        self.assertEqual(current_session, handler.server.latest_session)
 
     def test_uploaded_files_reuse_same_content_path_for_cache_stability(self):
         with TemporaryDirectory() as raw_tmp:
@@ -2051,6 +3635,74 @@ class TestExportSourceResolution(unittest.TestCase):
                     second = handler._save_uploaded_file(payload)
 
             self.assertEqual(first, second)
+
+    def test_uploaded_file_replaces_corrupt_digest_named_cache_entry_atomically(self):
+        with TemporaryDirectory() as raw_tmp:
+            upload_dir = Path(raw_tmp) / "uploads"
+            upload_dir.mkdir()
+            handler = object.__new__(app_server.AppRequestHandler)
+            file_bytes = b"expected upload bytes"
+            digest = hashlib.sha256(file_bytes).hexdigest()
+            safe_name = app_server.sanitize_upload_file_name("same.hwp")
+            cached = upload_dir / f"{digest}_{safe_name}"
+            cached.write_bytes(b"corrupt upload bytes!")
+            payload = {
+                "fileName": "same.hwp",
+                "fileDataBase64": base64.b64encode(file_bytes).decode("ascii"),
+            }
+
+            with patch.object(app_server, "UPLOAD_DIR", upload_dir):
+                result = handler._save_uploaded_file(payload)
+
+            self.assertEqual(cached, result)
+            self.assertEqual(file_bytes, cached.read_bytes())
+            self.assertEqual([], list(upload_dir.glob(".*.tmp")))
+
+    def test_uploaded_files_use_sha256_identity_and_do_not_alias_equal_size_payloads(self):
+        with TemporaryDirectory() as raw_tmp:
+            upload_dir = Path(raw_tmp) / "uploads"
+            upload_dir.mkdir()
+            handler = object.__new__(app_server.AppRequestHandler)
+            first_bytes = b"PDF payload A"
+            second_bytes = b"PDF payload B"
+            self.assertEqual(len(first_bytes), len(second_bytes))
+
+            with patch.object(app_server, "UPLOAD_DIR", upload_dir):
+                first = handler._save_uploaded_file({
+                    "fileName": "same.pdf",
+                    "fileDataBase64": base64.b64encode(first_bytes).decode("ascii"),
+                })
+                second = handler._save_uploaded_file({
+                    "fileName": "same.pdf",
+                    "fileDataBase64": base64.b64encode(second_bytes).decode("ascii"),
+                })
+
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.name.startswith(hashlib.sha256(first_bytes).hexdigest()))
+            self.assertTrue(second.name.startswith(hashlib.sha256(second_bytes).hexdigest()))
+            self.assertEqual(first_bytes, first.read_bytes())
+            self.assertEqual(second_bytes, second.read_bytes())
+
+    def test_uploaded_file_migrates_to_sha256_without_deleting_legacy_sha1_cache(self):
+        with TemporaryDirectory() as raw_tmp:
+            upload_dir = Path(raw_tmp) / "uploads"
+            upload_dir.mkdir()
+            handler = object.__new__(app_server.AppRequestHandler)
+            file_bytes = b"legacy cached pdf"
+            safe_name = app_server.sanitize_upload_file_name("legacy.pdf")
+            legacy_path = upload_dir / f"{hashlib.sha1(file_bytes).hexdigest()}_{safe_name}"
+            legacy_path.write_bytes(file_bytes)
+
+            with patch.object(app_server, "UPLOAD_DIR", upload_dir):
+                migrated = handler._save_uploaded_file({
+                    "fileName": "legacy.pdf",
+                    "fileDataBase64": base64.b64encode(file_bytes).decode("ascii"),
+                })
+
+            self.assertNotEqual(legacy_path, migrated)
+            self.assertTrue(migrated.name.startswith(hashlib.sha256(file_bytes).hexdigest()))
+            self.assertEqual(file_bytes, migrated.read_bytes())
+            self.assertEqual(file_bytes, legacy_path.read_bytes())
 
     def test_uploaded_file_rejects_malformed_base64(self):
         with TemporaryDirectory() as raw_tmp:
@@ -2148,11 +3800,14 @@ class TestExportSourceResolution(unittest.TestCase):
                 "files": [str(source)],
                 "outputDir": str(output_dir),
                 "inputIntent": "page-as-is",
+                "contentTarget": "shared-passages",
                 "preview": True,
                 "exportEdb": False,
                 "detectPerspective": True,
                 "skipCrop": False,
                 "skipDeskew": False,
+                "maxDimension": 1200,
+                "pdfDpi": 144,
             }
             captured_kwargs = {}
 
@@ -2184,9 +3839,59 @@ class TestExportSourceResolution(unittest.TestCase):
                 handler._handle_export()
 
             self.assertEqual("page-as-is", captured_kwargs["input_intent"])
+            self.assertEqual("shared-passages", captured_kwargs["content_target"])
             self.assertFalse(captured_kwargs["detect_perspective"])
             self.assertTrue(captured_kwargs["skip_crop"])
             self.assertTrue(captured_kwargs["skip_deskew"])
+            self.assertEqual(200, captured_kwargs["pdf_dpi"])
+            self.assertIsNone(captured_kwargs["max_dimension"])
+            self.assertEqual("off", captured_kwargs["page_tile_mode"])
+            self.assertTrue(responses[0][0]["ok"])
+
+    def test_recognition_export_defaults_to_source_first_safety_cap(self):
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            source = tmpdir / "source.png"
+            source.write_bytes(b"png")
+            captured_kwargs = {}
+
+            class FakeServer:
+                allowed_files = set()
+
+                def remember_session(self, session):
+                    self.latest_session = session
+
+            def fake_run_problem_export(_source, **kwargs):
+                captured_kwargs.update(kwargs)
+                output_dir = Path(kwargs["output_dir"])
+                return {
+                    "ok": True,
+                    "ui_session": {"pages": [], "problems": []},
+                    "output_dir": str(output_dir),
+                    "ui_session_path": str(output_dir / "ui_session.json"),
+                    "edb_path": None,
+                    "summary": {"placements": []},
+                }
+
+            responses = []
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = FakeServer()
+            handler._read_json_body = lambda: {
+                "files": [str(source)],
+                "outputDir": str(tmpdir / "out"),
+                "inputIntent": "multi-problem",
+                "preview": True,
+                "exportEdb": False,
+            }
+            handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
+
+            with patch.object(app_server, "run_problem_export", side_effect=fake_run_problem_export):
+                handler._handle_export()
+
+            self.assertEqual(
+                app_server.DEFAULT_RECOGNITION_MAX_DIMENSION,
+                captured_kwargs["max_dimension"],
+            )
             self.assertTrue(responses[0][0]["ok"])
 
     def test_export_passes_sanitized_requested_edb_name(self):
@@ -2298,7 +4003,6 @@ class TestExportSourceResolution(unittest.TestCase):
             source = tmpdir / "sample.hwp"
             source.write_bytes(b"hwp")
             output_dir = tmpdir / "out"
-            edb_path = output_dir / "lesson.edb"
             payload = {
                 "files": [str(source)],
                 "outputDir": str(output_dir),
@@ -2314,6 +4018,7 @@ class TestExportSourceResolution(unittest.TestCase):
             def fake_run_problem_export(_source, **kwargs):
                 resolved_output = Path(kwargs.get("output_dir") or output_dir)
                 resolved_output.mkdir(parents=True, exist_ok=True)
+                edb_path = resolved_output / "lesson.edb"
                 edb_path.write_bytes(b"edb")
                 return {
                     "ok": True,
@@ -2387,6 +4092,58 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
         handler._read_json_body = lambda: dict(payload or {})
         handler._send_json = lambda body, **kwargs: responses.append((body, kwargs))
         return handler, responses
+
+    def test_session_publish_rejects_raw_duplicate_ids_before_writer(self):
+        with TemporaryDirectory() as raw_tmp:
+            session = {
+                "output_dir": raw_tmp,
+                "pages": [],
+                "problems": [
+                    {"id": "dup", "title": "1", "riskFlags": [], "bbox": {}},
+                    {"id": "dup", "title": "2", "riskFlags": [], "bbox": {}},
+                ],
+            }
+            handler, responses = self._publish(session)
+            with patch.object(app_server, "write_classin_limited_edb_files") as writer:
+                handler._handle_session_publish()
+            writer.assert_not_called()
+            body, kwargs = responses[0]
+            self.assertEqual("publish_preflight_blocked", body["code"])
+            self.assertFalse(body["retryable"])
+            self.assertEqual("duplicate_problem_id", body["classinPreflight"]["issues"][0]["type"])
+            self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs["status"])
+
+    def test_session_publish_rejects_raw_missing_id_before_writer(self):
+        session = {
+            "pages": [],
+            "problems": [{"title": "1", "riskFlags": [], "bbox": {}}],
+        }
+        handler, responses = self._publish(session)
+        with patch.object(app_server, "write_classin_limited_edb_files") as writer:
+            handler._handle_session_publish()
+        writer.assert_not_called()
+        body, _kwargs = responses[0]
+        self.assertEqual("publish_preflight_blocked", body["code"])
+        self.assertEqual("missing_problem_id", body["classinPreflight"]["issues"][0]["type"])
+
+    def test_session_publish_rejects_malformed_problem_entry_before_writer(self):
+        session = {
+            "pages": [],
+            "problems": [
+                {"id": "p1", "title": "1", "riskFlags": [], "bbox": {}},
+                None,
+            ],
+        }
+        handler, responses = self._publish(session)
+        with patch.object(app_server, "write_classin_limited_edb_files") as writer:
+            handler._handle_session_publish()
+        writer.assert_not_called()
+        body, _kwargs = responses[0]
+        issue = body["classinPreflight"]["issues"][0]
+        self.assertEqual("publish_preflight_blocked", body["code"])
+        self.assertEqual("missing_problem_id", issue["type"])
+        self.assertTrue(issue["malformedEntry"])
+        self.assertEqual(1, issue["entryIndex"])
 
     def test_local_classin_split_writer_caps_part_page_hint_after_render_expands_template(self):
         with TemporaryDirectory() as raw_tmp:
@@ -2561,6 +4318,8 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                 handoff_md_path = Path(output_dir) / "classin_handoff.md"
                 handoff_path.write_text(
                     json.dumps({
+                        "status": "ready_for_classin_review",
+                        "readyForClassIn": True,
                         "classinPreflight": {
                             "status": "passed",
                             "passed": True,
@@ -2594,6 +4353,16 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(["Renamed_Lesson_part01.edb", "Renamed_Lesson_part02.edb"], captured["validated_paths"])
             self.assertEqual([13, 13], captured["expected_min_records"])
             self.assertEqual("Renamed_Lesson_part01.edb", body["publishSummary"]["edbFileName"])
+            self.assertTrue(body["publishSummary"]["edbFileExists"])
+            self.assertTrue(body["publishSummary"]["outputDirExists"])
+            self.assertTrue(body["publishSummary"]["readyForClassIn"])
+            self.assertTrue(body["publishSummary"]["canDownload"])
+            published_path = app_server.decode_file_reference(
+                body["publishSummary"]["edbFileUri"]
+            )
+            self.assertIsNotNone(published_path)
+            self.assertIn("published", published_path.parts)
+            self.assertNotIn(".publish-staging", published_path.parts)
             self.assertEqual(50, body["publishSummary"]["pageCountHint"])
             self.assertTrue(body["publishSummary"]["edbSplit"])
             self.assertEqual(2, body["publishSummary"]["edbPartCount"])
@@ -3975,6 +5744,52 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
 
 
 class TestRuntimeDiagnostics(unittest.TestCase):
+    def test_startup_retention_cleanup_is_best_effort(self):
+        class FailingServer:
+            def cleanup_artifacts(self, **_kwargs):
+                raise OSError("locked")
+
+        self.assertIsNone(app_server._run_startup_artifact_cleanup(FailingServer()))
+
+    def test_startup_retention_cleanup_defaults_to_non_destructive_dry_run(self):
+        calls = []
+
+        class Server:
+            def cleanup_artifacts(self, **kwargs):
+                calls.append(kwargs)
+                return {"ok": True, "dryRun": kwargs["dry_run"]}
+
+        with patch.dict(os.environ, {"EDB_AUTO_ARTIFACT_CLEANUP": ""}):
+            result = app_server._run_startup_artifact_cleanup(Server())
+        self.assertTrue(result["dryRun"])
+        self.assertTrue(calls[0]["dry_run"])
+
+    def test_startup_retention_cleanup_deletes_only_with_explicit_opt_in(self):
+        calls = []
+
+        class Server:
+            def cleanup_artifacts(self, **kwargs):
+                calls.append(kwargs)
+                return {"ok": True, "dryRun": kwargs["dry_run"]}
+
+        with patch.dict(os.environ, {"EDB_AUTO_ARTIFACT_CLEANUP": "1"}):
+            result = app_server._run_startup_artifact_cleanup(Server())
+        self.assertFalse(result["dryRun"])
+        self.assertFalse(calls[0]["dry_run"])
+
+    def test_startup_retention_cleanup_does_not_treat_generic_true_as_delete_opt_in(self):
+        calls = []
+
+        class Server:
+            def cleanup_artifacts(self, **kwargs):
+                calls.append(kwargs)
+                return {"ok": True, "dryRun": kwargs["dry_run"]}
+
+        with patch.dict(os.environ, {"EDB_AUTO_ARTIFACT_CLEANUP": "true"}):
+            result = app_server._run_startup_artifact_cleanup(Server())
+        self.assertTrue(result["dryRun"])
+        self.assertTrue(calls[0]["dry_run"])
+
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):
         with (
             patch.object(app_server.preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]]),
@@ -4164,6 +5979,25 @@ class TestSessionHistory(unittest.TestCase):
         self.assertEqual(2, history[0]["coreProblemCount"])
         self.assertEqual(["new-1", "new-2"], [problem["id"] for problem in history[0]["session"]["problems"]])
 
+    def test_session_history_exposes_review_mode_without_full_session_payload(self):
+        session = {
+            "session_name": "페이지 원본",
+            "generated_at": "2026-08-18T14:00:00+09:00",
+            "output_dir": "/tmp/page-as-is-session",
+            "input_intent": "page-as-is",
+            "content_target": "all",
+            "pages": [{"id": "page-001"}, {"id": "page-002"}],
+            "problems": [{"id": "p1"}, {"id": "p2"}],
+        }
+
+        history = app_server._session_history_with_session([], session)
+        public = app_server._public_session_history(history)
+
+        self.assertNotIn("session", public[0])
+        self.assertEqual("page-as-is", public[0]["inputIntent"])
+        self.assertEqual("all", public[0]["contentTarget"])
+        self.assertEqual(2, public[0]["pageCount"])
+
     def test_public_session_history_omits_full_session_payload(self):
         session = {
             "session_name": "영어 양식",
@@ -4334,6 +6168,1069 @@ class TestSessionHistory(unittest.TestCase):
 
 
 class TestSystemOpenTargets(unittest.TestCase):
+    def test_session_json_writes_are_atomic_when_replace_fails(self):
+        with TemporaryDirectory() as raw_tmp:
+            target = Path(raw_tmp) / "latest.json"
+            history_target = Path(raw_tmp) / "history.json"
+            target.write_text('{"version": "old"}', encoding="utf-8")
+            history_target.write_text('[{"id": "old"}]', encoding="utf-8")
+
+            with patch.object(app_server.os, "replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    app_server.save_latest_session({"version": "new"}, target)
+                with self.assertRaises(OSError):
+                    app_server.save_session_history([{"id": "new"}], history_target)
+
+            self.assertEqual('{"version": "old"}', target.read_text(encoding="utf-8"))
+            self.assertEqual('[{"id": "old"}]', history_target.read_text(encoding="utf-8"))
+            self.assertEqual([], list(target.parent.glob(".latest.json.*.tmp")))
+            self.assertEqual([], list(target.parent.glob(".history.json.*.tmp")))
+
+    def test_concurrent_history_updates_do_not_lose_distinct_sessions(self):
+        with TemporaryDirectory() as raw_tmp:
+            history_path = Path(raw_tmp) / "history.json"
+            barrier = threading.Barrier(8)
+
+            def remember(index):
+                barrier.wait()
+                app_server.remember_session_history(
+                    {
+                        "session_name": f"session-{index}",
+                        "output_dir": f"/tmp/session-{index}",
+                        "problems": [{"id": f"p{index}"}],
+                    },
+                    path=history_path,
+                    limit=20,
+                )
+
+            threads = [threading.Thread(target=remember, args=(index,)) for index in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(3)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            history = app_server.load_session_history(history_path)
+            self.assertEqual(8, len(history))
+            self.assertEqual(
+                {f"/tmp/session-{index}" for index in range(8)},
+                {entry["outputDir"] for entry in history},
+            )
+
+    def test_compare_and_remember_rejects_stale_session_snapshot(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    self.assertRegex(server.session_epoch(), r"^\d{20}-[0-9a-f]{32}$")
+                    base = {"session_name": "lesson", "problems": [{"id": "p1"}]}
+                    server.remember_session(base)
+                    client_revision = server.session_revision()
+                    first_base = server.session_snapshot()
+                    stale_base = server.session_snapshot()
+                    self.assertIsNotNone(first_base)
+                    self.assertIsNotNone(stale_base)
+
+                    first_update = dict(first_base)
+                    first_update["firstMutation"] = True
+                    stale_update = dict(stale_base)
+                    stale_update["staleMutation"] = True
+
+                    first_committed_revision = server.remember_session_if_current(
+                        first_base,
+                        first_update,
+                        expected_revision=client_revision,
+                    )
+                    self.assertEqual(client_revision + 1, first_committed_revision)
+                    # Even if a stale restore request starts after the first
+                    # commit and therefore snapshots the new server state, the
+                    # revision captured by its client is still rejected.
+                    second_request_base = server.session_snapshot()
+                    self.assertFalse(
+                        server.remember_session_if_current(
+                            second_request_base,
+                            stale_update,
+                            expected_revision=client_revision,
+                        )
+                    )
+                    current = server.session_snapshot()
+                    self.assertTrue(current["firstMutation"])
+                    self.assertNotIn("staleMutation", current)
+                    self.assertEqual(current, app_server.load_latest_session())
+                finally:
+                    server.server_close()
+
+    def test_history_write_failure_does_not_split_committed_latest_from_memory(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    updated = {"session_name": "committed", "problems": [{"id": "p1"}]}
+                    with patch.object(
+                        app_server,
+                        "save_session_history",
+                        side_effect=OSError("disk full"),
+                    ):
+                        revision = server.remember_session_if_current(
+                            None,
+                            updated,
+                            expected_revision=0,
+                        )
+
+                    self.assertEqual(1, revision)
+                    self.assertEqual(updated, server.session_snapshot())
+                    self.assertEqual(updated, app_server.load_latest_session())
+                    self.assertFalse(history_path.exists())
+                finally:
+                    server.server_close()
+
+                restarted = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    restarted_snapshot = restarted.session_snapshot()
+                    self.assertEqual("committed", restarted_snapshot["session_name"])
+                    self.assertEqual(["p1"], [item["id"] for item in restarted_snapshot["problems"]])
+                    self.assertEqual(1, restarted.session_revision())
+                finally:
+                    restarted.server_close()
+
+    def test_mutation_response_pairs_committed_session_with_its_revision(self):
+        base = {
+            "pages": [{"id": "page-1", "problemIds": ["p1"]}],
+            "problems": [{
+                "id": "p1",
+                "riskFlags": ["needs_review"],
+                "reviewStatus": "check_needed",
+            }],
+        }
+
+        class RacingServer:
+            def __init__(self):
+                self.latest_session = app_server._clone_jsonish(base)
+                self.allowed_files = set()
+
+            def session_snapshot_with_revision(self):
+                return app_server._clone_jsonish(self.latest_session), 5
+
+            def remember_session_if_current(self, expected, updated, *, expected_revision=None):
+                self.latest_session = app_server._clone_jsonish(updated)
+                return 6
+
+            def session_revision(self):
+                # A later request may already have committed before the first
+                # response is serialized. This value must never be mixed with
+                # the session returned by the first commit.
+                return 7
+
+            def session_epoch(self):
+                return "epoch-current"
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = RacingServer()
+        handler._read_json_body = lambda: {
+            "action": "confirm",
+            "problemIds": ["p1"],
+            "expectedSessionRevision": 5,
+            "expectedSessionEpoch": "epoch-current",
+        }
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        handler._handle_session_mutate()
+
+        payload, _kwargs = responses[0]
+        self.assertEqual(6, payload["sessionRevision"])
+        self.assertEqual("normal", payload["session"]["problems"][0]["reviewStatus"])
+
+    def test_mutation_rejects_revision_from_previous_server_epoch(self):
+        base = {"problems": [{"id": "p1", "reviewStatus": "check_needed"}]}
+
+        class RestartedServer:
+            def __init__(self):
+                self.latest_session = app_server._clone_jsonish(base)
+                self.allowed_files = set()
+                self.remembered = False
+
+            def session_snapshot_with_revision(self):
+                return app_server._clone_jsonish(self.latest_session), 1
+
+            def session_epoch(self):
+                return "epoch-new"
+
+            def remember_session_if_current(self, expected, updated, *, expected_revision=None):
+                self.remembered = True
+                return 2
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = RestartedServer()
+        handler._read_json_body = lambda: {
+            "action": "confirm",
+            "problemIds": ["p1"],
+            "expectedSessionRevision": 1,
+            "expectedSessionEpoch": "epoch-old",
+        }
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        handler._handle_session_mutate()
+
+        payload, kwargs = responses[0]
+        self.assertEqual("session_conflict", payload["code"])
+        self.assertEqual(app_server.HTTPStatus.CONFLICT, kwargs["status"])
+        self.assertFalse(handler.server.remembered)
+
+    def test_runtime_artifact_cleanup_protects_active_and_history_files(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            upload_dir = runtime_dir / "uploads"
+            output_dir = runtime_dir / "outputs" / "active"
+            export_dir = runtime_dir / "exports"
+            upload_dir.mkdir()
+            output_dir.mkdir(parents=True)
+            export_dir.mkdir()
+            protected_upload = upload_dir / "source.pdf"
+            protected_output = output_dir / "board.edb"
+            protected_history = export_dir / "history.zip"
+            orphan = export_dir / "orphan.zip"
+            for path in (protected_upload, protected_output, protected_history, orphan):
+                path.write_bytes(b"artifact")
+                os.utime(path, (1, 1))
+            active_session = {
+                "input_files": [str(protected_upload)],
+                "output_dir": str(output_dir),
+                "problems": [],
+            }
+            history = [{"session": {"problems": [], "edb_path": str(protected_history)}}]
+
+            preview = app_server.cleanup_runtime_artifacts(
+                runtime_dir=runtime_dir,
+                active_session=active_session,
+                history=history,
+                dry_run=True,
+                min_age_seconds=0,
+                now=100,
+            )
+
+            self.assertEqual([str(orphan.resolve())], preview["selectedPaths"])
+            self.assertEqual(0, preview["deletedFileCount"])
+            self.assertTrue(orphan.exists())
+
+            applied = app_server.cleanup_runtime_artifacts(
+                runtime_dir=runtime_dir,
+                active_session=active_session,
+                history=history,
+                dry_run=False,
+                min_age_seconds=0,
+                now=100,
+            )
+
+            self.assertEqual(1, applied["deletedFileCount"])
+            self.assertFalse(orphan.exists())
+            self.assertTrue(protected_upload.exists())
+            self.assertTrue(protected_output.exists())
+            self.assertTrue(protected_history.exists())
+
+    def test_runtime_artifact_capacity_only_selects_bytes_above_limit(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            export_dir = runtime_dir / "exports"
+            export_dir.mkdir()
+            oldest = export_dir / "oldest.zip"
+            newer = export_dir / "newer.zip"
+            oldest.write_bytes(b"a" * 6)
+            newer.write_bytes(b"b" * 6)
+            os.utime(oldest, (1, 1))
+            os.utime(newer, (2, 2))
+
+            result = app_server.cleanup_runtime_artifacts(
+                runtime_dir=runtime_dir,
+                active_session={},
+                history=[],
+                dry_run=True,
+                min_age_seconds=0,
+                max_bytes=8,
+                now=100,
+            )
+
+            self.assertEqual([str(oldest.resolve())], result["selectedPaths"])
+            self.assertEqual(6, result["selectedBytes"])
+
+    def test_runtime_artifact_cleanup_pauses_while_job_is_writing(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            output_dir = runtime_dir / "outputs" / "active-job"
+            output_dir.mkdir(parents=True)
+            in_progress = output_dir / "render.png"
+            in_progress.write_bytes(b"partial-render")
+            os.utime(in_progress, (1, 1))
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest_session.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "session_history.json"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    server.begin_artifact_job()
+                    with self.assertRaises(app_server.ArtifactCleanupBusy):
+                        server.cleanup_artifacts(dry_run=False, min_age_seconds=0)
+                    with self.assertRaises(app_server.ArtifactCleanupBusy):
+                        server.clear_session(
+                            cleanup_artifacts=True,
+                            dry_run=False,
+                            min_age_seconds=0,
+                        )
+                    self.assertTrue(in_progress.exists())
+                    server.end_artifact_job()
+
+                    result = server.cleanup_artifacts(dry_run=False, min_age_seconds=0)
+                    self.assertEqual(1, result["deletedFileCount"])
+                    self.assertFalse(in_progress.exists())
+                finally:
+                    server.server_close()
+
+    def test_artifact_jobs_serialize_before_stale_revision_can_write(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            artifact_path = runtime_dir / "outputs" / "shared" / "lesson.edb"
+            artifact_path.parent.mkdir(parents=True)
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest_session.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "session_history.json"),
+                patch.object(app_server, "GENERATED_SESSION_JS", runtime_dir / "generated_session.js"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                server.latest_session = {"problems": [], "artifactMarker": "base"}
+                server._session_revision = 1
+                expected_revision = server.session_revision()
+                first_started = threading.Event()
+                release_first = threading.Event()
+                results: list[tuple[str, bool]] = []
+                writes: list[str] = []
+
+                def publish(marker: str, pause: bool = False) -> None:
+                    server.begin_artifact_job()
+                    try:
+                        base, revision = server.session_snapshot_with_revision()
+                        if revision != expected_revision:
+                            results.append((marker, False))
+                            return
+                        if pause:
+                            first_started.set()
+                            release_first.wait(timeout=5)
+                        artifact_path.write_bytes(marker.encode("utf-8"))
+                        writes.append(marker)
+                        updated = dict(base or {})
+                        updated["artifactMarker"] = marker
+                        committed = server.remember_session_if_current(
+                            base,
+                            updated,
+                            expected_revision=revision,
+                        )
+                        results.append((marker, committed is not None))
+                    finally:
+                        server.end_artifact_job()
+
+                first = threading.Thread(target=publish, args=("winner", True))
+                second = threading.Thread(target=publish, args=("stale",))
+                try:
+                    first.start()
+                    self.assertTrue(first_started.wait(timeout=5))
+                    second.start()
+                    self.assertTrue(second.is_alive())
+                    release_first.set()
+                    first.join(timeout=5)
+                    second.join(timeout=5)
+
+                    self.assertFalse(first.is_alive())
+                    self.assertFalse(second.is_alive())
+                    self.assertEqual(["winner"], writes)
+                    self.assertEqual(b"winner", artifact_path.read_bytes())
+                    self.assertEqual("winner", server.session_snapshot()["artifactMarker"])
+                    self.assertCountEqual([("winner", True), ("stale", False)], results)
+                finally:
+                    release_first.set()
+                    first.join(timeout=5)
+                    second.join(timeout=5)
+                    server.server_close()
+
+    def test_session_clear_revision_check_is_atomic_with_delete(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    server.remember_session({"problems": [{"id": "p1"}]})
+                    stale_revision = server.session_revision()
+                    server.remember_session({"problems": [{"id": "p1"}, {"id": "p2"}]})
+
+                    with self.assertRaises(app_server.SessionRevisionConflict):
+                        server.clear_session(expected_revision=stale_revision)
+
+                    snapshot, current_revision = server.session_snapshot_with_revision()
+                    self.assertEqual(["p1", "p2"], [problem["id"] for problem in snapshot["problems"]])
+                    self.assertGreater(current_revision, stale_revision)
+                    self.assertTrue(latest_path.exists())
+                finally:
+                    server.server_close()
+
+    def test_session_clear_rolls_back_all_state_files_when_generated_reset_fails(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            latest_payload = '{"problems": [{"id": "p1"}]}'
+            history_payload = "[]"
+            generated_payload = "window.EDB_UI_SESSION = { problems: [] };\n"
+            latest_path.write_text(latest_payload, encoding="utf-8")
+            history_path.write_text(history_payload, encoding="utf-8")
+            generated_path.write_text(generated_payload, encoding="utf-8")
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                revision = server.session_revision()
+                try:
+                    with patch.object(app_server, "_atomic_write_text", side_effect=OSError("disk full")):
+                        with self.assertRaises(OSError):
+                            server.clear_session(expected_revision=revision)
+                    self.assertEqual(latest_payload, latest_path.read_text(encoding="utf-8"))
+                    self.assertEqual(history_payload, history_path.read_text(encoding="utf-8"))
+                    self.assertEqual(generated_payload, generated_path.read_text(encoding="utf-8"))
+                    self.assertEqual(revision, server.session_revision())
+                    self.assertEqual("p1", server.session_snapshot()["problems"][0]["id"])
+                finally:
+                    server.server_close()
+
+    def test_session_clear_rolls_back_when_second_state_file_move_fails(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            latest_path.write_text('{"problems": [{"id": "p1"}]}', encoding="utf-8")
+            history_path.write_text("[]", encoding="utf-8")
+            generated_path.write_text("window.EDB_UI_SESSION = {};\n", encoding="utf-8")
+            real_replace = os.replace
+            failed = False
+
+            def fail_history_once(source, target):
+                nonlocal failed
+                if Path(source) == history_path and not failed:
+                    failed = True
+                    raise OSError("history locked")
+                return real_replace(source, target)
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+                patch.object(app_server.os, "replace", side_effect=fail_history_once),
+            ):
+                with self.assertRaises(OSError):
+                    app_server._atomically_clear_persisted_session_state()
+
+            self.assertTrue(latest_path.exists())
+            self.assertTrue(history_path.exists())
+            self.assertEqual("window.EDB_UI_SESSION = {};\n", generated_path.read_text(encoding="utf-8"))
+
+    def test_session_clear_rolls_back_when_reset_commit_marker_write_fails(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            latest_payload = '{"problems": [{"id": "p1"}]}'
+            history_payload = "[]"
+            generated_payload = "window.EDB_UI_SESSION = {};\n"
+            latest_path.write_text(latest_payload, encoding="utf-8")
+            history_path.write_text(history_payload, encoding="utf-8")
+            generated_path.write_text(generated_payload, encoding="utf-8")
+            marker = runtime_dir / ".session_reset_transaction.json"
+            real_atomic_write = app_server._atomic_write_text
+
+            def fail_committed_marker(path, payload, **kwargs):
+                if Path(path) == marker and '"phase": "committed"' in payload:
+                    raise OSError("marker disk full")
+                return real_atomic_write(path, payload, **kwargs)
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+                patch.object(app_server, "_atomic_write_text", side_effect=fail_committed_marker),
+            ):
+                with self.assertRaises(OSError):
+                    app_server._atomically_clear_persisted_session_state()
+
+            self.assertEqual(latest_payload, latest_path.read_text(encoding="utf-8"))
+            self.assertEqual(history_payload, history_path.read_text(encoding="utf-8"))
+            self.assertEqual(generated_payload, generated_path.read_text(encoding="utf-8"))
+            self.assertFalse(marker.exists())
+            self.assertEqual([], list(runtime_dir.glob(".*.reset")))
+
+    def test_reset_recovery_never_overwrites_new_latest_after_rollback_failure(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            old_payload = '{"marker": "old", "problems": []}'
+            new_payload = '{"marker": "new", "problems": []}'
+            latest_path.write_text(old_payload, encoding="utf-8")
+            history_path.write_text("[]", encoding="utf-8")
+            generated_path.write_text("window.EDB_UI_SESSION = {};\n", encoding="utf-8")
+            real_replace = os.replace
+
+            def fail_move_and_rollback(source, target):
+                source_path = Path(source)
+                target_path = Path(target)
+                if source_path == history_path:
+                    raise OSError("history move failed")
+                if (
+                    source_path.name.startswith(f".{latest_path.name}.")
+                    and source_path.name.endswith(".reset")
+                    and target_path == latest_path
+                ):
+                    raise OSError("latest rollback failed")
+                return real_replace(source, target)
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+                patch.object(app_server.os, "replace", side_effect=fail_move_and_rollback),
+            ):
+                with self.assertRaises(OSError):
+                    app_server._atomically_clear_persisted_session_state()
+
+            marker = runtime_dir / ".session_reset_transaction.json"
+            self.assertTrue(marker.exists())
+            self.assertFalse(latest_path.exists())
+            latest_path.write_text(new_payload, encoding="utf-8")
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+                patch.object(app_server, "_refresh_session_problem_counts"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    self.assertEqual("new", server.session_snapshot()["marker"])
+                finally:
+                    server.server_close()
+
+            self.assertEqual(new_payload, latest_path.read_text(encoding="utf-8"))
+            self.assertFalse(marker.exists())
+            quarantined = list(
+                (runtime_dir / ".session-reset-recovery-conflicts").rglob(
+                    f".{latest_path.name}.*.reset"
+                )
+            )
+            self.assertEqual(1, len(quarantined))
+            self.assertEqual(old_payload, quarantined[0].read_text(encoding="utf-8"))
+
+    def test_new_latest_write_recovers_stale_reset_before_commit(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            old_payload = {"marker": "old", "problems": []}
+            new_payload = {"marker": "new", "problems": []}
+            latest_path.write_text(json.dumps(old_payload), encoding="utf-8")
+            stamp = "stale-before-new-write"
+            tombstone = latest_path.with_name(f".{latest_path.name}.{stamp}.reset")
+            os.replace(latest_path, tombstone)
+            marker = runtime_dir / ".session_reset_transaction.json"
+            marker.write_text(json.dumps({
+                "version": 1,
+                "stamp": stamp,
+                "phase": "preparing",
+                "generatedExistedBefore": False,
+                "entries": [{"target": str(latest_path), "tombstone": str(tombstone)}],
+            }), encoding="utf-8")
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                app_server.save_latest_session(new_payload)
+
+            self.assertEqual(new_payload, json.loads(latest_path.read_text(encoding="utf-8")))
+            self.assertFalse(marker.exists())
+            self.assertFalse(tombstone.exists())
+
+    def test_persist_latest_recovers_old_history_before_merging_new_session(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            old_latest = {"marker": "old", "problems": []}
+            old_history = [{
+                "id": "old-entry",
+                "sessionName": "Old",
+                "session": old_latest,
+            }]
+            latest_path.write_text(json.dumps(old_latest), encoding="utf-8")
+            history_path.write_text(json.dumps(old_history), encoding="utf-8")
+            generated_path.write_text("window.EDB_UI_SESSION = {};\n", encoding="utf-8")
+            stamp = "persist-history-recovery"
+            entries = []
+            for target in (latest_path, history_path, generated_path):
+                tombstone = target.with_name(f".{target.name}.{stamp}.reset")
+                os.replace(target, tombstone)
+                entries.append({"target": str(target), "tombstone": str(tombstone)})
+            marker = runtime_dir / ".session_reset_transaction.json"
+            marker.write_text(json.dumps({
+                "version": 1,
+                "stamp": stamp,
+                "phase": "preparing",
+                "generatedExistedBefore": True,
+                "entries": entries,
+            }), encoding="utf-8")
+            new_session = {"marker": "new", "session_name": "New", "problems": []}
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                merged, history_error = app_server.persist_latest_session_with_history(new_session)
+
+            self.assertIsNone(history_error)
+            self.assertEqual("new", json.loads(latest_path.read_text(encoding="utf-8"))["marker"])
+            stored_history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual([entry["id"] for entry in merged], [entry["id"] for entry in stored_history])
+            self.assertEqual("new", stored_history[0]["session"]["marker"])
+            self.assertIn("old-entry", [entry["id"] for entry in stored_history])
+            self.assertFalse(marker.exists())
+
+    def test_remember_history_recovers_old_history_before_merging_new_session(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            old_latest = {"marker": "old", "problems": []}
+            old_history = [{
+                "id": "old-entry",
+                "sessionName": "Old",
+                "session": old_latest,
+            }]
+            latest_path.write_text(json.dumps(old_latest), encoding="utf-8")
+            history_path.write_text(json.dumps(old_history), encoding="utf-8")
+            stamp = "remember-history-recovery"
+            entries = []
+            for target in (latest_path, history_path):
+                tombstone = target.with_name(f".{target.name}.{stamp}.reset")
+                os.replace(target, tombstone)
+                entries.append({"target": str(target), "tombstone": str(tombstone)})
+            marker = runtime_dir / ".session_reset_transaction.json"
+            marker.write_text(json.dumps({
+                "version": 1,
+                "stamp": stamp,
+                "phase": "preparing",
+                "generatedExistedBefore": False,
+                "entries": entries,
+            }), encoding="utf-8")
+            new_session = {"marker": "new", "session_name": "New", "problems": []}
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                merged = app_server.remember_session_history(new_session)
+
+            self.assertEqual("old", json.loads(latest_path.read_text(encoding="utf-8"))["marker"])
+            stored_history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual([entry["id"] for entry in merged], [entry["id"] for entry in stored_history])
+            self.assertEqual("new", stored_history[0]["session"]["marker"])
+            self.assertIn("old-entry", [entry["id"] for entry in stored_history])
+            self.assertFalse(marker.exists())
+
+    def test_register_current_session_recovers_history_tombstone_before_merge(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            current_session = {"marker": "current", "session_name": "Current", "problems": []}
+            old_history = [{
+                "id": "old-entry",
+                "sessionName": "Old",
+                "session": {"marker": "old", "problems": []},
+            }]
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    server.latest_session = current_session
+                    latest_path.write_text(json.dumps(current_session), encoding="utf-8")
+                    history_path.write_text(json.dumps(old_history), encoding="utf-8")
+                    stamp = "register-history-recovery"
+                    tombstone = history_path.with_name(f".{history_path.name}.{stamp}.reset")
+                    os.replace(history_path, tombstone)
+                    marker = runtime_dir / ".session_reset_transaction.json"
+                    marker.write_text(json.dumps({
+                        "version": 1,
+                        "stamp": stamp,
+                        "phase": "preparing",
+                        "generatedExistedBefore": False,
+                        "entries": [{"target": str(history_path), "tombstone": str(tombstone)}],
+                    }), encoding="utf-8")
+
+                    self.assertTrue(server.register_current_session(current_session))
+                finally:
+                    server.server_close()
+
+            stored_history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual("current", stored_history[0]["session"]["marker"])
+            self.assertIn("old-entry", [entry["id"] for entry in stored_history])
+            self.assertFalse(marker.exists())
+
+    def test_destructive_cleanup_recovers_history_before_selecting_old_artifact(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            export_dir = runtime_dir / "exports"
+            export_dir.mkdir(parents=True)
+            protected_artifact = export_dir / "old-history-only.edb"
+            protected_artifact.write_bytes(b"must survive")
+            os.utime(protected_artifact, (1, 1))
+            old_history = [{
+                "id": "old-entry",
+                "sessionName": "Old",
+                "session": {"edb_path": str(protected_artifact), "problems": []},
+            }]
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    history_path.write_text(json.dumps(old_history), encoding="utf-8")
+                    stamp = "cleanup-history-recovery"
+                    tombstone = history_path.with_name(f".{history_path.name}.{stamp}.reset")
+                    os.replace(history_path, tombstone)
+                    marker = runtime_dir / ".session_reset_transaction.json"
+                    marker.write_text(json.dumps({
+                        "version": 1,
+                        "stamp": stamp,
+                        "phase": "preparing",
+                        "generatedExistedBefore": False,
+                        "entries": [{"target": str(history_path), "tombstone": str(tombstone)}],
+                    }), encoding="utf-8")
+
+                    result = server.cleanup_artifacts(
+                        dry_run=False,
+                        min_age_seconds=0,
+                    )
+                finally:
+                    server.server_close()
+
+            self.assertTrue(protected_artifact.exists())
+            self.assertEqual(0, result["deletedFileCount"])
+            self.assertEqual(1, result["protectedFileCount"])
+            self.assertFalse(marker.exists())
+
+    def test_server_startup_restores_session_reset_interrupted_before_commit(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            latest_payload = '{"problems": [{"id": "p1"}]}'
+            history_payload = "[]"
+            generated_payload = "window.EDB_UI_SESSION = {};\n"
+            latest_path.write_text(latest_payload, encoding="utf-8")
+            history_path.write_text(history_payload, encoding="utf-8")
+            generated_path.write_text(generated_payload, encoding="utf-8")
+            stamp = "interrupted"
+            entries = []
+            for target in (latest_path, history_path, generated_path):
+                tombstone = target.with_name(f".{target.name}.{stamp}.reset")
+                os.replace(target, tombstone)
+                entries.append({"target": str(target), "tombstone": str(tombstone)})
+            marker = runtime_dir / ".session_reset_transaction.json"
+            marker.write_text(json.dumps({
+                "version": 1,
+                "stamp": stamp,
+                "phase": "preparing",
+                "generatedExistedBefore": True,
+                "entries": entries,
+            }), encoding="utf-8")
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+                patch.object(app_server, "_refresh_session_problem_counts"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    self.assertEqual("p1", server.session_snapshot()["problems"][0]["id"])
+                finally:
+                    server.server_close()
+
+            self.assertEqual(latest_payload, latest_path.read_text(encoding="utf-8"))
+            self.assertEqual(history_payload, history_path.read_text(encoding="utf-8"))
+            self.assertEqual(generated_payload, generated_path.read_text(encoding="utf-8"))
+            self.assertFalse(marker.exists())
+
+    def test_server_startup_finishes_session_reset_interrupted_after_commit(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            latest_path.write_text('{"problems": [{"id": "p1"}]}', encoding="utf-8")
+            history_path.write_text("[]", encoding="utf-8")
+            generated_path.write_text("window.EDB_UI_SESSION = {};\n", encoding="utf-8")
+            stamp = "committed"
+            entries = []
+            for target in (latest_path, history_path, generated_path):
+                tombstone = target.with_name(f".{target.name}.{stamp}.reset")
+                os.replace(target, tombstone)
+                entries.append({"target": str(target), "tombstone": str(tombstone)})
+            generated_path.write_text(app_server.EMPTY_GENERATED_SESSION_JS, encoding="utf-8")
+            marker = runtime_dir / ".session_reset_transaction.json"
+            marker.write_text(json.dumps({
+                "version": 1,
+                "stamp": stamp,
+                "phase": "committed",
+                "generatedExistedBefore": True,
+                "entries": entries,
+            }), encoding="utf-8")
+
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    self.assertIsNone(server.session_snapshot())
+                finally:
+                    server.server_close()
+
+            self.assertFalse(latest_path.exists())
+            self.assertFalse(history_path.exists())
+            self.assertEqual(app_server.EMPTY_GENERATED_SESSION_JS, generated_path.read_text(encoding="utf-8"))
+            self.assertFalse(marker.exists())
+            self.assertEqual([], list(runtime_dir.glob(".*.reset")))
+
+    def test_session_clear_reports_optional_cleanup_failure_after_successful_reset(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "history.json"),
+                patch.object(app_server, "GENERATED_SESSION_JS", runtime_dir / "generated.js"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                server.latest_session = {"problems": [{"id": "p1"}]}
+                server._session_revision = 1
+                try:
+                    with patch.object(
+                        app_server,
+                        "cleanup_runtime_artifacts",
+                        side_effect=OSError("cleanup locked"),
+                    ), patch.object(app_server, "_log_operation_exception"):
+                        cleanup, revision = server.clear_session_with_revision(
+                            expected_revision=1,
+                            cleanup_artifacts=True,
+                            dry_run=False,
+                        )
+                    self.assertFalse(cleanup["ok"])
+                    self.assertEqual("artifact_cleanup_failed", cleanup["code"])
+                    self.assertIsNone(server.session_snapshot())
+                    self.assertEqual(2, revision)
+                finally:
+                    server.server_close()
+
+    def test_staged_publish_cas_conflict_never_exposes_final_generation(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest_session.json"
+            history_path = runtime_dir / "session_history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    server.remember_session({"problems": [{"id": "p1"}]})
+                    expected, revision = server.session_snapshot_with_revision()
+                    server.remember_session({"problems": [{"id": "p1"}], "marker": "newer"})
+                    staging_dir = runtime_dir / ".publish-staging" / "generation"
+                    final_dir = runtime_dir / "published" / "generation"
+                    staging_dir.mkdir(parents=True)
+                    (staging_dir / "lesson.edb").write_bytes(b"edb")
+
+                    committed = server.adopt_staged_publish_if_current(
+                        expected,
+                        {"problems": [{"id": "p1"}], "marker": "stale"},
+                        staging_dir=staging_dir,
+                        final_dir=final_dir,
+                        expected_revision=revision,
+                    )
+
+                    self.assertIsNone(committed)
+                    self.assertTrue((staging_dir / "lesson.edb").exists())
+                    self.assertFalse(final_dir.exists())
+                    self.assertEqual("newer", server.session_snapshot()["marker"])
+                finally:
+                    server.server_close()
+
+    def test_staged_publish_persist_failure_rolls_generation_back(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "history.json"),
+                patch.object(app_server, "GENERATED_SESSION_JS", runtime_dir / "generated.js"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                try:
+                    server.latest_session = {"problems": [{"id": "p1"}]}
+                    server._session_revision = 1
+                    expected, revision = server.session_snapshot_with_revision()
+                    staging_dir = runtime_dir / ".publish-staging" / "generation"
+                    final_dir = runtime_dir / "published" / "generation"
+                    staging_dir.mkdir(parents=True)
+                    (staging_dir / "lesson.edb").write_bytes(b"edb")
+                    with patch.object(
+                        app_server,
+                        "persist_latest_session_with_history",
+                        side_effect=OSError("disk full"),
+                    ):
+                        with self.assertRaises(OSError):
+                            server.adopt_staged_publish_if_current(
+                                expected,
+                                {"problems": [{"id": "p1"}], "marker": "publish"},
+                                staging_dir=staging_dir,
+                                final_dir=final_dir,
+                                expected_revision=revision,
+                            )
+                    self.assertTrue((staging_dir / "lesson.edb").exists())
+                    self.assertFalse(final_dir.exists())
+                    self.assertNotIn("marker", server.session_snapshot())
+                    self.assertEqual(revision, server.session_revision())
+                finally:
+                    server.server_close()
+
+    def test_export_edb_artifact_job_blocks_reset_until_allowed_files_update_finishes(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "history.json"),
+                patch.object(app_server, "GENERATED_SESSION_JS", runtime_dir / "generated.js"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                handler = object.__new__(app_server.AppRequestHandler)
+                handler.server = server
+                started = threading.Event()
+                release = threading.Event()
+
+                def export_job():
+                    started.set()
+                    release.wait(timeout=5)
+                    server.add_allowed_files({"/tmp/export.zip"})
+
+                worker = threading.Thread(target=lambda: handler._run_artifact_job(export_job))
+                try:
+                    worker.start()
+                    self.assertTrue(started.wait(timeout=5))
+                    with self.assertRaises(app_server.ArtifactCleanupBusy):
+                        server.clear_session(expected_revision=0)
+                    release.set()
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive())
+                    self.assertIn("/tmp/export.zip", server.allowed_files)
+                    server.clear_session(expected_revision=0)
+                    self.assertEqual(set(), server.allowed_files)
+                finally:
+                    release.set()
+                    worker.join(timeout=5)
+                    server.server_close()
+
+    def test_restore_route_blocks_reset_and_cleanup_until_commit_finishes(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            with (
+                patch.object(app_server, "LATEST_SESSION_JSON", runtime_dir / "latest.json"),
+                patch.object(app_server, "SESSION_HISTORY_JSON", runtime_dir / "history.json"),
+                patch.object(app_server, "GENERATED_SESSION_JS", runtime_dir / "generated.js"),
+            ):
+                server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+                handler = object.__new__(app_server.AppRequestHandler)
+                handler.server = server
+                handler.path = "/api/session/restore"
+                started = threading.Event()
+                release = threading.Event()
+
+                def blocking_restore():
+                    started.set()
+                    release.wait(timeout=5)
+
+                handler._handle_session_restore = blocking_restore
+                worker = threading.Thread(target=handler._dispatch_post)
+                try:
+                    worker.start()
+                    self.assertTrue(started.wait(timeout=5))
+                    with self.assertRaises(app_server.ArtifactCleanupBusy):
+                        server.clear_session(
+                            expected_revision=0,
+                            cleanup_artifacts=True,
+                            dry_run=False,
+                            min_age_seconds=0,
+                        )
+                    release.set()
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive())
+                    server.clear_session(expected_revision=0)
+                finally:
+                    release.set()
+                    worker.join(timeout=5)
+                    server.server_close()
+
     def test_resolve_open_file_target_accepts_runtime_edb(self):
         app_server.RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(dir=app_server.RUNTIME_DIR) as raw_tmp:
@@ -4478,7 +7375,73 @@ class TestSystemOpenTargets(unittest.TestCase):
             self.assertEqual("window.EDB_UI_SESSION = null;\n", generated_path.read_text(encoding="utf-8"))
             self.assertIsNone(handler.server.latest_session)
             self.assertEqual(set(), handler.server.allowed_files)
-            self.assertEqual({"ok": True, "history": []}, responses[0][0])
+            self.assertEqual(
+                {
+                    "ok": True,
+                    "history": [],
+                    "session": None,
+                    "artifactCleanupRequested": False,
+                    "artifactCleanupDryRun": None,
+                    "artifactCleanupPerformed": False,
+                    "artifactCleanupSucceeded": None,
+                },
+                responses[0][0],
+            )
+
+    def test_session_clear_can_explicitly_delete_old_artifacts(self):
+        with TemporaryDirectory() as raw_tmp:
+            runtime_dir = Path(raw_tmp)
+            latest_path = runtime_dir / "latest.json"
+            history_path = runtime_dir / "history.json"
+            generated_path = runtime_dir / "generated_session.js"
+            export_dir = runtime_dir / "exports"
+            export_dir.mkdir()
+            artifact = export_dir / "old.zip"
+            artifact.write_bytes(b"old")
+            os.utime(artifact, (1, 1))
+            latest_path.write_text('{"problems": []}', encoding="utf-8")
+            history_path.write_text("[]", encoding="utf-8")
+
+            handler = object.__new__(app_server.AppRequestHandler)
+            handler.server = type("FakeServer", (), {
+                "latest_session": {"problems": []},
+                "allowed_files": set(),
+            })()
+            responses = []
+            handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+            with (
+                patch.object(app_server, "RUNTIME_DIR", runtime_dir),
+                patch.object(app_server, "LATEST_SESSION_JSON", latest_path),
+                patch.object(app_server, "SESSION_HISTORY_JSON", history_path),
+                patch.object(app_server, "GENERATED_SESSION_JS", generated_path),
+            ):
+                handler._handle_session_clear(SimpleNamespace(
+                    query="cleanupArtifacts=true&dryRun=false&minAgeDays=0"
+                ))
+
+            self.assertFalse(artifact.exists())
+            cleanup = responses[0][0]["artifactCleanup"]
+            self.assertFalse(cleanup["dryRun"])
+            self.assertEqual(1, cleanup["deletedFileCount"])
+            self.assertTrue(responses[0][0]["artifactCleanupRequested"])
+            self.assertTrue(responses[0][0]["artifactCleanupPerformed"])
+            self.assertTrue(responses[0][0]["artifactCleanupSucceeded"])
+
+    def test_runtime_artifact_cleanup_rejects_cross_origin_requests(self):
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.headers = {
+            "Host": "127.0.0.1:8765",
+            "Origin": "https://example.test",
+        }
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+
+        handler._handle_runtime_artifact_cleanup()
+
+        payload, kwargs = responses[0]
+        self.assertEqual("cross-origin request rejected", payload["error"])
+        self.assertEqual(app_server.HTTPStatus.FORBIDDEN, kwargs["status"])
 
     def test_shutdown_endpoint_sends_ok_and_stops_server(self):
         shutdown_called = threading.Event()

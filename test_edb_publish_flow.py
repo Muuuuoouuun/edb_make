@@ -12,7 +12,8 @@ from urllib.request import url2pathname
 from PIL import Image, ImageDraw
 
 import build_problem_board_edb as problem_board
-from inspect_edb import parse_edb
+import edb_builder
+from inspect_edb import parse_edb, parse_embedded_images
 from app_server import (
     _problems_to_entries,
     _session_publish_history,
@@ -33,11 +34,13 @@ from build_problem_board_edb import (
     build_image_only_records,
     run_problem_export,
     split_problem_entries_for_classin_page_limit,
+    write_classin_limited_edb_files,
     _pad_problem_crop_edges,
     _pad_problem_crop_bottom,
     _hwp_conversion_has_pdf_problem_markers,
     _trim_edge_vertical_guides,
     _trim_source_page_chrome,
+    _trim_text_priority_bottom_page_badge,
 )
 from edb_builder import CROP_FORMAT_V1
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
@@ -54,6 +57,46 @@ def _path_from_file_uri(value: str) -> Path:
 
 
 class TestEdbPublishFlow(unittest.TestCase):
+    def test_atomic_edb_write_preserves_existing_file_when_replace_fails(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            target = Path(raw_tmp) / "lesson.edb"
+            target.write_bytes(b"known-good")
+            with mock.patch.object(edb_builder.os, "replace", side_effect=OSError("locked")):
+                with self.assertRaises(OSError):
+                    edb_builder.write_edb(target, b"new")
+            self.assertEqual(b"known-good", target.read_bytes())
+            self.assertEqual([target], list(target.parent.iterdir()))
+
+    def test_atomic_edb_write_uses_short_staging_name_for_long_destination(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            target = Path(raw_tmp) / f"{'a' * 250}.edb"
+            edb_builder.write_edb(target, b"complete-edb")
+            self.assertEqual(b"complete-edb", target.read_bytes())
+            self.assertEqual([target], list(target.parent.iterdir()))
+
+    def test_edb_builder_rejects_empty_record_set(self):
+        with self.assertRaisesRegex(ValueError, "at least one record"):
+            edb_builder.build_edb([], header_flag=3)
+
+    def test_session_publish_preflight_blocks_duplicate_problem_ids(self):
+        problems = [
+            {"id": "same-id", "title": "1.", "riskFlags": []},
+            {"id": "same-id", "title": "2.", "riskFlags": []},
+        ]
+
+        preflight, _duplicate_number_groups = _session_publish_blocking_preflight(
+            problems,
+            session={"input_intent": "page-as-is"},
+        )
+
+        self.assertFalse(preflight["passed"])
+        duplicate_id_issues = [
+            issue for issue in preflight["issues"] if issue["type"] == "duplicate_problem_id"
+        ]
+        self.assertEqual(1, len(duplicate_id_issues))
+        self.assertEqual("same-id", duplicate_id_issues[0]["problemId"])
+        self.assertEqual(2, duplicate_id_issues[0]["occurrenceCount"])
+
     def test_hwp_layout_problem_markers_count_as_marker_document_signal(self):
         self.assertTrue(
             _hwp_conversion_has_pdf_problem_markers(
@@ -312,7 +355,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual("passage_fragment", fragment["passageRole"])
             self.assertEqual(fragment["imagePath"], fragment["originalImagePath"])
 
-    def test_page_as_is_problem_entries_default_to_reconstruct_step(self):
+    def test_page_as_is_problem_entries_default_to_chalk_step(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "page.png"
@@ -356,7 +399,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             with mock.patch.object(problem_board, "_extract_problem_cutout", side_effect=lambda crop, **_kwargs: crop.convert("RGBA")):
                 entries = build_problem_entries([prepared], [page], root / "out", LayoutTemplate(name="academy-default"))
 
-            self.assertEqual(PROCESSING_STEP_RECONSTRUCT, entries[0].processing_step)
+            self.assertEqual(problem_board.PROCESSING_STEP_CHALK, entries[0].processing_step)
             self.assertEqual(problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX, entries[0].placement_scale_ratio)
             self.assertEqual("page-as-is", entries[0].input_intent)
             self.assertTrue(entries[0].force_full_page_bounds)
@@ -416,8 +459,11 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(110.0, entries[0].bounds.top)
             self.assertEqual(80.0 - problem_board.PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX, entries[0].bounds.left)
             crop_width = Image.open(entries[0].crop_path).size[0]
-            self.assertLessEqual(crop_width, round(entries[0].bounds.width))
-            self.assertGreater(crop_width, round(entries[0].bounds.width) - 32)
+            self.assertEqual(
+                round(entries[0].bounds.width)
+                + problem_board.TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX * 2,
+                crop_width,
+            )
 
     def test_build_problem_entries_restores_ignored_hwp_marker_from_text_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -626,6 +672,61 @@ class TestEdbPublishFlow(unittest.TestCase):
                 )
             )
 
+    def test_fresh_preprocessed_board_render_skips_duplicate_transparency_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            board_render_path = root / "fresh-board.png"
+            rendered = Image.new("RGBA", (80, 48), (238, 238, 226, 0))
+            ImageDraw.Draw(rendered).rectangle(
+                (20, 8, 27, 39),
+                fill=(238, 238, 226, 255),
+            )
+            rendered.save(board_render_path)
+            crop = Image.new("RGB", rendered.size, "white")
+
+            with mock.patch.object(
+                problem_board,
+                "clean_problem_image_transparency",
+                side_effect=AssertionError("fresh render must not be cleaned twice"),
+            ), mock.patch.object(
+                problem_board,
+                "_extract_problem_cutout",
+                side_effect=AssertionError("fresh render must not be extracted twice"),
+            ):
+                exported = problem_board._load_board_export_image(
+                    board_render_path,
+                    crop,
+                    trusted_preprocessed_render=True,
+                )
+
+            self.assertEqual(rendered.tobytes(), exported.tobytes())
+
+    def test_fresh_text_board_render_defers_single_finalization_to_record_builder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            board_render_path = root / "fresh-text-board.png"
+            rendered = Image.new("RGBA", (80, 48), (238, 238, 226, 0))
+            ImageDraw.Draw(rendered).rectangle(
+                (20, 8, 27, 39),
+                fill=(238, 238, 226, 255),
+            )
+            rendered.save(board_render_path)
+            crop = Image.new("RGB", rendered.size, "white")
+
+            with mock.patch.object(
+                problem_board,
+                "_finalize_text_cutout",
+                side_effect=AssertionError("trusted loader must not finalize before record sizing"),
+            ):
+                exported = problem_board._load_board_export_image(
+                    board_render_path,
+                    crop,
+                    text_priority=True,
+                    trusted_preprocessed_render=True,
+                )
+
+            self.assertEqual(rendered.tobytes(), exported.tobytes())
+
     def test_passage_stitch_removes_footer_badge_and_collapses_join(self):
         first = Image.new("RGB", (240, 300), "white")
         first_draw = ImageDraw.Draw(first)
@@ -654,6 +755,7 @@ class TestEdbPublishFlow(unittest.TestCase):
         ImageDraw.Draw(first).text((24, 72), "left column ending", fill="black")
         second = Image.new("RGB", (240, 180), "white")
         draw = ImageDraw.Draw(second)
+        draw.text((10, 8), "DOMAIN", fill="black")
         draw.ellipse((150, 2, 220, 30), outline="black", width=2)
         draw.text((172, 8), "G2", fill="black")
         draw.line((8, 42, 232, 42), fill="black", width=3)
@@ -665,6 +767,134 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertLess(prepared[1].height, 140)
         self.assertGreater(prepared[1].height, 110)
         self.assertLess(prepared[1].convert("L").crop((0, 0, 240, 24)).getextrema()[0], 200)
+
+    def test_passage_stitch_removes_cropped_page_header_rule_without_header_text(self):
+        first = Image.new("RGB", (240, 120), "white")
+        ImageDraw.Draw(first).text((24, 72), "left column ending", fill="black")
+        second = Image.new("RGB", (240, 180), "white")
+        draw = ImageDraw.Draw(second)
+        draw.line((8, 12, 232, 12), fill="black", width=3)
+        draw.text((24, 44), "continued first glyph", fill="black")
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertLess(prepared[1].height, 165)
+        self.assertEqual(
+            (255, 255, 255),
+            prepared[1].getpixel((120, 0)),
+        )
+        self.assertLess(
+            prepared[1].convert("L").crop((20, 8, 180, 40)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_stitch_keeps_centered_section_label_above_box(self):
+        first = Image.new("RGB", (240, 120), "white")
+        ImageDraw.Draw(first).text((24, 72), "section A ending", fill="black")
+        second = Image.new("RGB", (240, 180), "white")
+        draw = ImageDraw.Draw(second)
+        draw.text((112, 8), "(B)", fill="black")
+        draw.rectangle((20, 42, 220, 160), outline="black", width=2)
+        draw.text((32, 64), "section B body", fill="black")
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertEqual(second.size, prepared[1].size)
+        self.assertLess(
+            prepared[1].convert("L").crop((96, 0, 144, 32)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_cleanup_erases_outer_guides_without_cropping_box_or_label(self):
+        image = Image.new("RGB", (240, 220), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((112, 8), "(B)", fill="black")
+        draw.rectangle((14, 42, 226, 160), outline="black", width=2)
+        draw.line((4, 0, 4, 219), fill="black", width=2)
+        draw.line((4, 168, 10, 168), fill="black", width=2)
+        draw.line((235, 0, 235, 219), fill="black", width=2)
+        draw.line((229, 32, 235, 32), fill="black", width=2)
+        draw.rectangle((180, 195, 181, 197), fill="black")
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual(image.size, cleaned.size)
+        self.assertEqual((255, 255, 255), cleaned.getpixel((4, 80)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((10, 168)))
+        self.assertEqual((255, 255, 255), cleaned.getpixel((235, 80)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((229, 32)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((180, 196)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((14, 80)))
+        self.assertLess(
+            cleaned.convert("L").crop((96, 0, 144, 32)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_cleanup_does_not_treat_repeated_underlines_as_box_edges(self):
+        image = Image.new("RGB", (500, 640), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((12, 0, 12, 639), fill="black", width=2)
+        draw.rectangle((25, 52, 478, 620), outline="black", width=2)
+        draw.text((52, 16), "[26 ~ 28] passage", fill="black")
+        draw.text((52, 84), "first glyph must stay", fill="black")
+        # Repeated answer underlines are long enough to be frame candidates,
+        # but their endpoints vary and must not displace the real box border.
+        draw.line((96, 150, 466, 150), fill="black", width=2)
+        draw.line((96, 214, 466, 214), fill="black", width=2)
+        draw.line((58, 278, 466, 278), fill="black", width=2)
+        draw.line((180, 342, 466, 342), fill="black", width=2)
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual((255, 255, 255), cleaned.getpixel((12, 300)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((25, 300)))
+        self.assertLess(
+            cleaned.convert("L").crop((48, 80, 90, 104)).getextrema()[0],
+            200,
+        )
+
+    def test_passage_cleanup_does_not_erase_text_beside_an_inner_material_box(self):
+        image = Image.new("RGB", (240, 220), "white")
+        draw = ImageDraw.Draw(image)
+        # A long outer rule and tightly spaced glyph-like strokes model a
+        # speaker label.  The smaller material box is intentionally cleaner
+        # and therefore easier for the frame detector to find.
+        draw.line((8, 0, 8, 219), fill="black", width=2)
+        for left in (13, 22, 31, 40):
+            draw.rectangle((left, 80, left + 5, 88), fill="black")
+        draw.rectangle((48, 42, 228, 190), outline="black", width=2)
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual(image.tobytes(), cleaned.tobytes())
+        self.assertEqual((0, 0, 0), cleaned.getpixel((14, 84)))
+
+    def test_passage_cleanup_prefers_vertical_frame_over_repeated_underlines(self):
+        image = Image.new("RGB", (240, 220), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((4, 0, 4, 180), fill="black", width=2)  # page divider
+        draw.line((14, 0, 14, 219), fill="black", width=2)  # passage frame
+        draw.line((228, 0, 228, 219), fill="black", width=2)
+        for y in (48, 82, 116, 150):
+            draw.line((48, y, 210, y), fill="black", width=2)
+        draw.rectangle((31, 176, 38, 184), fill="black")  # first glyph
+
+        cleaned = problem_board._erase_passage_outer_margin_page_guides(image)
+
+        self.assertEqual((255, 255, 255), cleaned.getpixel((4, 100)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((14, 100)))
+        self.assertEqual((0, 0, 0), cleaned.getpixel((34, 180)))
+
+    def test_passage_stitch_collapses_duplicate_edge_padding(self):
+        first = Image.new("RGB", (240, 220), "white")
+        ImageDraw.Draw(first).text((24, 130), "last passage line", fill="black")
+        second = Image.new("RGB", (240, 220), "white")
+        ImageDraw.Draw(second).text((24, 80), "continued passage line", fill="black")
+
+        prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
+
+        self.assertLess(prepared[0].height, 175)
+        self.assertLess(prepared[1].height, 155)
 
     def test_passage_stitch_preserves_substantial_footnote_below_rule(self):
         first = Image.new("RGB", (240, 300), "white")
@@ -714,14 +944,341 @@ class TestEdbPublishFlow(unittest.TestCase):
             Box(240, 40, 120, 320),
             image_width=400,
         )
-        self.assertEqual(200.0, right_column.left)
-        self.assertEqual(184.0, right_column.width)
+        self.assertEqual(206.0, right_column.left)
+        self.assertEqual(178.0, right_column.width)
         left_column = problem_board._expand_passage_source_bounds_horizontally(
             Box(40, 40, 120, 320),
             image_width=400,
         )
         self.assertEqual(16.0, left_column.left)
-        self.assertEqual(184.0, left_column.width)
+        self.assertEqual(178.0, left_column.width)
+
+    def test_passage_source_bounds_exclude_off_center_column_divider(self):
+        left_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(40, 40, 120, 320),
+            image_width=400,
+            column_divider_x=180.0,
+        )
+        right_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(200, 40, 120, 320),
+            image_width=400,
+            column_divider_x=180.0,
+        )
+
+        self.assertEqual(174.0, left_column.right)
+        self.assertEqual(186.0, right_column.left)
+        self.assertLess(left_column.right, 180.0)
+        self.assertGreater(right_column.left, 180.0)
+
+    def test_passage_source_bounds_use_explicit_column_when_text_box_straddles_divider(self):
+        left_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(120, 40, 100, 320),
+            image_width=400,
+            column_divider_x=180.0,
+            column_index=1,
+        )
+        right_column = problem_board._expand_passage_source_bounds_horizontally(
+            Box(160, 40, 100, 320),
+            image_width=400,
+            column_divider_x=180.0,
+            column_index=2,
+        )
+
+        self.assertEqual(174.0, left_column.right)
+        self.assertEqual(186.0, right_column.left)
+        self.assertLess(left_column.right, right_column.left)
+
+    def test_passage_segment_source_bounds_recover_vertical_edge_glyphs(self):
+        expanded = problem_board._expand_passage_segment_source_bounds(
+            Box(100, 8, 200, 380),
+            image_width=400,
+            image_height=400,
+        )
+
+        self.assertEqual(76.0, expanded.left)
+        self.assertEqual(0.0, expanded.top)
+        self.assertEqual(248.0, expanded.width)
+        self.assertEqual(400.0, expanded.height)
+
+    def test_stitched_passage_does_not_apply_a_second_vertical_outset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = Image.new("RGB", (400, 400), "white")
+            draw = ImageDraw.Draw(source)
+            draw.text((40, 96), "first passage fragment", fill="black")
+            draw.text((240, 216), "second passage fragment", fill="black")
+            task = problem_board._ProblemAssetTask(
+                source_image=source,
+                bounds=Box(32, 80, 320, 240),
+                segment_bounds=(
+                    Box(32, 80, 128, 80),
+                    Box(224, 200, 128, 80),
+                ),
+                crop_path=root / "crop.png",
+                board_render_path=root / "board.png",
+                chalk_color=(238, 238, 226),
+                trim_edge_guides=False,
+                preserve_horizontal_bounds=True,
+                pad_edges=False,
+            )
+            captured_heights: list[int] = []
+            original_compose = problem_board._compose_passage_segments
+
+            def capture_segments(images, **kwargs):
+                captured_heights.extend(image.height for image in images)
+                return original_compose(images, **kwargs)
+
+            with mock.patch.object(
+                problem_board,
+                "_compose_passage_segments",
+                side_effect=capture_segments,
+            ):
+                problem_board._render_problem_asset(task)
+
+            self.assertEqual([80, 80], captured_heights)
+
+    def test_text_priority_source_bounds_recover_only_crossing_glyphs(self):
+        image = Image.new("RGB", (600, 400), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((96, 120, 104, 136), fill="black")
+        draw.rectangle((236, 180, 244, 196), fill="black")
+        bounds = Box(100, 80, 140, 220)
+
+        expanded = problem_board._expand_text_priority_source_bounds_horizontally(
+            image,
+            bounds,
+        )
+
+        self.assertEqual(84.0, expanded.left)
+        self.assertEqual(172.0, expanded.width)
+        self.assertEqual(80.0, expanded.top)
+        self.assertEqual(220.0, expanded.height)
+
+    def test_text_priority_source_bounds_ignore_long_vertical_guide(self):
+        image = Image.new("RGB", (600, 400), "white")
+        ImageDraw.Draw(image).line((99, 80, 99, 299), fill="black", width=2)
+        bounds = Box(100, 80, 140, 220)
+
+        expanded = problem_board._expand_text_priority_source_bounds_horizontally(
+            image,
+            bounds,
+        )
+
+        self.assertEqual(bounds, expanded)
+
+    def test_horizontal_inner_edge_guard_finds_hidden_clip_but_keeps_frame(self):
+        clipped = Image.new("RGB", (320, 240), "white")
+        ImageDraw.Draw(clipped).rectangle((14, 80, 28, 96), fill="black")
+
+        clipped_stats = problem_board._problem_image_horizontal_inner_edge_risk_stats(
+            clipped,
+            expected_padding_px=16,
+        )
+
+        self.assertTrue(clipped_stats["hasRisk"])
+        self.assertEqual(["left"], clipped_stats["riskSides"])
+
+        framed = Image.new("RGB", (320, 240), "white")
+        ImageDraw.Draw(framed).rectangle((16, 30, 303, 210), outline="black", width=2)
+
+        framed_stats = problem_board._problem_image_horizontal_inner_edge_risk_stats(
+            framed,
+            expected_padding_px=16,
+        )
+
+        self.assertFalse(framed_stats["hasRisk"])
+        self.assertEqual([], framed_stats["riskSides"])
+
+    def test_classin_preflight_reports_hidden_horizontal_clip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "clipped.png"
+            clipped = Image.new("RGB", (320, 240), "white")
+            ImageDraw.Draw(clipped).rectangle((14, 80, 28, 96), fill="black")
+            clipped.save(image_path)
+
+            report = problem_board._classin_handoff_preflight(
+                {
+                    "contentTarget": "all",
+                    "problems": [
+                        {
+                            "id": "korean-problem-1",
+                            "title": "1.",
+                            "problemNumber": 1,
+                            "subject": "korean",
+                            "imagePath": image_path.resolve().as_uri(),
+                            "processingStep": "s2",
+                            "riskFlags": [],
+                            "reviewStatus": "passed",
+                        }
+                    ],
+                }
+            )
+
+        edge_issues = [
+            issue
+            for issue in report["issues"]
+            if issue.get("type") == "horizontal_crop_edge_risk"
+        ]
+        self.assertEqual(1, len(edge_issues))
+        self.assertEqual(["left"], edge_issues[0]["horizontalEdgeRiskStats"]["riskSides"])
+
+    def test_classin_preflight_skips_crop_edge_scan_for_full_page_as_is(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "full-page.png"
+            Image.new("RGB", (320, 240), "white").save(image_path)
+
+            with mock.patch.object(
+                problem_board,
+                "_problem_image_horizontal_inner_edge_risk_stats",
+                side_effect=AssertionError("full-page export must not scan a nonexistent crop seam"),
+            ):
+                report = problem_board._classin_handoff_preflight(
+                    {
+                        "contentTarget": "all",
+                        "problems": [
+                            {
+                                "id": "korean-page-1",
+                                "title": "1.",
+                                "problemNumber": 1,
+                                "subject": "korean",
+                                "imagePath": image_path.resolve().as_uri(),
+                                "processingStep": problem_board.PROCESSING_STEP_RAW,
+                                "inputIntent": "page-as-is",
+                                "forceFullPageBounds": True,
+                                "riskFlags": [],
+                                "reviewStatus": "passed",
+                            }
+                        ],
+                    }
+                )
+
+        self.assertFalse(
+            any(issue.get("type") == "horizontal_crop_edge_risk" for issue in report["issues"])
+        )
+
+    def test_tiny_top_column_header_is_not_used_as_passage_continuation(self):
+        page = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+        )
+        header = ContentBlock(
+            block_id="header",
+            block_type=BlockType.IMAGE,
+            bbox=Box(470, 8, 420, 48),
+            reading_order=1,
+            metadata={
+                "segmenter": "pdf-passage-range",
+                "marker_kind": "passage_continuation",
+                "passage_text_line_count": 1,
+                "passage_text_character_count": 2,
+            },
+        )
+        real_continuation = ContentBlock(
+            block_id="continuation",
+            block_type=BlockType.IMAGE,
+            bbox=Box(470, 8, 420, 520),
+            reading_order=1,
+            metadata={
+                "segmenter": "pdf-passage-range",
+                "marker_kind": "passage_continuation",
+                "passage_text_line_count": 18,
+                "passage_text_character_count": 480,
+            },
+        )
+
+        self.assertTrue(
+            problem_board._is_probable_passage_continuation_page_header(page, header)
+        )
+        self.assertFalse(
+            problem_board._is_probable_passage_continuation_page_header(
+                page,
+                real_continuation,
+            )
+        )
+
+    def test_passage_segments_are_centered_without_rescaling_at_the_join(self):
+        narrow = Image.new("RGB", (100, 80), "white")
+        ImageDraw.Draw(narrow).rectangle((0, 10, 9, 69), fill="black")
+        wide = Image.new("RGB", (140, 80), "white")
+        ImageDraw.Draw(wide).rectangle((0, 10, 9, 69), fill="black")
+
+        stitched = problem_board._compose_passage_segments(
+            [narrow, wide],
+            transparent=False,
+        )
+
+        self.assertEqual((140, 176), stitched.size)
+        self.assertEqual((255, 255, 255), stitched.getpixel((0, 10)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((20, 10)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((0, 106)))
+
+    def test_passage_segment_frames_share_one_visual_axis(self):
+        first = Image.new("RGB", (200, 200), "white")
+        first_draw = ImageDraw.Draw(first)
+        first_draw.line((10, 8, 10, 191), fill="black", width=2)
+        first_draw.line((190, 8, 190, 191), fill="black", width=2)
+        second = Image.new("RGB", (200, 200), "white")
+        second_draw = ImageDraw.Draw(second)
+        second_draw.line((14, 8, 14, 191), fill="black", width=2)
+        second_draw.line((194, 8, 194, 191), fill="black", width=2)
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=False,
+        )
+
+        self.assertEqual(204, stitched.width)
+        self.assertEqual((0, 0, 0), stitched.getpixel((14, 20)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((14, 236)))
+        self.assertEqual((0, 0, 0), stitched.getpixel((14, 207)))
+
+    def test_passage_segment_frame_bridge_preserves_transparent_chalk_color(self):
+        first = Image.new("RGBA", (160, 100), (255, 255, 255, 0))
+        first_draw = ImageDraw.Draw(first)
+        first_draw.line((12, 8, 12, 91), fill=(244, 248, 241, 255), width=1)
+        first_draw.line((148, 8, 148, 91), fill=(244, 248, 241, 255), width=1)
+        second = first.copy()
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=True,
+        )
+
+        self.assertEqual((244, 248, 241, 255), stitched.getpixel((12, 107)))
+
+    def test_passage_segment_frame_bridge_skips_mismatched_widths(self):
+        first = Image.new("RGB", (200, 120), "white")
+        first_draw = ImageDraw.Draw(first)
+        first_draw.line((10, 8, 10, 111), fill="black", width=2)
+        first_draw.line((190, 8, 190, 111), fill="black", width=2)
+        second = Image.new("RGB", (200, 120), "white")
+        second_draw = ImageDraw.Draw(second)
+        second_draw.line((20, 8, 20, 111), fill="black", width=2)
+        second_draw.line((180, 8, 180, 111), fill="black", width=2)
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=False,
+        )
+
+        self.assertEqual((255, 255, 255), stitched.getpixel((10, 127)))
+        self.assertEqual((255, 255, 255), stitched.getpixel((20, 127)))
+
+    def test_passage_segment_frame_bridge_skips_closed_section_boxes(self):
+        first = Image.new("RGB", (200, 120), "white")
+        ImageDraw.Draw(first).rectangle((10, 8, 190, 111), outline="black", width=2)
+        second = Image.new("RGB", (200, 120), "white")
+        ImageDraw.Draw(second).rectangle((10, 8, 190, 111), outline="black", width=2)
+
+        stitched = problem_board._compose_passage_segments(
+            [first, second],
+            transparent=False,
+        )
+
+        self.assertEqual((255, 255, 255), stitched.getpixel((10, 126)))
+        self.assertEqual((255, 255, 255), stitched.getpixel((190, 126)))
 
     def test_continuous_full_width_records_keep_explicit_non_overlap_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -769,6 +1326,87 @@ class TestEdbPublishFlow(unittest.TestCase):
                 selected[0].placement_scale_ratio,
             )
 
+    def test_content_target_only_treats_separate_shared_passage_as_passage(self):
+        common_passage = ProblemUnit(
+            unit_id="page-1-passage-1-3",
+            subject=Subject.KOREAN,
+            title="지문 1~3",
+            metadata={"passage_role": "passage_fragment", "passage_group_id": "passage-1-3"},
+        )
+        child_question = ProblemUnit(
+            unit_id="page-1-problem-1",
+            subject=Subject.KOREAN,
+            title="1.",
+            metadata={"passage_role": "child_question", "passage_group_id": "passage-1-3"},
+        )
+        question_with_table = ProblemUnit(
+            unit_id="page-1-problem-4",
+            subject=Subject.MATH,
+            title="4.",
+            metadata={"contains_table": True},
+        )
+
+        self.assertFalse(problem_board._problem_matches_content_target(common_passage, "questions"))
+        self.assertTrue(problem_board._problem_matches_content_target(child_question, "questions"))
+        self.assertTrue(problem_board._problem_matches_content_target(question_with_table, "questions"))
+        self.assertTrue(problem_board._problem_matches_content_target(common_passage, "shared-passages"))
+        self.assertFalse(problem_board._problem_matches_content_target(child_question, "shared-passages"))
+        self.assertFalse(problem_board._problem_matches_content_target(question_with_table, "shared-passages"))
+
+    def test_passage_only_defaults_to_text_preserving_fit_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = self._make_problem_entry(root, "page-1-passage-28-30", Box(0, 0, 900, 1800))
+            question = self._make_problem_entry(root, "page-1-problem-28", Box(0, 0, 900, 600))
+
+            selected = configure_problem_entries_for_export(
+                [passage, question],
+                passage_problem_ids={passage.problem_id},
+                passages_only=True,
+            )
+
+            self.assertEqual([passage.problem_id], [entry.problem_id for entry in selected])
+            self.assertEqual(problem_board.PROCESSING_STEP_CHALK, selected[0].processing_step)
+            self.assertEqual("page-as-is", selected[0].input_intent)
+            self.assertEqual(0.0, selected[0].placement_x_ratio)
+            self.assertEqual(
+                problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX,
+                selected[0].placement_scale_ratio,
+            )
+
+    def test_passage_only_keeps_an_explicit_processing_step_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = self._make_problem_entry(root, "page-1-passage-28-30", Box(0, 0, 900, 1800))
+
+            selected = configure_problem_entries_for_export(
+                [passage],
+                passage_problem_ids={passage.problem_id},
+                passages_only=True,
+                processing_step=problem_board.PROCESSING_STEP_ORIGINAL,
+            )
+
+            self.assertEqual(problem_board.PROCESSING_STEP_ORIGINAL, selected[0].processing_step)
+            self.assertEqual("page-as-is", selected[0].input_intent)
+
+    def test_passage_only_defaults_to_one_stitched_image_record(self):
+        self.assertEqual(
+            "image-only",
+            problem_board.resolve_export_record_mode(None, passages_only=True),
+        )
+
+    def test_passage_only_keeps_explicit_mixed_record_mode(self):
+        self.assertEqual(
+            "mixed",
+            problem_board.resolve_export_record_mode("mixed", passages_only=True),
+        )
+
+    def test_regular_export_keeps_mixed_record_mode_default(self):
+        self.assertEqual(
+            "mixed",
+            problem_board.resolve_export_record_mode(None, passages_only=False),
+        )
+
     def test_generated_single_problem_edb_validates(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -803,6 +1441,59 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertEqual([41, 1], [len(chunk) for chunk in chunks])
+
+    def test_record_assembly_rejects_duplicate_problem_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self._make_problem_entry(root, "duplicate-id", Box(0, 0, 640, 640))
+            second = self._make_problem_entry(root, "second", Box(0, 0, 640, 640))
+            second.problem_id = first.problem_id
+
+            with self.assertRaisesRegex(ValueError, "Duplicate problem ID.*duplicate-id"):
+                build_image_only_records(
+                    [first, second],
+                    LayoutTemplate(name="academy-default"),
+                )
+
+    def test_classin_split_rejects_single_problem_over_fifty_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "oversized", Box(0, 0, 640, 640))
+            entry.actual_height_pages = 50.1
+
+            with self.assertRaisesRegex(ValueError, "oversized.*50-page limit"):
+                split_problem_entries_for_classin_page_limit(
+                    [entry],
+                    LayoutTemplate(name="academy-default", board_page_count=80),
+                )
+
+    def test_classin_writer_rejects_single_rendered_record_over_fifty_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "rendered-oversized", Box(0, 0, 640, 640))
+            placement = {
+                "problem_id": entry.problem_id,
+                "actual_bottom_y_pages": 0.72,
+                "snapped_next_start_y_pages": 1.2,
+                "record_bottom_y_pages": 50.5,
+                "recordPageCountHint": 50,
+            }
+
+            with self.assertRaisesRegex(ValueError, "rendered-oversized.*50-page limit"):
+                write_classin_limited_edb_files(
+                    [entry],
+                    LayoutTemplate(name="academy-default", board_page_count=50),
+                    root,
+                    "lesson.edb",
+                    record_mode="image-only",
+                    text_confidence_threshold=0.78,
+                    dark_board=True,
+                    board_theme="charcoal",
+                    crop_format=edb_builder.CROP_FORMAT_V2,
+                    existing_records=[b"placeholder"],
+                    existing_placements=[placement],
+                    existing_header_flag=0,
+                )
 
     def test_classin_split_does_not_rebuild_each_candidate_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1278,6 +1969,18 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(["step3_page_chrome_artifact"], [issue["type"] for issue in preflight["issues"]])
             self.assertEqual(["edge_vertical_guide"], preflight["issues"][0]["artifactTypes"])
 
+    def test_page_chrome_detector_keeps_paired_inset_content_frame(self):
+        image = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((24, 40, 475, 390), outline="black", width=2)
+        draw.text((64, 80), "legitimate framed passage", fill="black")
+
+        stats = problem_board._problem_image_page_chrome_artifact_stats(image)
+
+        self.assertTrue(stats["pairedContentFrame"])
+        self.assertFalse(stats["hasArtifact"])
+        self.assertEqual(0, stats["edgeGuideColumnCount"])
+
     def test_publish_preflight_allows_page_chrome_for_page_as_is_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1356,6 +2059,34 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(2, preflight["issues"][0]["artifactProblemCount"])
             self.assertEqual(10, preflight["issues"][0]["checkedProblemCount"])
             self.assertGreater(preflight["issues"][0]["artifactRatio"], 0.10)
+
+    def test_publish_preflight_keeps_intentional_s2_passage_box(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            passage = root / "passage.png"
+            image = Image.new("RGB", (320, 240), "white")
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((0, 20, 319, 239), outline="black", width=3)
+            draw.text((32, 48), "shared passage", fill="black")
+            image.save(passage)
+            problem = {
+                "id": "passage-1-3",
+                "title": "지문 1~3",
+                "imagePath": passage.resolve().as_uri(),
+                "processingStep": "s2",
+                "passageRole": "passage_fragment",
+                "riskFlags": [],
+            }
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                [problem],
+                session={"problems": [problem], "pages": []},
+            )
+
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual([], duplicate_groups)
+            self.assertEqual([], preflight["issues"])
 
     def test_problem_ui_session_keeps_duplicate_problem_numbers_nonblocking(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1796,6 +2527,98 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual([13, 14], problem["passageChildProblemNumbers"])
             self.assertEqual(["continued-line-1"], problem["passagePreQuestionContinuationBlockIds"])
             self.assertEqual(["continued-line-1"], problem["passage_pre_question_continuation_block_ids"])
+
+    def test_ui_session_keeps_ordered_passage_boxes_on_every_source_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_paths = [root / "page-1.png", root / "page-2.png"]
+            crop_path = root / "passage.png"
+            for source_path in source_paths:
+                Image.new("RGB", (900, 1200), "white").save(source_path)
+            Image.new("RGB", (600, 900), "white").save(crop_path)
+            prepared_pages = [
+                PreparedPage(
+                    page_id=f"page-{index}",
+                    source_path=str(source_path),
+                    page_number=index,
+                    image=Image.open(source_path).convert("RGB"),
+                    original_size=(900, 1200),
+                )
+                for index, source_path in enumerate(source_paths, start=1)
+            ]
+            pages = [
+                PageModel(
+                    page_id=f"page-{index}",
+                    width_px=900,
+                    height_px=1200,
+                    subject=Subject.KOREAN,
+                    source_path=str(source_path),
+                )
+                for index, source_path in enumerate(source_paths, start=1)
+            ]
+            placement = {
+                "problem_id": "passage-1",
+                "title": "지문 1~3",
+                "problem_number": None,
+                "subject": "korean",
+                "source_page_id": "page-1",
+                "source_path": str(source_paths[0]),
+                "crop_path": str(crop_path),
+                "board_render_path": str(crop_path),
+                "actual_content_height_pages": 1.0,
+                "overflow_allowed": True,
+                "overflow_violation": False,
+                "overflow_amount_pages": 0.0,
+                "slot_span_count": 1,
+                "start_y_pages": 0.0,
+                "snapped_next_start_y_pages": 1.2,
+                "placement_x_ratio": 0.0,
+                "placement_y_ratio": 0.0,
+                "placement_scale_ratio": 1.0,
+                "record_mode": "image-only",
+                "processing_step": "raw",
+                "text_record_count": 0,
+                "image_record_count": 1,
+                "bbox": {"left": 40, "top": 60, "width": 820, "height": 1080},
+                "source_segments": [
+                    {
+                        "source_page_id": "page-1",
+                        "column_index": 1,
+                        "fragment_index": 1,
+                        "bbox": {"left": 40, "top": 500, "width": 390, "height": 620},
+                    },
+                    {
+                        "source_page_id": "page-1",
+                        "column_index": 2,
+                        "fragment_index": 2,
+                        "bbox": {"left": 470, "top": 60, "width": 390, "height": 760},
+                    },
+                    {
+                        "source_page_id": "page-2",
+                        "column_index": 1,
+                        "fragment_index": 3,
+                        "bbox": {"left": 40, "top": 60, "width": 390, "height": 420},
+                    },
+                ],
+                "risk_flags": [],
+            }
+
+            ui_session = build_problem_ui_session(
+                prepared_pages,
+                [placement],
+                root / "out",
+                None,
+                source_paths,
+                record_mode="image-only",
+                pages=pages,
+            )
+
+            problem = ui_session["problems"][0]
+            self.assertEqual(
+                ["page-1", "page-1", "page-2"],
+                [segment["sourcePageId"] for segment in problem["sourceSegments"]],
+            )
+            self.assertEqual([["passage-1"], ["passage-1"]], [page["problemIds"] for page in ui_session["pages"]])
 
     def test_ui_session_links_cross_page_passage_child_questions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2724,7 +3547,7 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, result["ui_session"]["passageGroupCount"])
             self.assertEqual(1, result["ui_session"]["crossPagePassageGroupCount"])
 
-    def test_problem_entries_preserve_pre_question_cross_page_passage_continuation_as_fragment(self):
+    def test_later_child_page_prefix_is_not_promoted_to_passage_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             page_1_image = root / "page-1.png"
@@ -2825,16 +3648,12 @@ class TestEdbPublishFlow(unittest.TestCase):
                 LayoutTemplate(name="academy-default"),
             )
 
-            passage_fragment = next(entry for entry in entries if entry.problem_id == "page-2-continuation")
+            prefix_entry = next(entry for entry in entries if entry.problem_id == "page-2-continuation")
             problem_15 = next(entry for entry in entries if entry.problem_id == "page-2-problem-15")
-            self.assertEqual("지문 13~16", passage_fragment.title)
-            self.assertIsNone(passage_fragment.problem_number)
-            self.assertEqual(["passage-continuation"], [block.block_id for block in passage_fragment.blocks])
-            self.assertNotIn("passage-continuation", [block.block_id for block in problem_15.blocks])
-            self.assertGreater(problem_15.bounds.top, passage_fragment.bounds.top)
-            self.assertEqual("passage_fragment", page_2.problems[0].metadata.get("passage_role"))
-            self.assertTrue(page_2.problems[0].metadata.get("supplemental_item"))
-            self.assertEqual("page-1-passage-13-16", page_2.problems[0].metadata.get("passage_group_id"))
+            self.assertEqual("지문 이어짐", prefix_entry.title)
+            self.assertIsNone(page_2.problems[0].metadata.get("passage_role"))
+            self.assertFalse(page_2.problems[0].metadata.get("supplemental_item"))
+            self.assertIsNone(page_2.problems[0].metadata.get("passage_group_id"))
             self.assertIn("passage_cross_page_merge_check", problem_15.risk_flags)
 
     def test_problem_entries_stitch_cross_page_passage_fragments_into_one_entry(self):
@@ -3033,6 +3852,539 @@ class TestEdbPublishFlow(unittest.TestCase):
                 "page-1-passage-fragment",
                 page_2.problems[0].metadata.get("passage_merged_into_problem_id"),
             )
+
+    def test_pdf_text_before_first_cross_page_child_is_stitched_into_passage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page_1_image = root / "page-1.png"
+            page_2_image = root / "page-2.png"
+            first_image = Image.new("RGB", (900, 1200), "white")
+            second_image = Image.new("RGB", (900, 1200), "white")
+            ImageDraw.Draw(first_image).rectangle((60, 760, 760, 1080), fill=(220, 20, 20))
+            ImageDraw.Draw(second_image).rectangle((60, 80, 760, 220), fill=(20, 40, 220))
+            first_image.save(page_1_image)
+            second_image.save(page_2_image)
+
+            prepared_pages = [
+                PreparedPage(
+                    page_id="page-1",
+                    source_path=str(page_1_image),
+                    page_number=1,
+                    image=first_image,
+                    original_size=first_image.size,
+                ),
+                PreparedPage(
+                    page_id="page-2",
+                    source_path=str(page_2_image),
+                    page_number=2,
+                    image=second_image,
+                    original_size=second_image.size,
+                    metadata={
+                        "pdf_text_lines": [
+                            {
+                                "text": "앞 페이지에서 이어지는 공통 지문의 첫 번째 줄입니다.",
+                                "bbox": {"left": 60, "top": 80, "right": 760, "bottom": 115},
+                            },
+                            {
+                                "text": "문항이 시작되기 전까지 이어지는 두 번째 줄입니다.",
+                                "bbox": {"left": 60, "top": 140, "right": 730, "bottom": 175},
+                            },
+                        ]
+                    },
+                ),
+            ]
+            passage_metadata = {
+                "passage_group_id": "page-1-passage-24-27",
+                "passage_range": {"start": 24, "end": 27},
+                "passage_child_problem_numbers": [24, 25, 26, 27],
+            }
+            page_1 = PageModel(
+                page_id="page-1",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_1_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="passage-part-1",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=740, width=760, height=380),
+                        reading_order=0,
+                        text="첫 페이지에서 시작한 공통 지문",
+                    )
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-1-passage-fragment",
+                        subject=Subject.KOREAN,
+                        title="지문 24~27",
+                        stem_block_ids=["passage-part-1"],
+                        metadata={
+                            **passage_metadata,
+                            "passage_role": "passage_fragment",
+                            "supplemental_item": True,
+                            "passage_detection_confidence": 0.9,
+                            "passage_text_line_count": 1,
+                            "passage_text_character_count": 10,
+                            "passage_text_bounds_score": 1.0,
+                        },
+                    )
+                ],
+            )
+            page_2 = PageModel(
+                page_id="page-2",
+                width_px=900,
+                height_px=1200,
+                subject=Subject.KOREAN,
+                source_path=str(page_2_image),
+                blocks=[
+                    ContentBlock(
+                        block_id="q24",
+                        block_type=BlockType.STEM,
+                        bbox=Box(left=40, top=260, width=760, height=440),
+                        reading_order=0,
+                        text="24. 첫 번째 문항",
+                        metadata={"column_index": 1},
+                    )
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="page-2-problem-24",
+                        subject=Subject.KOREAN,
+                        title="24.",
+                        stem_block_ids=["q24"],
+                        metadata={"problem_number": 24},
+                    )
+                ],
+            )
+
+            entries = build_problem_entries(
+                prepared_pages,
+                [page_1, page_2],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+                content_target="shared-passages",
+            )
+
+            self.assertEqual(1, len(entries))
+            passage_entry = entries[0]
+            with Image.open(passage_entry.crop_path).convert("RGB") as stitched:
+                pixels = list(stitched.get_flattened_data())
+            self.assertGreater(sum(1 for red, green, blue in pixels if red > 180 and green < 80 and blue < 80), 1000)
+            self.assertGreater(sum(1 for red, green, blue in pixels if blue > 180 and red < 80 and green < 100), 1000)
+            self.assertEqual([], passage_entry.blocks)
+            self.assertNotIn("passage_cross_page_merge_check", passage_entry.risk_flags)
+            continuation = next(
+                problem
+                for problem in page_2.problems
+                if problem.metadata.get("passage_pre_question_continuation")
+            )
+            self.assertEqual("passage_fragment", continuation.metadata.get("passage_role"))
+            self.assertTrue(continuation.metadata.get("passage_fragments_merged"))
+            primary = page_1.problems[0]
+            self.assertEqual(3, primary.metadata.get("passage_text_line_count"))
+            self.assertGreater(primary.metadata.get("passage_text_character_count", 0), 40)
+            self.assertTrue(passage_entry.board_render_path.is_file())
+
+    def test_nested_question_material_is_not_exported_as_a_passage(self):
+        parent_group = "page-1-passage-11-14"
+        page_1 = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="passage-11-14",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=120, width=380, height=600),
+                    reading_order=0,
+                    text="[11~14] 다음 글을 읽고 물음에 답하시오.",
+                ),
+                ContentBlock(
+                    block_id="q11",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=120, width=380, height=240),
+                    reading_order=1,
+                    text="11. 첫 문항",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id=parent_group,
+                    subject=Subject.KOREAN,
+                    title="지문 11~14",
+                    stem_block_ids=["passage-11-14"],
+                    metadata={
+                        "passage_group_id": parent_group,
+                        "passage_range": {"start": 11, "end": 14},
+                        "passage_role": "passage_fragment",
+                        "passage_child_problem_numbers": [11, 12, 13, 14],
+                        "shared_passage_block_ids": ["passage-11-14"],
+                    },
+                ),
+                ProblemUnit(
+                    unit_id="q11",
+                    subject=Subject.KOREAN,
+                    title="11.",
+                    stem_block_ids=["q11"],
+                    metadata={
+                        "problem_number": 11,
+                        "passage_group_id": parent_group,
+                        "passage_range": {"start": 11, "end": 14},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [11, 12, 13, 14],
+                    },
+                ),
+            ],
+        )
+        nested_group = "page-2-passage-13-14"
+        page_2 = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="material-13-14",
+                    block_type=BlockType.IMAGE,
+                    bbox=Box(left=40, top=120, width=380, height=300),
+                    reading_order=0,
+                    text="[13~14] <보기>를 참고하시오.",
+                    metadata={"shared_passage": True},
+                ),
+                ContentBlock(
+                    block_id="q13",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=460, width=380, height=260),
+                    reading_order=1,
+                    text="13. 자료 문항",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id=nested_group,
+                    subject=Subject.KOREAN,
+                    title="지문 13~14",
+                    figure_block_ids=["material-13-14"],
+                    metadata={
+                        "passage_group_id": nested_group,
+                        "passage_range": {"start": 13, "end": 14},
+                        "passage_role": "passage_fragment",
+                        "passage_child_problem_numbers": [13, 14],
+                        "shared_passage_block_ids": ["material-13-14"],
+                        "supplemental_item": True,
+                    },
+                ),
+                ProblemUnit(
+                    unit_id="q13",
+                    subject=Subject.KOREAN,
+                    title="13.",
+                    stem_block_ids=["q13"],
+                    metadata={
+                        "problem_number": 13,
+                        "passage_group_id": nested_group,
+                        "passage_range": {"start": 13, "end": 14},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [13, 14],
+                    },
+                ),
+            ],
+        )
+
+        problem_board._annotate_cross_page_passage_groups([page_1, page_2])
+
+        material = next(problem for problem in page_2.problems if problem.unit_id == nested_group)
+        child = next(problem for problem in page_2.problems if problem.unit_id == "q13")
+        self.assertEqual("question_material_fragment", material.metadata.get("passage_role"))
+        self.assertTrue(material.metadata.get("nested_passage_suppressed"))
+        self.assertFalse(problem_board._problem_matches_content_target(material, "shared-passages"))
+        self.assertEqual(parent_group, child.metadata.get("passage_group_id"))
+        self.assertEqual({"start": 11, "end": 14}, child.metadata.get("passage_range"))
+        self.assertFalse(page_2.blocks[0].metadata.get("shared_passage"))
+
+    def test_later_child_page_content_is_not_materialized_as_passage_continuation(self):
+        page_1 = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="q24",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=300, width=760, height=400),
+                    reading_order=0,
+                    text="24. first child",
+                    metadata={"column_index": 1},
+                )
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="page-1-problem-24",
+                    subject=Subject.KOREAN,
+                    title="24.",
+                    stem_block_ids=["q24"],
+                    metadata={
+                        "problem_number": 24,
+                        "passage_group_id": "passage-24-27",
+                        "passage_range": {"start": 24, "end": 27},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [24, 25, 26, 27],
+                    },
+                )
+            ],
+        )
+        page_2 = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="q25",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=300, width=760, height=400),
+                    reading_order=0,
+                    text="25. later child",
+                    metadata={"column_index": 1},
+                )
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="page-2-problem-25",
+                    subject=Subject.KOREAN,
+                    title="25.",
+                    stem_block_ids=["q25"],
+                    metadata={"problem_number": 25},
+                )
+            ],
+        )
+        prepared = PreparedPage(
+            page_id="page-2",
+            source_path="page-2.pdf",
+            page_number=2,
+            image=Image.new("RGB", (900, 1200), "white"),
+            original_size=(900, 1200),
+            metadata={
+                "pdf_text_lines": [
+                    {
+                        "text": "앞 문항의 선택지 내용이 다음 페이지 위쪽에 남아 있습니다.",
+                        "bbox": {"left": 60, "top": 80, "right": 760, "bottom": 115},
+                    },
+                    {
+                        "text": "이 내용은 공통 지문으로 다시 붙으면 안 됩니다.",
+                        "bbox": {"left": 60, "top": 140, "right": 730, "bottom": 175},
+                    },
+                ]
+            },
+        )
+
+        problem_board._annotate_cross_page_passage_groups([page_1, page_2])
+        problem_board._materialize_pdf_pre_question_passage_continuations(
+            [page_1, page_2],
+            {"page-2": prepared},
+        )
+
+        self.assertFalse(any(
+            problem.metadata.get("passage_pre_question_continuation")
+            for problem in page_2.problems
+        ))
+
+    def test_completed_passage_group_is_not_revived_by_next_page_numbered_material(self):
+        group_id = "page-1-passage-1-2"
+        page_1 = PageModel(
+            page_id="page-1",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            metadata={"source_type": "pdf", "segmenter": "pdf-text-markers"},
+            blocks=[
+                ContentBlock(
+                    block_id="passage-1-2",
+                    block_type=BlockType.IMAGE,
+                    bbox=Box(left=40, top=720, width=820, height=420),
+                    reading_order=0,
+                    metadata={"shared_passage": True},
+                ),
+                ContentBlock(
+                    block_id="q1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=100, width=380, height=240),
+                    reading_order=1,
+                    text="1. 첫 문항",
+                ),
+                ContentBlock(
+                    block_id="q2",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=100, width=380, height=240),
+                    reading_order=2,
+                    text="2. 둘째 문항",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id=group_id,
+                    subject=Subject.KOREAN,
+                    title="지문 1~2",
+                    figure_block_ids=["passage-1-2"],
+                    metadata={
+                        "passage_group_id": group_id,
+                        "passage_range": {"start": 1, "end": 2},
+                        "passage_role": "passage_fragment",
+                        "passage_child_problem_numbers": [1, 2],
+                        "shared_passage_block_ids": ["passage-1-2"],
+                    },
+                ),
+                *[
+                    ProblemUnit(
+                        unit_id=f"page-1-problem-{number}",
+                        subject=Subject.KOREAN,
+                        title=f"{number}.",
+                        stem_block_ids=[f"q{number}"],
+                        metadata={
+                            "problem_number": number,
+                            "passage_group_id": group_id,
+                            "passage_range": {"start": 1, "end": 2},
+                            "passage_role": "child_question",
+                            "passage_child_problem_numbers": [1, 2],
+                        },
+                    )
+                    for number in (1, 2)
+                ],
+            ],
+        )
+        page_2 = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            metadata={
+                "source_type": "pdf",
+                "segmenter": "pdf-text-markers",
+                "pdf_pre_question_text_regions": [
+                    {
+                        "before_problem_number": 1,
+                        "column_index": 1,
+                        "bbox": {"left": 40, "top": 80, "right": 420, "bottom": 500},
+                    }
+                ],
+            },
+            blocks=[
+                ContentBlock(
+                    block_id="page-2-material-1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=40, top=520, width=380, height=120),
+                    reading_order=0,
+                    text="1. 도표 안의 항목 번호",
+                )
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="page-2-material-1",
+                    subject=Subject.KOREAN,
+                    title="1.",
+                    stem_block_ids=["page-2-material-1"],
+                    metadata={"problem_number": 1},
+                )
+            ],
+        )
+
+        problem_board._annotate_cross_page_passage_groups([page_1, page_2])
+
+        self.assertFalse(any(
+            problem.metadata.get("cross_page_passage_inferred")
+            for problem in page_2.problems
+        ))
+        self.assertIsNone(page_2.problems[0].metadata.get("passage_group_id"))
+        self.assertEqual(["page-1"], page_1.problems[0].metadata.get("passage_source_page_ids"))
+
+    def test_numbered_question_before_first_passage_child_is_not_swallowed(self):
+        page = PageModel(
+            page_id="page-2",
+            width_px=900,
+            height_px=1200,
+            subject=Subject.KOREAN,
+            blocks=[
+                ContentBlock(
+                    block_id="q42",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=80, width=400, height=440),
+                    reading_order=0,
+                    text="42. 앞에 있는 독립 문항",
+                    metadata={"column_index": 1},
+                ),
+                ContentBlock(
+                    block_id="q43",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=460, top=650, width=400, height=400),
+                    reading_order=1,
+                    text="43. 지문의 첫 번째 문항",
+                    metadata={"column_index": 1},
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="page-2-problem-42",
+                    subject=Subject.KOREAN,
+                    title="42.",
+                    stem_block_ids=["q42"],
+                    metadata={"problem_number": 42},
+                ),
+                ProblemUnit(
+                    unit_id="page-2-problem-43",
+                    subject=Subject.KOREAN,
+                    title="43.",
+                    stem_block_ids=["q43"],
+                    metadata={
+                        "problem_number": 43,
+                        "passage_group_id": "passage-43-45",
+                        "passage_range": {"start": 43, "end": 45},
+                        "passage_role": "child_question",
+                        "passage_child_problem_numbers": [43, 44, 45],
+                        "passage_source_page_ids": ["page-1", "page-2"],
+                    },
+                ),
+            ],
+        )
+        prepared = PreparedPage(
+            page_id="page-2",
+            source_path="page-2.pdf",
+            page_number=2,
+            image=Image.new("RGB", (900, 1200), "white"),
+            original_size=(900, 1200),
+            metadata={
+                "pdf_text_lines": [
+                    {
+                        "text": "42번 문항의 본문과 보기 카드가 이 영역을 차지합니다.",
+                        "bbox": {"left": 470, "top": 100, "right": 840, "bottom": 135},
+                    },
+                    {
+                        "text": "이 텍스트는 43~45번 공통 지문으로 합쳐지면 안 됩니다.",
+                        "bbox": {"left": 470, "top": 180, "right": 840, "bottom": 215},
+                    },
+                ]
+            },
+        )
+
+        problem_board._materialize_pdf_pre_question_passage_continuations(
+            [page],
+            {"page-2": prepared},
+        )
+
+        self.assertFalse(any(
+            problem.metadata.get("passage_pre_question_continuation")
+            for problem in page.problems
+        ))
+        block_by_id = {block.block_id: block for block in page.blocks}
+        next_by_id = problem_board._build_crop_next_problem_map(
+            page.problems,
+            block_by_id,
+        )
+        self.assertEqual(
+            "page-2-problem-43",
+            next_by_id["page-2-problem-42"].unit_id,
+        )
 
     def test_classin_handoff_manifest_explains_duplicate_problem_number_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3486,6 +4838,68 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertIn("passage_missing_child_questions", markdown)
             self.assertIn("문항 누락", markdown)
 
+    def test_classin_preflight_allows_intentional_shared_passage_only_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.pdf"
+            edb_path = root / "passages.edb"
+            passage_crop = root / "passage-31-34.png"
+            source.write_bytes(b"pdf")
+            edb_path.write_bytes(b"edb")
+
+            image = Image.new("RGB", (760, 420), "white")
+            draw = ImageDraw.Draw(image)
+            for line in range(14):
+                y = 24 + line * 27
+                draw.line((40, y, 710, y), fill=(20, 20, 20), width=3)
+            image.save(passage_crop)
+
+            problem = {
+                "id": "passage-31-34",
+                "title": "지문 31~34",
+                "imagePath": passage_crop.resolve().as_uri(),
+                "sourcePageId": "page-1",
+                "bbox": {"left": 40, "top": 80, "width": 670, "height": 378},
+                "passageGroupId": "passage-31-34",
+                "passageRange": {"start": 31, "end": 34},
+                "passageRole": "passage_fragment",
+                "passageChildProblemNumbers": [31, 32, 33, 34],
+                "supplementalItem": True,
+                "riskFlags": [],
+                "reviewStatus": "normal",
+            }
+
+            json_path, md_path = problem_board.write_classin_handoff_manifest(
+                root,
+                source_paths=[source],
+                edb_path=edb_path,
+                ui_session={
+                    "contentTarget": "shared-passages",
+                    "content_target": "shared-passages",
+                    "core_problem_count": 0,
+                    "supplemental_item_count": 1,
+                    "detected_problem_count": 1,
+                    "source_page_count": 1,
+                    "reviewSummary": {},
+                    "problems": [problem],
+                },
+                summary={"record_count": 1, "record_mode": "image-only", "placements": []},
+                template=LayoutTemplate(name="academy-default", board_page_count=8),
+            )
+
+            handoff = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = md_path.read_text(encoding="utf-8")
+            preflight = handoff["classinPreflight"]
+            self.assertTrue(handoff["readyForClassIn"])
+            self.assertTrue(preflight["passed"])
+            self.assertEqual("passed", preflight["status"])
+            self.assertEqual("shared-passages", handoff["contentTarget"])
+            self.assertEqual([], handoff["passageGroups"][0]["missingChildProblemNumbers"])
+            self.assertFalse(
+                any(issue["type"] == "passage_missing_child_questions" for issue in preflight["issues"])
+            )
+            self.assertNotIn("passage_missing_child_questions", markdown)
+
     def test_classin_handoff_manifest_includes_asset_preflight_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3777,6 +5191,44 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual("page-001", overlap_issues[0]["sourcePageId"])
             self.assertGreaterEqual(overlap_issues[0]["overlapAreaRatio"], 0.8)
             self.assertIn("source_problem_bbox_overlap", markdown)
+
+    def test_classin_preflight_ignores_supplemental_passage_enclosing_bbox(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crop = root / "crop.png"
+            Image.new("RGB", (640, 320), "white").save(crop)
+            problems = [
+                {
+                    "id": "q10",
+                    "title": "10.",
+                    "imagePath": crop.resolve().as_uri(),
+                    "sourcePageId": "page-004",
+                    "bbox": {"left": 0, "top": 100, "width": 500, "height": 300},
+                    "riskFlags": [],
+                },
+                {
+                    "id": "passage-11-15",
+                    "title": "지문 11~15",
+                    "imagePath": crop.resolve().as_uri(),
+                    "sourcePageId": "page-004",
+                    "bbox": {"left": 0, "top": 0, "width": 1000, "height": 1200},
+                    "passageRole": "passage_fragment",
+                    "supplementalItem": True,
+                    "riskFlags": [],
+                },
+            ]
+
+            preflight, duplicate_groups = _session_publish_blocking_preflight(
+                problems,
+                session={"problems": problems, "pages": []},
+            )
+
+            self.assertTrue(preflight["passed"])
+            self.assertEqual([], duplicate_groups)
+            self.assertNotIn(
+                "source_problem_bbox_overlap",
+                [issue["type"] for issue in preflight["issues"]],
+            )
 
     def test_classin_preflight_flags_passage_group_source_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4448,12 +5900,81 @@ class TestEdbPublishFlow(unittest.TestCase):
             placement = placements[0]
             expected_display_width = problem_board.V2_TARGET_IMAGE_WIDTH_PX * entry.placement_scale_ratio
             self.assertAlmostEqual(expected_display_width, placement["rendered_width_px"], places=3)
-            self.assertGreaterEqual(placement["image_pixel_width"], 1500)
-            self.assertGreater(placement["image_pixel_width"], placement["rendered_width_px"] * 2.4)
+            self.assertEqual(1697, placement["image_pixel_width"])
+            self.assertEqual(2400, placement["image_pixel_height"])
+            self.assertEqual("source-preserving", placement["image_resolution_policy"])
+            self.assertLessEqual(
+                placement["image_pixel_width"],
+                problem_board.V2_ENCODED_IMAGE_MAX_WIDTH_PX,
+            )
+            self.assertGreater(placement["image_pixel_width"], placement["rendered_width_px"] * 2.6)
             self.assertAlmostEqual(
                 2400 / 1697,
                 placement["image_pixel_height"] / placement["image_pixel_width"],
                 places=3,
+            )
+
+    def test_v2_preserves_safe_300_dpi_page_and_bounds_oversized_scan(self):
+        self.assertEqual(
+            (2480, 3508),
+            problem_board._v2_encoded_image_size((2480, 3508), (760.0, 1075.0)),
+        )
+        self.assertEqual(
+            (3508, 2480),
+            problem_board._v2_encoded_image_size((3508, 2480), (1075.0, 760.0)),
+        )
+
+        encoded_width, encoded_height = problem_board._v2_encoded_image_size(
+            (5000, 7000),
+            (900.0, 1260.0),
+        )
+
+        self.assertLessEqual(encoded_width, problem_board.V2_ENCODED_IMAGE_MAX_WIDTH_PX)
+        self.assertLessEqual(
+            max(encoded_width, encoded_height),
+            problem_board.V2_ENCODED_IMAGE_MAX_EDGE_PX,
+        )
+        self.assertLessEqual(
+            encoded_width * encoded_height,
+            problem_board.V2_ENCODED_IMAGE_MAX_PIXELS,
+        )
+
+    def test_page_as_is_and_formula_subjects_use_high_fidelity_jpeg_quality(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            entry.input_intent = "page-as-is"
+            math_entry = self._make_problem_entry(root, "math-1", Box(0, 0, 800, 600))
+            math_entry.subject = Subject.MATH
+            captured_qualities: list[int] = []
+
+            def fake_encode(_image, quality=92):
+                captured_qualities.append(quality)
+                return b"jpeg", "JPEG"
+
+            with (
+                mock.patch.object(problem_board, "_encode_image_bytes", side_effect=fake_encode),
+                mock.patch.object(problem_board, "build_v1_secondary_image_bytes", return_value=b"preview"),
+            ):
+                build_image_only_records(
+                    [entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=problem_board.CROP_FORMAT_V1,
+                    dark_board=False,
+                )
+                build_image_only_records(
+                    [math_entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=problem_board.CROP_FORMAT_V1,
+                    dark_board=False,
+                )
+
+            self.assertEqual(
+                [
+                    problem_board.TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY,
+                    problem_board.TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY,
+                ],
+                captured_qualities,
             )
 
     def test_v1_page_as_is_export_uses_fit_width_continuous_flow(self):
@@ -4638,6 +6159,102 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertGreater(placements[0]["image_pixel_width"], int(entry.bounds.width))
             self.assertEqual(placements[0]["rendered_width_px"], V1_DEFAULT_DISPLAY_WIDTH_PX)
 
+    def test_v1_page_as_is_secondary_preserves_primary_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            entry.input_intent = "page-as-is"
+            entry.processing_step = problem_board.PROCESSING_STEP_CHALK
+
+            records, _placements = build_image_only_records(
+                [entry],
+                LayoutTemplate(name="academy-default"),
+                crop_format=CROP_FORMAT_V1,
+                dark_board=False,
+            )
+
+            images = parse_embedded_images(records[0])
+            self.assertEqual([(1697, 2400), (1697, 2400)], [
+                (image.width, image.height) for image in images
+            ])
+            primary = records[0][images[0].offset : images[0].offset + images[0].length]
+            secondary = records[0][images[1].offset : images[1].offset + images[1].length]
+            self.assertEqual(primary, secondary)
+
+    def test_raw_page_as_is_reuses_exact_source_bytes_on_dark_board(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 1697, 2400))
+            source = Image.new("RGB", (1697, 2400), "white")
+            ImageDraw.Draw(source).text((120, 180), "원본 페이지 픽셀 보존", fill="black")
+            source.save(entry.crop_path, format="PNG", compress_level=2)
+            entry.board_render_path = entry.crop_path
+            entry.input_intent = "page-as-is"
+            entry.force_full_page_bounds = True
+            entry.processing_step = problem_board.PROCESSING_STEP_RAW
+            expected_bytes = entry.crop_path.read_bytes()
+
+            with mock.patch.object(
+                problem_board,
+                "_load_board_export_image",
+                side_effect=AssertionError("raw page-as-is must not remove the paper background"),
+            ), mock.patch.object(
+                problem_board,
+                "_encode_image_bytes",
+                side_effect=AssertionError("raw page-as-is must not re-encode the source"),
+            ):
+                records, placements = build_image_only_records(
+                    [entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=CROP_FORMAT_V1,
+                    dark_board=True,
+                )
+
+            images = parse_embedded_images(records[0])
+            primary = records[0][images[0].offset : images[0].offset + images[0].length]
+            secondary = records[0][images[1].offset : images[1].offset + images[1].length]
+            self.assertEqual(expected_bytes, primary)
+            self.assertEqual(expected_bytes, secondary)
+            self.assertEqual("source-preserving", placements[0]["image_resolution_policy"])
+
+    def test_v1_regular_problem_secondary_keeps_legacy_preview_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "problem-1", Box(0, 0, 1200, 1600))
+
+            records, _placements = build_image_only_records(
+                [entry],
+                LayoutTemplate(name="academy-default"),
+                crop_format=CROP_FORMAT_V1,
+                dark_board=False,
+            )
+
+            images = parse_embedded_images(records[0])
+            self.assertEqual((1200, 1600), (images[0].width, images[0].height))
+            self.assertEqual((576, 768), (images[1].width, images[1].height))
+
+    def test_v1_page_as_is_secondary_respects_edge_and_pixel_budgets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self._make_problem_entry(root, "page-1", Box(0, 0, 600, 900))
+            entry.input_intent = "page-as-is"
+
+            with (
+                mock.patch.object(edb_builder, "V1_PAGE_AS_IS_SECONDARY_MAX_EDGE_PX", 700),
+                mock.patch.object(edb_builder, "V1_PAGE_AS_IS_SECONDARY_MAX_PIXELS", 400_000),
+            ):
+                records, _placements = build_image_only_records(
+                    [entry],
+                    LayoutTemplate(name="academy-default"),
+                    crop_format=CROP_FORMAT_V1,
+                    dark_board=False,
+                )
+
+            secondary = parse_embedded_images(records[0])[1]
+            self.assertLessEqual(max(secondary.width, secondary.height), 700)
+            self.assertLessEqual(secondary.width * secondary.height, 400_000)
+            self.assertAlmostEqual(600 / 900, secondary.width / secondary.height, places=2)
+
     def test_publish_entries_recalculate_actual_height_from_current_image(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4750,6 +6367,8 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             self.assertEqual(1, len(entries))
             crop = Image.open(entries[0].crop_path).convert("RGB")
+            self.assertGreaterEqual(crop.width, round(entries[0].bounds.width))
+            self.assertLessEqual(crop.width, round(entries[0].bounds.width) + 64)
             gray = crop.convert("L")
             left_band_dark = sum(
                 1
@@ -4771,7 +6390,10 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertLess(left_band_dark, 20)
-            self.assertLess(bottom_left_dark, 20)
+            # Preserve the full PDF column instead of deleting its left edge.
+            # A few disconnected antialiased badge glyph pixels may remain,
+            # but the footer frame itself must be gone.
+            self.assertLess(bottom_left_dark, 80)
             self.assertLess(bottom_blue, 10)
 
     def test_recrop_problem_uses_full_page_chrome_trim(self):
@@ -6370,6 +7992,141 @@ class TestEdbPublishFlow(unittest.TestCase):
         ]
         self.assertTrue(internal_dark_columns)
 
+    def test_passage_chrome_cleanup_preserves_lower_right_column_text(self):
+        image = Image.new("RGB", (320, 240), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 40), "shared passage", fill="black")
+        draw.rectangle((292, 212, 319, 239), fill="black")
+
+        cleaned = _trim_source_page_chrome(
+            image,
+            preserve_horizontal_bounds=True,
+        )
+
+        self.assertEqual(image.size, cleaned.size)
+        self.assertEqual(
+            image.crop((292, 212, 320, 240)).tobytes(),
+            cleaned.crop((292, 212, 320, 240)).tobytes(),
+        )
+
+    def test_text_priority_page_badge_is_trimmed_below_real_content(self):
+        image = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 60), "question", fill="black")
+        for index, y in enumerate(range(140, 280, 28), start=1):
+            draw.text((24, y), f"{index}. complete choice", fill="black")
+        draw.line((0, 352, 64, 352), fill="black", width=2)
+        draw.line((0, 378, 64, 378), fill="black", width=2)
+        draw.line((64, 352, 64, 378), fill="black", width=2)
+        draw.text((34, 358), "8", fill="black")
+
+        trimmed = _trim_text_priority_bottom_page_badge(image)
+
+        self.assertLess(trimmed.height, 352)
+        self.assertGreater(trimmed.height, 280)
+        self.assertLess(
+            trimmed.convert("L").crop((20, 246, 180, 276)).getextrema()[0],
+            200,
+        )
+
+    def test_tall_listening_page_badge_is_trimmed_after_choices(self):
+        image = Image.new("RGB", (960, 236), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((18, 16), "6. listening prompt", fill="black")
+        draw.text(
+            (42, 90),
+            "1  $14      2  $19      3  $24      4  $28      5  $33",
+            fill="black",
+        )
+        draw.rectangle((866, 160, 959, 223), outline="black", width=2)
+        draw.text((878, 172), "1", fill="black")
+        padded = problem_board._pad_problem_crop_edges(
+            image,
+            left_padding_px=problem_board.TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX,
+            right_padding_px=problem_board.TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX,
+        )
+
+        trimmed = _trim_text_priority_bottom_page_badge(padded)
+
+        self.assertEqual(992, trimmed.width)
+        self.assertGreater(trimmed.height, 140)
+        self.assertLess(trimmed.height, 196)
+        self.assertLess(
+            trimmed.convert("L").crop((0, 100, 850, trimmed.height)).getextrema()[0],
+            200,
+        )
+
+    def test_text_priority_lone_outer_guide_is_erased_without_cropping(self):
+        image = Image.new("RGB", (500, 360), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((12, 24, 12, 335), fill="black", width=2)
+        draw.text((48, 60), "16. complete question", fill="black")
+        draw.text((48, 140), "1. complete choice", fill="black")
+
+        cleaned = problem_board._erase_text_priority_unpaired_outer_vertical_guide(image)
+
+        self.assertEqual(image.size, cleaned.size)
+        self.assertEqual((255, 255, 255), cleaned.getpixel((12, 180)))
+        self.assertLess(cleaned.convert("L").crop((40, 40, 260, 180)).getextrema()[0], 200)
+
+    def test_trusted_pdf_asset_protection_skips_horizontal_chrome_cropping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = Image.new("RGB", (935, 600), "white")
+            draw = ImageDraw.Draw(source)
+            draw.line((92, 20, 92, 580), fill="black", width=3)
+            draw.rectangle((160, 120, 670, 520), outline="black", width=3)
+            draw.text((24, 48), "17. complete vocational problem", fill="black")
+            task = problem_board._ProblemAssetTask(
+                source_image=source,
+                bounds=Box(left=0.0, top=0.0, width=935.0, height=600.0),
+                crop_path=root / "trusted-pdf-crop.png",
+                board_render_path=root / "trusted-pdf-stage2.png",
+                chalk_color=(238, 238, 226),
+                trim_edge_guides=True,
+                protect_horizontal_bounds=True,
+                pad_edges=True,
+                subject=Subject.UNKNOWN,
+            )
+
+            with mock.patch.object(
+                problem_board,
+                "_trim_edge_vertical_guides",
+                side_effect=AssertionError("trusted PDF bounds must not be cropped"),
+            ), mock.patch.object(
+                problem_board,
+                "_trim_edge_attached_page_chrome",
+                side_effect=AssertionError("trusted PDF content must keep its width"),
+            ):
+                self.assertEqual((967, 688), problem_board._render_problem_asset(task))
+
+            with Image.open(task.crop_path) as crop:
+                self.assertEqual((967, 688), crop.size)
+                self.assertLess(
+                    crop.convert("L").crop((160, 120, 700, 560)).getextrema()[0],
+                    200,
+                )
+
+    def test_text_priority_paired_outer_frame_is_preserved(self):
+        image = Image.new("RGB", (500, 360), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((12, 24, 487, 335), outline="black", width=2)
+        draw.text((48, 60), "boxed content", fill="black")
+
+        cleaned = problem_board._erase_text_priority_unpaired_outer_vertical_guide(image)
+
+        self.assertEqual(image.tobytes(), cleaned.tobytes())
+
+    def test_text_priority_final_choice_row_is_not_mistaken_for_page_badge(self):
+        image = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 60), "question", fill="black")
+        draw.text((0, 350), "5. final choice text extends across the row", fill="black")
+
+        trimmed = _trim_text_priority_bottom_page_badge(image)
+
+        self.assertEqual(image.size, trimmed.size)
+
     def test_slanted_edge_vertical_guides_are_trimmed(self):
         image = Image.new("RGB", (180, 180), "white")
         draw = ImageDraw.Draw(image)
@@ -6471,6 +8228,70 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertEqual(1, len(entries))
             self.assertLessEqual(entries[0].bounds.top, 78)
             self.assertGreaterEqual(entries[0].bounds.bottom, 174)
+
+    def test_pdf_passage_range_bounds_do_not_pull_in_page_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            page_image = Image.new("RGB", (600, 520), "white")
+            draw = ImageDraw.Draw(page_image)
+            draw.line((0, 70, 599, 70), fill="black", width=3)
+            draw.text((24, 24), "PAGE HEADER", fill="black")
+            draw.rectangle((40, 150, 440, 390), outline="black", width=2)
+            draw.text((60, 174), "[1~2] shared passage", fill="black")
+            page_image.save(source)
+            prepared = PreparedPage(
+                page_id="page-1",
+                source_path=str(source),
+                page_number=1,
+                image=page_image,
+                original_size=page_image.size,
+            )
+            passage_block = ContentBlock(
+                block_id="passage",
+                block_type=BlockType.IMAGE,
+                bbox=Box(40, 150, 400, 240),
+                reading_order=0,
+                text="[1~2] shared passage",
+                metadata={
+                    "segmenter": "pdf-passage-range",
+                    "column_index": 0,
+                    "question_band_index": 0,
+                },
+            )
+            page = PageModel(
+                page_id="page-1",
+                width_px=600,
+                height_px=520,
+                subject=Subject.ENGLISH,
+                source_path=str(source),
+                blocks=[passage_block],
+                problems=[
+                    ProblemUnit(
+                        unit_id="passage-1-2",
+                        subject=Subject.ENGLISH,
+                        title="지문 1~2",
+                        figure_block_ids=["passage"],
+                        metadata={
+                            "passage_role": "passage_fragment",
+                            "supplemental_item": True,
+                            "passage_range": {"start": 1, "end": 2},
+                        },
+                    )
+                ],
+            )
+
+            entries = build_problem_entries(
+                [prepared],
+                [page],
+                root / "out",
+                LayoutTemplate(name="academy-default"),
+            )
+
+            self.assertEqual(1, len(entries))
+            self.assertAlmostEqual(150.0, entries[0].bounds.top)
+            with Image.open(entries[0].crop_path) as crop:
+                self.assertGreater(crop.convert("L").crop((0, 0, crop.width, 24)).getextrema()[0], 180)
 
     def test_problem_bounds_expand_when_edge_ink_would_be_clipped(self):
         with tempfile.TemporaryDirectory() as tmp:

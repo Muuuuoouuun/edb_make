@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from ai_usage import image_generation_usage_event, summarize_ai_cost
+
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover
@@ -76,6 +78,7 @@ class ImageReconstructionResult:
     prompt: str
     source_path: Path
     latency_ms: int
+    image_size: str = "auto"
     revised_prompt: str | None = None
     usage: dict[str, Any] | None = None
     response_id: str | None = None
@@ -84,6 +87,16 @@ class ImageReconstructionResult:
     postprocess: dict[str, Any] | None = None
 
     def to_metadata(self) -> dict[str, Any]:
+        usage_event = (
+            image_generation_usage_event(
+                provider=self.provider,
+                model=self.model,
+                usage=self.usage,
+                image_size=self.image_size,
+            )
+            if self.provider in {"gemini", "openai"}
+            else None
+        )
         return {
             "status": "applied",
             "provider": self.provider,
@@ -91,8 +104,11 @@ class ImageReconstructionResult:
             "source_path": str(self.source_path),
             "output_path": str(self.output_path),
             "latency_ms": self.latency_ms,
+            "image_size": self.image_size,
             "revised_prompt": self.revised_prompt,
             "usage": self.usage or {},
+            "usage_event": usage_event or {},
+            "cost_estimate": summarize_ai_cost([usage_event] if usage_event else []),
             "response_id": self.response_id,
             "response_text": self.response_text,
             "mime_type": self.mime_type,
@@ -374,6 +390,7 @@ def _reconstruct_with_gemini(
         prompt=prompt.strip() or DEFAULT_RECONSTRUCTION_PROMPT,
         source_path=source,
         latency_ms=latency_ms,
+        image_size=image_size or "auto",
         usage=response_payload.get("usageMetadata") if isinstance(response_payload.get("usageMetadata"), dict) else None,
         response_id=str(response_payload.get("responseId") or response_payload.get("id") or "") or None,
         response_text=response_text or None,
@@ -466,6 +483,7 @@ def _reconstruct_with_openai(
         prompt=str(fields[1][1]),
         source_path=source,
         latency_ms=latency_ms,
+        image_size=str(fields[2][1]),
         revised_prompt=first.get("revised_prompt") if isinstance(first.get("revised_prompt"), str) else None,
         usage=payload.get("usage") if isinstance(payload.get("usage"), dict) else first.get("usage"),
         response_id=str(payload.get("id")) if payload.get("id") else None,

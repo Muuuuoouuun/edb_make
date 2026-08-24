@@ -11,6 +11,7 @@ param(
     [switch]$Clean,
     [switch]$SkipAppBuild,
     [switch]$InstallPyInstaller,
+    [switch]$BundleUpscayl,
     [switch]$Sign,
     [string]$SignTool = "",
     [string]$SignCertificatePath = "",
@@ -30,6 +31,52 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 . (Join-Path $ProjectRoot "scripts\Sign-WindowsArtifact.ps1")
 $ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectRoot $OutputDir }
+$ResolvedOutputDir = [System.IO.Path]::GetFullPath($ResolvedOutputDir)
+
+function Assert-EDBSafeOutputDirectory {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$ProjectPath,
+        [bool]$WillClean = $false
+    )
+
+    $TrimChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $ResolvedPath = [System.IO.Path]::GetFullPath($Path).TrimEnd($TrimChars)
+    $ResolvedProject = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd($TrimChars)
+    $ProtectedPaths = @(
+        [System.IO.Path]::GetPathRoot($ResolvedPath),
+        [Environment]::GetFolderPath("UserProfile"),
+        $ResolvedProject
+    )
+    foreach ($ProtectedPath in $ProtectedPaths) {
+        if ($ProtectedPath -and [string]::Equals($ResolvedPath, $ProtectedPath.TrimEnd($TrimChars), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing unsafe packaging output directory: $ResolvedPath"
+        }
+    }
+    $OutputPrefix = $ResolvedPath + [System.IO.Path]::DirectorySeparatorChar
+    if ($ResolvedProject.StartsWith($OutputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing packaging output directory that contains the project: $ResolvedPath"
+    }
+    if (($ResolvedPath -split '[\\/]') -contains '.git') {
+        throw "Refusing packaging output inside .git: $ResolvedPath"
+    }
+    $ProjectPrefix = $ResolvedProject + [System.IO.Path]::DirectorySeparatorChar
+    if ($ResolvedPath.StartsWith($ProjectPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $RelativePath = $ResolvedPath.Substring($ProjectPrefix.Length)
+        $TopLevel = ($RelativePath -split '[\\/]')[0]
+        if ($TopLevel -ne 'dist') {
+            throw "Refusing project-internal packaging output outside the exact dist allowlist: $ResolvedPath"
+        }
+    } elseif (Test-Path -LiteralPath $ResolvedPath -PathType Container) {
+        $ExistingEntry = Get-ChildItem -Force -LiteralPath $ResolvedPath | Select-Object -First 1
+        $Sentinel = Join-Path $ResolvedPath ".edb-packaging-output"
+        if ($ExistingEntry -and -not (Test-Path -LiteralPath $Sentinel -PathType Leaf)) {
+            throw "Refusing to clean non-empty unmarked external packaging output: $ResolvedPath"
+        }
+    }
+}
+
+Assert-EDBSafeOutputDirectory -Path $ResolvedOutputDir -ProjectPath $ProjectRoot -WillClean ([bool]$Clean)
 if ([string]::IsNullOrWhiteSpace($AppDisplayName)) {
     $AppDisplayName = $AppName
 }
@@ -39,7 +86,7 @@ if ([string]::IsNullOrWhiteSpace($AppPublisher)) {
 
 if (-not $PythonExe) {
     $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-    if (Test-Path $VenvPython) {
+    if (Test-Path -LiteralPath $VenvPython -PathType Leaf) {
         $PythonExe = $VenvPython
     } else {
         $PythonExe = "python"
@@ -49,8 +96,16 @@ if (-not $PythonExe) {
 function Find-InnoSetupCompiler {
     param([string]$Requested)
 
-    if ($Requested -and (Test-Path $Requested)) {
-        return $Requested
+    if ($Requested) {
+        $ResolvedRequested = if ([System.IO.Path]::IsPathRooted($Requested)) {
+            [System.IO.Path]::GetFullPath($Requested)
+        } else {
+            [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Requested))
+        }
+        if (-not (Test-Path -LiteralPath $ResolvedRequested -PathType Leaf)) {
+            throw "Requested Inno Setup compiler was not found: $ResolvedRequested"
+        }
+        return (Resolve-Path -LiteralPath $ResolvedRequested).Path
     }
 
     $Candidates = @()
@@ -63,8 +118,8 @@ function Find-InnoSetupCompiler {
     )
 
     foreach ($Candidate in $Candidates) {
-        if ($Candidate -and (Test-Path $Candidate)) {
-            return $Candidate
+        if ($Candidate -and (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+            return (Resolve-Path -LiteralPath $Candidate).Path
         }
     }
 
@@ -139,9 +194,9 @@ function Read-PackagedUpdateConfig {
         (Join-Path $PackageRoot "_internal\app_update_config.json")
     )
     foreach ($Candidate in $Candidates) {
-        if (Test-Path $Candidate) {
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
             try {
-                return Get-Content -Raw -Path $Candidate | ConvertFrom-Json
+                return Get-Content -Raw -LiteralPath $Candidate | ConvertFrom-Json
             } catch {
                 throw "Could not read packaged update metadata: $Candidate. $($_.Exception.Message)"
             }
@@ -176,6 +231,9 @@ if (-not $SkipAppBuild) {
     if ($InstallPyInstaller) {
         $AppBuildArgs.InstallPyInstaller = $true
     }
+    if ($BundleUpscayl) {
+        $AppBuildArgs.BundleUpscayl = $true
+    }
     $AppBuildArgs.RequirePyInstaller = $true
     if ($PythonExe) {
         $AppBuildArgs.PythonExe = $PythonExe
@@ -195,8 +253,10 @@ if (-not $SkipAppBuild) {
 
 $PackageRoot = Join-Path $ResolvedOutputDir $AppName
 $PackageExe = Join-Path $PackageRoot "$AppName.exe"
-if (-not (Test-Path $PackageExe)) {
-    throw "PyInstaller app output was not found: $PackageExe. Build the app first or remove -SkipAppBuild."
+try {
+    Assert-EDBNonEmptyFile -Path $PackageExe -Label "PyInstaller app executable"
+} catch {
+    throw "PyInstaller app output was not found or is empty: $PackageExe. Build the app first or remove -SkipAppBuild."
 }
 
 $PackagedUpdateConfig = Read-PackagedUpdateConfig $PackageRoot
@@ -233,6 +293,9 @@ if ($EffectiveInstallerDownloadUrl) {
 if ($EffectiveInstallerReleaseNotesUrl) {
     $VerifierArgs += @("--expected-release-notes-url", $EffectiveInstallerReleaseNotesUrl)
 }
+if ($env:EDB_RELEASE_GIT_COMMIT) {
+    $VerifierArgs += @("--expected-git-commit", $env:EDB_RELEASE_GIT_COMMIT)
+}
 & $PythonExe @VerifierArgs
 Assert-EDBNativeCommandSucceeded "Packaged app verification"
 
@@ -250,8 +313,8 @@ if ($Sign -and $SkipAppBuild) {
 }
 
 $InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"
-if (Test-Path $InstallerPath) {
-    Remove-Item -Force $InstallerPath
+if (Test-Path -LiteralPath $InstallerPath -PathType Leaf) {
+    Remove-Item -Force -LiteralPath $InstallerPath
 }
 
 $Iscc = Find-InnoSetupCompiler $InnoSetupCompiler

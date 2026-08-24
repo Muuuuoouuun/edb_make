@@ -3,14 +3,28 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from ocr_backend import GeminiOCRBackend, create_ocr_backend
+from ai_usage import (
+    aggregate_token_usage,
+    summarize_ai_cost,
+    summarize_token_efficiency,
+)
+from ocr_backend import (
+    DEFAULT_GEMINI_OCR_MODEL,
+    ECONOMY_GEMINI_OCR_MODEL,
+    GeminiOCRBackend,
+    create_ocr_backend,
+    ocr_cache_fingerprint,
+    preferred_ocr_backend_name,
+)
 from page_repair import AIFallbackConfig, build_ai_fallback_config, repair_page_model
 from pipeline_cache import PipelineCache
 from preprocess import PreparedPage, prepare_source_pages
@@ -29,6 +43,19 @@ def load_env_local() -> None:
                 os.environ.setdefault(key.strip(), val.strip())
 
 load_env_local()
+
+_LATEX_COMMAND_PATTERN = re.compile(
+    r"\\(?:"
+    r"alpha|beta|gamma|delta|theta|lambda|mu|pi|rho|sigma|phi|omega|"
+    r"sin|cos|tan|log|ln|sqrt|frac|sum|prod|int|lim|"
+    r"times|div|pm|cdot|leq|geq|neq|infty"
+    r")\b",
+    re.IGNORECASE,
+)
+_UNPUNCTUATED_OR_MALFORMED_STEM_END_PATTERN = re.compile(
+    r"(?:구하|고르|쓰|설명하|서술하|계산하|선택하|판단하|확인하|작성하|나타내|말하)"
+    r"[가-힣]{0,3}$"
+)
 
 
 def _resolve_subject(name: str | None) -> Subject:
@@ -58,6 +85,7 @@ def build_run_summary(
     ocr_cache_misses = 0
     route_counts: dict[str, int] = {}
     route_tier_counts: dict[str, int] = {}
+    token_usage_events: list[dict[str, Any]] = []
 
     for page in pages:
         ai_summary = page.metadata.get("ai_fallback")
@@ -68,6 +96,9 @@ def build_run_summary(
                 ai_applied_pages += 1
             if ai_summary.get("cache_hit"):
                 ai_cache_hits += 1
+            raw_token_usage = ai_summary.get("token_usage")
+            if isinstance(raw_token_usage, dict):
+                token_usage_events.append(dict(raw_token_usage))
         route_summary = page.metadata.get("route_decision")
         if isinstance(route_summary, dict):
             route = str(route_summary.get("route") or "unknown")
@@ -87,6 +118,11 @@ def build_run_summary(
                 ocr_cache_hits += 1
             if block.metadata.get("ocr_cache_miss"):
                 ocr_cache_misses += 1
+            raw_events = block.metadata.get("ai_token_usage_events")
+            if isinstance(raw_events, list):
+                token_usage_events.extend(
+                    dict(event) for event in raw_events if isinstance(event, dict)
+                )
 
     return {
         "source": str(source),
@@ -106,39 +142,106 @@ def build_run_summary(
         "ocr_cache_miss_count": ocr_cache_misses,
         "route_counts": route_counts,
         "route_tier_counts": route_tier_counts,
+        "token_usage": aggregate_token_usage(token_usage_events),
+        "ai_token_efficiency": summarize_token_efficiency(token_usage_events),
+        "ai_cost_summary": summarize_ai_cost(token_usage_events),
         "pages_json_path": str(Path(output_dir) / "pages.json"),
     }
 
 
 def _maybe_build_gemini_escalation(
-    *, ai_config: AIFallbackConfig | None, primary_backend_name: str
+    *,
+    ai_config: AIFallbackConfig | None,
+    primary_backend_name: str,
+    primary_model: str | None = None,
 ) -> GeminiOCRBackend | None:
-    """Build a Gemini OCR backend for per-block escalation when AI fallback is
-    enabled and the primary backend isn't already Gemini. Returns None when
-    escalation is unavailable (no API key) or unnecessary."""
+    """Build a quality OCR backend for low-confidence blocks.
+
+    Local OCR escalates to the balanced Gemini model. Economy Gemini OCR can
+    likewise escalate only uncertain blocks to the current quality model.
+    """
     if ai_config is None or not ai_config.enabled:
         return None
-    if primary_backend_name == "gemini":
+    if (
+        primary_backend_name == "gemini"
+        and str(primary_model or "").strip().lower() != ECONOMY_GEMINI_OCR_MODEL
+    ):
         return None
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         return None
     try:
-        return GeminiOCRBackend()
+        return GeminiOCRBackend(
+            model=(
+                DEFAULT_GEMINI_OCR_MODEL
+                if primary_backend_name == "gemini"
+                else None
+            )
+        )
     except Exception:
         return None
 
 
-def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
-    """A block should be re-OCRed by Claude when the primary engine returned
-    empty text or low confidence — both strong signals the local engine
-    struggled with this crop."""
+def _ocr_exactness_risk(ocr_result) -> bool:
+    r"""Detect economy-model output that likely rewrote visible exam notation.
+
+    OCR output is displayed as plain text. A Lite-model LaTeX command such as
+    ``\pi`` or ``\sin`` therefore indicates semantic normalization rather than
+    exact transcription and must be checked by the balanced quality model.
+    """
+    model = str(ocr_result.metadata.get("model") or "").strip().lower()
+    if model != ECONOMY_GEMINI_OCR_MODEL:
+        return False
+    text = str(ocr_result.text or "").strip()
+    if _LATEX_COMMAND_PATTERN.search(text):
+        return True
+    block_type = str(ocr_result.metadata.get("block_type_hint") or "").strip().lower()
+    return block_type == "stem" and bool(
+        _UNPUNCTUATED_OR_MALFORMED_STEM_END_PATTERN.search(text)
+    )
+
+
+def _ocr_escalation_reason(ocr_result, *, threshold: float) -> str | None:
+    """Return the reason a primary OCR result needs a quality-model check."""
     text = (ocr_result.text or "").strip()
     if not text:
-        return True
+        return "empty_primary"
+    if _ocr_exactness_risk(ocr_result):
+        return "exactness_risk"
     confidence = ocr_result.confidence
     if confidence is None:
+        return None
+    if float(confidence) < float(threshold):
+        return "low_confidence_primary"
+    return None
+
+
+def _ocr_needs_escalation(ocr_result, *, threshold: float) -> bool:
+    return _ocr_escalation_reason(ocr_result, threshold=threshold) is not None
+
+
+def _should_accept_ocr_escalation(
+    primary_result,
+    escalated_result,
+    *,
+    reason: str,
+) -> bool:
+    escalated_text = (escalated_result.text or "").strip()
+    if not escalated_text:
         return False
-    return float(confidence) < float(threshold)
+    if reason == "exactness_risk":
+        return True
+    primary_text = (primary_result.text or "").strip()
+    if not primary_text:
+        return True
+    primary_conf = (
+        primary_result.confidence if primary_result.confidence is not None else 0.0
+    )
+    escalated_conf = (
+        escalated_result.confidence
+        if escalated_result.confidence is not None
+        else 0.0
+    )
+    return float(escalated_conf) >= float(primary_conf)
 
 
 def _should_skip_ocr_for_trusted_block(
@@ -188,7 +291,19 @@ def _file_identity(path_value: object) -> dict[str, Any]:
         "size_bytes": int(stat.st_size),
         "mtime_ns": int(stat.st_mtime_ns),
     }
+    identity["sha256"] = _file_sha256(path)
     return identity
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return "unavailable"
+    return digest.hexdigest()
 
 
 def _bucket_coordinate(value: float, *, bucket_size: int = 4) -> int:
@@ -214,13 +329,17 @@ def _page_metadata_for_output(metadata: dict[str, Any]) -> dict[str, Any]:
 def _build_ocr_cache_identity(
     prepared_page: PreparedPage,
     block: ContentBlock,
+    *,
+    backend_fingerprint: str = "",
+    source_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(prepared_page.metadata)
     source_path = metadata.get("original_source_path") or prepared_page.source_path
     bucket_size = 4
     return {
         "version": "ocr_block_identity_v2",
-        "source": _file_identity(source_path),
+        "backend_fingerprint": backend_fingerprint,
+        "source": dict(source_identity or _file_identity(source_path)),
         "page": {
             "id": prepared_page.page_id,
             "number": int(prepared_page.page_number),
@@ -269,6 +388,11 @@ def _lazy_cache_backend_name(ocr_mode: str | None) -> str | None:
     return None
 
 
+def _backend_cache_fingerprint(backend: object, fallback_name: str) -> str:
+    fingerprint = str(getattr(backend, "cache_fingerprint", "") or "").strip()
+    return fingerprint or ocr_cache_fingerprint(fallback_name)
+
+
 def _gemini_escalation_may_be_available(
     *,
     ai_config: AIFallbackConfig | None,
@@ -291,6 +415,23 @@ def resolve_block_ocr_worker_count(
     if bounded_item_count <= 0:
         return 1
     max_workers = max(1, min(8, bounded_item_count or 1))
+    normalized_mode = (ocr_mode or "").strip().lower()
+    normalized_backend = (backend_name or "").strip().lower()
+    if normalized_mode in {"none", "noop"} or normalized_backend in {"none", "noop"}:
+        return 1
+    if normalized_mode in {"paddle", "paddleocr"} or normalized_backend in {"paddle", "paddleocr"}:
+        return 1
+    network_backend = (
+        normalized_mode in {"gemini", "google", "claude", "anthropic"}
+        or normalized_mode.startswith("gemini-")
+        or normalized_backend in {"gemini", "google", "claude", "anthropic"}
+    )
+    if network_backend:
+        try:
+            ai_cap = int(os.environ.get("EDB_AI_MAX_WORKERS", "3").strip() or "3")
+        except ValueError:
+            ai_cap = 3
+        max_workers = min(max_workers, max(1, ai_cap))
     raw_worker_count = os.environ.get("EDB_RECOGNITION_BLOCK_WORKERS", "").strip()
     if raw_worker_count:
         try:
@@ -300,14 +441,8 @@ def resolve_block_ocr_worker_count(
         if requested_workers > 0:
             return max(1, min(max_workers, requested_workers))
 
-    normalized_mode = (ocr_mode or "").strip().lower()
-    normalized_backend = (backend_name or "").strip().lower()
-    if normalized_mode in {"none", "noop"} or normalized_backend in {"none", "noop"}:
-        return 1
-    if normalized_mode in {"gemini", "google", "claude", "anthropic"}:
-        return 3
-    if normalized_backend in {"gemini", "google", "claude", "anthropic"}:
-        return 3
+    if network_backend:
+        return max_workers
 
     default_workers = min(max_workers, os.cpu_count() or 2)
     return max(1, default_workers)
@@ -360,18 +495,68 @@ def resolve_recognition_worker_count(
     return max(1, min(item_count, default_workers))
 
 
+def resolve_global_ocr_worker_limit(
+    *,
+    ocr_mode: str,
+    ai_config: AIFallbackConfig | None = None,
+    resolved_backend_name: str | None = None,
+) -> int:
+    backend_name = (resolved_backend_name or preferred_ocr_backend_name(ocr_mode)).strip().lower()
+    if backend_name in {"none", "noop", "paddle", "paddleocr"}:
+        return 1
+    if backend_name == "gemini" or bool(ai_config and ai_config.enabled):
+        try:
+            configured = int(os.environ.get("EDB_AI_MAX_WORKERS", "3").strip() or "3")
+        except ValueError:
+            configured = 3
+        return max(1, min(8, configured))
+    try:
+        configured = int(
+            os.environ.get("EDB_LOCAL_OCR_MAX_WORKERS", str(min(8, os.cpu_count() or 2))).strip()
+        )
+    except ValueError:
+        configured = min(8, os.cpu_count() or 2)
+    return max(1, min(8, configured))
+
+
 def build_page_models_for_prepared_pages(
     prepared_pages: list[PreparedPage],
     *,
     subject: Subject,
     ocr_mode: str,
     ai_config: AIFallbackConfig | None = None,
+    ocr_semaphore: threading.BoundedSemaphore | None = None,
+    global_ocr_worker_limit: int | None = None,
 ) -> list[PageModel]:
+    resolved_backend_name = preferred_ocr_backend_name(ocr_mode)
     worker_count = resolve_recognition_worker_count(
         len(prepared_pages),
         ocr_mode=ocr_mode,
         ai_config=ai_config,
     )
+    if resolved_backend_name == "paddleocr":
+        worker_count = 1
+    resolved_global_ocr_worker_limit = global_ocr_worker_limit or resolve_global_ocr_worker_limit(
+        ocr_mode=ocr_mode,
+        ai_config=ai_config,
+        resolved_backend_name=resolved_backend_name,
+    )
+    shared_ocr_semaphore = ocr_semaphore or threading.BoundedSemaphore(
+        resolved_global_ocr_worker_limit
+    )
+
+    # A multipage document points every prepared page back to the same
+    # original PDF/HWP. Hash each distinct original once before page workers
+    # start instead of rereading the entire document in every worker.
+    source_identities: dict[str, dict[str, Any]] = {}
+    for prepared_page in prepared_pages:
+        source_path = str(
+            prepared_page.metadata.get("original_source_path")
+            or prepared_page.source_path
+        )
+        if source_path not in source_identities:
+            source_identities[source_path] = _file_identity(source_path)
+
     if worker_count <= 1:
         pages = [
             build_page_model(
@@ -379,6 +564,14 @@ def build_page_models_for_prepared_pages(
                 subject=subject,
                 ocr_mode=ocr_mode,
                 ai_config=ai_config,
+                ocr_semaphore=shared_ocr_semaphore,
+                global_ocr_worker_limit=resolved_global_ocr_worker_limit,
+                source_identity=source_identities[
+                    str(
+                        prepared_page.metadata.get("original_source_path")
+                        or prepared_page.source_path
+                    )
+                ],
             )
             for prepared_page in prepared_pages
         ]
@@ -389,6 +582,14 @@ def build_page_models_for_prepared_pages(
                 subject=subject,
                 ocr_mode=ocr_mode,
                 ai_config=ai_config,
+                ocr_semaphore=shared_ocr_semaphore,
+                global_ocr_worker_limit=resolved_global_ocr_worker_limit,
+                source_identity=source_identities[
+                    str(
+                        prepared_page.metadata.get("original_source_path")
+                        or prepared_page.source_path
+                    )
+                ],
             )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -396,6 +597,7 @@ def build_page_models_for_prepared_pages(
 
     for page in pages:
         page.metadata["recognition_page_worker_count"] = worker_count
+        page.metadata["global_ocr_worker_limit"] = resolved_global_ocr_worker_limit
     return pages
 
 
@@ -406,6 +608,9 @@ def build_page_model(
     *,
     ai_config: AIFallbackConfig | None = None,
     cache: PipelineCache | None = None,
+    ocr_semaphore: threading.BoundedSemaphore | None = None,
+    global_ocr_worker_limit: int | None = None,
+    source_identity: dict[str, Any] | None = None,
 ) -> PageModel:
     recognition_started_at = time.perf_counter()
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
@@ -428,6 +633,20 @@ def build_page_model(
         create_ocr_backend(ocr_mode) if ocr_eligible_block_count > 0 else None
     )
     backend_name = lazy_backend_name or (backend.engine_name if backend is not None else "none")
+    backend_cache_fingerprint = (
+        ocr_cache_fingerprint(ocr_mode)
+        if backend is None
+        else _backend_cache_fingerprint(backend, backend_name)
+    )
+    source_path_for_cache = (
+        prepared_page.metadata.get("original_source_path")
+        or prepared_page.source_path
+    )
+    ocr_source_identity = (
+        dict(source_identity)
+        if source_identity is not None
+        else _file_identity(source_path_for_cache)
+    )
     backend_lock = threading.Lock()
     escalation_backend = (
         _maybe_build_gemini_escalation(
@@ -444,23 +663,29 @@ def build_page_model(
         ocr_mode=ocr_mode,
         backend_name=backend_name,
     )
+    resolved_global_ocr_worker_limit = global_ocr_worker_limit or resolve_global_ocr_worker_limit(
+        ocr_mode=ocr_mode,
+        ai_config=ai_config,
+        resolved_backend_name=backend_name,
+    )
+    call_semaphore = ocr_semaphore or threading.BoundedSemaphore(
+        resolved_global_ocr_worker_limit
+    )
 
     def _get_backend():
-        nonlocal backend, backend_name, escalation_backend, escalation_backend_checked
+        nonlocal backend, backend_name
         if backend is not None:
             return backend
         with backend_lock:
             if backend is None:
                 backend = create_ocr_backend(ocr_mode)
                 backend_name = backend.engine_name
-                escalation_backend = _maybe_build_gemini_escalation(
-                    ai_config=ai_config,
-                    primary_backend_name=backend_name,
-                )
-                escalation_backend_checked = True
         return backend
 
-    def _get_escalation_backend(primary_backend_name: str | None):
+    def _get_escalation_backend(
+        primary_backend_name: str | None,
+        primary_model: str | None = None,
+    ):
         nonlocal escalation_backend, escalation_backend_checked
         if escalation_backend_checked:
             return escalation_backend
@@ -469,11 +694,25 @@ def build_page_model(
                 escalation_backend = _maybe_build_gemini_escalation(
                     ai_config=ai_config,
                     primary_backend_name=primary_backend_name or backend_name,
+                    primary_model=primary_model,
                 )
                 escalation_backend_checked = True
         return escalation_backend
 
     def _process_block(block):
+        token_usage_events: list[dict[str, Any]] = []
+
+        def _record_live_token_usage(result: Any, *, stage: str) -> None:
+            raw_usage = result.metadata.get("token_usage")
+            if not isinstance(raw_usage, dict):
+                return
+            event = dict(raw_usage)
+            event["stage"] = stage
+            model = str(result.metadata.get("model") or "").strip()
+            if model:
+                event["model"] = model
+            token_usage_events.append(event)
+
         if _should_skip_ocr_for_trusted_block(block, page_segmenter=page_segmenter):
             block.metadata["ocr_backend"] = "pdf_text_marker"
             block.metadata["ocr_skipped"] = True
@@ -487,7 +726,12 @@ def build_page_model(
             return
 
         crop = crop_block_image(prepared_page, block)
-        cache_identity = _build_ocr_cache_identity(prepared_page, block)
+        cache_identity = _build_ocr_cache_identity(
+            prepared_page,
+            block,
+            backend_fingerprint=backend_cache_fingerprint,
+            source_identity=ocr_source_identity,
+        )
         cached_ocr = pipeline_cache.load_ocr_result(
             crop,
             backend_name=backend_name,
@@ -500,75 +744,127 @@ def build_page_model(
             block.metadata["ocr_cache_hit"] = True
             block.metadata["ocr_cache_miss"] = False
         else:
-            active_backend = _get_backend()
-            started_at = time.perf_counter()
-            ocr_result = active_backend.recognize(crop)
-            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
+            call_semaphore.acquire()
+            try:
+                active_backend = _get_backend()
+                started_at = time.perf_counter()
+                ocr_result = active_backend.recognize(crop)
+                elapsed_ms = int(round((time.perf_counter() - started_at) * 1000.0))
+            finally:
+                call_semaphore.release()
             ocr_result.metadata.setdefault("backend_latency_ms", elapsed_ms)
-            pipeline_cache.save_ocr_result(
-                crop,
-                ocr_result,
-                backend_name=active_backend.engine_name,
-                cache_identity=cache_identity,
-            )
+            _record_live_token_usage(ocr_result, stage="ocr")
+            if ocr_result.metadata.get("cacheable", True):
+                pipeline_cache.save_ocr_result(
+                    crop,
+                    ocr_result,
+                    backend_name=active_backend.engine_name,
+                    cache_identity=cache_identity,
+                )
+            else:
+                block.metadata["ocr_cache_write_skipped"] = True
+                block.metadata["ocr_cache_write_skipped_reason"] = "backend_failure"
             block.metadata["ocr_primary_backend"] = active_backend.engine_name
             block.metadata["ocr_cache_hit"] = False
             block.metadata["ocr_cache_miss"] = True
 
-        active_escalation_backend = _get_escalation_backend(ocr_result.backend_name)
-        if active_escalation_backend is not None and _ocr_needs_escalation(
-            ocr_result, threshold=escalation_threshold
-        ):
+        active_escalation_backend = _get_escalation_backend(
+            ocr_result.backend_name,
+            str(ocr_result.metadata.get("model") or ""),
+        )
+        escalation_reason = _ocr_escalation_reason(
+            ocr_result,
+            threshold=escalation_threshold,
+        )
+        if active_escalation_backend is not None and escalation_reason is not None:
             block.metadata["ocr_escalation_attempted"] = True
+            block.metadata["ocr_escalation_trigger"] = escalation_reason
             block.metadata["ocr_escalation_backend"] = active_escalation_backend.engine_name
+            escalation_cache_identity = _build_ocr_cache_identity(
+                prepared_page,
+                block,
+                backend_fingerprint=_backend_cache_fingerprint(
+                    active_escalation_backend,
+                    active_escalation_backend.engine_name,
+                ),
+                source_identity=ocr_source_identity,
+            )
             escalated_cached = pipeline_cache.load_ocr_result(
                 crop,
                 backend_name="gemini_escalated",
-                cache_identity=cache_identity,
+                cache_identity=escalation_cache_identity,
             )
             if escalated_cached is not None:
                 escalated_result = escalated_cached
                 block.metadata["ocr_escalation_cache_hit"] = True
             else:
-                escalation_started = time.perf_counter()
-                escalated_result = active_escalation_backend.recognize(crop)
-                escalation_elapsed_ms = int(
-                    round((time.perf_counter() - escalation_started) * 1000.0)
-                )
+                call_semaphore.acquire()
+                try:
+                    escalation_started = time.perf_counter()
+                    escalated_result = active_escalation_backend.recognize(crop)
+                    escalation_elapsed_ms = int(
+                        round((time.perf_counter() - escalation_started) * 1000.0)
+                    )
+                finally:
+                    call_semaphore.release()
                 escalated_result.metadata.setdefault(
                     "backend_latency_ms", escalation_elapsed_ms
                 )
-                pipeline_cache.save_ocr_result(
-                    crop,
+                _record_live_token_usage(
                     escalated_result,
-                    backend_name="gemini_escalated",
-                    cache_identity=cache_identity,
+                    stage="ocr_escalation",
                 )
+                if escalated_result.metadata.get("cacheable", True):
+                    pipeline_cache.save_ocr_result(
+                        crop,
+                        escalated_result,
+                        backend_name="gemini_escalated",
+                        cache_identity=escalation_cache_identity,
+                    )
+                else:
+                    block.metadata["ocr_escalation_cache_write_skipped"] = True
+                    block.metadata["ocr_escalation_cache_write_skipped_reason"] = (
+                        "backend_failure"
+                    )
                 block.metadata["ocr_escalation_cache_hit"] = False
 
-            primary_text = (ocr_result.text or "").strip()
-            escalated_text = (escalated_result.text or "").strip()
-            primary_conf = ocr_result.confidence if ocr_result.confidence is not None else 0.0
-            escalated_conf = (
-                escalated_result.confidence if escalated_result.confidence is not None else 0.0
+            # Self-reported confidence did not catch the Lite model changing
+            # visible notation (for example π -> \pi). For that evidence-backed
+            # risk, prefer any non-empty balanced-model transcription.
+            should_accept_escalation = _should_accept_ocr_escalation(
+                ocr_result,
+                escalated_result,
+                reason=escalation_reason,
             )
-            # Accept escalation when it produced text and either the primary
-            # produced nothing, or the escalation is at least as confident.
-            if escalated_text and (not primary_text or escalated_conf >= primary_conf):
+            if should_accept_escalation:
                 ocr_result = escalated_result
                 block.metadata["ocr_escalated"] = True
-                block.metadata["ocr_escalation_reason"] = (
-                    "empty_primary" if not primary_text else "low_confidence_primary"
-                )
+                block.metadata["ocr_escalation_reason"] = escalation_reason
             else:
                 block.metadata["ocr_escalated"] = False
 
+        if token_usage_events:
+            block.metadata["ai_token_usage_events"] = token_usage_events
         block.metadata["ocr_backend"] = ocr_result.backend_name
         if isinstance(ocr_result.metadata.get("backend_latency_ms"), (int, float)):
             block.metadata["ocr_latency_ms"] = int(ocr_result.metadata["backend_latency_ms"])
         block.metadata["ocr_line_count"] = int(ocr_result.metadata.get("line_count") or len(ocr_result.lines))
         block.metadata["ocr_empty_text"] = bool(ocr_result.metadata.get("empty_text")) or not bool(ocr_result.text.strip())
         block.metadata["ocr_text_length"] = int(ocr_result.metadata.get("text_length") or len((ocr_result.text or "").strip()))
+        if ocr_result.metadata.get("fallback_reason"):
+            block.metadata["ocr_fallback_reason"] = str(
+                ocr_result.metadata["fallback_reason"]
+            )
+        if ocr_result.metadata.get("fallback_message"):
+            block.metadata["ocr_fallback_message"] = str(
+                ocr_result.metadata["fallback_message"]
+            )
+        if isinstance(ocr_result.metadata.get("retry_after_ms"), (int, float)):
+            block.metadata["ocr_retry_after_ms"] = int(
+                ocr_result.metadata["retry_after_ms"]
+            )
+        if ocr_result.metadata.get("circuit_open"):
+            block.metadata["ocr_circuit_open"] = True
         block_type_hint = ocr_result.metadata.get("block_type_hint", "")
         if ocr_result.text.strip():
             block.text = ocr_result.text.strip()
@@ -639,6 +935,7 @@ def build_page_model(
             "cache_hit_count": ocr_cache_hit_count,
             "cache_miss_count": ocr_cache_miss_count,
             "skipped_block_count": ocr_skipped_block_count,
+            "global_worker_limit": resolved_global_ocr_worker_limit,
         },
         "ocr_escalation": {
             "stage": "ocr_escalation",
@@ -686,7 +983,14 @@ def build_page_model(
             "ai_stages": ai_stages,
         },
     )
-    return repair_page_model(prepared_page, page, ocr_mode=ocr_mode, config=ai_config, cache=pipeline_cache)
+    return repair_page_model(
+        prepared_page,
+        page,
+        ocr_mode=ocr_mode,
+        config=ai_config,
+        cache=pipeline_cache,
+        request_semaphore=call_semaphore,
+    )
 
 
 def build_pages_from_source(

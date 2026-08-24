@@ -1,11 +1,13 @@
 import json
 import unittest
 from unittest.mock import patch
+import base64
+from io import BytesIO
 
 from PIL import Image
 
 import page_repair
-from page_repair import build_ai_fallback_config
+from page_repair import build_ai_fallback_config, repair_page_model
 from preprocess import PreparedPage
 from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
 
@@ -21,6 +23,12 @@ class TestPageRepairConfig(unittest.TestCase):
             captured["timeout_ms"] = timeout_ms
             return {
                 "responseId": "response-1",
+                "usageMetadata": {
+                    "promptTokenCount": 210,
+                    "candidatesTokenCount": 35,
+                    "thoughtsTokenCount": 5,
+                    "totalTokenCount": 250,
+                },
                 "candidates": [
                     {
                         "content": {
@@ -68,7 +76,7 @@ class TestPageRepairConfig(unittest.TestCase):
 
         with patch.object(page_repair, "_image_to_base64", return_value="encoded-image"):
             with patch.object(page_repair, "_post_json", side_effect=fake_post_json):
-                payload, response_id = page_repair._request_gemini_repair(
+                payload, response_id, token_usage = page_repair._request_gemini_repair(
                     prepared_page=prepared_page,
                     page=page,
                     config=config,
@@ -78,8 +86,36 @@ class TestPageRepairConfig(unittest.TestCase):
 
         self.assertEqual(response_id, "response-1")
         self.assertEqual(payload["problem_start_block_ids"], ["block-1"])
+        self.assertEqual(250, token_usage["total_token_count"])
+        self.assertEqual(1, token_usage["request_count"])
         self.assertEqual(captured["timeout_ms"], 12345)
-        self.assertEqual(captured["payload"]["generationConfig"]["maxOutputTokens"], 6789)
+        generation_config = captured["payload"]["generationConfig"]
+        self.assertEqual(generation_config["maxOutputTokens"], 536)
+        self.assertEqual(
+            generation_config["thinkingConfig"],
+            {"thinkingLevel": "low"},
+        )
+        self.assertNotIn(
+            "problem_units",
+            generation_config["responseSchema"]["properties"],
+        )
+        self.assertNotIn(
+            "notes",
+            generation_config["responseSchema"]["properties"],
+        )
+        self.assertEqual(token_usage["configured_max_output_tokens"], 6789)
+        self.assertEqual(token_usage["effective_max_output_tokens"], 536)
+
+    def test_repair_context_image_caps_long_edge(self):
+        encoded = page_repair._image_to_base64(
+            Image.new("RGB", (4200, 2800), "white")
+        )
+
+        with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+            self.assertEqual(
+                max(decoded.size),
+                page_repair.AI_REPAIR_IMAGE_MAX_DIMENSION,
+            )
 
     def test_31_pro_falls_back_to_stable_pro_on_call_error(self):
         urls = []
@@ -148,6 +184,7 @@ class TestPageRepairConfig(unittest.TestCase):
                         response_id,
                         used_model,
                         attempts,
+                        token_usage,
                     ) = page_repair._request_ai_repair_with_model_fallback(
                         prepared_page=prepared_page,
                         page=page,
@@ -158,12 +195,80 @@ class TestPageRepairConfig(unittest.TestCase):
 
         self.assertEqual(response_id, "fallback-response")
         self.assertEqual(payload["problem_start_block_ids"], ["block-1"])
-        self.assertEqual(used_model, "gemini-2.5-pro")
+        self.assertEqual(used_model, "gemini-3.6-flash")
+        self.assertEqual(4096, token_usage["configured_max_output_tokens"])
+        self.assertEqual(536, token_usage["effective_max_output_tokens"])
+        self.assertEqual(0, token_usage["problem_units_requested"])
         self.assertEqual(["error", "ok"], [attempt["status"] for attempt in attempts])
         self.assertEqual([], sleep_calls)
         self.assertEqual(1, sum("gemini-3.1-pro-preview" in url for url in urls))
         self.assertTrue(any("gemini-3.1-pro-preview" in url for url in urls))
-        self.assertTrue(any("gemini-2.5-pro" in url for url in urls))
+        self.assertTrue(any("gemini-3.6-flash" in url for url in urls))
+
+    def test_invalid_repair_response_still_records_provider_token_usage(self):
+        prepared_page = PreparedPage(
+            page_id="page-1",
+            source_path="sample.png",
+            page_number=1,
+            image=Image.new("RGB", (100, 120), "white"),
+            original_size=(100, 120),
+        )
+        page = PageModel(
+            page_id="page-1",
+            width_px=100,
+            height_px=120,
+            subject=Subject.SCIENCE,
+            blocks=[
+                ContentBlock(
+                    block_id="block-1",
+                    block_type=BlockType.STEM,
+                    bbox=Box(left=0, top=0, width=80, height=40),
+                    reading_order=0,
+                    text="1. 문제",
+                )
+            ],
+        )
+        invalid_payload = {
+            "problem_start_block_ids": ["unknown-block"],
+            "choice_block_ids": [],
+            "figure_block_ids": [],
+            "display_titles": [],
+            "notes": [],
+        }
+        usage = {
+            "request_count": 1,
+            "prompt_token_count": 100,
+            "candidates_token_count": 20,
+            "thoughts_token_count": 5,
+            "total_token_count": 125,
+        }
+
+        class EmptyCache:
+            def load_ai_repair(self, **_kwargs):
+                return None
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+            with patch.object(
+                page_repair,
+                "_request_ai_repair_with_model_fallback",
+                return_value=(
+                    invalid_payload,
+                    "response-invalid",
+                    "gemini-3.1-pro-preview",
+                    [{"model": "gemini-3.1-pro-preview", "status": "ok"}],
+                    usage,
+                ),
+            ):
+                repaired = repair_page_model(
+                    prepared_page,
+                    page,
+                    ocr_mode="gemini",
+                    config=build_ai_fallback_config(mode="force"),
+                    cache=EmptyCache(),
+                )
+
+        self.assertEqual("invalid_response", repaired.metadata["ai_fallback"]["status"])
+        self.assertEqual(125, repaired.metadata["ai_fallback"]["token_usage"]["total_token_count"])
 
     def test_quota_exhausted_error_does_not_retry_or_fallback(self):
         urls = []
@@ -326,9 +431,15 @@ class TestPageRepairConfig(unittest.TestCase):
 
         prompt = page_repair._build_repair_prompt(page, ["forced"])
 
-        self.assertIn("5 or more numbered questions", prompt)
-        self.assertIn("Do not stop after the first 2 or 3", prompt)
-        self.assertIn("omit problem_units before omitting any problem_start_block_ids", prompt)
+        self.assertIn("For 5+ questions include all", prompt)
+        self.assertIn("not only the first 2–3", prompt)
+        self.assertIn("Do not return problem_units or notes", prompt)
+
+        complex_prompt = page_repair._build_repair_prompt(
+            page,
+            ["merged_problem_block"],
+        )
+        self.assertIn("Return problem_units only", complex_prompt)
 
 
 if __name__ == "__main__":

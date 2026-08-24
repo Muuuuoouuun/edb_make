@@ -104,10 +104,13 @@ Apple M4에서 폭 1600px를 목표로 합성 정답 세트 8건, 실제 crop 6�
 - 한 번에 하나의 Upscayl 프로세스만 실행하고 출력은 1,600만 픽셀로 제한한다.
 - 앱 내 리소스, 설치된 Upscayl 앱, `PATH`, 운영용 `UPSCAYL_BIN`·`UPSCAYL_MODELS_DIR` 순으로 엔진을 자동 탐지한다.
 
-배포 패키저는 `resources/upscayl`이 준비된 경우 이를 자동 포함한다. 릴리스 리소스 구조는 다음과 같다.
+배포 패키저는 외부 설치형 Upscayl 탐색을 기본으로 하며 `resources/upscayl`을 자동 포함하지 않는다. 번들은 macOS `--bundle-upscayl`, Windows `-BundleUpscayl`, direct spec의 `EDB_BUNDLE_UPSCAYL=1`로 명시적으로 활성화해야 한다. 이때 `LICENSE`, `THIRD_PARTY_NOTICES.md`, `CORRESPONDING_SOURCE.txt`가 없거나 비어 있으면 패키징이 중단된다. 릴리스 리소스 구조는 다음과 같다.
 
 ```text
 resources/upscayl/
+  LICENSE                       # 배포 대상 Upscayl 라이선스 전문
+  THIRD_PARTY_NOTICES.md        # 모델·NCNN 등 제3자 고지
+  CORRESPONDING_SOURCE.txt      # 정확한 버전의 소스 제공 위치/방법
   mac/bin/upscayl-bin          # macOS 빌드
   win/bin/upscayl-bin.exe      # Windows 빌드
   linux/bin/upscayl-bin        # Linux 빌드

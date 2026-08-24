@@ -9,6 +9,7 @@ import errno
 import gzip
 import hashlib
 import importlib
+import ipaddress
 import json
 import math
 import mimetypes
@@ -16,11 +17,15 @@ import os
 import platform
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import traceback
+import uuid
 import webbrowser
 import zipfile
 from datetime import datetime
@@ -33,14 +38,21 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
+from bug_reporting import (
+    DEFAULT_BUG_REPORT_URL,
+    BugReportDeliveryError,
+    BugReportValidationError,
+    build_bug_report,
+    deliver_bug_report,
+)
 from layout_template_schema import LayoutTemplate
 from structured_schema import Box, Subject
 from user_settings import (
+    ai_enabled_from_settings,
     apply_to_env as apply_user_settings_to_env,
     load_user_settings,
     summarize_for_response as summarize_user_settings,
     update_api_keys,
-    update_gemini_api_key,
 )
 
 
@@ -50,6 +62,8 @@ DEFAULT_BOARD_THEME = "charcoal"
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
+ACTIVE_IMAGE_ENHANCE_SIZE = "1k"
+HIGH_RES_IMAGE_SIZE_ALIASES = {"2K", "2048", "2048PX", "4K", "4096", "4096PX"}
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
@@ -58,8 +72,141 @@ PASSAGE_REVIEW_REASON_LABELS = {
     "passage_fragment": "지문 본문",
     "passage_group_source_reuse": "지문 겹침",
     "passage_missing_child_questions": "문항 누락",
+    "passage_quality_review": "지문 품질 확인",
     "source_problem_bbox_overlap": "문항 영역 겹침",
 }
+MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
+MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO = 0.30
+MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO = 0.70
+PUBLISH_RECOVERY_STEPS = [
+    "같은 작업에서 다시 제작해 주세요. 편집 내용은 최근 작업에 보관됩니다.",
+    "계속 실패하면 PNG 묶음으로 먼저 보관한 뒤 오류 정보를 복사해 신고해 주세요.",
+]
+
+
+def _log_operation_exception(operation: str, exc: BaseException) -> None:
+    print(
+        f"[operation-error] {operation}: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+        flush=True,
+    )
+    traceback.print_exc(file=sys.stderr)
+
+
+def _publish_failure_payload(
+    *,
+    code: str,
+    message: str,
+    exc: BaseException,
+    retryable: bool = True,
+    recovery_steps: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"{message}: {exc}",
+        "code": code,
+        "operation": "session_publish",
+        "retryable": retryable,
+        "recoverySteps": list(recovery_steps or PUBLISH_RECOVERY_STEPS),
+    }
+
+
+def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, Any]:
+    text = str(exc).lower()
+    if stage == "prepare" and (
+        isinstance(exc, SessionWritePathTooLong)
+        or isinstance(exc, OSError) and exc.errno == errno.ENAMETOOLONG
+    ):
+        return _publish_failure_payload(
+            code="publish_path_too_long",
+            message="EDB 제작 경로가 너무 깁니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=[
+                "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
+                "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
+            ],
+        )
+    if stage == "prepare" and isinstance(exc, FileNotFoundError):
+        return _publish_failure_payload(
+            code="publish_output_unavailable",
+            message="EDB 제작 파일을 저장할 폴더를 준비하지 못했습니다",
+            exc=exc,
+            retryable=True,
+        )
+    if isinstance(exc, FileNotFoundError):
+        return _publish_failure_payload(
+            code="publish_asset_missing",
+            message="EDB 제작에 필요한 원본 파일을 찾지 못했습니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=[
+                "최근 작업에서 원본 PDF 또는 이미지가 열리는지 확인해 주세요.",
+                "파일이 이동되었다면 원본 PDF를 다시 등록하고 제작해 주세요.",
+            ],
+        )
+    if isinstance(exc, ValueError) and ("page limit" in text or "50" in text and "page" in text):
+        return _publish_failure_payload(
+            code="publish_page_limit_exceeded",
+            message="ClassIn 보드 페이지 제한을 초과했습니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=[
+                "문항을 나누거나 일부 문항을 제외한 뒤 다시 제작해 주세요.",
+                "계속 필요하면 여러 EDB로 나누어 제작해 주세요.",
+            ],
+        )
+    definitions = {
+        "prepare": ("publish_output_unavailable", "제작 파일을 저장할 폴더를 준비하지 못했습니다"),
+        "build": ("publish_build_failed", "EDB 제작 데이터 생성에 실패했습니다"),
+        "write": ("edb_write_failed", "EDB 파일 저장 또는 검증에 실패했습니다"),
+        "handoff": ("publish_handoff_failed", "ClassIn 전달 파일 생성에 실패했습니다"),
+        "commit": ("publish_session_commit_failed", "완성 파일을 현재 작업에 반영하지 못했습니다"),
+    }
+    code, message = definitions.get(stage, ("publish_failed", "EDB 제작에 실패했습니다"))
+    return _publish_failure_payload(code=code, message=message, exc=exc)
+
+
+def _recognition_retry_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"AI 재인식 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "code": "recognition_retry_path_too_long",
+        "operation": "session_retry_ai",
+        "retryable": False,
+        "recoverySteps": [
+            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
+            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
+        ],
+    }
+
+
+def _session_mutation_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"편집 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "code": "session_mutation_path_too_long",
+        "operation": "session_mutate",
+        "retryable": False,
+        "recoverySteps": [
+            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
+            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
+        ],
+    }
+
+
+def _image_enhancement_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"고화질 이미지 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "code": "image_enhancement_path_too_long",
+        "operation": "session_enhance_image",
+        "retryable": False,
+        "recoverySteps": [
+            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
+            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
+        ],
+    }
 
 
 @lru_cache(maxsize=None)
@@ -176,6 +323,10 @@ def recrop_problem(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "recrop_problem", *args, **kwargs)
 
 
+def _stitch_passage_image_files(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_stitch_passage_image_files", *args, **kwargs)
+
+
 def resolve_subject(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "resolve_subject", *args, **kwargs)
 
@@ -262,6 +413,7 @@ APP_UPDATE_CONFIG_ERROR_KEY = "_configError"
 # normal PDFs/photos before parsing or AI recognition can start.
 MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
 MAX_UPDATE_FEED_BYTES = 262_144
+DEFAULT_RECOGNITION_MAX_DIMENSION = 4096
 UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
 RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -275,6 +427,7 @@ UPDATE_PLATFORM_ARTIFACT_TYPES = {
     "windows": ("setup-exe",),
 }
 INPUT_INTENTS = {"auto", "single-problem", "multi-problem", "page-as-is"}
+CONTENT_TARGETS = {"all", "questions", "shared-passages"}
 OUTER_EDB_PREFIX_LEN = 11
 _update_status_cache_lock = threading.Lock()
 _update_status_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -286,11 +439,36 @@ def is_frozen_app() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def _windows_documents_directory() -> Path | None:
+    """Return the redirected Windows Documents known folder when available."""
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+
+        # CSIDL_PERSONAL remains supported and, unlike ``Path.home() / Documents``,
+        # follows OneDrive and administrator-configured known-folder redirection.
+        buffer = ctypes.create_unicode_buffer(32_768)
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0005, None, 0, buffer)
+        if result == 0 and buffer.value.strip():
+            return Path(buffer.value).resolve()
+    except (AttributeError, OSError, ValueError):
+        pass
+
+    user_profile = os.environ.get("USERPROFILE", "").strip()
+    if user_profile:
+        return (Path(user_profile).expanduser() / "Documents").resolve()
+    return None
+
+
 def default_frozen_app_home() -> Path:
     configured = os.environ.get("EDB_APP_HOME", "").strip()
     if configured:
-        return Path(configured).expanduser().resolve()
-    return (Path.home() / "Documents" / "ClassInEDBMVP").resolve()
+        return Path(os.path.expandvars(configured)).expanduser().resolve()
+    documents_directory = _windows_documents_directory()
+    if documents_directory is None:
+        documents_directory = (Path.home() / "Documents").resolve()
+    return (documents_directory / "ClassInEDBMVP").resolve()
 
 
 def app_root() -> Path:
@@ -312,6 +490,11 @@ LEGACY_UI_ASSET_ALIASES = {
     "/app.js": "/app.bundle.js",
 }
 RUNTIME_DIR = BASE_DIR / ".app_runtime"
+
+
+def _global_ai_enabled() -> bool:
+    """Authoritative user preference for every provider-backed AI path."""
+    return ai_enabled_from_settings(load_user_settings(RUNTIME_DIR))
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
@@ -319,10 +502,327 @@ GENERATED_SESSION_JS = RUNTIME_DIR / "generated_session.js"
 APP_LOG_FILE = RUNTIME_DIR / "app.log"
 EMPTY_GENERATED_SESSION_JS = "window.EDB_UI_SESSION = null;\n"
 DEFAULT_OUTPUT_ROOT_NAME = "outputs"
+RUNTIME_ARTIFACT_ROOT_NAMES = ("uploads", DEFAULT_OUTPUT_ROOT_NAME, "exports")
+DEFAULT_ARTIFACT_RETENTION_DAYS = 30.0
+FILE_PREVIEW_MIN_DIMENSION = 256
+FILE_PREVIEW_MAX_DIMENSION = 2048
+FILE_PREVIEW_JPEG_QUALITY = 82
+_session_storage_lock = threading.RLock()
+
+
+class RequestPayloadTooLarge(Exception):
+    def __init__(self, content_length: int, limit: int) -> None:
+        self.content_length = content_length
+        self.limit = limit
+        super().__init__(f"request body is {content_length} bytes; limit is {limit} bytes")
+
+
+class ArtifactCleanupBusy(RuntimeError):
+    """Raised when cleanup would race an artifact-producing request."""
+
+
+class SessionRevisionConflict(RuntimeError):
+    """Raised when a destructive request no longer targets the current session."""
+
+
+class SessionWritePathTooLong(OSError):
+    """Raised when a session's configured write root cannot safely be extended."""
+
+    def __init__(self, operation: str, path: str | Path) -> None:
+        self.operation = operation
+        self.path = Path(path)
+        super().__init__(
+            errno.ENAMETOOLONG,
+            f"{operation} output path is too long; choose a shorter output directory",
+            str(path),
+        )
 
 
 def default_output_root() -> Path:
     return RUNTIME_DIR / DEFAULT_OUTPUT_ROOT_NAME
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    """Best-effort durability for a file-system entry created by rename."""
+    try:
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+    except (AttributeError, OSError):
+        return
+    try:
+        try:
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+    finally:
+        os.close(directory_fd)
+
+
+def _atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> None:
+    """Durably replace a text file without exposing a partially-written JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=".atomic-write.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        temporary_path = Path(raw_temporary_path)
+        with os.fdopen(descriptor, "w", encoding=encoding) as temporary_file:
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        # fsync the containing directory as well: the file contents and rename
+        # are otherwise atomic but the new directory entry can still be lost
+        # after a sudden power failure on POSIX filesystems. Windows does not
+        # generally allow opening directories this way, so it keeps the safe
+        # atomic-replace behavior and skips only this extra durability step.
+        _fsync_parent_directory(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Durably replace a binary file without exposing partial cache entries."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=".atomic-write.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        temporary_path = Path(raw_temporary_path)
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        _fsync_parent_directory(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def _write_zip_atomically(path: Path, *, compression: int, populate) -> None:
+    """Build a ZIP beside its destination and expose it only after close/fsync."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=".atomic-zip.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        os.close(descriptor)
+        temporary_path = Path(raw_temporary_path)
+        with zipfile.ZipFile(temporary_path, "w", compression=compression) as archive:
+            populate(archive)
+        # Windows FlushFileBuffers requires a handle opened with write access.
+        # ``r+b`` keeps the completed archive unchanged while providing that
+        # writable handle for os.fsync on every supported platform.
+        with temporary_path.open("r+b") as archive_file:
+            os.fsync(archive_file.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        _fsync_parent_directory(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def _file_matches_digest(
+    path: Path,
+    expected_digest: str,
+    expected_size: int,
+    *,
+    algorithm: str = "sha256",
+) -> bool:
+    """Validate a managed upload cache hit before reusing its digest-named path."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != expected_size:
+            return False
+        digest = hashlib.new(algorithm)
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == expected_digest
+
+
+def _session_reset_transaction_path() -> Path:
+    return LATEST_SESSION_JSON.parent / ".session_reset_transaction.json"
+
+
+def _valid_session_reset_entries(payload: dict[str, Any]) -> list[tuple[Path, Path]] | None:
+    allowed_targets = {str(path): path for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)}
+    entries: list[tuple[Path, Path]] = []
+    stamp = str(payload.get("stamp") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", stamp):
+        return None
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        return None
+    seen_targets: set[Path] = set()
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            return None
+        target = allowed_targets.get(str(raw_entry.get("target") or ""))
+        tombstone = Path(str(raw_entry.get("tombstone") or ""))
+        if target is None or target in seen_targets:
+            return None
+        expected_tombstone = target.with_name(f".{target.name}.{stamp}.reset")
+        if tombstone != expected_tombstone:
+            return None
+        seen_targets.add(target)
+        entries.append((target, tombstone))
+    return entries
+
+
+def _quarantine_reset_tombstone(tombstone: Path, *, marker: Path, stamp: str) -> Path:
+    quarantine_dir = marker.parent / ".session-reset-recovery-conflicts" / stamp
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    destination = quarantine_dir / tombstone.name
+    if destination.exists():
+        destination = quarantine_dir / f"{tombstone.name}.{uuid.uuid4().hex[:12]}"
+    os.replace(tombstone, destination)
+    _fsync_parent_directory(destination)
+    print(
+        f"[app-server] preserved stale reset tombstone without overwriting newer state: {destination}",
+        file=sys.stderr,
+    )
+    return destination
+
+
+def _recover_interrupted_session_reset() -> bool:
+    """Finish or roll back a reset interrupted by process termination."""
+    marker = _session_reset_transaction_path()
+    with _session_storage_lock:
+        if not marker.exists():
+            return False
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[app-server] session reset recovery marker unreadable: {exc}", file=sys.stderr)
+            return False
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            print("[app-server] session reset recovery marker is invalid", file=sys.stderr)
+            return False
+        entries = _valid_session_reset_entries(payload)
+        if entries is None:
+            print("[app-server] session reset recovery marker identity is invalid", file=sys.stderr)
+            return False
+        stamp = str(payload.get("stamp") or "")
+        phase = str(payload.get("phase") or "")
+        try:
+            if phase == "committed":
+                for _target, tombstone in entries:
+                    if tombstone.exists():
+                        tombstone.unlink()
+            elif phase == "preparing":
+                for target, tombstone in reversed(entries):
+                    if tombstone.exists():
+                        if target.exists():
+                            _quarantine_reset_tombstone(
+                                tombstone,
+                                marker=marker,
+                                stamp=stamp,
+                            )
+                        else:
+                            os.replace(tombstone, target)
+                    elif not target.exists():
+                        raise FileNotFoundError(
+                            f"reset recovery lost both target and tombstone: {target}"
+                        )
+            else:
+                print(f"[app-server] session reset recovery phase is invalid: {phase}", file=sys.stderr)
+                return False
+            marker.unlink()
+            _fsync_parent_directory(marker)
+        except OSError as exc:
+            print(f"[app-server] interrupted session reset recovery deferred: {exc}", file=sys.stderr)
+            return False
+    print(f"[app-server] recovered interrupted session reset ({phase})", file=sys.stderr)
+    return True
+
+
+def _atomically_clear_persisted_session_state() -> None:
+    """Clear all persisted session pointers as one recoverable transaction."""
+    targets = (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)
+    stamp = uuid.uuid4().hex
+    moved: list[tuple[Path, Path]] = []
+    marker = _session_reset_transaction_path()
+    with _session_storage_lock:
+        _recover_interrupted_session_reset()
+        generated_existed_before = GENERATED_SESSION_JS.exists()
+        planned = [
+            (target, target.with_name(f".{target.name}.{stamp}.reset"))
+            for target in targets
+            if target.exists()
+        ]
+        marker_payload: dict[str, Any] = {
+            "version": 1,
+            "stamp": stamp,
+            "phase": "preparing",
+            "generatedExistedBefore": generated_existed_before,
+            "entries": [
+                {"target": str(target), "tombstone": str(tombstone)}
+                for target, tombstone in planned
+            ],
+        }
+        try:
+            _atomic_write_text(marker, json.dumps(marker_payload, ensure_ascii=False, indent=2))
+            for target, tombstone in planned:
+                os.replace(target, tombstone)
+                moved.append((target, tombstone))
+            _atomic_write_text(GENERATED_SESSION_JS, EMPTY_GENERATED_SESSION_JS)
+            marker_payload["phase"] = "committed"
+            _atomic_write_text(marker, json.dumps(marker_payload, ensure_ascii=False, indent=2))
+        except BaseException:
+            try:
+                generated_was_moved = any(target == GENERATED_SESSION_JS for target, _ in moved)
+                if GENERATED_SESSION_JS.exists() and (
+                    generated_was_moved or not generated_existed_before
+                ):
+                    GENERATED_SESSION_JS.unlink()
+            except OSError:
+                pass
+            for target, tombstone in reversed(moved):
+                if tombstone.exists():
+                    os.replace(tombstone, target)
+            try:
+                marker.unlink()
+                _fsync_parent_directory(marker)
+            except OSError:
+                pass
+            raise
+        tombstone_cleanup_failed = False
+        for _target, tombstone in moved:
+            try:
+                tombstone.unlink()
+            except OSError as exc:
+                tombstone_cleanup_failed = True
+                print(f"[app-server] reset tombstone cleanup failed: {exc}", file=sys.stderr)
+        if not tombstone_cleanup_failed:
+            try:
+                marker.unlink()
+                _fsync_parent_directory(marker)
+            except OSError as exc:
+                print(f"[app-server] reset transaction marker cleanup failed: {exc}", file=sys.stderr)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -380,6 +880,25 @@ def _app_platform_key() -> str:
     return sys.platform
 
 
+def _normalized_app_arch(value: Any) -> str:
+    arch = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "amd64": "x64",
+        "x86-64": "x64",
+        "x86_64": "x64",
+        "aarch64": "arm64",
+        "arm64-v8a": "arm64",
+        "universal2": "universal",
+        "all": "universal",
+        "any": "universal",
+    }
+    return aliases.get(arch, arch)
+
+
+def _app_arch_key() -> str:
+    return _normalized_app_arch(platform.machine())
+
+
 def _app_update_config_alias_conflict_error(label: str, source: dict[str, Any], *field_names: str) -> str:
     values = {
         field_name: str(source.get(field_name) or "").strip()
@@ -415,6 +934,7 @@ def load_app_update_config() -> dict[str, Any]:
         "updateFeedUrl": "",
         "downloadUrl": "",
         "releaseNotesUrl": "",
+        "bugReportUrl": DEFAULT_BUG_REPORT_URL,
     }
     seen: set[Path] = set()
     for path in (RESOURCE_DIR / APP_UPDATE_CONFIG_FILE, BASE_DIR / APP_UPDATE_CONFIG_FILE):
@@ -435,6 +955,7 @@ def load_app_update_config() -> dict[str, Any]:
         "updateFeedUrl": "EDB_UPDATE_FEED_URL",
         "downloadUrl": "EDB_DOWNLOAD_URL",
         "releaseNotesUrl": "EDB_RELEASE_NOTES_URL",
+        "bugReportUrl": "EDB_BUG_REPORT_URL",
     }
     for key, env_name in env_map.items():
         if os.environ.get(env_name):
@@ -516,20 +1037,54 @@ def _normalize_update_url(value: Any) -> str:
 
 
 def _is_loopback_hostname(hostname: str | None) -> bool:
-    host = (hostname or "").strip().lower()
-    return host == "localhost" or host == "::1" or host.startswith("127.")
+    host = (hostname or "").strip().lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_host_is_loopback(headers: Any) -> bool:
+    raw_host = str(headers.get("Host") or "").strip()
+    if not raw_host or any(character in raw_host for character in "/\\?#@,"):
+        return False
+    parsed = urlparse(f"http://{raw_host}")
+    try:
+        _ = parsed.port
+    except ValueError:
+        return False
+    return bool(parsed.hostname) and _is_loopback_hostname(parsed.hostname)
 
 
 def _request_is_same_origin(headers: Any) -> bool:
     host = str(headers.get("Host") or "").strip().lower()
-    if not host:
+    if not host or not _request_host_is_loopback(headers):
         return False
     for header_name in ("Origin", "Referer"):
         raw_value = str(headers.get(header_name) or "").strip()
         if not raw_value:
             continue
         parsed = urlparse(raw_value)
-        return parsed.scheme == "http" and parsed.netloc.lower() == host
+        return (
+            parsed.scheme == "http"
+            and parsed.netloc.lower() == host
+            and _is_loopback_hostname(parsed.hostname)
+        )
+    return True
+
+
+def _browser_write_request_is_trusted(headers: Any) -> bool:
+    """Reject cross-site browser writes while preserving native local clients."""
+    if not _request_host_is_loopback(headers):
+        return False
+    origin = str(headers.get("Origin") or "").strip()
+    if origin:
+        return _request_is_same_origin(headers)
+    fetch_site = str(headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if fetch_site in {"cross-site", "same-site"}:
+        return False
     return True
 
 
@@ -782,10 +1337,12 @@ def build_app_update_status() -> dict[str, Any]:
     fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
     app_name = str(config.get("appName") or "ClassInEDBMVP")
     app_id = str(config.get("appId") or config.get("app_id") or app_name).strip() or app_name
+    current_arch = _app_arch_key()
     cache_key = (
         app_id,
         app_name,
         platform_key,
+        current_arch,
         current_version,
         feed_url,
         fallback_download_url,
@@ -800,6 +1357,7 @@ def build_app_update_status() -> dict[str, Any]:
         "appId": app_id,
         "appName": app_name,
         "platform": platform_key,
+        "arch": current_arch,
         "currentVersion": current_version,
         "configured": bool(feed_url or fallback_download_url),
         "updateAvailable": False,
@@ -908,6 +1466,23 @@ def build_app_update_status() -> dict[str, Any]:
         status["channelStatus"] = "invalid_feed"
         status["error"] = artifact_metadata_error
         return _remember_update_status(cache_key, status)
+    feed_arch = _normalized_app_arch(selected.get("arch"))
+    if feed_arch and current_arch and feed_arch != "universal" and feed_arch != current_arch:
+        status["updateAvailable"] = False
+        status["channelStatus"] = "unsupported_architecture"
+        status["code"] = "update_architecture_mismatch"
+        status["error"] = (
+            f"update architecture {feed_arch!r} is not compatible with this device ({current_arch!r})"
+        )
+        status["availableDownloadUrl"] = status.get("downloadUrl") or ""
+        status["downloadUrl"] = ""
+        if isinstance(status.get("latest"), dict):
+            status["latest"]["downloadUrl"] = ""
+        status["recoverySteps"] = [
+            f"{current_arch}용 설치 파일을 선택해 주세요.",
+            "지원 파일이 보이지 않으면 오류 정보와 함께 신고해 주세요.",
+        ]
+        return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     if comparison > 0 and not download_url:
         status["updateAvailable"] = False
@@ -975,7 +1550,11 @@ def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> 
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
         return False
-    return bool(isinstance(payload, dict) and payload.get("ok"))
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("ok") is True
+        and payload.get("app") == APP_NAME
+    )
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -1195,6 +1774,18 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         "error": message,
         "errorKind": "export_failed",
     }
+    if isinstance(exc, FileNotFoundError) and (
+        "problem_crops" in message or "problem_cutouts" in message
+    ):
+        payload.update({
+            "code": "recognition_asset_missing",
+            "operation": "session_export",
+            "retryable": True,
+            "recoverySteps": [
+                "같은 원본 파일로 문제 인식을 다시 시도해 주세요.",
+                "계속 실패하면 페이지 PNG로 등록한 뒤 오류 정보를 복사해 신고해 주세요.",
+            ],
+        })
     if (
         "HWP/HWPX" in message
         or "valid HWP" in message
@@ -1248,6 +1839,12 @@ def _extract_input_intent(payload: dict[str, Any]) -> str:
     return normalized if normalized in INPUT_INTENTS else "auto"
 
 
+def _extract_content_target(payload: dict[str, Any]) -> str:
+    raw = payload.get("contentTarget") or payload.get("content_target") or "all"
+    normalized = str(raw).strip().lower().replace("_", "-")
+    return normalized if normalized in CONTENT_TARGETS else "all"
+
+
 def _extract_input_notes(payload: dict[str, Any]) -> str:
     raw = payload.get("inputNotes")
     if raw is None:
@@ -1257,15 +1854,171 @@ def _extract_input_notes(payload: dict[str, Any]) -> str:
     return str(raw or "").strip()
 
 
-def sanitize_output_dir_name(value: str | None) -> str:
+_WINDOWS_RESERVED_PATH_COMPONENTS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+SAFE_PATH_COMPONENT_MAX_BYTES = 240
+EDB_FILE_STEM_MAX_BYTES = 220
+# Keep managed paths comfortably below the legacy Windows MAX_PATH boundary.
+# Windows counts UTF-16 code units for this limit; UTF-8 byte limits alone do
+# not account for a long user profile or a redirected OneDrive Documents path.
+WINDOWS_MANAGED_PATH_MAX_UNITS = 239
+UPLOAD_FILE_NAME_MAX_BYTES = 96
+MANAGED_OUTPUT_DIR_NAME_MAX_BYTES = 96
+MANAGED_GENERATION_DIR_NAME_MAX_BYTES = 32
+MANAGED_PATH_COMPONENT_MIN_BYTES = 12
+MANAGED_GENERATION_PLACEHOLDER = "g" * MANAGED_GENERATION_DIR_NAME_MAX_BYTES
+MANAGED_CROP_RELATIVE_PATH = Path("problem_crops") / "problem_999999_ffffffff.png"
+MANAGED_PREVIEW_RESERVED_DESCENDANTS = (
+    MANAGED_CROP_RELATIVE_PATH,
+    Path(".publish-staging") / MANAGED_GENERATION_PLACEHOLDER / "classin_handoff.json",
+)
+MANAGED_OUTPUT_RESERVED_DESCENDANTS = (
+    Path(".export-staging") / MANAGED_GENERATION_PLACEHOLDER / MANAGED_CROP_RELATIVE_PATH,
+    Path(".publish-staging") / MANAGED_GENERATION_PLACEHOLDER / "classin_handoff.json",
+)
+MANAGED_RETRY_RESERVED_DESCENDANTS = (
+    Path("ai_retries") / MANAGED_GENERATION_PLACEHOLDER / MANAGED_CROP_RELATIVE_PATH,
+)
+MANAGED_MUTATION_RESERVED_DESCENDANTS = (MANAGED_CROP_RELATIVE_PATH,)
+MANAGED_IMAGE_RECONSTRUCTION_FILE_MAX_BYTES = 100
+MANAGED_IMAGE_RECONSTRUCTION_PLACEHOLDER = "i" * MANAGED_IMAGE_RECONSTRUCTION_FILE_MAX_BYTES
+MANAGED_IMAGE_RECONSTRUCTION_RESERVED_DESCENDANTS = (
+    Path("ai_image_reconstructions") / MANAGED_IMAGE_RECONSTRUCTION_PLACEHOLDER,
+)
+MANAGED_PUBLISH_RESERVED_DESCENDANTS = (
+    Path("classin_handoff.json"),
+    Path("generated_session.js"),
+)
+# Keep ample headroom even if a future export policy allows far more parts
+# than today's ClassIn page limit.
+EDB_PART_SUFFIX_RESERVED_BYTES = len("_part999999999999.edb".encode("utf-8"))
+
+
+def _windows_path_units(value: str | Path) -> int:
+    """Return Windows path length in UTF-16 code units on every host OS."""
+    return len(str(value).encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+def _absolute_path_text_for_budget(value: str | Path) -> str:
+    raw = str(value)
+    if re.match(r"^[A-Za-z]:[\\/]", raw) or raw.startswith(("\\\\", "//")):
+        return raw.rstrip("\\/")
+    return str(Path(value).resolve()).rstrip("\\/")
+
+
+def _managed_path_component_max_bytes(
+    parent_dir: str | Path,
+    *,
+    reserved_descendants: tuple[str | Path, ...] = (),
+    max_bytes: int = SAFE_PATH_COMPONENT_MAX_BYTES,
+    minimum_bytes: int = MANAGED_PATH_COMPONENT_MIN_BYTES,
+) -> int:
+    """Budget one managed component against its complete future path.
+
+    A UTF-8 byte budget is deliberately capped by the available UTF-16 unit
+    budget. This is conservative for Hangul and emoji while being exact for
+    the ASCII characters that make up generated hashes and timestamps.
+    """
+    if not sys.platform.startswith("win"):
+        return int(max_bytes)
+
+    parent_text = _absolute_path_text_for_budget(parent_dir)
+    descendants = reserved_descendants or ("",)
+    available_units: list[int] = []
+    for descendant in descendants:
+        descendant_text = str(descendant).strip("\\/")
+        fixed_units = _windows_path_units(parent_text) + 1
+        if descendant_text:
+            fixed_units += 1 + _windows_path_units(descendant_text)
+        available_units.append(WINDOWS_MANAGED_PATH_MAX_UNITS - fixed_units)
+    budget = min(int(max_bytes), min(available_units))
+    if budget < int(minimum_bytes):
+        raise OSError(
+            errno.ENAMETOOLONG,
+            "managed runtime path is too long even after compact naming; "
+            "configure EDB_APP_HOME to a shorter directory",
+            parent_text,
+        )
+    return budget
+
+
+def _is_windows_reserved_path_component(value: str | None) -> bool:
+    component = str(value or "").strip().rstrip(" .")
+    if not component:
+        return False
+    return component.split(".", 1)[0].upper() in _WINDOWS_RESERVED_PATH_COMPONENTS
+
+
+def _truncate_utf8_bytes(value: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _sanitize_path_component_token(value: str | None) -> str:
+    raw = str(value or "").strip()
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
+    return safe.rstrip(" .")
+
+
+def _finalize_safe_path_component(value: str, *, max_bytes: int) -> str:
+    safe = _truncate_utf8_bytes(value, max_bytes).rstrip(" .")
+    if _is_windows_reserved_path_component(safe):
+        safe = "_" + _truncate_utf8_bytes(safe, max(0, max_bytes - 1))
+    safe = _truncate_utf8_bytes(safe, max_bytes).rstrip(" .")
+    return safe
+
+
+def sanitize_output_dir_name(
+    value: str | None,
+    *,
+    suffix: str | None = None,
+    max_bytes: int = SAFE_PATH_COMPONENT_MAX_BYTES,
+) -> str:
     raw = (value or "").strip()
     if not raw:
-        return f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
-    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
-    return safe or f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
+        raw = f"mvp_export_{time.strftime('%Y%m%d_%H%M%S')}"
+    safe = _sanitize_path_component_token(raw)
+    suffix_token = _sanitize_path_component_token(suffix)
+    if suffix_token:
+        suffix_tail = f"_{suffix_token}"
+        if len(suffix_tail.encode("utf-8")) > max_bytes:
+            # Preserve collision resistance when a long runtime root leaves no
+            # room for the readable timestamp/UUID suffix itself.
+            compact_digest = hashlib.sha256(
+                suffix_token.encode("utf-8", errors="surrogatepass")
+            ).hexdigest()
+            suffix_tail = _truncate_utf8_bytes(
+                f"_{compact_digest}",
+                max_bytes,
+            )
+        available_bytes = max(0, max_bytes - len(suffix_tail.encode("utf-8")))
+        safe = f"{_truncate_utf8_bytes(safe, available_bytes).rstrip(' ._')}{suffix_tail}"
+    safe = _finalize_safe_path_component(safe, max_bytes=max_bytes)
+    if safe:
+        return safe
+    return _finalize_safe_path_component("mvp_export", max_bytes=max_bytes) or "export"
 
 
-def sanitize_upload_file_name(value: str | None) -> str:
+def _unique_artifact_stamp() -> str:
+    """Return a readable, process-unique suffix for immutable artifact paths."""
+    return f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}_{uuid.uuid4().hex[:12]}"
+
+
+def sanitize_upload_file_name(
+    value: str | None,
+    *,
+    max_bytes: int = UPLOAD_FILE_NAME_MAX_BYTES,
+) -> str:
     raw = Path(value or "upload.bin").name
     invalid = '<>:"/\\|?*'
     safe = "".join(ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw).strip(" .")
@@ -1273,14 +2026,31 @@ def sanitize_upload_file_name(value: str | None) -> str:
         return "upload.bin"
 
     path = Path(safe)
-    extension = path.suffix[:12]
+    extension = _truncate_utf8_bytes(path.suffix[:12], 32).rstrip(" .")
     stem = path.stem or "upload"
     digest = hashlib.sha1(safe.encode("utf-8", errors="ignore")).hexdigest()[:10]
-    trimmed_stem = stem[:48].rstrip(" ._") or "upload"
-    return f"{trimmed_stem}_{digest}{extension}"
+    suffix_tail = f"_{digest}{extension}"
+    available_bytes = max(1, max_bytes - len(suffix_tail.encode("utf-8")))
+    trimmed_stem = _truncate_utf8_bytes(stem, available_bytes).rstrip(" ._") or "upload"
+    if _is_windows_reserved_path_component(trimmed_stem):
+        trimmed_stem = f"_{_truncate_utf8_bytes(trimmed_stem, max(1, available_bytes - 1))}"
+    return _truncate_utf8_bytes(
+        f"{trimmed_stem}{suffix_tail}",
+        max_bytes,
+    ).rstrip(" .")
 
 
-def sanitize_edb_file_name(value: str | None, *, fallback_stem: str = "classin") -> str:
+def sanitize_edb_file_name(
+    value: str | None,
+    *,
+    fallback_stem: str = "classin",
+    max_bytes: int = SAFE_PATH_COMPONENT_MAX_BYTES,
+) -> str:
+    stem_max_bytes = min(
+        EDB_FILE_STEM_MAX_BYTES,
+        max(1, int(max_bytes) - EDB_PART_SUFFIX_RESERVED_BYTES),
+    )
+
     def _clean_stem(raw: str | None, fallback: str) -> str:
         candidate = Path(str(raw or "")).name.strip()
         if candidate.lower().endswith(".edb"):
@@ -1288,12 +2058,240 @@ def sanitize_edb_file_name(value: str | None, *, fallback_stem: str = "classin")
         candidate = candidate.strip(" .")
         if not candidate:
             return fallback
-        safe = sanitize_output_dir_name(candidate).strip(" ._")
-        return (safe[:150].rstrip(" ._") or fallback)
+        safe = sanitize_output_dir_name(
+            candidate,
+            max_bytes=stem_max_bytes,
+        ).strip(" ._")
+        safe = _truncate_utf8_bytes(safe, stem_max_bytes).rstrip(" ._") or fallback
+        if _is_windows_reserved_path_component(safe):
+            safe = f"_{_truncate_utf8_bytes(safe, max(1, stem_max_bytes - 1))}"
+        return _finalize_safe_path_component(safe, max_bytes=stem_max_bytes)
 
     fallback = _clean_stem(fallback_stem, "classin")
     stem = _clean_stem(value, fallback) if value is not None else fallback
     return f"{stem}.edb"
+
+
+def _managed_upload_target_name(
+    value: str | None,
+    content_digest: str,
+    *,
+    upload_dir: str | Path,
+) -> str:
+    digest_prefix = f"{content_digest}_"
+    component_budget = _managed_path_component_max_bytes(
+        upload_dir,
+        max_bytes=255,
+        minimum_bytes=len(digest_prefix.encode("utf-8")) + 20,
+    )
+    safe_name = sanitize_upload_file_name(
+        value,
+        max_bytes=min(
+            UPLOAD_FILE_NAME_MAX_BYTES,
+            component_budget - len(digest_prefix.encode("utf-8")),
+        ),
+    )
+    return f"{digest_prefix}{safe_name}"
+
+
+def _managed_output_dir_name(
+    value: str | None,
+    *,
+    parent_dir: str | Path,
+    suffix: str | None = None,
+    reserved_descendants: tuple[str | Path, ...] = MANAGED_OUTPUT_RESERVED_DESCENDANTS,
+) -> str:
+    budget = _managed_path_component_max_bytes(
+        parent_dir,
+        reserved_descendants=reserved_descendants,
+        max_bytes=MANAGED_OUTPUT_DIR_NAME_MAX_BYTES,
+    )
+    return sanitize_output_dir_name(value, suffix=suffix, max_bytes=budget)
+
+
+def _managed_generation_dir_name(
+    value: str | None,
+    *,
+    parent_dir: str | Path,
+    reserved_descendants: tuple[str | Path, ...],
+) -> str:
+    unique_digest = hashlib.sha256(
+        _unique_artifact_stamp().encode("utf-8", errors="surrogatepass")
+    ).hexdigest()[:16]
+    budget = _managed_path_component_max_bytes(
+        parent_dir,
+        reserved_descendants=reserved_descendants,
+        max_bytes=MANAGED_GENERATION_DIR_NAME_MAX_BYTES,
+    )
+    return sanitize_output_dir_name(value, suffix=unique_digest, max_bytes=budget)
+
+
+def _managed_export_generation_paths(output_dir: str | Path) -> tuple[Path, Path]:
+    output_path = Path(output_dir).resolve()
+    staging_parent = output_path / ".export-staging"
+    generation_name = _managed_generation_dir_name(
+        "export",
+        parent_dir=staging_parent,
+        reserved_descendants=(MANAGED_CROP_RELATIVE_PATH,),
+    )
+    return (
+        staging_parent / generation_name,
+        output_path / "exports" / generation_name,
+    )
+
+
+def _managed_publish_artifact_paths(
+    output_dir: str | Path,
+    requested_edb_name: str | None,
+    *,
+    fallback_stem: str,
+) -> tuple[str, Path, Path]:
+    output_path = Path(output_dir).resolve()
+    raw_name = requested_edb_name or fallback_stem
+    generation_name = _managed_generation_dir_name(
+        Path(raw_name).stem,
+        parent_dir=output_path / ".publish-staging",
+        reserved_descendants=MANAGED_PUBLISH_RESERVED_DESCENDANTS,
+    )
+    staging_dir = output_path / ".publish-staging" / generation_name
+    final_dir = output_path / "published" / generation_name
+    edb_name_budget = _managed_path_component_max_bytes(
+        staging_dir,
+        max_bytes=SAFE_PATH_COMPONENT_MAX_BYTES,
+        minimum_bytes=EDB_PART_SUFFIX_RESERVED_BYTES + 1,
+    )
+    edb_name = sanitize_edb_file_name(
+        requested_edb_name,
+        fallback_stem=fallback_stem,
+        max_bytes=edb_name_budget,
+    )
+    return edb_name, staging_dir, final_dir
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return whether path is inside root, including Windows case folding."""
+    try:
+        path_text = os.path.normcase(str(path.resolve()))
+        root_text = os.path.normcase(str(root.resolve()))
+        return os.path.commonpath((path_text, root_text)) == root_text
+    except (OSError, ValueError):
+        return False
+
+
+def _session_configured_output_dir(session: dict[str, Any]) -> Path | None:
+    raw_value = session.get("output_dir") or session.get("outputDir")
+    return decode_file_reference(str(raw_value)) if raw_value else None
+
+
+def _session_recovery_output_dir(
+    session: dict[str, Any],
+    *,
+    operation: str,
+    reserved_descendants: tuple[str | Path, ...],
+) -> Path:
+    recovery_parent = default_output_root() / "recovered"
+    identity = "|".join(
+        (
+            str(session.get("output_dir") or session.get("outputDir") or ""),
+            str(session.get("generated_at") or session.get("generatedAt") or ""),
+            str(session.get("session_name") or session.get("sessionName") or ""),
+            "|".join(str(value) for value in (session.get("input_files") or session.get("inputFiles") or [])),
+        )
+    )
+    digest = hashlib.sha256(identity.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+    try:
+        component = _managed_output_dir_name(
+            f"session_{digest}",
+            parent_dir=recovery_parent,
+            reserved_descendants=reserved_descendants,
+        )
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG:
+            raise SessionWritePathTooLong(operation, recovery_parent) from exc
+        raise
+    return (recovery_parent / component).resolve()
+
+
+def _session_write_paths_fit(
+    output_dir: Path,
+    reserved_descendants: tuple[str | Path, ...],
+) -> bool:
+    if not sys.platform.startswith("win"):
+        return True
+    base_text = _absolute_path_text_for_budget(output_dir)
+    for descendant in reserved_descendants:
+        descendant_text = str(descendant).strip("\\/")
+        candidate = f"{base_text}{os.sep}{descendant_text}" if descendant_text else base_text
+        if _windows_path_units(candidate) > WINDOWS_MANAGED_PATH_MAX_UNITS:
+            return False
+    return True
+
+
+def _select_session_write_root(
+    session: dict[str, Any],
+    *,
+    operation: str,
+    reserved_descendants: tuple[str | Path, ...],
+) -> tuple[Path, bool]:
+    """Choose a write root without moving any legacy session artifacts.
+
+    Only paths already below the app-managed output root may be redirected.
+    Paths outside that root are treated as deliberate user choices.
+    """
+    configured = _session_configured_output_dir(session)
+    managed_root = default_output_root().resolve()
+    if configured is None:
+        return (
+            _session_recovery_output_dir(
+                session,
+                operation=operation,
+                reserved_descendants=reserved_descendants,
+            ),
+            True,
+        )
+
+    configured = configured.resolve()
+    if _session_write_paths_fit(configured, reserved_descendants):
+        return configured, False
+    if not _path_is_within(configured, managed_root):
+        raise SessionWritePathTooLong(operation, configured)
+
+    recovered = _session_recovery_output_dir(
+        session,
+        operation=operation,
+        reserved_descendants=reserved_descendants,
+    )
+    if not _session_write_paths_fit(recovered, reserved_descendants):
+        raise SessionWritePathTooLong(operation, recovered)
+    return recovered, True
+
+
+def _managed_retry_dir(output_dir: Path, target_id: str, stamp: str) -> Path:
+    retry_parent = output_dir / "ai_retries"
+    suffix = hashlib.sha256(
+        f"{stamp}|{target_id}".encode("utf-8", errors="surrogatepass")
+    ).hexdigest()[:16]
+    budget = _managed_path_component_max_bytes(
+        retry_parent,
+        reserved_descendants=(MANAGED_CROP_RELATIVE_PATH,),
+        max_bytes=MANAGED_GENERATION_DIR_NAME_MAX_BYTES,
+    )
+    component = sanitize_output_dir_name(target_id, suffix=suffix, max_bytes=budget)
+    return retry_parent / component
+
+
+def _adopt_recovered_output_dir_after_success(
+    session: dict[str, Any],
+    output_dir: Path,
+    *,
+    recovered: bool,
+    summaries: list[dict[str, Any]],
+) -> bool:
+    if not recovered or not any(summary.get("status") == "applied" for summary in summaries):
+        return False
+    session["output_dir"] = str(output_dir)
+    session["outputDir"] = str(output_dir)
+    return True
 
 
 def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dict[str, Any]:
@@ -1553,6 +2551,12 @@ def _write_classin_limited_edb_files_local(
             render_chunk(chunk_entries[:split_index])
             render_chunk(chunk_entries[split_index:])
             return
+        if flow_end_pages > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+            problem_id = str(getattr(chunk_entries[0], "problem_id", "unknown") or "unknown")
+            raise ValueError(
+                f"Problem '{problem_id}' exceeds ClassIn's {CLASSIN_MAX_BOARD_PAGE_COUNT}-page limit "
+                f"after rendering ({flow_end_pages:.3f} pages); split the source before publishing"
+            )
 
         rendered_chunks.append(rendered_chunk)
 
@@ -1662,14 +2666,32 @@ def _annotate_session_with_edb_part_metadata(session: dict[str, Any], edb_parts:
             problem["edb_local_record_bottom_y_pages"] = placement.get("record_bottom_y_pages")
 
 
+def _path_from_file_uri(value: str) -> tuple[Path, bool]:
+    parsed = urlparse(value)
+    host = unquote(parsed.netloc or "").strip()
+    raw_path = url2pathname(unquote(parsed.path or ""))
+    if host and host.lower() != "localhost":
+        unc_suffix = raw_path if raw_path.startswith(("/", "\\")) else f"/{raw_path}"
+        unc_path = f"//{host}{unc_suffix}"
+        return Path(unc_path), True
+    return Path(raw_path), False
+
+
 def decode_file_reference(value: str | None) -> Path | None:
     if not value:
         return None
-    parsed = urlparse(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.startswith("/api/file"):
+        parsed = urlparse(text)
+        raw = parse_qs(parsed.query).get("path", [None])[0]
+        return decode_file_reference(raw)
+    parsed = urlparse(text)
     if parsed.scheme == "file":
-        path = Path(url2pathname(unquote(parsed.path)))
-        return path.resolve()
-    path = Path(value)
+        path, is_unc = _path_from_file_uri(text)
+        return path if is_unc else path.resolve()
+    path = Path(text)
     if not path.is_absolute():
         path = (BASE_DIR / path).resolve()
     return path
@@ -1682,6 +2704,159 @@ def path_to_api_url(path: str | Path | None) -> str | None:
     if resolved is None:
         return None
     return f"/api/file?path={quote(str(resolved))}"
+
+
+def _path_as_file_uri(path: Path) -> str:
+    normalized = str(path).replace("\\", "/")
+    if normalized.startswith("//"):
+        return f"file://{quote(normalized[2:], safe='/:')}"
+    return path.resolve().as_uri()
+
+
+def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> Any:
+    source_text = str(source_root.resolve())
+    target_text = str(target_root.resolve())
+    source_uri = _path_as_file_uri(source_root)
+    target_uri = _path_as_file_uri(target_root)
+    if isinstance(value, str):
+        if value.startswith("/api/file"):
+            parsed = urlparse(value)
+            raw_path = parse_qs(parsed.query).get("path", [None])[0]
+            if raw_path:
+                remapped_path = _remap_artifact_paths(
+                    str(decode_file_reference(raw_path) or raw_path),
+                    source_root,
+                    target_root,
+                )
+                if isinstance(remapped_path, str) and remapped_path != str(
+                    decode_file_reference(raw_path) or raw_path
+                ):
+                    return f"/api/file?path={quote(remapped_path)}"
+        if value == source_text or value.startswith(f"{source_text}{os.sep}"):
+            return f"{target_text}{value[len(source_text):]}"
+        if value == source_uri or value.startswith(f"{source_uri}/"):
+            return f"{target_uri}{value[len(source_uri):]}"
+        return value
+    if isinstance(value, Path):
+        remapped = _remap_artifact_paths(str(value), source_root, target_root)
+        return Path(remapped) if isinstance(remapped, str) else value
+    if isinstance(value, list):
+        return [_remap_artifact_paths(item, source_root, target_root) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _remap_artifact_paths(item, source_root, target_root)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _discard_staged_publish(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[app-server] staged publish cleanup failed for {path}: {exc}", file=sys.stderr)
+
+
+def _source_identity_suffix(source_paths: list[Path]) -> str:
+    identity = hashlib.sha256()
+    for source_path in source_paths:
+        resolved = source_path.resolve()
+        identity.update(str(resolved).encode("utf-8", errors="surrogatepass"))
+        identity.update(b"\0")
+        try:
+            with resolved.open("rb") as source_file:
+                while chunk := source_file.read(1024 * 1024):
+                    identity.update(chunk)
+        except OSError:
+            try:
+                stat = resolved.stat()
+            except OSError:
+                continue
+            identity.update(f"{stat.st_size}\0{stat.st_mtime_ns}".encode("ascii"))
+        identity.update(b"\0")
+    return identity.hexdigest()[:10]
+
+
+def _rewrite_staged_artifact_references(staging_dir: Path, final_dir: Path) -> None:
+    staging_text = str(staging_dir.resolve())
+    final_text = str(final_dir.resolve())
+    staging_uri = _path_as_file_uri(staging_dir)
+    final_uri = _path_as_file_uri(final_dir)
+    for path in staging_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            remapped = _remap_artifact_paths(payload, staging_dir, final_dir)
+            _atomic_write_text(path, json.dumps(remapped, ensure_ascii=False, indent=2))
+        elif path.suffix.lower() in {".md", ".js"}:
+            payload = path.read_text(encoding="utf-8")
+            _atomic_write_text(
+                path,
+                payload.replace(staging_text, final_text).replace(staging_uri, final_uri),
+            )
+
+
+def _parse_file_preview_max_dimension(query: dict[str, list[str]]) -> int | None:
+    raw_value = query.get("previewMax", query.get("preview_max", [None]))[0]
+    if raw_value is None:
+        return None
+    try:
+        requested = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return max(FILE_PREVIEW_MIN_DIMENSION, min(FILE_PREVIEW_MAX_DIMENSION, requested))
+
+
+@lru_cache(maxsize=32)
+def _build_file_preview_payload(
+    path_value: str,
+    modified_ns: int,
+    file_size: int,
+    max_dimension: int,
+) -> tuple[bytes, str] | None:
+    del modified_ns, file_size  # cache-key inputs; the path is opened below
+    from PIL import Image, ImageOps
+
+    path = Path(path_value)
+    with Image.open(path) as loaded:
+        if max(loaded.size) <= max_dimension:
+            return None
+        image = ImageOps.exif_transpose(loaded).copy()
+
+    image.thumbnail(
+        (max_dimension, max_dimension),
+        Image.Resampling.LANCZOS,
+        reducing_gap=3.0,
+    )
+    has_alpha = "A" in image.getbands() or (
+        image.mode == "P" and "transparency" in image.info
+    )
+    output = BytesIO()
+    if has_alpha:
+        if image.mode != "RGBA":
+            image = image.convert("RGBA")
+        image.save(
+            output,
+            format="PNG",
+            compress_level=6,
+            optimize=False,
+        )
+        mime_type = "image/png"
+    else:
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(
+            output,
+            format="JPEG",
+            quality=FILE_PREVIEW_JPEG_QUALITY,
+            optimize=True,
+            progressive=True,
+        )
+        mime_type = "image/jpeg"
+    return output.getvalue(), mime_type
 
 
 def _classin_handoff_readiness(path: Path | None) -> tuple[str, bool | None]:
@@ -2003,6 +3178,72 @@ def _session_passage_review_queue_issues(
     return issues
 
 
+def _session_problem_id_issues(problems: list[Any]) -> list[dict[str, Any]]:
+    problems_by_id: dict[str, list[dict[str, Any]]] = {}
+    issues: list[dict[str, Any]] = []
+    for index, problem in enumerate(problems):
+        if not isinstance(problem, dict):
+            issues.append(
+                {
+                    "type": "missing_problem_id",
+                    "severity": "error",
+                    "message": "문항 데이터가 손상되어 내부 식별자를 확인할 수 없습니다.",
+                    "problemId": "",
+                    "problemTitle": "",
+                    "entryIndex": index,
+                    "entry_index": index,
+                    "malformedEntry": True,
+                    "malformed_entry": True,
+                }
+            )
+            continue
+        problem_id = str(problem.get("id") or problem.get("problem_id") or "").strip()
+        if not problem_id:
+            issues.append(
+                {
+                    "type": "missing_problem_id",
+                    "severity": "error",
+                    "message": "문항 내부 식별자가 비어 있어 EDB 제작을 중단했습니다.",
+                    "problemId": "",
+                    "problemTitle": str(problem.get("title") or problem.get("problemNumber") or ""),
+                    "entryIndex": index,
+                    "entry_index": index,
+                }
+            )
+            continue
+        problems_by_id.setdefault(problem_id, []).append(problem)
+
+    for problem_id, matches in problems_by_id.items():
+        if len(matches) < 2:
+            continue
+        source_page_ids = list(
+            dict.fromkeys(
+                str(problem.get("sourcePageId") or problem.get("source_page_id") or "").strip()
+                for problem in matches
+                if str(problem.get("sourcePageId") or problem.get("source_page_id") or "").strip()
+            )
+        )
+        issues.append(
+            {
+                "type": "duplicate_problem_id",
+                "severity": "error",
+                "message": (
+                    "서로 다른 문항이 같은 내부 식별자를 사용하고 있어 EDB 제작을 중단했습니다. "
+                    "문항을 다시 인식하거나 분할한 뒤 재시도해 주세요."
+                ),
+                "problemId": problem_id,
+                "problemTitle": str(matches[0].get("title") or matches[0].get("problemNumber") or ""),
+                "problemIds": [problem_id],
+                "problem_ids": [problem_id],
+                "occurrenceCount": len(matches),
+                "occurrence_count": len(matches),
+                "sourcePageIds": source_page_ids,
+                "source_page_ids": source_page_ids,
+            }
+        )
+    return issues
+
+
 def _session_publish_blocking_preflight(
     problems: list[dict[str, Any]],
     session: dict[str, Any] | None = None,
@@ -2032,6 +3273,7 @@ def _session_publish_blocking_preflight(
     )
     if not page_as_is:
         issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
+    issues.extend(_session_problem_id_issues(problems))
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))
     issues.extend(
@@ -2094,6 +3336,9 @@ def _session_publish_preflight_blocked_payload(
                 blocking_problem_ids.append(problem_id)
     return {
         "ok": False,
+        "code": "publish_preflight_blocked",
+        "operation": "session_publish",
+        "retryable": False,
         "error": "ClassIn 사전점검에서 제작 전 확인 문제가 발견되어 EDB publish를 중단했습니다.",
         "errorKind": "publish_preflight_blocked",
         "error_kind": "publish_preflight_blocked",
@@ -2105,6 +3350,10 @@ def _session_publish_preflight_blocked_payload(
         "classin_preflight_passed": False,
         "classinPreflightIssueCount": int(preflight.get("issueCount") or 0),
         "classin_preflight_issue_count": int(preflight.get("issueCount") or 0),
+        "recoverySteps": [
+            "표시된 문항 오류를 수정하거나 원본 PDF를 다시 등록해 주세요.",
+            "수정 후 같은 작업에서 다시 제작해 주세요.",
+        ],
         "blockingDuplicateProblemNumberGroups": duplicate_groups,
         "blocking_duplicate_problem_number_groups": duplicate_groups,
         "blockingIssueTypes": issue_types,
@@ -2294,6 +3543,13 @@ def _session_publish_summary(
         "publishedAt": published_at,
         "edbValidation": dict(edb_validation),
     }
+    summary["canDownload"] = bool(
+        summary["edbFileExists"]
+        or any(
+            bool(part.get("edbFileExists") or part.get("edb_file_exists"))
+            for part in normalized_edb_parts
+        )
+    )
     summary.update({
         "status_label": summary["statusLabel"],
         "edb_file_name": summary["edbFileName"],
@@ -2342,6 +3598,7 @@ def _session_publish_summary(
         "inner_size": summary["innerSize"],
         "published_at": summary["publishedAt"],
         "edb_validation": summary["edbValidation"],
+        "can_download": summary["canDownload"],
     })
     return summary
 
@@ -2480,6 +3737,15 @@ def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = 
     review_summary = session_snapshot.get("reviewSummary")
     if not isinstance(review_summary, dict):
         review_summary = session_snapshot.get("review_summary")
+    input_intent = str(
+        session_snapshot.get("inputIntent") or session_snapshot.get("input_intent") or ""
+    ).strip()
+    content_target = str(
+        session_snapshot.get("contentTarget") or session_snapshot.get("content_target") or ""
+    ).strip()
+    page_count = len([
+        page for page in (session_snapshot.get("pages") or []) if isinstance(page, dict)
+    ])
     updated_value = updated_at or datetime.now().astimezone().isoformat(timespec="seconds")
     return {
         "id": entry_id,
@@ -2494,6 +3760,12 @@ def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = 
         "detectedProblemCount": counts["detected_problem_count"],
         "coreProblemCount": counts["core_problem_count"],
         "supplementalItemCount": counts["supplemental_item_count"],
+        "inputIntent": input_intent,
+        "input_intent": input_intent,
+        "contentTarget": content_target,
+        "content_target": content_target,
+        "pageCount": page_count,
+        "page_count": page_count,
         "publishSummary": publish_summary or None,
         "reviewSummary": review_summary or None,
         "inputFileCount": int(session_snapshot.get("input_file_count") or len(session_snapshot.get("input_files") or [])),
@@ -2550,19 +3822,37 @@ def content_disposition_attachment(filename: str) -> str:
 
 
 def load_latest_session() -> dict[str, Any] | None:
-    if LATEST_SESSION_JSON.exists():
-        return json.loads(LATEST_SESSION_JSON.read_text(encoding="utf-8"))
-    return None
+    with _session_storage_lock:
+        _recover_interrupted_session_reset()
+        if not LATEST_SESSION_JSON.exists():
+            return None
+        try:
+            payload = json.loads(LATEST_SESSION_JSON.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def save_latest_session(session: dict[str, Any], path: Path | None = None) -> None:
+    target = path or LATEST_SESSION_JSON
+    payload = json.dumps(session, ensure_ascii=False, indent=2)
+    with _session_storage_lock:
+        if path is None or target == LATEST_SESSION_JSON:
+            _recover_interrupted_session_reset()
+        _atomic_write_text(target, payload)
 
 
 def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
     target = path or SESSION_HISTORY_JSON
-    if not target.exists():
-        return []
-    try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    with _session_storage_lock:
+        if path is None or target == SESSION_HISTORY_JSON:
+            _recover_interrupted_session_reset()
+        if not target.exists():
+            return []
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
     if not isinstance(payload, list):
         return []
     return [entry for entry in payload if isinstance(entry, dict)]
@@ -2570,8 +3860,11 @@ def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
 
 def save_session_history(history: list[dict[str, Any]], path: Path | None = None) -> None:
     target = path or SESSION_HISTORY_JSON
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = json.dumps(history, ensure_ascii=False, indent=2)
+    with _session_storage_lock:
+        if path is None or target == SESSION_HISTORY_JSON:
+            _recover_interrupted_session_reset()
+        _atomic_write_text(target, payload)
 
 
 def remember_session_history(
@@ -2582,9 +3875,51 @@ def remember_session_history(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     target = path or SESSION_HISTORY_JSON
-    history = _session_history_with_session(load_session_history(target), session, updated_at=updated_at, limit=limit)
-    save_session_history(history, target)
+    # Keep read/merge/write inside one re-entrant critical section so concurrent
+    # requests cannot silently discard another request's history entry.
+    with _session_storage_lock:
+        if path is None or target == SESSION_HISTORY_JSON:
+            _recover_interrupted_session_reset()
+        history = _session_history_with_session(
+            load_session_history(target),
+            session,
+            updated_at=updated_at,
+            limit=limit,
+        )
+        save_session_history(history, target)
     return history
+
+
+def persist_latest_session_with_history(
+    session: dict[str, Any],
+    *,
+    updated_at: str | None = None,
+    limit: int = 10,
+) -> tuple[list[dict[str, Any]], OSError | None]:
+    """Commit the authoritative latest snapshot, then best-effort its history.
+
+    The latest snapshot is the source of truth.  A history write failure must
+    not leave in-memory state behind a latest-session file that already
+    committed, otherwise a subsequent CAS mutation could overwrite it.
+    """
+
+    with _session_storage_lock:
+        # Recover before reading history. Recovering only inside the later
+        # save_latest_session call can restore an OLD history tombstone after
+        # this merge was already calculated, then overwrite it with [NEW].
+        _recover_interrupted_session_reset()
+        history = _session_history_with_session(
+            load_session_history(),
+            session,
+            updated_at=updated_at,
+            limit=limit,
+        )
+        save_latest_session(session)
+        try:
+            save_session_history(history)
+        except OSError as exc:
+            return history, exc
+    return history, None
 
 
 def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
@@ -2672,6 +4007,8 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         add_path(value)
     for value in session.get("rendered_page_file_uris", []):
         add_path(value)
+    for value in session.get("input_files", []) or session.get("inputFiles", []):
+        add_path(value)
 
     for problem in session.get("problems", []):
         for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
@@ -2696,25 +4033,148 @@ def collect_session_history_file_paths(history: list[dict[str, Any]]) -> set[str
     return paths
 
 
+def _session_artifact_protection_paths(session: dict[str, Any] | None) -> set[Path]:
+    if not isinstance(session, dict):
+        return set()
+    protected = {Path(value).resolve() for value in collect_session_file_paths(session)}
+    for key in ("output_dir", "outputDir"):
+        raw_value = session.get(key)
+        if not raw_value:
+            continue
+        decoded = decode_file_reference(str(raw_value))
+        if decoded is not None:
+            try:
+                protected.add(decoded.resolve())
+            except (OSError, ValueError):
+                continue
+    return protected
+
+
+def _history_artifact_protection_paths(history: list[dict[str, Any]]) -> set[Path]:
+    protected: set[Path] = set()
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        protected |= _session_artifact_protection_paths(entry)
+        protected |= _session_artifact_protection_paths(
+            entry.get("session") if isinstance(entry.get("session"), dict) else None
+        )
+    return protected
+
+
+def _path_is_protected(path: Path, protected_paths: set[Path]) -> bool:
+    return path in protected_paths or any(parent in protected_paths for parent in path.parents)
+
+
+def cleanup_runtime_artifacts(
+    *,
+    runtime_dir: Path | None = None,
+    active_session: dict[str, Any] | None = None,
+    history: list[dict[str, Any]] | None = None,
+    dry_run: bool = True,
+    min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+    max_bytes: int | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Plan or remove old, unreferenced runtime artifacts.
+
+    The default is intentionally non-destructive. Files referenced by the
+    active session or any retained history snapshot are never selected.
+    """
+    if min_age_seconds < 0:
+        raise ValueError("minAgeSeconds must be non-negative")
+    if max_bytes is not None and max_bytes < 0:
+        raise ValueError("maxBytes must be non-negative")
+
+    base = (runtime_dir or RUNTIME_DIR).resolve()
+    current_session = active_session if active_session is not None else load_latest_session()
+    current_history = history if history is not None else load_session_history()
+    protected_paths = _session_artifact_protection_paths(current_session)
+    protected_paths |= _history_artifact_protection_paths(current_history)
+    observed_at = time.time() if now is None else float(now)
+
+    files: list[tuple[Path, int, float, bool]] = []
+    for root_name in RUNTIME_ARTIFACT_ROOT_NAMES:
+        root = base / root_name
+        if not root.is_dir():
+            continue
+        resolved_root = root.resolve()
+        for path in root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(resolved_root)
+                stat = path.stat()
+            except (OSError, ValueError):
+                continue
+            files.append((path, int(stat.st_size), float(stat.st_mtime), _path_is_protected(resolved, protected_paths)))
+
+    total_bytes = sum(size for _, size, _, _ in files)
+    protected_bytes = sum(size for _, size, _, protected in files if protected)
+    eligible = [
+        item
+        for item in files
+        if not item[3] and observed_at - item[2] >= min_age_seconds
+    ]
+    eligible.sort(key=lambda item: (item[2], str(item[0])))
+
+    if max_bytes is None:
+        selected = eligible
+    else:
+        bytes_to_reclaim = max(0, total_bytes - max_bytes)
+        selected = []
+        selected_bytes = 0
+        for item in eligible:
+            if selected_bytes >= bytes_to_reclaim:
+                break
+            selected.append(item)
+            selected_bytes += item[1]
+
+    deleted_paths: list[str] = []
+    errors: list[dict[str, str]] = []
+    if not dry_run:
+        for path, _, _, _ in selected:
+            try:
+                path.unlink()
+                deleted_paths.append(str(path.resolve()))
+            except OSError as exc:
+                errors.append({"path": str(path), "error": str(exc)})
+        for root_name in RUNTIME_ARTIFACT_ROOT_NAMES:
+            root = base / root_name
+            if not root.is_dir():
+                continue
+            for directory in sorted((path for path in root.rglob("*") if path.is_dir()), key=lambda path: len(path.parts), reverse=True):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+
+    selected_bytes = sum(size for _, size, _, _ in selected)
+    deleted_path_set = set(deleted_paths)
+    return {
+        "ok": not errors,
+        "dryRun": bool(dry_run),
+        "runtimeDir": str(base),
+        "minAgeSeconds": float(min_age_seconds),
+        "maxBytes": max_bytes,
+        "totalFileCount": len(files),
+        "totalBytes": total_bytes,
+        "protectedFileCount": sum(1 for _, _, _, protected in files if protected),
+        "protectedBytes": protected_bytes,
+        "eligibleFileCount": len(eligible),
+        "selectedFileCount": len(selected),
+        "selectedBytes": selected_bytes,
+        "selectedPaths": [str(path.resolve()) for path, _, _, _ in selected],
+        "deletedFileCount": len(deleted_paths),
+        "deletedBytes": sum(size for path, size, _, _ in selected if str(path.resolve()) in deleted_path_set),
+        "deletedPaths": deleted_paths,
+        "errors": errors,
+    }
+
+
 def _file_uri_to_path(value: Any) -> Path | None:
-    if not value:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.startswith("file://"):
-        parsed = urlparse(text)
-        # url2pathname expects a path with a leading slash for absolute paths;
-        # urlparse preserves that on Windows (`/C:/...`).
-        return Path(url2pathname(parsed.path))
-    if text.startswith("/api/file"):
-        # session was already rewritten; pull the underlying path back out.
-        parsed = urlparse(text)
-        params = parse_qs(parsed.query)
-        raw = params.get("path", [None])[0]
-        return Path(unquote(raw)) if raw else None
-    # bare filesystem path
-    return Path(text)
+    return decode_file_reference(str(value)) if value else None
 
 
 def _target_within_allowed_roots(target: Path) -> bool:
@@ -2845,6 +4305,15 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                     or None
                 ),
                 force_full_page_bounds=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
+                preserve_media_regions=[
+                    dict(region)
+                    for region in (
+                        problem.get("preserveMediaRegions")
+                        or problem.get("preserve_media_regions")
+                        or []
+                    )
+                    if isinstance(region, dict)
+                ],
             )
         )
     return entries
@@ -2877,6 +4346,10 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
 
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten = json.loads(json.dumps(session))
+    _backfill_passage_source_segments(
+        rewritten,
+        pages_json_pages=_session_pages_json_pages(session),
+    )
     rewritten["edb_file_uri"] = path_to_api_url(
         session.get("edb_path") or session.get("edbPath") or session.get("edb_file_uri") or session.get("edbFileUri")
     )
@@ -2912,6 +4385,168 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     return rewritten
 
 
+def _passage_range_key(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        start = int(value.get("start"))
+        end = int(value.get("end"))
+    except (TypeError, ValueError):
+        return None
+    return (start, end) if start > 0 and end >= start else None
+
+
+def _problem_passage_range_key(problem: dict[str, Any]) -> tuple[int, int] | None:
+    metadata = problem.get("metadata") if isinstance(problem.get("metadata"), dict) else {}
+    for value in (
+        problem.get("passageRange"),
+        problem.get("passage_range"),
+        metadata.get("passage_range"),
+    ):
+        passage_range = _passage_range_key(value)
+        if passage_range is not None:
+            return passage_range
+    return None
+
+
+def _backfill_passage_source_segments(
+    session: dict[str, Any],
+    *,
+    pages_json_pages: list[dict[str, Any]] | None = None,
+) -> int:
+    """Recover exact passage fragments for sessions created before sourceSegments.
+
+    The legacy UI session retained only a union bbox, even though pages.json still
+    contains the original left-to-right and cross-page passage blocks.  Restrict
+    recovery to matching passage ranges and known source pages so child-question
+    pages are never promoted to passage fragments merely because they share a
+    passage group.
+    """
+    structured_pages = pages_json_pages if pages_json_pages is not None else _session_pages_json_pages(session)
+    if not structured_pages:
+        return 0
+
+    session_pages_by_id = {
+        str(page.get("id") or page.get("page_id") or "").strip(): page
+        for page in (session.get("pages") or [])
+        if isinstance(page, dict) and str(page.get("id") or page.get("page_id") or "").strip()
+    }
+
+    candidates: dict[tuple[int, int], list[tuple[int, float, float, str, dict[str, Any], dict[str, Any]]]] = {}
+    for page_index, page in enumerate(structured_pages):
+        page_id = str(page.get("page_id") or page.get("id") or "").strip()
+        if not page_id:
+            continue
+        for block_index, block in enumerate(page.get("blocks") or []):
+            if not isinstance(block, dict):
+                continue
+            metadata = block.get("metadata") if isinstance(block.get("metadata"), dict) else {}
+            segmenter = str(metadata.get("segmenter") or "").strip().lower()
+            marker_kind = str(metadata.get("marker_kind") or "").strip().lower()
+            if "passage" not in segmenter and marker_kind not in {"passage_range", "passage_continuation"}:
+                continue
+            passage_range = _passage_range_key(metadata.get("passage_range"))
+            bbox = block.get("bbox") if isinstance(block.get("bbox"), dict) else {}
+            try:
+                width = float(bbox.get("width") or 0)
+                height = float(bbox.get("height") or 0)
+            except (TypeError, ValueError):
+                continue
+            if passage_range is None or width <= 0 or height <= 0:
+                continue
+            raw_order = metadata.get("passage_fragment_index", block.get("reading_order", block_index + 1))
+            try:
+                within_page_order = float(raw_order)
+            except (TypeError, ValueError):
+                within_page_order = float(block_index + 1)
+            try:
+                left = float(bbox.get("left") or 0)
+            except (TypeError, ValueError):
+                left = 0.0
+            candidates.setdefault(passage_range, []).append(
+                (page_index, within_page_order, left, page_id, block, metadata)
+            )
+
+    recovered = 0
+    for problem in session.get("problems") or []:
+        if not isinstance(problem, dict):
+            continue
+        existing = problem.get("sourceSegments") or problem.get("source_segments")
+        if isinstance(existing, list) and existing:
+            continue
+        if problem.get("manualStitch") or problem.get("manual_stitch"):
+            continue
+        role = str(problem.get("passageRole") or problem.get("passage_role") or "").strip().lower()
+        if role not in {"passage_fragment", "shared_passage", "passage"}:
+            continue
+        passage_range = _problem_passage_range_key(problem)
+        if passage_range is None:
+            continue
+        source_page_ids = {
+            str(page_id).strip()
+            for page_id in (
+                problem.get("passageSourcePageIds")
+                or problem.get("passage_source_page_ids")
+                or []
+            )
+            if str(page_id or "").strip()
+        }
+        matched = [
+            item for item in candidates.get(passage_range, [])
+            if not source_page_ids or item[3] in source_page_ids
+        ]
+        if not matched:
+            continue
+        matched.sort(key=lambda item: (item[0], item[1], item[2]))
+        source_segments: list[dict[str, Any]] = []
+        for fragment_index, (_page_index, _within_order, _left, page_id, block, metadata) in enumerate(matched, start=1):
+            bbox = block.get("bbox") or {}
+            normalized_bbox = {
+                "left": float(bbox.get("left") or 0),
+                "top": float(bbox.get("top") or 0),
+                "width": float(bbox.get("width") or 0),
+                "height": float(bbox.get("height") or 0),
+            }
+            raw_column_index = metadata.get("column_index", fragment_index)
+            try:
+                column_index = int(raw_column_index)
+            except (TypeError, ValueError):
+                column_index = fragment_index
+            source_segments.append({
+                "sourcePageId": page_id,
+                "source_page_id": page_id,
+                "sourceBlockId": str(block.get("block_id") or ""),
+                "source_block_id": str(block.get("block_id") or ""),
+                "fragmentIndex": fragment_index,
+                "fragment_index": fragment_index,
+                "columnIndex": column_index,
+                "column_index": column_index,
+                "bbox": normalized_bbox,
+                "recoveredFromPagesJson": True,
+                "recovered_from_pages_json": True,
+            })
+        problem["sourceSegments"] = source_segments
+        problem["source_segments"] = list(source_segments)
+        problem["sourceSegmentsRecovered"] = True
+        problem["source_segments_recovered"] = True
+        problem_id = str(problem.get("id") or "").strip()
+        if problem_id:
+            for page_id in dict.fromkeys(segment["sourcePageId"] for segment in source_segments):
+                page = session_pages_by_id.get(page_id)
+                if page is None:
+                    continue
+                raw_problem_ids = page.get("problemIds")
+                if not isinstance(raw_problem_ids, list):
+                    raw_problem_ids = page.get("problem_ids")
+                problem_ids = [str(value) for value in (raw_problem_ids or []) if str(value or "").strip()]
+                if problem_id not in problem_ids:
+                    problem_ids.append(problem_id)
+                page["problemIds"] = problem_ids
+                page["problem_ids"] = list(problem_ids)
+        recovered += 1
+    return recovered
+
+
 def _find_problem(session: dict[str, Any], problem_id: str) -> tuple[int, dict[str, Any]]:
     for index, problem in enumerate(session.get("problems", [])):
         if isinstance(problem, dict) and str(problem.get("id")) == problem_id:
@@ -2929,18 +4564,53 @@ def _find_page(session: dict[str, Any], page_id: str) -> dict[str, Any]:
 def _resolve_session_path(value: Any) -> Path | None:
     """Coerce a session-stored value (file URI, /api/file URL, raw path) to a
     real filesystem path. Returns None if the value cannot be resolved."""
-    if not value:
-        return None
-    text = str(value)
-    if text.startswith("file://"):
-        parsed = urlparse(text)
-        return Path(url2pathname(parsed.path))
-    if text.startswith("/api/file"):
-        parsed = urlparse(text)
-        params = parse_qs(parsed.query)
-        raw = params.get("path", [None])[0]
-        return Path(unquote(raw)) if raw else None
-    return Path(text)
+    return decode_file_reference(str(value)) if value else None
+
+
+def _session_reextract_source_paths(session: dict[str, Any] | None) -> list[Path]:
+    """Return preserved source files for a session-only re-extraction preview.
+
+    Prefer the first-generation input documents.  Older/restored sessions may
+    not retain those paths, so fall back to the source page images in page
+    order.  Only existing regular files are returned and aliases resolving to
+    the same file are de-duplicated.
+    """
+
+    if not isinstance(session, dict):
+        return []
+
+    def existing_unique(values: list[Any]) -> list[Path]:
+        resolved_paths: list[Path] = []
+        seen: set[str] = set()
+        for value in values:
+            path = _resolve_session_path(value)
+            if path is None:
+                continue
+            try:
+                resolved = path.resolve()
+            except (OSError, ValueError):
+                continue
+            if not resolved.is_file():
+                continue
+            key = os.path.normcase(str(resolved))
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved_paths.append(resolved)
+        return resolved_paths
+
+    input_paths = existing_unique(
+        list(session.get("input_files") or session.get("inputFiles") or [])
+    )
+    if input_paths:
+        return input_paths
+
+    page_values: list[Any] = []
+    for page in session.get("pages", []) or []:
+        if not isinstance(page, dict):
+            continue
+        page_values.append(page.get("sourceImagePath") or page.get("sourceImageUri"))
+    return existing_unique(page_values)
 
 
 def _next_problem_id(session: dict[str, Any], base: str, suffix: str) -> str:
@@ -2960,12 +4630,18 @@ def _next_problem_id(session: dict[str, Any], base: str, suffix: str) -> str:
 
 
 def _crop_dir_for_session(session: dict[str, Any]) -> Path:
-    out = session.get("output_dir")
-    if out:
-        target = Path(str(out)) / "problem_crops"
-    else:
-        target = RUNTIME_DIR / "mutated_crops"
+    selected_output_dir, recovered_output = _select_session_write_root(
+        session,
+        operation="session_mutate",
+        reserved_descendants=MANAGED_MUTATION_RESERVED_DESCENDANTS,
+    )
+    target = selected_output_dir / "problem_crops"
     target.mkdir(parents=True, exist_ok=True)
+    if recovered_output:
+        # Request handlers persist their cloned session only after the mutation
+        # completes and wins the session CAS, so failed edits never adopt this.
+        session["output_dir"] = str(selected_output_dir)
+        session["outputDir"] = str(selected_output_dir)
     return target
 
 
@@ -3589,12 +5265,16 @@ def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:
             for flag in (page.get("riskFlags") or page.get("risk_flags") or [])
             if str(flag or "").strip()
         }
-        if not page_flags.intersection(actionable_flags):
-            continue
+        page_status = str(page.get("reviewStatus") or page.get("review_status") or "").strip().lower()
+        page_confirmed = bool(page.get("pageReviewConfirmed") or page.get("page_review_confirmed"))
         page_problem_ids = [str(pid) for pid in (page.get("problemIds") or page.get("problem_ids") or []) if pid]
         if page_problem_ids:
-            actionable_problem_ids.update(page_problem_ids)
-        else:
+            if page_flags.intersection(actionable_flags) or page_status in {"check_needed", "failed"}:
+                actionable_problem_ids.update(page_problem_ids)
+        elif not page_confirmed and (
+            page_status in {"check_needed", "failed"}
+            or bool(page_flags.intersection(actionable_flags))
+        ):
             actionable_page_count += 1
     actionable_needs_review_count = len(actionable_problem_ids) + actionable_page_count
     return {
@@ -4063,6 +5743,11 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
         }
         problem["cropBaseImagePath"] = crop_base_image_path
         problem["cropBaseBoardRenderPath"] = problem.get("boardRenderPath") or crop_base_image_path
+        problem["cropBasePreserveMediaRegions"] = list(
+            problem.get("preserveMediaRegions")
+            or problem.get("preserve_media_regions")
+            or []
+        )
     else:
         base_bbox = _bbox_from_problem(problem, prefer_crop_base=True)
         if (
@@ -4155,8 +5840,338 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     }
     problem["manualCrop"] = crop
     problem["manual_crop"] = crop
+    # A manual crop changes the local coordinate system. Until those regions
+    # are re-detected, stale PDF media boxes must not be pasted elsewhere.
+    preserved_regions = (
+        list(problem.get("cropBasePreserveMediaRegions") or [])
+        if _manual_crop_is_empty(crop)
+        else []
+    )
+    problem["preserveMediaRegions"] = preserved_regions
+    problem["preserve_media_regions"] = list(preserved_regions)
     if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
         _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
+    _refresh_session_problem_counts(session)
+    return session
+
+
+def _mutate_stitch_crop(
+    session: dict[str, Any],
+    problem_id: str,
+    segments: Any,
+) -> dict[str, Any]:
+    """Replace one problem with an ordered stitch of page-level crop boxes."""
+    _index, problem = _find_problem(session, problem_id)
+    raw_segments = segments if isinstance(segments, list) else []
+    if not raw_segments:
+        raise ValueError("segments is required")
+    if len(raw_segments) > 32:
+        raise ValueError("segments must contain at most 32 regions")
+
+    page_cache: dict[str, tuple[dict[str, Any], Path, int, int, float | None]] = {}
+    normalized: list[tuple[str, Box, int, int]] = []
+    from PIL import Image
+
+    for index, raw_segment in enumerate(raw_segments, start=1):
+        segment = raw_segment if isinstance(raw_segment, dict) else {}
+        page_id = str(
+            segment.get("pageId")
+            or segment.get("page_id")
+            or segment.get("sourcePageId")
+            or segment.get("source_page_id")
+            or ""
+        ).strip()
+        if not page_id:
+            raise ValueError(f"segments[{index - 1}].pageId is required")
+        if page_id not in page_cache:
+            page = _find_page(session, page_id)
+            source_path = _resolve_session_path(
+                page.get("sourceImagePath") or page.get("sourceImageUri")
+            )
+            if source_path is None or not source_path.exists():
+                raise FileNotFoundError(f"page image missing for {page_id}: {source_path}")
+            with Image.open(source_path) as page_image:
+                image_width, image_height = page_image.size
+                column_divider_x = _lazy_call(
+                    "segment",
+                    "detect_pdf_visual_column_divider_x",
+                    page_image.convert("RGB"),
+                )
+                try:
+                    column_divider_x = float(column_divider_x)
+                except (TypeError, ValueError):
+                    column_divider_x = None
+                if (
+                    column_divider_x is not None
+                    and (
+                        not math.isfinite(column_divider_x)
+                        or column_divider_x < image_width * MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO
+                        or column_divider_x > image_width * MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO
+                    )
+                ):
+                    # Side rules and answer-box borders can resemble a column
+                    # divider. Only a line in the central page band is allowed
+                    # to constrain a manual passage crop.
+                    column_divider_x = None
+            page_cache[page_id] = (
+                page,
+                source_path,
+                image_width,
+                image_height,
+                column_divider_x,
+            )
+        _page, _source_path, image_width, image_height, column_divider_x = page_cache[page_id]
+        raw_box = (
+            segment.get("bbox")
+            or segment.get("cropBox")
+            or segment.get("crop_box")
+            or segment
+        )
+        box = _coerce_crop_box(raw_box, image_width=image_width, image_height=image_height)
+        raw_column_index = segment.get("columnIndex", segment.get("column_index"))
+        try:
+            column_index = int(raw_column_index) if raw_column_index is not None else 0
+        except (TypeError, ValueError):
+            column_index = 0
+        if column_divider_x is not None:
+            # Legacy UI sessions sometimes defaulted every fragment to the
+            # left column. Treat a hint as stale when the whole box is already
+            # on the opposite side; a box crossing the divider still honors
+            # the explicit column selected by the user.
+            if column_index == 1 and box.left >= column_divider_x:
+                column_index = 2
+            elif column_index == 2 and box.right <= column_divider_x:
+                column_index = 1
+            if column_index not in {1, 2}:
+                column_index = 1 if (box.left + box.right) * 0.5 < column_divider_x else 2
+            if column_index == 1:
+                safe_right = max(
+                    1.0,
+                    float(column_divider_x) - MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                )
+                right = min(float(box.right), safe_right)
+                left = min(float(box.left), right - 1.0)
+            else:
+                safe_left = min(
+                    float(image_width) - 1.0,
+                    float(column_divider_x) + MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                )
+                left = max(float(box.left), safe_left)
+                right = max(left + 1.0, float(box.right))
+            box = Box.from_points(left, box.top, right, box.bottom)
+        elif column_index < 1:
+            column_index = 1
+        if box.width < 8 or box.height < 8:
+            raise ValueError(
+                f"segments[{index - 1}] is too small after page-boundary cleanup (minimum 8x8 px)"
+            )
+        raw_order = segment.get("order", segment.get("fragmentIndex", segment.get("fragment_index", index)))
+        try:
+            order = int(raw_order)
+        except (TypeError, ValueError):
+            raise ValueError(f"segments[{index - 1}].order must be an integer") from None
+        if order < 1:
+            raise ValueError(f"segments[{index - 1}].order must be positive")
+        normalized.append((page_id, box, order, column_index))
+
+    orders = [order for _page_id, _box, order, _column_index in normalized]
+    if len(set(orders)) != len(orders):
+        raise ValueError("segments must have unique order values")
+
+    for left_index, (left_page_id, left_box, _left_order, _left_column) in enumerate(normalized):
+        for right_page_id, right_box, _right_order, _right_column in normalized[left_index + 1:]:
+            if left_page_id != right_page_id:
+                continue
+            intersection_width = max(0.0, min(left_box.right, right_box.right) - max(left_box.left, right_box.left))
+            intersection_height = max(0.0, min(left_box.bottom, right_box.bottom) - max(left_box.top, right_box.top))
+            intersection_area = intersection_width * intersection_height
+            union_area = left_box.area + right_box.area - intersection_area
+            overlap = intersection_area / union_area if union_area > 0 else 0.0
+            if overlap >= 0.98:
+                raise ValueError("segments contain duplicate regions on the same page")
+
+    normalized.sort(key=lambda item: item[2])
+    crop_dir = _crop_dir_for_session(session)
+    stitched_path = crop_dir / _make_crop_filename(problem_id, "manual_stitch")
+    with tempfile.TemporaryDirectory(prefix=".manual-stitch-", dir=str(crop_dir)) as raw_tmp:
+        temp_dir = Path(raw_tmp)
+        fragment_paths: list[Path] = []
+        for index, (page_id, box, _order, _column_index) in enumerate(normalized, start=1):
+            source_path = page_cache[page_id][1]
+            fragment_path = temp_dir / f"fragment-{index:03d}.png"
+            _crop_image_by_bbox(source_path, box, fragment_path)
+            with Image.open(fragment_path) as fragment_image:
+                cleaned_fragment = _lazy_call(
+                    "build_problem_board_edb",
+                    "_erase_corner_page_badges",
+                    fragment_image.copy(),
+                )
+                cleaned_fragment = _lazy_call(
+                    "build_problem_board_edb",
+                    "_trim_text_priority_bottom_page_badge",
+                    cleaned_fragment,
+                )
+                cleaned_fragment.save(fragment_path)
+            fragment_paths.append(fragment_path)
+        source_crop_boxes: list[tuple[int, int, int, int]] = []
+        stitch_diagnostics: dict[str, Any] = {}
+        _stitch_passage_image_files(
+            fragment_paths,
+            stitched_path,
+            transparent=False,
+            source_crop_boxes_output=source_crop_boxes,
+            stitch_diagnostics_output=stitch_diagnostics,
+        )
+
+    effective_normalized: list[tuple[str, Box, int, int]] = []
+    trimmed_fragment_count = 0
+    for index, (page_id, box, order, column_index) in enumerate(normalized):
+        source_left = math.floor(box.left)
+        source_top = math.floor(box.top)
+        source_right = math.ceil(box.right)
+        source_bottom = math.ceil(box.bottom)
+        crop_width = max(1, source_right - source_left)
+        crop_height = max(1, source_bottom - source_top)
+        crop_box = (
+            source_crop_boxes[index]
+            if index < len(source_crop_boxes)
+            else (0, 0, crop_width, crop_height)
+        )
+        crop_left, crop_top, crop_right, crop_bottom = crop_box
+        crop_left = max(0, min(crop_width - 1, int(crop_left)))
+        crop_top = max(0, min(crop_height - 1, int(crop_top)))
+        crop_right = max(crop_left + 1, min(crop_width, int(crop_right)))
+        crop_bottom = max(crop_top + 1, min(crop_height, int(crop_bottom)))
+        if (crop_left, crop_top, crop_right, crop_bottom) != (0, 0, crop_width, crop_height):
+            trimmed_fragment_count += 1
+        effective_normalized.append((
+            page_id,
+            Box.from_points(
+                source_left + crop_left,
+                source_top + crop_top,
+                source_left + crop_right,
+                source_top + crop_bottom,
+            ),
+            order,
+            column_index,
+        ))
+
+    board_uri = stitched_path.resolve().as_uri()
+    if _crop_refreshes_board_render(problem):
+        board_path = crop_dir / _make_crop_filename(problem_id, "manual_stitch_board")
+        _render_board_crop_from_raw(stitched_path, board_path, problem)
+        board_uri = board_path.resolve().as_uri()
+
+    source_segments: list[dict[str, Any]] = []
+    for fragment_index, (page_id, box, _order, column_index) in enumerate(effective_normalized, start=1):
+        bbox = {
+            "left": box.left,
+            "top": box.top,
+            "width": box.width,
+            "height": box.height,
+        }
+        source_segments.append({
+            "sourcePageId": page_id,
+            "source_page_id": page_id,
+            "fragmentIndex": fragment_index,
+            "fragment_index": fragment_index,
+            "columnIndex": column_index,
+            "column_index": column_index,
+            "bbox": bbox,
+        })
+
+    first_page_id, first_box, _first_order, _first_column = effective_normalized[0]
+    first_source_path = page_cache[first_page_id][1]
+    first_bbox = {
+        "left": first_box.left,
+        "top": first_box.top,
+        "width": first_box.width,
+        "height": first_box.height,
+    }
+    source_page_ids = list(dict.fromkeys(
+        page_id for page_id, _box, _order, _column in effective_normalized
+    ))
+
+    problem["sourcePageId"] = first_page_id
+    problem["source_page_id"] = first_page_id
+    problem["sourceImagePath"] = first_source_path.resolve().as_uri()
+    problem["bbox"] = first_bbox
+    problem["sourceSegments"] = source_segments
+    problem["source_segments"] = list(source_segments)
+    problem["imagePath"] = stitched_path.resolve().as_uri()
+    problem["boardRenderPath"] = board_uri
+    problem["recordMode"] = "image-only"
+    problem["textRecordCount"] = 0
+    problem["imageRecordCount"] = 1
+    problem["manualStitch"] = True
+    problem["manual_stitch"] = True
+    problem["passageSourcePageIds"] = source_page_ids
+    problem["passage_source_page_ids"] = list(source_page_ids)
+    problem["passageFragmentsMerged"] = len(source_segments) > 1
+    problem["passage_fragments_merged"] = len(source_segments) > 1
+    problem["passageFragmentCount"] = len(source_segments)
+    problem["passage_fragment_count"] = len(source_segments)
+    problem["passageMergedSourcePageIds"] = source_page_ids
+    problem["passage_merged_source_page_ids"] = list(source_page_ids)
+    problem["passageMergedFragmentCount"] = len(source_segments)
+    problem["passage_merged_fragment_count"] = len(source_segments)
+    stitch_diagnostics = {
+        **stitch_diagnostics,
+        "trimmed_source_fragment_count": trimmed_fragment_count,
+        "trimmedSourceFragmentCount": trimmed_fragment_count,
+    }
+    problem["manualStitchDiagnostics"] = stitch_diagnostics
+    problem["manual_stitch_diagnostics"] = dict(stitch_diagnostics)
+    problem["manualCrop"] = {
+        "leftRatio": 0.0,
+        "rightRatio": 0.0,
+        "topRatio": 0.0,
+        "bottomRatio": 0.0,
+    }
+    problem["manual_crop"] = dict(problem["manualCrop"])
+    problem["preserveMediaRegions"] = []
+    problem["preserve_media_regions"] = []
+    problem["riskFlags"] = []
+    problem["risk_flags"] = []
+    problem["reviewStatus"] = "normal"
+    problem["review_status"] = "normal"
+    for key in (
+        "cropBaseBbox",
+        "cropBaseImagePath",
+        "cropBaseBoardRenderPath",
+        "cropBasePreserveMediaRegions",
+    ):
+        problem.pop(key, None)
+
+    metadata = problem.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["passage_source_page_ids"] = list(source_page_ids)
+        metadata["passage_fragments_merged"] = len(source_segments) > 1
+        metadata["passage_fragment_count"] = len(source_segments)
+        metadata["passage_merged_source_page_ids"] = list(source_page_ids)
+        metadata["passage_merged_fragment_count"] = len(source_segments)
+        metadata["manual_stitch"] = True
+        metadata["manual_stitch_diagnostics"] = dict(stitch_diagnostics)
+
+    previous_positions: dict[str, int] = {}
+    for page in session.get("pages", []) or []:
+        if not isinstance(page, dict):
+            continue
+        ids = [str(raw_id) for raw_id in (page.get("problemIds") or page.get("problem_ids") or []) if raw_id]
+        if problem_id in ids:
+            previous_positions[str(page.get("id") or "")] = ids.index(problem_id)
+        next_ids = [current_id for current_id in ids if current_id != problem_id]
+        page["problemIds"] = next_ids
+        page["problem_ids"] = list(next_ids)
+    for page_id in source_page_ids:
+        page = page_cache[page_id][0]
+        ids = [str(raw_id) for raw_id in (page.get("problemIds") or []) if raw_id]
+        insertion_index = min(previous_positions.get(page_id, len(ids)), len(ids))
+        ids.insert(insertion_index, problem_id)
+        page["problemIds"] = ids
+        page["problem_ids"] = list(ids)
+
+    _refresh_mutated_crop_layout(problem, stitched_path)
     _refresh_session_problem_counts(session)
     return session
 
@@ -4506,10 +6521,13 @@ def _write_session_image_export_zip(
     session_name = str(session.get("session_name") or session.get("sessionName") or "session")
     export_dir = RUNTIME_DIR / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
-    safe_session_name = sanitize_output_dir_name(session_name or "session")
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    digest = hashlib.sha1(f"{safe_session_name}|{stamp}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
-    zip_path = (export_dir / f"{safe_session_name}_images_{stamp}_{digest}.zip").resolve()
+    stamp = _unique_artifact_stamp()
+    digest = hashlib.sha1(f"{session_name}|{stamp}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
+    zip_stem = sanitize_output_dir_name(
+        session_name or "session",
+        suffix=f"images_{stamp}_{digest}",
+    )
+    zip_path = (export_dir / f"{zip_stem}.zip").resolve()
 
     manifest: dict[str, Any] = {
         "sessionName": session_name,
@@ -4527,7 +6545,7 @@ def _write_session_image_export_zip(
     if normalized_mode in {"raw", "both"}:
         folders.append(("raw", "raw_crops", "rawCrop"))
 
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    def populate_archive(archive) -> None:
         for index, problem in enumerate(items, start=1):
             problem_id = str(problem.get("id") or "")
             filename = _safe_export_filename(index, problem.get("title"), problem_id)
@@ -4588,6 +6606,12 @@ def _write_session_image_export_zip(
         manifest["count"] = len(exported_problem_ids)
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
+    _write_zip_atomically(
+        zip_path,
+        compression=zipfile.ZIP_DEFLATED,
+        populate=populate_archive,
+    )
+
     return {
         "zipPath": str(zip_path),
         "fileName": zip_path.name,
@@ -4595,6 +6619,50 @@ def _write_session_image_export_zip(
         "missing": manifest["missing"],
         "manifest": manifest,
         "mode": normalized_mode,
+    }
+
+
+def _write_edb_export_zip(edb_paths: list[Path], bundle_name: str | None = None) -> dict[str, Any]:
+    resolved_paths = [Path(path).resolve() for path in edb_paths]
+    if len(resolved_paths) < 2:
+        raise ValueError("at least two EDB files are required for a bundle")
+    if any(path.suffix.lower() != ".edb" or not path.is_file() for path in resolved_paths):
+        raise ValueError("EDB bundle contains a missing or invalid file")
+
+    requested_name = sanitize_edb_file_name(bundle_name, fallback_stem=resolved_paths[0].stem)
+    export_dir = RUNTIME_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    digest_source = "|".join(str(path) for path in resolved_paths)
+    digest = hashlib.sha1(f"{digest_source}|{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
+    zip_stem = sanitize_output_dir_name(
+        Path(requested_name).stem or "classin",
+        suffix=f"files_{stamp}_{digest}",
+    )
+    zip_path = (export_dir / f"{zip_stem}.zip").resolve()
+
+    used_names: set[str] = set()
+
+    def populate_archive(archive) -> None:
+        for index, path in enumerate(resolved_paths, start=1):
+            arcname = path.name
+            collision_index = index
+            while arcname.casefold() in used_names:
+                arcname = f"{Path(path.name).stem}_part{collision_index:02d}.edb"
+                collision_index += 1
+            used_names.add(arcname.casefold())
+            archive.write(path, arcname)
+
+    _write_zip_atomically(
+        zip_path,
+        compression=zipfile.ZIP_STORED,
+        populate=populate_archive,
+    )
+
+    return {
+        "zipPath": str(zip_path),
+        "fileName": zip_path.name,
+        "count": len(resolved_paths),
     }
 
 
@@ -4610,6 +6678,105 @@ def _mutate_exclude_many(session: dict[str, Any], problem_ids: Any) -> dict[str,
 
 def _mutate_exclude(session: dict[str, Any], problem_id: str) -> dict[str, Any]:
     return _mutate_exclude_many(session, [problem_id])
+
+
+def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]:
+    ids = set(_coerce_problem_ids(problem_ids))
+    if not ids:
+        raise ValueError("problemIds is required")
+    problems = session.get("problems")
+    if not isinstance(problems, list):
+        raise ValueError("session problems are missing")
+    available_ids = {
+        str(problem.get("id"))
+        for problem in problems
+        if isinstance(problem, dict) and problem.get("id")
+    }
+    missing = sorted(ids - available_ids)
+    if missing:
+        raise ValueError(f"problem not found: {', '.join(missing)}")
+
+    for problem in problems:
+        if not isinstance(problem, dict) or str(problem.get("id") or "") not in ids:
+            continue
+        problem["riskFlags"] = []
+        problem["risk_flags"] = []
+        problem["reviewStatus"] = "normal"
+        problem["review_status"] = "normal"
+        problem["parseFailed"] = False
+        problem["parse_failed"] = False
+
+    normalized_by_id = {
+        str(problem.get("id")): problem
+        for problem in problems
+        if isinstance(problem, dict) and problem.get("id")
+    }
+    for page in session.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_problem_ids = page.get("problemIds")
+        if not isinstance(page_problem_ids, list):
+            page_problem_ids = page.get("problem_ids")
+        page_problems = [
+            normalized_by_id[str(problem_id)]
+            for problem_id in (page_problem_ids or [])
+            if str(problem_id) in normalized_by_id
+        ]
+        if page_problems and all(_problem_review_status(problem) == "normal" for problem in page_problems):
+            page["riskFlags"] = []
+            page["risk_flags"] = []
+            page["reviewStatus"] = "normal"
+            page["review_status"] = "normal"
+    return session
+
+
+def _mutate_confirm_pages(
+    session: dict[str, Any],
+    page_ids: Any,
+    *,
+    decision: str = "no_passage",
+) -> dict[str, Any]:
+    """Resolve review-only pages that intentionally contain no extracted item.
+
+    A page without problem ids cannot be sent through ``_mutate_confirm``.  Keep
+    an explicit decision on the page so the review target remains part of the
+    stable progress denominator after it is resolved.
+    """
+    ids = set(_coerce_problem_ids(page_ids))
+    if not ids:
+        raise ValueError("pageIds is required")
+    normalized_decision = str(decision or "no_passage").strip().lower().replace("-", "_")
+    if normalized_decision not in {"no_passage"}:
+        raise ValueError(f"unsupported page review decision: {decision}")
+
+    pages = session.get("pages")
+    if not isinstance(pages, list):
+        raise ValueError("session pages are missing")
+    available_pages = {
+        str(page.get("id")): page
+        for page in pages
+        if isinstance(page, dict) and page.get("id")
+    }
+    missing = sorted(ids - set(available_pages))
+    if missing:
+        raise ValueError(f"page not found: {', '.join(missing)}")
+
+    for page_id in ids:
+        page = available_pages[page_id]
+        problem_ids = page.get("problemIds")
+        if not isinstance(problem_ids, list):
+            problem_ids = page.get("problem_ids")
+        if any(problem_ids or []):
+            raise ValueError(f"page still has review items: {page_id}")
+        page["riskFlags"] = []
+        page["risk_flags"] = []
+        page["reviewStatus"] = "normal"
+        page["review_status"] = "normal"
+        page["pageReviewConfirmed"] = True
+        page["page_review_confirmed"] = True
+        page["pageReviewDecision"] = normalized_decision
+        page["page_review_decision"] = normalized_decision
+    return session
 
 
 def _problem_review_status(problem: dict[str, Any]) -> str:
@@ -4760,13 +6927,15 @@ def _replace_single_problem(session: dict[str, Any], old_problem_id: str, replac
     _refresh_session_problem_counts(session)
 
 
-def _image_reconstruction_dir(session: dict[str, Any]) -> Path:
-    if session.get("output_dir"):
-        target = Path(str(session["output_dir"])).resolve() / "ai_image_reconstructions"
-    else:
-        target = RUNTIME_DIR / "ai_image_reconstructions"
+def _image_reconstruction_dir(session: dict[str, Any]) -> tuple[Path, Path, bool]:
+    selected_output_dir, recovered_output = _select_session_write_root(
+        session,
+        operation="session_enhance_image",
+        reserved_descendants=MANAGED_IMAGE_RECONSTRUCTION_RESERVED_DESCENDANTS,
+    )
+    target = selected_output_dir / "ai_image_reconstructions"
     target.mkdir(parents=True, exist_ok=True)
-    return target
+    return target, selected_output_dir, recovered_output
 
 
 def _payload_bool(payload: dict[str, Any], camel_key: str, snake_key: str, default: bool) -> bool:
@@ -4788,7 +6957,16 @@ _AI_IMAGE_REVIEW_FLAGS = {
 }
 
 _IMAGE_ENHANCE_MODES = {"auto", "preserve", "ai"}
-_TEXT_PRESERVATION_SUBJECTS = {"korean", "english"}
+_TEXT_PRESERVATION_SUBJECTS = {
+    "korean",
+    "english",
+    "math",
+    "science",
+    "physics",
+    "chemistry",
+    "biology",
+    "earth_science",
+}
 
 
 def _normalize_image_enhance_mode(value: Any) -> str:
@@ -4845,7 +7023,10 @@ def _problem_image_subject(session: dict[str, Any], problem: dict[str, Any]) -> 
 def _resolved_image_enhance_mode(requested_mode: str, subject: str) -> str:
     if requested_mode != "auto":
         return requested_mode
-    return "preserve" if subject in _TEXT_PRESERVATION_SUBJECTS else "ai"
+    # Auto mode must be both economical and semantically safe. Generative
+    # reconstruction remains an explicit opt-in because pixel similarity
+    # cannot prove that formulae, labels, or answer choices were preserved.
+    return "preserve"
 
 
 def _original_problem_image_path(
@@ -4896,17 +7077,18 @@ def _semantic_text_preservation_gate(
     source/output OCR or PDF text-layer comparison is available, generated
     text-priority pages must remain reviewable instead of becoming a false pass.
     """
-    if subject not in _TEXT_PRESERVATION_SUBJECTS:
-        return {
-            "status": "not_applicable",
-            "review_required": False,
-            "method": "subject_not_text_priority",
-        }
     if resolved_mode != "ai" or delivery_mode in {"content_safe_primary", "content_safe_fallback"}:
         return {
             "status": "pass",
             "review_required": False,
             "method": "pixel_preserving_resize",
+        }
+    if subject not in _TEXT_PRESERVATION_SUBJECTS:
+        return {
+            "status": "unverified",
+            "review_required": True,
+            "method": "semantic_visual_comparison_unavailable",
+            "reason": "generated_diagram_or_label_identity_not_verified",
         }
     return {
         "status": "unverified",
@@ -4957,6 +7139,23 @@ def _image_attempt_summary(result: Any, *, attempt: int, mode: str) -> dict[str,
     }
 
 
+def _image_generation_output_path(output_dir: Path, problem_id: str, suffix: str) -> Path:
+    problem_token = problem_id or "problem"
+    problem_digest = hashlib.sha1(problem_token.encode("utf-8", errors="surrogatepass")).hexdigest()[:10]
+    component_budget = _managed_path_component_max_bytes(
+        output_dir,
+        max_bytes=MANAGED_IMAGE_RECONSTRUCTION_FILE_MAX_BYTES,
+        minimum_bytes=24,
+    )
+    stem_budget = max(20, component_budget - len(".png".encode("utf-8")))
+    stem = sanitize_output_dir_name(
+        problem_token,
+        suffix=f"{problem_digest}_{suffix}",
+        max_bytes=stem_budget,
+    )
+    return output_dir / f"{stem}.png"
+
+
 def _content_safe_primary_batch(
     session: dict[str, Any],
     problem_ids: list[str],
@@ -4976,8 +7175,11 @@ def _content_safe_primary_batch(
         source_path = _original_problem_image_path(problem, session)
         if source_path is None or not source_path.exists():
             continue
-        safe_problem = sanitize_output_dir_name(problem_id) or "problem"
-        output_path = output_dir / f"{safe_problem}_{stamp}_text-preserve-2x.png"
+        output_path = _image_generation_output_path(
+            output_dir,
+            problem_id,
+            f"{stamp}_text-preserve-2x",
+        )
         jobs.append((problem_id, source_path, output_path))
 
     if not jobs:
@@ -5026,10 +7228,26 @@ def _content_safe_primary_batch(
     return results
 
 
+def _active_image_enhance_size(provider: str, requested_size: str) -> tuple[str, bool]:
+    """Keep image regeneration below the temporarily disabled 2K tier."""
+    value = str(requested_size or "auto").strip()
+    if provider != "gemini":
+        return value, False
+    high_resolution_skipped = value.upper() in HIGH_RES_IMAGE_SIZE_ALIASES
+    if value.upper() in {"512", "512PX", "0.5K"}:
+        return value, False
+    return ACTIVE_IMAGE_ENHANCE_SIZE, high_resolution_skipped
+
+
 def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     requested_mode = _normalize_image_enhance_mode(
         payload.get("mode") or payload.get("enhanceMode") or payload.get("enhance_mode") or "auto"
     )
+    ai_enabled = _global_ai_enabled()
+    if not ai_enabled and requested_mode == "ai":
+        raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
+    if not ai_enabled and requested_mode == "auto":
+        requested_mode = "preserve"
     provider = normalize_image_provider(
         payload.get("provider")
         or payload.get("imageProvider")
@@ -5055,12 +7273,13 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
     custom_prompt = str(payload.get("prompt") or payload.get("imagePrompt") or "").strip()
     quality = str(payload.get("quality") or "high")
-    size = str(payload.get("size") or "auto")
+    requested_size = str(payload.get("size") or "auto")
+    size, high_resolution_skipped = _active_image_enhance_size(provider, requested_size)
     timeout_ms = int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)
     transparent_background = _payload_bool(payload, "transparentBackground", "transparent_background", True)
     sharpen = _payload_bool(payload, "sharpen", "sharpen", True)
-    output_dir = _image_reconstruction_dir(session)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    output_dir, selected_output_dir, recovered_output = _image_reconstruction_dir(session)
+    stamp = _unique_artifact_stamp()
     summaries: list[dict[str, Any]] = []
     preserve_results = _content_safe_primary_batch(
         session,
@@ -5106,10 +7325,13 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             })
             continue
 
-        safe_problem = sanitize_output_dir_name(problem_id) or "problem"
         output_model = "text-preserve-2x" if resolved_mode == "preserve" else model
-        safe_model = sanitize_output_dir_name(output_model) or resolved_mode
-        output_path = preserve_row.get("output_path") if preserve_row else output_dir / f"{safe_problem}_{stamp}_{safe_model}.png"
+        safe_model = sanitize_output_dir_name(output_model, max_bytes=80) or resolved_mode
+        output_path = preserve_row.get("output_path") if preserve_row else _image_generation_output_path(
+            output_dir,
+            problem_id,
+            f"{stamp}_{safe_model}",
+        )
         attempts: list[dict[str, Any]] = []
         result: Any | None = None
         delivery_mode = "content_safe_primary" if resolved_mode == "preserve" else "ai_primary"
@@ -5158,7 +7380,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 })
 
         if resolved_mode == "ai" and result is not None and not _result_passes_content_gate(result):
-            retry_path = output_dir / f"{safe_problem}_{stamp}_{safe_model}_retry.png"
+            retry_path = _image_generation_output_path(
+                output_dir,
+                problem_id,
+                f"{stamp}_{safe_model}_retry",
+            )
             retry_prompt = _content_recovery_prompt(problem_prompt, _result_content_preservation(result))
             try:
                 retry_result = reconstruct_problem_image(
@@ -5191,7 +7417,11 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 })
 
         if resolved_mode == "ai" and (result is None or not _result_passes_content_gate(result)):
-            fallback_path = output_dir / f"{safe_problem}_{stamp}_content_safe.png"
+            fallback_path = _image_generation_output_path(
+                output_dir,
+                problem_id,
+                f"{stamp}_content_safe",
+            )
             try:
                 fallback_result = build_content_safe_upscale(
                     source_path,
@@ -5296,6 +7526,8 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "quality": quality,
             "size": size,
+            "requestedSize": requested_size,
+            "highResolutionSkipped": high_resolution_skipped,
             "requestedMode": requested_mode,
             "resolvedMode": resolved_mode,
             "subject": subject,
@@ -5328,6 +7560,12 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         })
 
     session["ai_image_reconstruction_summary"] = summaries
+    _adopt_recovered_output_dir_after_success(
+        session,
+        selected_output_dir,
+        recovered=recovered_output,
+        summaries=summaries,
+    )
     return session
 
 
@@ -5373,6 +7611,118 @@ def _offset_retry_problem_to_source_page(problem: dict[str, Any], crop_box: Box)
             pass
 
 
+def _partial_retry_identity_problem(
+    source_problem: dict[str, Any],
+    source_page: dict[str, Any],
+    source_path: Path,
+    retry_problems: list[dict[str, Any]],
+    *,
+    crop_box: Box,
+    retry_dir: Path,
+) -> dict[str, Any]:
+    """Collapse partial-retry detections into one problem without changing identity.
+
+    A partial retry is an edge-refinement operation, not a split operation.  AI
+    providers may still return multiple candidates for one cropped region; the
+    safe behavior is to use their union as the refined boundary while retaining
+    the original problem id, title, number, metadata, and position in page order.
+    """
+    detected_boxes = [_bbox_from_problem(problem) for problem in retry_problems]
+    left = min(box.left for box in detected_boxes)
+    top = min(box.top for box in detected_boxes)
+    right = max(box.right for box in detected_boxes)
+    bottom = max(box.bottom for box in detected_boxes)
+
+    from PIL import Image
+
+    with Image.open(source_path) as source_image:
+        refined_box = _coerce_crop_box(
+            {
+                "left": left,
+                "top": top,
+                "width": right - left,
+                "height": bottom - top,
+            },
+            image_width=source_image.width,
+            image_height=source_image.height,
+        )
+
+    problem_id = str(source_problem.get("id") or "")
+    raw_crop_path = retry_dir / _make_crop_filename(problem_id, "ai_partial_identity")
+    _crop_image_by_bbox(source_path, refined_box, raw_crop_path)
+    raw_uri = raw_crop_path.resolve().as_uri()
+    board_uri = raw_uri
+    if _crop_refreshes_board_render(source_problem):
+        board_crop_path = retry_dir / _make_crop_filename(problem_id, "ai_partial_identity_board")
+        _render_board_crop_from_raw(raw_crop_path, board_crop_path, source_problem)
+        board_uri = board_crop_path.resolve().as_uri()
+
+    risk_flags = list(dict.fromkeys(
+        str(flag)
+        for problem in retry_problems
+        for flag in (problem.get("riskFlags") or problem.get("risk_flags") or [])
+        if flag
+    ))
+    if len(retry_problems) > 1:
+        risk_flags.append("ai_partial_retry_multiple_candidates")
+    risk_flags = list(dict.fromkeys(risk_flags))
+
+    preserved = dict(source_problem)
+    for key in (
+        "manualCrop",
+        "manual_crop",
+        "cropBaseBbox",
+        "cropBaseImagePath",
+        "cropBaseBoardRenderPath",
+        "cropBasePreserveMediaRegions",
+    ):
+        preserved.pop(key, None)
+    preserved["id"] = problem_id
+    preserved["sourcePageId"] = str(source_page.get("id") or source_problem.get("sourcePageId") or "")
+    preserved["sourceImagePath"] = source_path.resolve().as_uri()
+    preserved["sourceFileName"] = str(source_problem.get("sourceFileName") or source_path.name)
+    preserved["bbox"] = {
+        "left": refined_box.left,
+        "top": refined_box.top,
+        "width": refined_box.width,
+        "height": refined_box.height,
+    }
+    preserved["imagePath"] = raw_uri
+    preserved["boardRenderPath"] = board_uri
+    preserved["cropBaseBbox"] = dict(preserved["bbox"])
+    preserved["cropBaseImagePath"] = raw_uri
+    preserved["cropBaseBoardRenderPath"] = board_uri
+    preserved["cropBasePreserveMediaRegions"] = []
+    preserved["preserveMediaRegions"] = []
+    preserved["preserve_media_regions"] = []
+    preserved["riskFlags"] = risk_flags
+    preserved["risk_flags"] = list(risk_flags)
+    preserved["reviewStatus"] = "check_needed" if risk_flags else "normal"
+    preserved["review_status"] = preserved["reviewStatus"]
+    preserved["parseFailed"] = False
+    preserved["parse_failed"] = False
+    preserved["replacesProblemId"] = problem_id
+    preserved["replaces_problem_id"] = problem_id
+    preserved["aiRetry"] = {
+        "status": "applied",
+        "partial": True,
+        "preservedProblemIdentity": True,
+        "replacesProblemId": problem_id,
+        "sourcePageId": preserved["sourcePageId"],
+        "detectedProblemCount": len(retry_problems),
+        "collapsedMultipleCandidates": len(retry_problems) > 1,
+        "cropBox": {
+            "left": crop_box.left,
+            "top": crop_box.top,
+            "width": crop_box.width,
+            "height": crop_box.height,
+        },
+        "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    _refresh_mutated_crop_layout(preserved, raw_crop_path)
+    return preserved
+
+
 def _retry_target_problem_ids(payload: dict[str, Any]) -> list[str]:
     raw_problem_ids = payload.get("problemIds") or payload.get("problem_ids") or []
     if payload.get("problemId") or payload.get("problem_id"):
@@ -5388,12 +7738,12 @@ def _payload_crop_box_for_problem(payload: dict[str, Any], problem_id: str) -> A
 
 
 def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    session_output_dir = session.get("output_dir")
-    if session_output_dir:
-        output_root = Path(session_output_dir).resolve() / "ai_retries"
-    else:
-        output_root = (RUNTIME_DIR / "ai_retries").resolve()
+    stamp = _unique_artifact_stamp()
+    selected_output_dir, recovered_output = _select_session_write_root(
+        session,
+        operation="session_retry_ai",
+        reserved_descendants=MANAGED_RETRY_RESERVED_DESCENDANTS,
+    )
     ai_config = session.get("ai_fallback") if isinstance(session.get("ai_fallback"), dict) else {}
     summaries: list[dict[str, Any]] = []
 
@@ -5416,7 +7766,7 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                     image_width=source_image.width,
                     image_height=source_image.height,
                 )
-            retry_dir = output_root / sanitize_output_dir_name(f"{problem_id}_{stamp}")
+            retry_dir = _managed_retry_dir(selected_output_dir, problem_id, stamp)
             partial_source_path = retry_dir / "partial_source.png"
             _crop_image_by_bbox(source_path, crop_box, partial_source_path)
             result = run_problem_export(
@@ -5451,7 +7801,7 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
             if not retry_problems:
                 raise ValueError("partial AI retry produced no problems")
 
-            replacements: list[dict[str, Any]] = []
+            normalized_retry_problems: list[dict[str, Any]] = []
             for index, retry_problem in enumerate(retry_problems, start=1):
                 normalized = _normalized_retry_problem(
                     session,
@@ -5459,27 +7809,28 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                     retry_problem,
                     stamp=stamp,
                     index=(job_index * 1000) + index,
-                    replacements_so_far=replacements,
+                    replacements_so_far=normalized_retry_problems,
                 )
                 _offset_retry_problem_to_source_page(normalized, crop_box)
-                normalized["aiRetry"]["partial"] = True
-                normalized["aiRetry"]["replacesProblemId"] = problem_id
-                normalized["aiRetry"]["cropBox"] = {
-                    "left": crop_box.left,
-                    "top": crop_box.top,
-                    "width": crop_box.width,
-                    "height": crop_box.height,
-                }
-                normalized["replacesProblemId"] = problem_id
-                normalized["replaces_problem_id"] = problem_id
-                replacements.append(normalized)
-            _replace_single_problem(session, problem_id, replacements)
+                normalized_retry_problems.append(normalized)
+            replacement = _partial_retry_identity_problem(
+                problem,
+                page,
+                source_path,
+                normalized_retry_problems,
+                crop_box=crop_box,
+                retry_dir=retry_dir,
+            )
+            _replace_single_problem(session, problem_id, [replacement])
             summaries.append({
                 "problemId": problem_id,
                 "pageId": str(page.get("id") or ""),
                 "status": "applied",
                 "partial": True,
-                "replacedProblemCount": len(replacements),
+                "preservedProblemIdentity": True,
+                "detectedProblemCount": len(normalized_retry_problems),
+                "collapsedMultipleCandidates": len(normalized_retry_problems) > 1,
+                "replacedProblemCount": 1,
             })
         except Exception as exc:  # noqa: BLE001 - record per-problem retry failure
             try:
@@ -5504,11 +7855,92 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
             })
 
     session["ai_retry_summary"] = summaries
+    _adopt_recovered_output_dir_after_success(
+        session,
+        selected_output_dir,
+        recovered=recovered_output,
+        summaries=summaries,
+    )
+    _refresh_session_problem_counts(session)
+    return session
+
+
+def _mutate_classify(session: dict[str, Any], problem_id: str, classification: str) -> dict[str, Any]:
+    normalized = str(classification or "").strip().lower().replace("_", "-")
+    if normalized not in {"question", "shared-passage"}:
+        raise ValueError("classification must be question or shared-passage")
+    if not problem_id:
+        raise ValueError("problemId is required")
+
+    _index, problem = _find_problem(session, problem_id)
+    metadata = problem.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        problem["metadata"] = metadata
+
+    existing_group_id = str(
+        problem.get("passageGroupId")
+        or problem.get("passage_group_id")
+        or metadata.get("passageGroupId")
+        or metadata.get("passage_group_id")
+        or ""
+    ).strip()
+
+    if normalized == "shared-passage":
+        group_id = existing_group_id or f"manual-passage-{problem_id}"
+        role: str | None = "passage_fragment"
+        supplemental = True
+        problem["passageGroupId"] = group_id
+        problem["passage_group_id"] = group_id
+        metadata["passageGroupId"] = group_id
+        metadata["passage_group_id"] = group_id
+    else:
+        manual_group = existing_group_id.startswith("manual-passage-")
+        role = "child_question" if existing_group_id and not manual_group else None
+        supplemental = False
+        if manual_group:
+            for container in (problem, metadata):
+                container.pop("passageGroupId", None)
+                container.pop("passage_group_id", None)
+                container.pop("passageRange", None)
+                container.pop("passage_range", None)
+
+    for container in (problem, metadata):
+        if role is None:
+            container.pop("passageRole", None)
+            container.pop("passage_role", None)
+        else:
+            container["passageRole"] = role
+            container["passage_role"] = role
+        container["supplementalItem"] = supplemental
+        container["supplemental_item"] = supplemental
+        container["classificationSource"] = "manual"
+        container["classification_source"] = "manual"
+
+    _refresh_session_problem_counts(session)
+    return session
+
+
+def _mutate_classify_many(
+    session: dict[str, Any],
+    problem_ids: Any,
+    classification: str,
+) -> dict[str, Any]:
+    if not isinstance(problem_ids, list) or not problem_ids:
+        raise ValueError("problemIds must be a non-empty list")
+    ordered_ids = list(dict.fromkeys(str(value or "").strip() for value in problem_ids))
+    ordered_ids = [problem_id for problem_id in ordered_ids if problem_id]
+    if not ordered_ids:
+        raise ValueError("problemIds must contain at least one id")
+    for problem_id in ordered_ids:
+        _mutate_classify(session, problem_id, classification)
     _refresh_session_problem_counts(session)
     return session
 
 
 def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if not _global_ai_enabled():
+        raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
     if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
 
@@ -5522,12 +7954,12 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
     if not page_ids:
         raise ValueError("AI 재인식할 페이지가 없습니다")
 
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    session_output_dir = session.get("output_dir")
-    if session_output_dir:
-        output_root = Path(session_output_dir).resolve() / "ai_retries"
-    else:
-        output_root = (RUNTIME_DIR / "ai_retries").resolve()
+    stamp = _unique_artifact_stamp()
+    selected_output_dir, recovered_output = _select_session_write_root(
+        session,
+        operation="session_retry_ai",
+        reserved_descendants=MANAGED_RETRY_RESERVED_DESCENDANTS,
+    )
     ai_config = session.get("ai_fallback") if isinstance(session.get("ai_fallback"), dict) else {}
     summaries: list[dict[str, Any]] = []
     retry_jobs: list[dict[str, Any]] = []
@@ -5546,7 +7978,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
             retry_jobs.append({
                 "pageId": page_id,
                 "sourcePath": source_path,
-                "retryDir": output_root / sanitize_output_dir_name(f"{page_id}_{stamp}"),
+                "retryDir": _managed_retry_dir(selected_output_dir, page_id, stamp),
             })
 
     def _run_retry_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -5707,6 +8139,12 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
         })
 
     session["ai_retry_summary"] = summaries
+    _adopt_recovered_output_dir_after_success(
+        session,
+        selected_output_dir,
+        recovered=recovered_output,
+        summaries=summaries,
+    )
     _refresh_session_problem_counts(session)
     return session
 
@@ -5722,11 +8160,9 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, str):
             return value
         if value.startswith("/api/file"):
-            parsed = urlparse(value)
-            params = parse_qs(parsed.query)
-            raw = params.get("path", [None])[0]
-            if raw:
-                return Path(unquote(raw)).resolve().as_uri()
+            decoded = decode_file_reference(value)
+            if decoded is not None:
+                return _path_as_file_uri(decoded)
         return value
 
     for problem in cloned.get("problems", []) or []:
@@ -5744,21 +8180,286 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 class AppHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
+    # Windows SO_REUSEADDR permits unrelated processes to bind the same port,
+    # which can split requests between two local services. Keep quick restart
+    # behavior on POSIX, but require exclusive ownership on Windows.
+    allow_reuse_address = not sys.platform.startswith("win")
     daemon_threads = True
+
+    def server_bind(self) -> None:
+        if sys.platform.startswith("win"):
+            exclusive_address_use = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive_address_use is not None:
+                self.socket.setsockopt(socket.SOL_SOCKET, exclusive_address_use, 1)
+        super().server_bind()
 
     def __init__(self, server_address, RequestHandlerClass):
         super().__init__(server_address, RequestHandlerClass)
-        self.latest_session: dict[str, Any] | None = load_latest_session()
-        self.allowed_files: set[str] = collect_session_file_paths(self.latest_session) if self.latest_session else set()
-        self.allowed_files |= collect_session_history_file_paths(load_session_history())
+        _recover_interrupted_session_reset()
+        self._state_lock = threading.RLock()
+        # Artifact-producing handlers write files before committing session
+        # metadata. Serialize the entire handler so a stale CAS loser cannot
+        # overwrite the winner's files before its commit is rejected.
+        self._artifact_job_lock = threading.Lock()
+        self._active_artifact_jobs = 0
+        # Encode process start order into the epoch so a browser can reject a
+        # delayed response from a server incarnation it never observed.  The
+        # UUID keeps concurrently-started processes unique.
+        self._session_epoch = f"{time.time_ns():020d}-{uuid.uuid4().hex}"
+        latest_session = load_latest_session()
+        history = load_session_history()
+        if latest_session is not None:
+            _refresh_session_problem_counts(latest_session)
+        self.latest_session: dict[str, Any] | None = _clone_jsonish(latest_session) if latest_session else None
+        self._session_revision = 1 if latest_session is not None else 0
+        self.allowed_files: set[str] = collect_session_file_paths(latest_session) if latest_session else set()
+        self.allowed_files |= collect_session_history_file_paths(history)
+
+    def session_snapshot(self) -> dict[str, Any] | None:
+        with self._state_lock:
+            return _clone_jsonish(self.latest_session) if self.latest_session is not None else None
+
+    def session_snapshot_with_revision(self) -> tuple[dict[str, Any] | None, int]:
+        with self._state_lock:
+            snapshot = _clone_jsonish(self.latest_session) if self.latest_session is not None else None
+            return snapshot, self._session_revision
+
+    def session_revision(self) -> int:
+        with self._state_lock:
+            return self._session_revision
+
+    def session_epoch(self) -> str:
+        return self._session_epoch
+
+    def add_allowed_files(self, paths: set[str]) -> None:
+        with self._state_lock:
+            self.allowed_files.update(paths)
+
+    def is_file_allowed(self, path: str) -> bool:
+        with self._state_lock:
+            return path in self.allowed_files
 
     def remember_session(self, session: dict[str, Any]) -> None:
-        self.latest_session = session
-        self.allowed_files = collect_session_file_paths(session)
-        LATEST_SESSION_JSON.parent.mkdir(parents=True, exist_ok=True)
-        LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
-        remember_session_history(session)
+        snapshot = _clone_jsonish(session)
+        with self._state_lock:
+            history, history_error = persist_latest_session_with_history(snapshot)
+            self.latest_session = snapshot
+            self._session_revision += 1
+            self.allowed_files.update(collect_session_file_paths(snapshot))
+            self.allowed_files.update(collect_session_history_file_paths(history))
+            if history_error is not None:
+                print(
+                    f"[app-server] latest session committed but history update failed: {history_error}",
+                    file=sys.stderr,
+                )
+
+    def remember_session_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> int | None:
+        """Persist ``updated_session`` only when the caller's base is current.
+
+        Request handlers perform image/OCR work outside the server lock.  Two
+        concurrent requests may therefore start from the same snapshot.  The
+        equality check and write must share one critical section so the slower
+        request cannot silently overwrite the result that committed first.
+        """
+        expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
+        updated_snapshot = _clone_jsonish(updated_session)
+        with self._state_lock:
+            if expected_revision is not None and self._session_revision != expected_revision:
+                return None
+            if self.latest_session != expected_snapshot:
+                return None
+            history, history_error = persist_latest_session_with_history(updated_snapshot)
+            self.latest_session = updated_snapshot
+            self._session_revision += 1
+            self.allowed_files.update(collect_session_file_paths(updated_snapshot))
+            self.allowed_files.update(collect_session_history_file_paths(history))
+            if history_error is not None:
+                print(
+                    f"[app-server] latest session committed but history update failed: {history_error}",
+                    file=sys.stderr,
+                )
+            return self._session_revision
+
+    def adopt_staged_publish_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        staging_dir: Path,
+        final_dir: Path,
+        expected_revision: int | None = None,
+    ) -> int | None:
+        """CAS-check first, then atomically expose one immutable publish generation."""
+        expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
+        updated_snapshot = _clone_jsonish(updated_session)
+        with self._state_lock:
+            if expected_revision is not None and self._session_revision != expected_revision:
+                return None
+            if self.latest_session != expected_snapshot:
+                return None
+            final_dir.parent.mkdir(parents=True, exist_ok=True)
+            if final_dir.exists():
+                raise FileExistsError(f"publish generation already exists: {final_dir}")
+            os.replace(staging_dir, final_dir)
+            try:
+                history, history_error = persist_latest_session_with_history(updated_snapshot)
+            except BaseException:
+                try:
+                    os.replace(final_dir, staging_dir)
+                except OSError as rollback_exc:
+                    print(
+                        f"[app-server] publish adoption rollback failed: {rollback_exc}",
+                        file=sys.stderr,
+                    )
+                raise
+            self.latest_session = updated_snapshot
+            self._session_revision += 1
+            self.allowed_files.update(collect_session_file_paths(updated_snapshot))
+            self.allowed_files.update(collect_session_history_file_paths(history))
+            if history_error is not None:
+                print(
+                    f"[app-server] latest session committed but history update failed: {history_error}",
+                    file=sys.stderr,
+                )
+            return self._session_revision
+
+    def begin_artifact_job(self) -> None:
+        self._artifact_job_lock.acquire()
+        try:
+            with self._state_lock:
+                self._active_artifact_jobs += 1
+        except BaseException:
+            self._artifact_job_lock.release()
+            raise
+
+    def end_artifact_job(self) -> None:
+        try:
+            with self._state_lock:
+                self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
+        finally:
+            self._artifact_job_lock.release()
+
+    def begin_artifact_read(self) -> None:
+        # Reads may run concurrently with each other and with immutable
+        # generation writes, but reset/retention cleanup must not unlink their
+        # backing files until the response stream has finished.
+        with self._state_lock:
+            self._active_artifact_jobs += 1
+
+    def end_artifact_read(self) -> None:
+        with self._state_lock:
+            self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
+
+    def register_current_session(self, session: dict[str, Any]) -> bool:
+        """Persist history only if ``session`` is still the current snapshot."""
+        snapshot = _clone_jsonish(session)
+        with self._state_lock:
+            if self.latest_session != snapshot:
+                return False
+            self.allowed_files.update(collect_session_file_paths(snapshot))
+            with _session_storage_lock:
+                if not LATEST_SESSION_JSON.exists():
+                    save_latest_session(snapshot)
+                history = _session_history_with_session(load_session_history(), snapshot)
+                try:
+                    save_session_history(history)
+                except OSError as exc:
+                    print(
+                        f"[app-server] session history refresh failed: {exc}",
+                        file=sys.stderr,
+                    )
+        return True
+
+    def cleanup_artifacts(
+        self,
+        *,
+        dry_run: bool = True,
+        min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        # Hold the state lock through selection/deletion. Otherwise a concurrent
+        # remember_session could make an already-selected file active.
+        with self._state_lock:
+            if not dry_run and self._active_artifact_jobs:
+                raise ArtifactCleanupBusy(
+                    f"artifact cleanup paused while {self._active_artifact_jobs} request(s) are using files"
+                )
+            return cleanup_runtime_artifacts(
+                active_session=_clone_jsonish(self.latest_session) if self.latest_session is not None else {},
+                history=load_session_history(),
+                dry_run=dry_run,
+                min_age_seconds=min_age_seconds,
+                max_bytes=max_bytes,
+            )
+
+    def clear_session(
+        self,
+        *,
+        expected_revision: int | None = None,
+        cleanup_artifacts: bool = False,
+        dry_run: bool = True,
+        min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+    ) -> dict[str, Any] | None:
+        cleanup_result, _revision = self.clear_session_with_revision(
+            expected_revision=expected_revision,
+            cleanup_artifacts=cleanup_artifacts,
+            dry_run=dry_run,
+            min_age_seconds=min_age_seconds,
+        )
+        return cleanup_result
+
+    def clear_session_with_revision(
+        self,
+        *,
+        expected_revision: int | None = None,
+        cleanup_artifacts: bool = False,
+        dry_run: bool = True,
+        min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+    ) -> tuple[dict[str, Any] | None, int]:
+        with self._state_lock:
+            if expected_revision is not None and self._session_revision != expected_revision:
+                raise SessionRevisionConflict(
+                    f"session revision changed from {expected_revision} to {self._session_revision}"
+                )
+            if self._active_artifact_jobs:
+                raise ArtifactCleanupBusy(
+                    f"session reset paused while {self._active_artifact_jobs} request(s) are using files"
+                )
+            _atomically_clear_persisted_session_state()
+            self.latest_session = None
+            self._session_revision += 1
+            cleared_revision = self._session_revision
+            self.allowed_files.clear()
+            if cleanup_artifacts:
+                try:
+                    cleanup_result = cleanup_runtime_artifacts(
+                        active_session={},
+                        history=[],
+                        dry_run=dry_run,
+                        min_age_seconds=min_age_seconds,
+                    )
+                except Exception as exc:  # reset is complete even if optional cleanup fails
+                    _log_operation_exception("session_reset.artifact_cleanup", exc)
+                    cleanup_result = {
+                        "ok": False,
+                        "code": "artifact_cleanup_failed",
+                        "operation": "artifact_cleanup",
+                        "retryable": True,
+                        "dryRun": bool(dry_run),
+                        "error": str(exc),
+                        "errors": [{"error": str(exc)}],
+                    }
+                return (
+                    cleanup_result,
+                    cleared_revision,
+                )
+        return None, cleared_revision
 
 
 class AppRequestHandler(SimpleHTTPRequestHandler):
@@ -5768,6 +8469,194 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     @property
     def app_server(self) -> AppHTTPServer:
         return self.server  # type: ignore[return-value]
+
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        if not _request_host_is_loopback(self.headers):
+            self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "loopback Host header required")
+            return False
+        if self.command in {"POST", "PUT", "PATCH", "DELETE", "OPTIONS"}:
+            if not _browser_write_request_is_trusted(self.headers):
+                self.send_error(HTTPStatus.FORBIDDEN, "cross-site state-changing request rejected")
+                return False
+        return True
+
+    def _current_session_snapshot(self) -> dict[str, Any] | None:
+        server = getattr(self, "server", None)
+        if server is None:
+            return load_latest_session()
+        snapshotter = getattr(server, "session_snapshot", None)
+        if callable(snapshotter):
+            return snapshotter()
+        session = getattr(server, "latest_session", None)
+        return session if isinstance(session, dict) else load_latest_session()
+
+    def _current_session_state(self) -> tuple[dict[str, Any] | None, int | None]:
+        server = getattr(self, "server", None)
+        if server is None:
+            return self._current_session_snapshot(), None
+        snapshotter = getattr(server, "session_snapshot_with_revision", None)
+        if callable(snapshotter):
+            return snapshotter()
+        return self._current_session_snapshot(), None
+
+    @staticmethod
+    def _payload_session_revision(payload: dict[str, Any]) -> int | None:
+        raw_revision = payload.get("expectedSessionRevision", payload.get("expected_session_revision"))
+        if isinstance(raw_revision, bool) or raw_revision is None:
+            return None
+        try:
+            revision = int(raw_revision)
+        except (TypeError, ValueError):
+            return None
+        return revision if revision >= 0 else None
+
+    @staticmethod
+    def _payload_session_epoch(payload: dict[str, Any]) -> str | None:
+        raw_epoch = payload.get("expectedSessionEpoch", payload.get("expected_session_epoch"))
+        epoch = str(raw_epoch or "").strip()
+        return epoch or None
+
+    def _validate_expected_session_revision(
+        self,
+        payload: dict[str, Any],
+        current_revision: int | None,
+    ) -> bool:
+        # Test doubles and older embedding hosts without revision support keep
+        # their compatibility path. The real server requires a revision that
+        # came from the client's last successful session response.
+        if current_revision is None:
+            return True
+        epoch_getter = getattr(getattr(self, "server", None), "session_epoch", None)
+        current_epoch = str(epoch_getter() or "").strip() if callable(epoch_getter) else ""
+        epoch_matches = not current_epoch or self._payload_session_epoch(payload) == current_epoch
+        if epoch_matches and self._payload_session_revision(payload) == current_revision:
+            return True
+        self._send_session_conflict()
+        return False
+
+    def _remember_session_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[bool, int | None]:
+        registrar = getattr(self.app_server, "remember_session_if_current", None)
+        if callable(registrar):
+            result = registrar(
+                expected_session,
+                updated_session,
+                expected_revision=expected_revision,
+            )
+            if type(result) is int:
+                return True, result
+            return bool(result), None
+        # Lightweight test doubles and older embedding hosts do not expose the
+        # CAS helper. Preserve compatibility while the real server remains
+        # concurrency-safe.
+        self.app_server.remember_session(updated_session)
+        return True, None
+
+    def _adopt_staged_publish_if_current(
+        self,
+        expected_session: dict[str, Any] | None,
+        updated_session: dict[str, Any],
+        *,
+        staging_dir: Path,
+        final_dir: Path,
+        expected_revision: int | None = None,
+    ) -> tuple[bool, int | None]:
+        adopter = getattr(self.app_server, "adopt_staged_publish_if_current", None)
+        if callable(adopter):
+            result = adopter(
+                expected_session,
+                updated_session,
+                staging_dir=staging_dir,
+                final_dir=final_dir,
+                expected_revision=expected_revision,
+            )
+            if type(result) is int:
+                return True, result
+            return bool(result), None
+        # Compatibility for lightweight embedding hosts. The generation path
+        # is unique, so exposing it cannot overwrite an older successful EDB.
+        final_dir.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging_dir, final_dir)
+        try:
+            committed = self._remember_session_if_current(
+                expected_session,
+                updated_session,
+                expected_revision=expected_revision,
+            )
+        except BaseException:
+            os.replace(final_dir, staging_dir)
+            raise
+        if not committed[0]:
+            try:
+                os.replace(final_dir, staging_dir)
+            except OSError:
+                _discard_staged_publish(final_dir)
+        return committed
+
+    def _send_session_conflict(self) -> None:
+        current, current_revision = self._current_session_state()
+        payload: dict[str, Any] = {
+            "ok": False,
+            "code": "session_conflict",
+            "error": "다른 작업이 먼저 세션을 변경했습니다. 최신 상태를 불러온 뒤 다시 시도해 주세요.",
+            "session": rewrite_session_for_http(current) if isinstance(current, dict) else None,
+            "recoverySteps": [
+                "화면의 최신 세션 상태를 확인해 주세요.",
+                "방금 수행한 작업을 최신 상태에서 다시 시도해 주세요.",
+            ],
+        }
+        if current_revision is not None:
+            payload["sessionRevision"] = current_revision
+        self._send_json(
+            payload,
+            status=HTTPStatus.CONFLICT,
+        )
+
+    def _run_artifact_job(self, handler) -> None:
+        server = getattr(self, "server", None)
+        starter = getattr(server, "begin_artifact_job", None)
+        finisher = getattr(server, "end_artifact_job", None)
+        if not callable(starter) or not callable(finisher):
+            handler()
+            return
+        starter()
+        try:
+            handler()
+        finally:
+            finisher()
+
+    def _run_artifact_read(self, handler) -> None:
+        server = getattr(self, "server", None)
+        starter = getattr(server, "begin_artifact_read", None)
+        finisher = getattr(server, "end_artifact_read", None)
+        if not callable(starter) or not callable(finisher):
+            handler()
+            return
+        starter()
+        try:
+            handler()
+        finally:
+            finisher()
+
+    def _allow_session_files(self, paths: set[str]) -> None:
+        adder = getattr(self.app_server, "add_allowed_files", None)
+        if callable(adder):
+            adder(paths)
+            return
+        self.app_server.allowed_files |= paths
+
+    def _file_is_allowed(self, path: str) -> bool:
+        checker = getattr(self.app_server, "is_file_allowed", None)
+        if callable(checker):
+            return bool(checker(path))
+        return path in self.app_server.allowed_files
 
     def log_message(self, format: str, *args) -> None:
         client = self.client_address[0] if self.client_address else "-"
@@ -5817,13 +8706,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._handle_latest_session()
             return
         if parsed.path == "/api/session/history":
-            self._handle_session_history()
+            self._run_artifact_read(self._handle_session_history)
             return
         if parsed.path == "/api/session/problem-image":
-            self._handle_session_problem_image(parsed)
+            self._run_artifact_read(lambda: self._handle_session_problem_image(parsed))
             return
         if parsed.path == "/api/file":
-            self._handle_file(parsed)
+            self._run_artifact_read(lambda: self._handle_file(parsed))
             return
         if parsed.path == "/api/user-settings":
             self._handle_user_settings_get()
@@ -5835,15 +8724,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self) -> None:
+        try:
+            self._dispatch_post()
+        except RequestPayloadTooLarge as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "upload payload is too large",
+                    "code": "payload_too_large",
+                    "maxBytes": exc.limit,
+                    "receivedBytes": exc.content_length,
+                    "recoverySteps": [
+                        "한 번에 올리는 파일 수를 줄여 다시 시도해 주세요.",
+                        "큰 PDF는 여러 파일로 나누거나 이미지 해상도를 낮춰 주세요.",
+                    ],
+                },
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+
+    def _dispatch_post(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/export":
-            self._handle_export()
+            self._run_artifact_job(self._handle_export)
             return
         if parsed.path == "/api/user-settings":
             self._handle_user_settings_post()
             return
+        if parsed.path == "/api/bug-report":
+            self._handle_bug_report()
+            return
+        if parsed.path == "/api/runtime/artifacts/cleanup":
+            self._handle_runtime_artifact_cleanup()
+            return
         if parsed.path == "/api/session/publish":
-            self._handle_session_publish()
+            self._run_artifact_job(self._handle_session_publish)
             return
         if parsed.path == "/api/session/classin-review":
             self._handle_session_classin_review()
@@ -5861,44 +8775,50 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._handle_shutdown()
             return
         if parsed.path == "/api/session/mutate":
-            self._handle_session_mutate()
+            self._run_artifact_job(self._handle_session_mutate)
             return
         if parsed.path == "/api/session/export-images":
-            self._handle_session_export_images()
+            self._run_artifact_job(self._handle_session_export_images)
+            return
+        if parsed.path == "/api/session/export-edb":
+            self._run_artifact_job(self._handle_session_export_edb)
             return
         if parsed.path == "/api/session/problem-image":
-            self._handle_session_problem_image_post()
+            self._run_artifact_read(self._handle_session_problem_image_post)
             return
         if parsed.path == "/api/session/retry-ai":
-            self._handle_session_retry_ai()
+            self._run_artifact_job(self._handle_session_retry_ai)
             return
         if parsed.path == "/api/session/enhance-image":
-            self._handle_session_enhance_image()
+            self._run_artifact_job(self._handle_session_enhance_image)
             return
         if parsed.path == "/api/session/restore":
-            self._handle_session_restore()
+            self._run_artifact_job(self._handle_session_restore)
             return
         if parsed.path == "/api/session/history/restore":
-            self._handle_session_history_restore()
+            self._run_artifact_job(self._handle_session_history_restore)
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/session/latest":
-            self._handle_session_clear()
+            self._handle_session_clear(parsed)
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
     def _handle_session_publish(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
 
         payload_session = payload.get("session")
@@ -5911,7 +8831,34 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not isinstance(placement_payload, dict):
             placement_payload = {}
 
-        by_id = {p["id"]: p for p in session.get("problems", []) if isinstance(p, dict) and p.get("id")}
+        raw_problem_values = session.get("problems")
+        if not isinstance(raw_problem_values, list):
+            raw_problem_values = []
+        raw_id_issues = _session_problem_id_issues(raw_problem_values)
+        raw_problems = [problem for problem in raw_problem_values if isinstance(problem, dict)]
+        if raw_id_issues:
+            raw_id_preflight = {
+                "status": "blocked",
+                "passed": False,
+                "checkedProblemCount": len(raw_problem_values),
+                "checked_problem_count": len(raw_problem_values),
+                "issueCount": len(raw_id_issues),
+                "issue_count": len(raw_id_issues),
+                "issues": [{**issue, "blocking": True} for issue in raw_id_issues],
+                "gate": "session_publish",
+                "gateLabel": "EDB publish",
+                "gate_label": "EDB publish",
+            }
+            self._send_json(
+                _session_publish_preflight_blocked_payload(raw_id_preflight, []),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        by_id = {
+            str(p.get("id") or p.get("problem_id") or "").strip(): p
+            for p in raw_problems
+        }
         sequence: list[dict[str, Any]] = []
         seen: set[str] = set()
         for pid in order:
@@ -5925,8 +8872,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             seen.add(pid)
 
         if not sequence:
-            self._send_json({"ok": False, "error": "after exclusion nothing remains to publish"},
-                            status=HTTPStatus.BAD_REQUEST)
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "publish_empty_selection",
+                    "operation": "session_publish",
+                    "retryable": False,
+                    "error": "제외 후 제작할 문항이 남아 있지 않습니다.",
+                    "recoverySteps": ["제작할 문항을 하나 이상 포함한 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
             return
 
         sequence_with_placements: list[dict[str, Any]] = []
@@ -5963,19 +8919,54 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             entries = _problems_to_entries(sequence, template=template)
         except FileNotFoundError as exc:
-            self._send_json({"ok": False, "error": f"missing asset: {exc}"}, status=HTTPStatus.CONFLICT)
+            self._send_json(_publish_stage_failure_payload("build", exc), status=HTTPStatus.CONFLICT)
             return
         except (KeyError, ValueError) as exc:
-            self._send_json({"ok": False, "error": f"session is missing fields needed for publish: {exc}"},
-                            status=HTTPStatus.CONFLICT)
+            self._send_json(
+                _publish_failure_payload(
+                    code="publish_session_invalid",
+                    message="현재 작업에 EDB 제작 필수 정보가 없습니다",
+                    exc=exc,
+                    retryable=False,
+                    recovery_steps=[
+                        "원본 PDF를 다시 등록해 새 작업을 만든 뒤 제작해 주세요.",
+                        "반복되면 오류 정보를 복사해 신고해 주세요.",
+                    ],
+                ),
+                status=HTTPStatus.CONFLICT,
+            )
             return
 
         # Resize the logical canvas to match the actual problem count after the
         # user may have excluded items in the review UI. Mirrors the formula in
         # run_problem_export so mvp_board.edb and the published EDB agree.
         template.board_page_count = max(50, len(entries) * 2)
-        output_dir = Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        requested_edb_name = payload.get("edbName") if "edbName" in payload else payload.get("edb_name")
+        try:
+            output_dir, _recovered_output = _select_session_write_root(
+                session,
+                operation="session_publish",
+                reserved_descendants=MANAGED_OUTPUT_RESERVED_DESCENDANTS,
+            )
+            edb_name, staging_dir, final_dir = _managed_publish_artifact_paths(
+                output_dir,
+                str(requested_edb_name) if requested_edb_name is not None else None,
+                fallback_stem=f"{session.get('session_name') or 'classin'}-published-{stamp}",
+            )
+            staging_dir.mkdir(parents=True, exist_ok=False)
+        except OSError as exc:
+            _log_operation_exception("session_publish.prepare_output", exc)
+            failure = _publish_stage_failure_payload("prepare", exc)
+            self._send_json(
+                failure,
+                status=(
+                    HTTPStatus.CONFLICT
+                    if failure.get("code") == "publish_path_too_long"
+                    else HTTPStatus.INTERNAL_SERVER_ERROR
+                ),
+            )
+            return
 
         crop_format = _normalize_crop_format(session.get("crop_format"))
 
@@ -5984,30 +8975,27 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 entries,
                 template,
                 record_mode="image-only",
-                output_dir=output_dir,
+                output_dir=staging_dir,
                 text_confidence_threshold=0.78,
                 dark_board=True,
                 board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
                 crop_format=crop_format,
             )
-        except Exception as exc:  # noqa: BLE001 — bubble up pipeline errors verbatim
-            self._send_json({"ok": False, "error": f"publish build failed: {exc}"},
-                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        except Exception as exc:  # noqa: BLE001 — report the exact pipeline stage
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.build_records", exc)
+            self._send_json(
+                _publish_stage_failure_payload("build", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
-
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        requested_edb_name = payload.get("edbName") if "edbName" in payload else payload.get("edb_name")
-        edb_name = sanitize_edb_file_name(
-            str(requested_edb_name) if requested_edb_name is not None else None,
-            fallback_stem=f"{session.get('session_name') or 'classin'}-published-{stamp}",
-        )
         edb_parts: list[dict[str, Any]] = []
         edb_path: Path | None = None
         try:
-            edb_parts = write_classin_limited_edb_files(
+            staged_edb_parts = write_classin_limited_edb_files(
                 entries,
                 template,
-                output_dir,
+                staging_dir,
                 edb_name,
                 record_mode="image-only",
                 text_confidence_threshold=0.78,
@@ -6018,31 +9006,55 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 existing_placements=placements,
                 existing_header_flag=header_flag,
             )
-            if not edb_parts:
+            if not staged_edb_parts:
                 raise ValueError("no EDB parts were generated")
-            edb_validation, edb_parts = _validate_edb_parts(edb_parts)
+            staged_edb_validation, staged_edb_parts = _validate_edb_parts(staged_edb_parts)
+            edb_parts = _remap_artifact_paths(staged_edb_parts, staging_dir, final_dir)
+            edb_validation = _remap_artifact_paths(
+                staged_edb_validation,
+                staging_dir,
+                final_dir,
+            )
             edb_path = Path(str(edb_parts[0]["edbPath"]))
         except Exception as exc:  # noqa: BLE001
-            self._send_json({"ok": False, "error": f"failed to write edb: {exc}"},
-                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.write_edb", exc)
+            self._send_json(
+                _publish_stage_failure_payload("write", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
 
         core_problem_count = sum(1 for problem in sequence if not _session_problem_is_supplemental(problem))
         supplemental_item_count = sum(1 for problem in sequence if _session_problem_is_supplemental(problem))
 
-        new_session = build_ui_session(
-            prepared_pages=[],
-            placements=placements,
-            output_dir=output_dir,
-            edb_path=edb_path,
-            source_paths=session.get("input_files") or [],
-            record_mode="image-only",
-            ai_fallback_config=session.get("ai_fallback"),
-            ai_summary=session.get("ai_summary"),
-            template=template,
-            board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
-            crop_format=crop_format,
-        )
+        try:
+            new_session = build_ui_session(
+                prepared_pages=[],
+                placements=placements,
+                output_dir=output_dir,
+                edb_path=edb_path,
+                source_paths=session.get("input_files") or [],
+                record_mode="image-only",
+                ai_fallback_config=session.get("ai_fallback"),
+                ai_summary=session.get("ai_summary"),
+                template=template,
+                board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
+                crop_format=crop_format,
+            )
+            new_session = _remap_artifact_paths(new_session, staging_dir, final_dir)
+        except Exception as exc:  # noqa: BLE001
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.build_session", exc)
+            self._send_json(
+                _publish_stage_failure_payload("build", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        # Keep the stable working root for the next publish; all generated
+        # artifact references themselves point at this immutable generation.
+        new_session["output_dir"] = str(output_dir)
+        new_session["outputDir"] = str(output_dir)
         # carry over user-facing labels so the rename doesn't get lost
         if session.get("session_name"):
             new_session["session_name"] = session["session_name"]
@@ -6050,6 +9062,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             new_session,
             session,
             ("inputIntent", "input_intent"),
+        )
+        _copy_session_metadata_aliases_overwrite(
+            new_session,
+            session,
+            ("contentTarget", "content_target"),
         )
         new_session["crop_format"] = crop_format
         # publish only re-renders records; page-level review metadata
@@ -6114,8 +9131,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if path is not None
         ]
         try:
-            classin_handoff_path, classin_handoff_markdown_path = write_classin_handoff_manifest(
-                output_dir,
+            staged_handoff_path, staged_handoff_markdown_path = write_classin_handoff_manifest(
+                staging_dir,
                 source_paths=source_paths_for_handoff,
                 edb_path=edb_path,
                 edb_parts=edb_parts,
@@ -6132,19 +9149,43 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 template=template,
             )
         except Exception as exc:  # noqa: BLE001 — keep publish failures explicit for the UI.
-            self._send_json({"ok": False, "error": f"failed to write ClassIn handoff: {exc}"},
-                            status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.write_handoff", exc)
+            self._send_json(
+                _publish_stage_failure_payload("handoff", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
 
         classin_preflight: dict[str, Any] = {}
         handoff_payload: dict[str, Any] = {}
         try:
-            raw_handoff_payload = json.loads(classin_handoff_path.read_text(encoding="utf-8"))
+            raw_handoff_payload = json.loads(staged_handoff_path.read_text(encoding="utf-8"))
             handoff_payload = raw_handoff_payload if isinstance(raw_handoff_payload, dict) else {}
+            handoff_payload = _remap_artifact_paths(handoff_payload, staging_dir, final_dir)
+            _atomic_write_text(
+                staged_handoff_path,
+                json.dumps(handoff_payload, ensure_ascii=False, indent=2),
+            )
+            markdown_payload = staged_handoff_markdown_path.read_text(encoding="utf-8")
+            markdown_payload = markdown_payload.replace(
+                str(staging_dir.resolve()),
+                str(final_dir.resolve()),
+            ).replace(_path_as_file_uri(staging_dir), _path_as_file_uri(final_dir))
+            _atomic_write_text(staged_handoff_markdown_path, markdown_payload)
             if isinstance(handoff_payload.get("classinPreflight"), dict):
                 classin_preflight = dict(handoff_payload["classinPreflight"])
-        except (OSError, json.JSONDecodeError):
-            classin_preflight = {}
+        except (OSError, json.JSONDecodeError) as exc:
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.validate_handoff", exc)
+            self._send_json(
+                _publish_stage_failure_payload("handoff", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        classin_handoff_path = final_dir / staged_handoff_path.relative_to(staging_dir)
+        classin_handoff_markdown_path = final_dir / staged_handoff_markdown_path.relative_to(staging_dir)
 
         new_session["classin_handoff_path"] = str(classin_handoff_path)
         new_session["classinHandoffPath"] = str(classin_handoff_path)
@@ -6249,15 +9290,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             if layout_diagnostics is not None:
                 break
 
-        publish_summary = _session_publish_summary(
-            edb_path=edb_path,
-            output_dir=output_dir,
-            edb_validation=edb_validation,
+        staged_publish_summary = _session_publish_summary(
+            edb_path=Path(str(staged_edb_parts[0]["edbPath"])),
+            output_dir=staging_dir,
+            edb_validation=staged_edb_validation,
             record_count=len(records),
             core_problem_count=core_problem_count,
             supplemental_item_count=supplemental_item_count,
-            classin_handoff_path=classin_handoff_path,
-            classin_handoff_markdown_path=classin_handoff_markdown_path,
+            classin_handoff_path=staged_handoff_path,
+            classin_handoff_markdown_path=staged_handoff_markdown_path,
             classin_preflight=classin_preflight,
             passage_groups=(
                 handoff_payload.get("passageGroups")
@@ -6304,15 +9345,39 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             source_problem_overlap_groups=source_problem_overlap_groups,
             source_problem_overlap_group_count=source_problem_overlap_group_count,
             layout_diagnostics=layout_diagnostics,
-            edb_parts=edb_parts,
+            edb_parts=staged_edb_parts,
+        )
+        publish_summary = _remap_artifact_paths(
+            staged_publish_summary,
+            staging_dir,
+            final_dir,
         )
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
         new_session["publishSummary"] = publish_summary
         new_session["publish_history"] = publish_history
         new_session["publishHistory"] = publish_history
-        self.app_server.remember_session(new_session)
-        self._send_json({
+        try:
+            committed, committed_revision = self._adopt_staged_publish_if_current(
+                base_session,
+                new_session,
+                staging_dir=staging_dir,
+                final_dir=final_dir,
+                expected_revision=current_revision,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _discard_staged_publish(staging_dir)
+            _log_operation_exception("session_publish.commit_generation", exc)
+            self._send_json(
+                _publish_stage_failure_payload("commit", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        if not committed:
+            _discard_staged_publish(staging_dir)
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "edbValidation": edb_validation,
@@ -6321,20 +9386,26 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "publish_summary": publish_summary,
             "publishHistory": publish_history,
             "publish_history": publish_history,
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "bulk-crop" | "exclude", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "confirm" | "confirm-page" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
 
         action = str(payload.get("action") or "").strip().lower()
@@ -6362,6 +9433,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if raw_crop is None:
                     raw_crop = payload
                 new_session = _mutate_crop(session, problem_id, raw_crop)
+            elif action in {"stitch-crop", "stitch_crop"}:
+                problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                segments = payload.get("segments")
+                new_session = _mutate_stitch_crop(session, problem_id, segments)
             elif action in {"bulk-crop", "bulk_crop"}:
                 page_id = str(payload.get("pageId") or payload.get("page_id") or "")
                 regions = payload.get("regions")
@@ -6374,16 +9449,47 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else:
                     problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                     new_session = _mutate_exclude(session, problem_id)
+            elif action == "confirm":
+                ids_raw = payload.get("problemIds", payload.get("problem_ids"))
+                if ids_raw is None:
+                    ids_raw = [payload.get("problemId", payload.get("problem_id"))]
+                new_session = _mutate_confirm(session, ids_raw)
+            elif action in {"confirm-page", "confirm_page"}:
+                ids_raw = payload.get("pageIds", payload.get("page_ids"))
+                if ids_raw is None:
+                    ids_raw = [payload.get("pageId", payload.get("page_id"))]
+                decision = str(payload.get("decision") or "no_passage")
+                new_session = _mutate_confirm_pages(session, ids_raw, decision=decision)
+            elif action == "classify":
+                classification = str(payload.get("classification") or "")
+                ids_raw = payload.get("problemIds", payload.get("problem_ids"))
+                if ids_raw is not None:
+                    new_session = _mutate_classify_many(session, ids_raw, classification)
+                else:
+                    problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                    new_session = _mutate_classify(session, problem_id, classification)
             elif action in {"retry-ai", "retry_ai"}:
                 new_session = _mutate_retry_ai(session, payload)
             elif action in {"enhance-image", "enhance_image"}:
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|bulk-crop|exclude|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|confirm-page|classify|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
+        except SessionWritePathTooLong as exc:
+            if action in {"retry-ai", "retry_ai"}:
+                failure = _recognition_retry_path_failure_payload(exc)
+            elif action in {"enhance-image", "enhance_image"}:
+                failure = _image_enhancement_path_failure_payload(exc)
+            else:
+                failure = _session_mutation_path_failure_payload(exc)
+            self._send_json(
+                failure,
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -6391,11 +9497,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
-        self.app_server.remember_session(new_session)
-        self._send_json({"ok": True, "session": rewrite_session_for_http(new_session)})
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            new_session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {"ok": True, "session": rewrite_session_for_http(new_session)}
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     def _handle_session_export_images(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session = self._current_session_snapshot()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
@@ -6425,7 +9541,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         zip_path = Path(result["zipPath"]).resolve()
-        self.app_server.allowed_files.add(str(zip_path))
+        self._allow_session_files({str(zip_path)})
         self._send_json({
             "ok": True,
             "downloadUrl": path_to_api_url(zip_path),
@@ -6434,6 +9550,67 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "count": result["count"],
             "missing": result["missing"],
             "mode": result["mode"],
+        })
+
+    def _handle_session_export_edb(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        raw_paths = payload.get("edbPaths", payload.get("edb_paths"))
+        if not isinstance(raw_paths, list) or not raw_paths:
+            self._send_json({"ok": False, "error": "edbPaths is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        resolved_paths: list[Path] = []
+        seen_paths: set[str] = set()
+        for raw_path in raw_paths:
+            path = decode_file_reference(str(raw_path or ""))
+            if path is None or path.suffix.lower() != ".edb":
+                self._send_json({"ok": False, "error": "invalid EDB file path"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            normalized = str(path.resolve())
+            if not self._file_is_allowed(normalized):
+                self._send_json({"ok": False, "error": "EDB file not allowed"}, status=HTTPStatus.FORBIDDEN)
+                return
+            if not path.is_file():
+                self._send_json({"ok": False, "error": "EDB file not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if normalized not in seen_paths:
+                resolved_paths.append(path.resolve())
+                seen_paths.add(normalized)
+
+        if len(resolved_paths) == 1:
+            path = resolved_paths[0]
+            self._send_json({
+                "ok": True,
+                "downloadUrl": path_to_api_url(path),
+                "fileName": path.name,
+                "count": 1,
+                "bundled": False,
+            })
+            return
+
+        try:
+            result = _write_edb_export_zip(resolved_paths, payload.get("fileName") or payload.get("file_name"))
+        except (OSError, ValueError) as exc:
+            self._send_json(
+                {"ok": False, "error": f"failed to export EDB files: {exc}"},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        zip_path = Path(result["zipPath"]).resolve()
+        self._allow_session_files({str(zip_path)})
+        self._send_json({
+            "ok": True,
+            "downloadUrl": path_to_api_url(zip_path),
+            "zipPath": str(zip_path),
+            "fileName": result["fileName"],
+            "count": result["count"],
+            "bundled": True,
         })
 
     def _send_session_problem_image_response(self, session: dict[str, Any], problem_id: str, variant: str) -> None:
@@ -6494,7 +9671,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _handle_session_problem_image(self, parsed) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session = self._current_session_snapshot()
         if session is None:
             self.send_error(HTTPStatus.NOT_FOUND, "no session available")
             return
@@ -6504,7 +9681,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_session_problem_image_response(session, problem_id, variant)
 
     def _handle_session_problem_image_post(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session = self._current_session_snapshot()
         if session is None:
             self.send_error(HTTPStatus.NOT_FOUND, "no session available")
             return
@@ -6521,12 +9698,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_session_problem_image_response(session, problem_id, variant)
 
     def _handle_session_retry_ai(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
+            if not self._validate_expected_session_revision(payload, current_revision):
+                return
             preview_only = _coerce_bool(
                 payload.get("preview")
                 if "preview" in payload
@@ -6540,6 +9720,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        except SessionWritePathTooLong as exc:
+            self._send_json(
+                _recognition_retry_path_failure_payload(exc),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -6547,48 +9733,82 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
+        response_revision = current_revision
         if preview_only:
-            self.app_server.allowed_files |= collect_session_file_paths(new_session)
+            self._allow_session_files(collect_session_file_paths(new_session))
         else:
-            self.app_server.remember_session(new_session)
-        self._send_json({
+            committed, committed_revision = self._remember_session_if_current(
+                base_session,
+                new_session,
+                expected_revision=current_revision,
+            )
+            if not committed:
+                self._send_session_conflict()
+                return
+            response_revision = committed_revision
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "retry": new_session.get("ai_retry_summary") or [],
             "preview": preview_only,
-        })
+        }
+        if response_revision is not None:
+            response["sessionRevision"] = response_revision
+        self._send_json(response)
 
     def _handle_session_classin_review(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        if not self._validate_expected_session_revision(payload, current_revision):
+            return
         review = _apply_classin_review_result(session, payload)
-        self.app_server.remember_session(session)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(session),
             "review": review,
             "classinReview": review,
             "classin_review": review,
             "history": _public_session_history(load_session_history()),
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     def _handle_session_enhance_image(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
+        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
+            if not self._validate_expected_session_revision(payload, current_revision):
+                return
             new_session = _mutate_enhance_image(session, payload)
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except SessionWritePathTooLong as exc:
+            self._send_json(
+                _image_enhancement_path_failure_payload(exc),
+                status=HTTPStatus.CONFLICT,
+            )
             return
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -6597,22 +9817,35 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
             return
 
-        self.app_server.remember_session(new_session)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            new_session,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "enhance": new_session.get("ai_image_reconstruction_summary") or [],
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     # ── /api/session/restore ────────────────────────────────────────────
     # Body: { "session": { ... full session JSON ... } }
     # Replaces the server's "latest" session with the provided snapshot. Used
     # by the front-end Undo stack so a single round-trip is enough to revert.
     def _handle_session_restore(self) -> None:
+        base_session, current_revision = self._current_session_state()
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
         snapshot = payload.get("session")
         if not isinstance(snapshot, dict) or "problems" not in snapshot:
@@ -6627,22 +9860,35 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # would otherwise drift over time.
         restored = _denormalize_session_paths(snapshot)
         _refresh_session_problem_counts(restored)
-        self.app_server.remember_session(restored)
-        self._send_json({"ok": True, "session": rewrite_session_for_http(restored)})
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            restored,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {"ok": True, "session": rewrite_session_for_http(restored)}
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
     def _handle_session_history(self) -> None:
         history = load_session_history()
-        self.app_server.allowed_files |= collect_session_history_file_paths(history)
+        self._allow_session_files(collect_session_history_file_paths(history))
         self._send_json({
             "ok": True,
             "history": _public_session_history(history),
         })
 
     def _handle_session_history_restore(self) -> None:
+        base_session, current_revision = self._current_session_state()
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
             return
         session_id = str(payload.get("id") or payload.get("sessionId") or payload.get("session_id") or "").strip()
         if not session_id:
@@ -6654,30 +9900,198 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         restored = _denormalize_session_paths(entry["session"])
         _refresh_session_problem_counts(restored)
-        self.app_server.remember_session(restored)
-        self._send_json({
+        committed, committed_revision = self._remember_session_if_current(
+            base_session,
+            restored,
+            expected_revision=current_revision,
+        )
+        if not committed:
+            self._send_session_conflict()
+            return
+        response = {
             "ok": True,
             "session": rewrite_session_for_http(restored),
             "history": _public_session_history(load_session_history()),
-        })
+        }
+        if committed_revision is not None:
+            response["sessionRevision"] = committed_revision
+        self._send_json(response)
 
-    def _handle_session_clear(self) -> None:
-        self.app_server.latest_session = None
-        self.app_server.allowed_files = set()
-        for path in (LATEST_SESSION_JSON, SESSION_HISTORY_JSON):
-            try:
-                if path.exists():
-                    path.unlink()
-            except OSError as exc:
-                self._send_json({"ok": False, "error": f"failed to clear: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
-                return
-        # also blank out the generated_session.js bridge so a refresh shows empty state
+    def _handle_runtime_artifact_cleanup(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json(
+                {"ok": False, "error": "cross-origin request rejected"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
         try:
-            GENERATED_SESSION_JS.parent.mkdir(parents=True, exist_ok=True)
-            GENERATED_SESSION_JS.write_text(EMPTY_GENERATED_SESSION_JS, encoding="utf-8")
-        except OSError:
-            pass
-        self._send_json({"ok": True, "history": []})
+            payload = self._read_json_body()
+            dry_run = _coerce_bool(payload.get("dryRun", payload.get("dry_run")), default=True)
+            raw_min_age_seconds = payload.get("minAgeSeconds", payload.get("min_age_seconds"))
+            raw_min_age_days = payload.get("minAgeDays", payload.get("min_age_days"))
+            if raw_min_age_seconds is not None:
+                min_age_seconds = float(raw_min_age_seconds)
+            elif raw_min_age_days is not None:
+                min_age_seconds = float(raw_min_age_days) * 86_400
+            else:
+                min_age_seconds = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400
+            raw_max_bytes = payload.get("maxBytes", payload.get("max_bytes"))
+            max_bytes = int(raw_max_bytes) if raw_max_bytes is not None else None
+            cleaner = getattr(self.app_server, "cleanup_artifacts", None)
+            if callable(cleaner):
+                result = cleaner(
+                    dry_run=dry_run,
+                    min_age_seconds=min_age_seconds,
+                    max_bytes=max_bytes,
+                )
+            else:
+                result = cleanup_runtime_artifacts(
+                    active_session=self._current_session_snapshot(),
+                    history=load_session_history(),
+                    dry_run=dry_run,
+                    min_age_seconds=min_age_seconds,
+                    max_bytes=max_bytes,
+                )
+        except ArtifactCleanupBusy as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "artifact_cleanup_busy",
+                    "operation": "artifact_cleanup",
+                    "retryable": True,
+                    "error": str(exc),
+                    "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(result)
+
+    def _handle_session_clear(self, parsed=None) -> None:
+        params = parse_qs(parsed.query) if parsed is not None else {}
+        _, current_revision = self._current_session_state()
+        revision_payload = {
+            "expectedSessionRevision": params.get(
+                "expectedSessionRevision",
+                params.get("expected_session_revision", [None]),
+            )[0],
+            "expectedSessionEpoch": params.get(
+                "expectedSessionEpoch",
+                params.get("expected_session_epoch", [None]),
+            )[0],
+        }
+        if not self._validate_expected_session_revision(revision_payload, current_revision):
+            return
+        expected_revision = self._payload_session_revision(revision_payload)
+        cleanup_requested = _coerce_bool(
+            params.get("cleanupArtifacts", params.get("cleanup_artifacts", [False]))[0],
+            default=False,
+        )
+        dry_run = _coerce_bool(params.get("dryRun", params.get("dry_run", [True]))[0], default=True)
+        try:
+            raw_min_age_days = params.get("minAgeDays", params.get("min_age_days", [DEFAULT_ARTIFACT_RETENTION_DAYS]))[0]
+            min_age_seconds = float(raw_min_age_days) * 86_400
+            clearer_with_revision = getattr(self.app_server, "clear_session_with_revision", None)
+            clearer = getattr(self.app_server, "clear_session", None)
+            cleared_revision: int | None = None
+            if callable(clearer_with_revision):
+                cleanup_result, cleared_revision = clearer_with_revision(
+                    expected_revision=expected_revision,
+                    cleanup_artifacts=cleanup_requested,
+                    dry_run=dry_run,
+                    min_age_seconds=min_age_seconds,
+                )
+            elif callable(clearer):
+                clear_kwargs: dict[str, Any] = {}
+                if isinstance(self.app_server, AppHTTPServer):
+                    clear_kwargs["expected_revision"] = expected_revision
+                if cleanup_requested:
+                    cleanup_result = clearer(
+                        cleanup_artifacts=True,
+                        dry_run=dry_run,
+                        min_age_seconds=min_age_seconds,
+                        **clear_kwargs,
+                    )
+                else:
+                    clearer(**clear_kwargs)
+                    cleanup_result = None
+            else:
+                _atomically_clear_persisted_session_state()
+                self.app_server.latest_session = None
+                self.app_server.allowed_files = set()
+                cleanup_result = (
+                    cleanup_runtime_artifacts(
+                        active_session={},
+                        history=[],
+                        dry_run=dry_run,
+                        min_age_seconds=min_age_seconds,
+                    )
+                    if cleanup_requested
+                    else None
+                )
+        except SessionRevisionConflict:
+            self._send_session_conflict()
+            return
+        except ArtifactCleanupBusy as exc:
+            current_session, busy_revision = self._current_session_state()
+            busy_payload: dict[str, Any] = {
+                "ok": False,
+                "code": "artifact_cleanup_busy",
+                "operation": "session_reset",
+                "retryable": True,
+                "artifactCleanupRequested": cleanup_requested,
+                "error": str(exc),
+                "session": rewrite_session_for_http(current_session)
+                if isinstance(current_session, dict)
+                else None,
+                "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+            }
+            if busy_revision is not None:
+                busy_payload["sessionRevision"] = busy_revision
+            self._send_json(
+                busy_payload,
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except (OSError, TypeError, ValueError) as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "reset_failed",
+                    "operation": "session_reset",
+                    "retryable": True,
+                    "error": f"failed to clear: {exc}",
+                    "recoverySteps": [
+                        "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
+                        "계속 실패하면 최근 작업을 유지한 채 오류 정보를 신고해 주세요.",
+                    ],
+                },
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        response: dict[str, Any] = {
+            "ok": True,
+            "history": [],
+            "session": None,
+            "artifactCleanupRequested": cleanup_requested,
+            "artifactCleanupDryRun": dry_run if cleanup_requested else None,
+            "artifactCleanupPerformed": bool(
+                cleanup_requested and not dry_run and cleanup_result is not None
+            ),
+            "artifactCleanupSucceeded": (
+                bool(cleanup_result.get("ok"))
+                if cleanup_requested and isinstance(cleanup_result, dict)
+                else None
+            ),
+        }
+        if cleared_revision is not None:
+            response["sessionRevision"] = cleared_revision
+        if cleanup_result is not None:
+            response["artifactCleanup"] = cleanup_result
+        self._send_json(response)
 
     def _handle_open_folder(self) -> None:
         if not _request_is_same_origin(self.headers):
@@ -6772,21 +10186,65 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        has_gemini_key = "geminiApiKey" in payload or "gemini_api_key" in payload
         raw_key = payload.get("geminiApiKey") if "geminiApiKey" in payload else payload.get("gemini_api_key")
+        has_openai_key = "openAiApiKey" in payload or "openai_api_key" in payload
         raw_openai_key = payload.get("openAiApiKey") if "openAiApiKey" in payload else payload.get("openai_api_key")
+        has_ai_enabled = "aiEnabled" in payload or "ai_enabled" in payload
+        raw_ai_enabled = payload.get("aiEnabled") if "aiEnabled" in payload else payload.get("ai_enabled")
         try:
-            if raw_openai_key is None:
-                summary = update_gemini_api_key(RUNTIME_DIR, raw_key if isinstance(raw_key, str) else "")
-            else:
-                summary = update_api_keys(
-                    RUNTIME_DIR,
-                    gemini_api_key=raw_key if isinstance(raw_key, str) else None,
-                    openai_api_key=raw_openai_key if isinstance(raw_openai_key, str) else "",
-                )
+            summary = update_api_keys(
+                RUNTIME_DIR,
+                gemini_api_key=(raw_key if isinstance(raw_key, str) else "") if has_gemini_key else None,
+                openai_api_key=(raw_openai_key if isinstance(raw_openai_key, str) else "") if has_openai_key else None,
+                ai_enabled=_coerce_bool(raw_ai_enabled) if has_ai_enabled else None,
+            )
         except OSError as exc:
             self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "settings": summary})
+
+    def _handle_bug_report(self) -> None:
+        try:
+            request_payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json(
+                {"ok": False, "error": f"invalid JSON: {exc}"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        app_config = load_app_update_config()
+        try:
+            report = build_bug_report(
+                request_payload,
+                app_config=app_config,
+                log_file=APP_LOG_FILE,
+            )
+        except BugReportValidationError as exc:
+            self._send_json(
+                {"ok": False, "error": str(exc), "code": "invalid_bug_report"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        endpoint = str(app_config.get("bugReportUrl") or DEFAULT_BUG_REPORT_URL).strip()
+        try:
+            receipt = deliver_bug_report(report, endpoint=endpoint)
+        except BugReportDeliveryError as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "code": "bug_report_delivery_failed",
+                    "recoverySteps": [
+                        "인터넷 연결을 확인한 뒤 다시 시도해 주세요.",
+                        "계속 실패하면 앱 로그와 함께 관리자에게 알려 주세요.",
+                    ],
+                },
+                status=HTTPStatus.BAD_GATEWAY,
+            )
+            return
+        print(f"[bug-report] accepted as {receipt['reportId']}")
+        self._send_json(receipt, status=HTTPStatus.CREATED)
 
     def _read_json_body(self) -> dict[str, Any]:
         raw_content_length = self.headers.get("Content-Length", "0")
@@ -6794,15 +10252,25 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             content_length = int(raw_content_length)
         except (TypeError, ValueError) as exc:
             raise json.JSONDecodeError("invalid Content-Length", str(raw_content_length), 0) from exc
+        if content_length < 0:
+            raise json.JSONDecodeError("invalid Content-Length", str(raw_content_length), 0)
         if content_length > MAX_JSON_BODY_BYTES:
-            raise json.JSONDecodeError("JSON body too large", "", 0)
+            raise RequestPayloadTooLarge(content_length, MAX_JSON_BODY_BYTES)
         raw_body = self.rfile.read(content_length) if content_length else b"{}"
         if not raw_body:
             return {}
         return json.loads(raw_body.decode("utf-8"))
 
     def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        response_payload = payload
+        if "session" in payload and "sessionEpoch" not in payload:
+            epoch_getter = getattr(getattr(self, "server", None), "session_epoch", None)
+            if callable(epoch_getter):
+                epoch = str(epoch_getter() or "").strip()
+                if epoch:
+                    response_payload = dict(payload)
+                    response_payload["sessionEpoch"] = epoch
+        body = json.dumps(response_payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -6824,23 +10292,34 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_latest_session(self) -> None:
-        session = self.app_server.latest_session or load_latest_session()
+        session, current_revision = self._current_session_state()
         if session is None:
-            self._send_json({"ok": True, "session": None})
+            response: dict[str, Any] = {"ok": True, "session": None}
+            if current_revision is not None:
+                response["sessionRevision"] = current_revision
+            self._send_json(response)
             return
         _refresh_session_problem_counts(session)
-        self.app_server.latest_session = session
-        self.app_server.allowed_files |= collect_session_file_paths(session)
-        if not LATEST_SESSION_JSON.exists():
-            LATEST_SESSION_JSON.parent.mkdir(parents=True, exist_ok=True)
-            LATEST_SESSION_JSON.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
-        remember_session_history(session)
-        self._send_json(
-            {
-                "ok": True,
-                "session": rewrite_session_for_http(session),
-            }
-        )
+        registrar = getattr(self.app_server, "register_current_session", None)
+        if callable(registrar):
+            if not registrar(session):
+                session, current_revision = self._current_session_state()
+                if session is None:
+                    response = {"ok": True, "session": None}
+                    if current_revision is not None:
+                        response["sessionRevision"] = current_revision
+                    self._send_json(response)
+                    return
+                _refresh_session_problem_counts(session)
+        else:
+            self._allow_session_files(collect_session_file_paths(session))
+            if not LATEST_SESSION_JSON.exists():
+                save_latest_session(session)
+            remember_session_history(session)
+        response = {"ok": True, "session": rewrite_session_for_http(session)}
+        if current_revision is not None:
+            response["sessionRevision"] = current_revision
+        self._send_json(response)
 
     def _handle_file(self, parsed) -> None:
         query = parse_qs(parsed.query)
@@ -6851,19 +10330,45 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         normalized = str(path.resolve())
-        if normalized not in self.app_server.allowed_files:
+        if not self._file_is_allowed(normalized):
             self.send_error(HTTPStatus.FORBIDDEN, "file not allowed")
             return
 
         mime_type, _ = mimetypes.guess_type(path.name)
+        attachment_suffixes = {".edb", ".zip"}
         if path.suffix.lower() == ".edb":
             mime_type = "application/octet-stream"
+        elif path.suffix.lower() == ".zip":
+            mime_type = "application/zip"
 
-        file_size = path.stat().st_size
+        file_stat = path.stat()
+        file_size = file_stat.st_size
+        preview_max_dimension = _parse_file_preview_max_dimension(query)
+        if preview_max_dimension is not None and str(mime_type or "").startswith("image/"):
+            try:
+                preview_payload = _build_file_preview_payload(
+                    normalized,
+                    file_stat.st_mtime_ns,
+                    file_size,
+                    preview_max_dimension,
+                )
+            except (OSError, ValueError):
+                preview_payload = None
+            if preview_payload is not None:
+                payload, preview_mime_type = preview_payload
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", preview_mime_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.send_header("X-Preview-Max-Dimension", str(preview_max_dimension))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("Content-Length", str(file_size))
-        if path.suffix.lower() == ".edb":
+        if path.suffix.lower() in attachment_suffixes:
             self.send_header("Content-Disposition", content_disposition_attachment(path.name))
         self.end_headers()
         with path.open("rb") as source:
@@ -6874,23 +10379,46 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         file_data_base64 = payload.get("fileDataBase64")
         if not file_data_base64:
             raise ValueError("fileDataBase64 is required when sourcePath is not provided")
-        safe_name = sanitize_upload_file_name(file_name)
         try:
             file_bytes = base64.b64decode(file_data_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise ValueError("fileDataBase64 is not valid base64") from exc
-        content_digest = hashlib.sha1(file_bytes).hexdigest()
+        content_digest = hashlib.sha256(file_bytes).hexdigest()
+        target_name = _managed_upload_target_name(
+            file_name,
+            content_digest,
+            upload_dir=UPLOAD_DIR,
+        )
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        suffix = Path(safe_name).suffix
+        suffix = Path(target_name).suffix
         for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{suffix}")):
-            if candidate.is_file():
+            if _file_matches_digest(candidate, content_digest, len(file_bytes)):
                 return candidate
-        target_path = UPLOAD_DIR / f"{content_digest}_{safe_name}"
-        if not target_path.exists():
-            target_path.write_bytes(file_bytes)
+        # Older sessions may still reference SHA-1-prefixed cache files. Keep
+        # those files in place, but every new upload is materialized under a
+        # SHA-256 identity so a chosen-prefix SHA-1 collision cannot alias it.
+        target_path = UPLOAD_DIR / target_name
+        _atomic_write_bytes(target_path, file_bytes)
         return target_path
 
-    def _resolve_source_paths(self, payload: dict[str, Any]) -> list[Path]:
+    def _resolve_source_paths(
+        self,
+        payload: dict[str, Any],
+        *,
+        session: dict[str, Any] | None = None,
+    ) -> list[Path]:
+        reuse_session_sources = _coerce_bool(
+            payload.get("reuseSessionSources")
+            if "reuseSessionSources" in payload
+            else payload.get("reuse_session_sources"),
+            default=False,
+        )
+        if reuse_session_sources:
+            resolved_paths = _session_reextract_source_paths(session)
+            if not resolved_paths:
+                raise FileNotFoundError("current session has no preserved source files available for re-extraction")
+            return resolved_paths
+
         file_payloads = payload.get("files")
         if isinstance(file_payloads, list) and file_payloads:
             resolved_paths: list[Path] = []
@@ -6934,20 +10462,72 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if requested:
             target = Path(str(requested))
             if not target.is_absolute():
-                target = output_root / sanitize_output_dir_name(str(requested))
+                target = output_root / _managed_output_dir_name(
+                    str(requested),
+                    parent_dir=output_root,
+                )
             return target.resolve()
         if not source_paths:
-            return (output_root / sanitize_output_dir_name(None)).resolve()
+            return (
+                output_root
+                / _managed_output_dir_name(
+                    None,
+                    parent_dir=output_root,
+                )
+            ).resolve()
+        identity_suffix = _source_identity_suffix(source_paths)
         if len(source_paths) == 1:
-            return (output_root / sanitize_output_dir_name(source_paths[0].stem)).resolve()
+            return (
+                output_root
+                / _managed_output_dir_name(
+                    source_paths[0].stem,
+                    parent_dir=output_root,
+                    suffix=identity_suffix,
+                )
+            ).resolve()
         batch_name = f"{source_paths[0].stem}_{len(source_paths)}files"
-        return (output_root / sanitize_output_dir_name(batch_name)).resolve()
+        return (
+            output_root
+            / _managed_output_dir_name(
+                batch_name,
+                parent_dir=output_root,
+                suffix=identity_suffix,
+            )
+        ).resolve()
+
+    def _resolve_preview_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
+        """Keep speculative exports immutable and separate from active output.
+
+        A preview may later be adopted through session restore, but it must not
+        touch the deterministic directory referenced by the current session.
+        Unadopted previews remain under the managed runtime root and are
+        eligible for the normal retention cleanup.
+        """
+        requested = payload.get("output_dir") or payload.get("outputDir")
+        if requested:
+            name_hint = Path(str(requested)).name
+        elif len(source_paths) == 1:
+            name_hint = source_paths[0].stem
+        elif source_paths:
+            name_hint = f"{source_paths[0].stem}_{len(source_paths)}files"
+        else:
+            name_hint = "preview"
+        preview_root = default_output_root() / "previews"
+        run_name = _managed_output_dir_name(
+            name_hint,
+            parent_dir=preview_root,
+            suffix=_unique_artifact_stamp(),
+            reserved_descendants=MANAGED_PREVIEW_RESERVED_DESCENDANTS,
+        )
+        return (preview_root / run_name).resolve()
 
     def _handle_export(self) -> None:
+        base_session, current_revision = self._current_session_state()
+        export_staging_dir: Path | None = None
+        export_final_dir: Path | None = None
+        export_working_dir: Path | None = None
         try:
             payload = self._read_json_body()
-            source_paths = self._resolve_source_paths(payload)
-            output_dir = self._resolve_output_dir(payload, source_paths)
             preview_only = _coerce_bool(
                 payload.get("preview")
                 if "preview" in payload
@@ -6956,8 +10536,37 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 else payload.get("dryRun"),
                 default=False,
             )
+            reuse_session_sources = _coerce_bool(
+                payload.get("reuseSessionSources")
+                if "reuseSessionSources" in payload
+                else payload.get("reuse_session_sources"),
+                default=False,
+            )
+            if reuse_session_sources and not preview_only:
+                raise ValueError("reuseSessionSources is only allowed for preview exports")
+            if (not preview_only or reuse_session_sources) and not self._validate_expected_session_revision(
+                payload,
+                current_revision,
+            ):
+                return
+            source_paths = self._resolve_source_paths(payload, session=base_session)
+            if preview_only:
+                output_dir = self._resolve_preview_output_dir(payload, source_paths)
+            else:
+                export_working_dir = self._resolve_output_dir(payload, source_paths)
+                export_staging_dir, export_final_dir = _managed_export_generation_paths(
+                    export_working_dir,
+                )
+                export_staging_dir.mkdir(parents=True, exist_ok=False)
+                output_dir = export_staging_dir
+            export_edb_name_budget = _managed_path_component_max_bytes(
+                output_dir,
+                max_bytes=SAFE_PATH_COMPONENT_MAX_BYTES,
+                minimum_bytes=EDB_PART_SUFFIX_RESERVED_BYTES + 1,
+            )
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
             input_intent = _extract_input_intent(payload)
+            content_target = _extract_content_target(payload)
             input_notes = _extract_input_notes(payload)
             crop_format = _extract_crop_format(payload)
             detect_perspective = _coerce_bool(payload.get("detectPerspective") if "detectPerspective" in payload else payload.get("detect_perspective"))
@@ -6967,25 +10576,46 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 detect_perspective = False
                 skip_deskew = True
                 skip_crop = True
+            requested_max_dimension = (
+                int(payload["maxDimension"])
+                if payload.get("maxDimension")
+                else int(payload["max_dimension"])
+                if payload.get("max_dimension")
+                else DEFAULT_RECOGNITION_MAX_DIMENSION
+            )
+            requested_pdf_dpi = int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200)
+            # A page-as-is record is itself the display master. Never shrink it
+            # after the document render, even if an older client still submits
+            # the generic recognition limit or a lower PDF DPI.
+            max_dimension = None if input_intent == "page-as-is" else requested_max_dimension
+            pdf_dpi = max(200, requested_pdf_dpi) if input_intent == "page-as-is" else requested_pdf_dpi
             common_kwargs = {
                 "output_dir": output_dir,
                 "subject_name": str(payload.get("subject") or "unknown"),
                 "ocr": str(payload.get("ocr") or "auto"),
-                "pdf_dpi": int(payload.get("pdfDpi") or payload.get("pdf_dpi") or 200),
+                "pdf_dpi": pdf_dpi,
                 "detect_perspective": detect_perspective,
                 "skip_deskew": skip_deskew,
                 "skip_crop": skip_crop,
-                "max_dimension": int(payload["maxDimension"]) if payload.get("maxDimension") else int(payload["max_dimension"]) if payload.get("max_dimension") else None,
+                "max_dimension": max_dimension,
                 "export_edb": _coerce_bool(payload.get("export_edb") if "export_edb" in payload else payload.get("exportEdb"), default=True),
                 "edb_name": sanitize_edb_file_name(
                     str(payload.get("edbName") or payload.get("edb_name"))
                     if (payload.get("edbName") or payload.get("edb_name")) is not None
                     else None,
                     fallback_stem="mvp_board",
+                    max_bytes=export_edb_name_budget,
                 ),
                 "sync_ui": False,
             }
             common_kwargs.update(_extract_ai_fallback_kwargs(payload))
+            ai_enabled = _global_ai_enabled()
+            if not ai_enabled:
+                requested_ocr = str(common_kwargs.get("ocr") or "auto").strip().lower()
+                if requested_ocr not in {"none", "off", "disabled"}:
+                    common_kwargs["ocr"] = "local"
+                common_kwargs["ai_fallback_enabled"] = False
+                common_kwargs["ai_fallback"] = "off"
             if export_mode == "page":
                 result = run_export(
                     source_paths[0] if len(source_paths) == 1 else source_paths,
@@ -6998,15 +10628,34 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
+                    page_tile_mode=str(
+                        payload.get("pageTileMode")
+                        or payload.get("page_tile_mode")
+                        or "off"
+                    ),
+                    content_target=content_target,
                     input_notes=input_notes,
                     **common_kwargs,
                 )
+            if isinstance(result, dict):
+                result["ai_enabled"] = ai_enabled
+                result["aiEnabled"] = ai_enabled
+        except RequestPayloadTooLarge:
+            if export_staging_dir is not None:
+                _discard_staged_publish(export_staging_dir)
+            raise
         except Exception as exc:
+            if export_staging_dir is not None:
+                _discard_staged_publish(export_staging_dir)
             self._send_json(_export_error_payload(exc), status=HTTPStatus.BAD_REQUEST)
             return
 
         session = result["ui_session"]
+        session["ai_enabled"] = ai_enabled
+        session["aiEnabled"] = ai_enabled
         session.setdefault("input_intent", input_intent)
+        session.setdefault("content_target", content_target)
+        session.setdefault("contentTarget", content_target)
         if input_notes:
             session["input_notes"] = input_notes
         _refresh_session_problem_counts(session)
@@ -7020,6 +10669,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["edb_parts"] = normalized_parts
                 result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
+                if export_staging_dir is not None:
+                    _discard_staged_publish(export_staging_dir)
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
         elif edb_path:
@@ -7036,7 +10687,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["edb_parts"] = normalized_parts
                 result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
+                if export_staging_dir is not None:
+                    _discard_staged_publish(export_staging_dir)
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        if export_staging_dir is not None and export_final_dir is not None:
+            result = _remap_artifact_paths(result, export_staging_dir, export_final_dir)
+            edb_validation = _remap_artifact_paths(
+                edb_validation,
+                export_staging_dir,
+                export_final_dir,
+            )
+            normalized_parts = result.get("edb_parts") or []
+            session = result["ui_session"]
+            if export_working_dir is not None:
+                session["output_dir"] = str(export_working_dir)
+                session["outputDir"] = str(export_working_dir)
+            result["ui_session"] = session
+            try:
+                _rewrite_staged_artifact_references(export_staging_dir, export_final_dir)
+                final_ui_session_path = Path(str(result["ui_session_path"]))
+                staged_ui_session_path = export_staging_dir / final_ui_session_path.relative_to(
+                    export_final_dir
+                )
+                _atomic_write_text(
+                    staged_ui_session_path,
+                    json.dumps(session, ensure_ascii=False, indent=2),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _discard_staged_publish(export_staging_dir)
+                _log_operation_exception("session_export.rewrite_generation", exc)
+                self._send_json(
+                    _export_error_payload(exc),
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
                 return
         if normalized_parts:
             session["edb_parts"] = normalized_parts
@@ -7046,10 +10730,37 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             session["edb_split"] = len(normalized_parts) > 1
             session["edbSplit"] = len(normalized_parts) > 1
             _annotate_session_with_edb_part_metadata(session, normalized_parts)
+        response_revision = current_revision
         if preview_only:
-            self.app_server.allowed_files |= collect_session_file_paths(session)
+            self._allow_session_files(collect_session_file_paths(session))
         else:
-            self.app_server.remember_session(session)
+            if export_staging_dir is None or export_final_dir is None:
+                self._send_json(
+                    _export_error_payload(RuntimeError("export generation paths are missing")),
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            try:
+                committed, committed_revision = self._adopt_staged_publish_if_current(
+                    base_session,
+                    session,
+                    staging_dir=export_staging_dir,
+                    final_dir=export_final_dir,
+                    expected_revision=current_revision,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _discard_staged_publish(export_staging_dir)
+                _log_operation_exception("session_export.commit_generation", exc)
+                self._send_json(
+                    _export_error_payload(exc),
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            if not committed:
+                _discard_staged_publish(export_staging_dir)
+                self._send_session_conflict()
+                return
+            response_revision = committed_revision
         classin_preflight = session.get("classinPreflight")
         if not isinstance(classin_preflight, dict):
             classin_preflight = session.get("classin_preflight")
@@ -7060,8 +10771,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         )
         classin_preflight_passed = bool(classin_preflight.get("passed")) if classin_preflight else False
         classin_preflight_status = str(classin_preflight.get("status") or "")
-        self._send_json(
-            {
+        response = {
                 "ok": True,
                 "session": rewrite_session_for_http(session),
                 "preview": preview_only,
@@ -7092,7 +10802,32 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "export_mode": session.get("export_mode"),
                 "exportMode": session.get("export_mode"),
             }
+        if response_revision is not None:
+            response["sessionRevision"] = response_revision
+        self._send_json(response)
+
+
+def _run_startup_artifact_cleanup(server: AppHTTPServer) -> dict[str, Any] | None:
+    # Deletion is deliberately stricter than general boolean settings: only
+    # an explicit administrator opt-in of exactly ``1`` may mutate artifacts
+    # during startup. Any other value remains a non-destructive audit.
+    delete_enabled = str(os.environ.get("EDB_AUTO_ARTIFACT_CLEANUP") or "").strip() == "1"
+    try:
+        result = server.cleanup_artifacts(
+            dry_run=not delete_enabled,
+            min_age_seconds=DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
         )
+    except Exception as exc:  # startup cleanup is maintenance, never availability-critical
+        print(f"[app-server] startup artifact cleanup skipped: {exc}", file=sys.stderr)
+        return None
+    print(
+        "[app-server] startup artifact cleanup "
+        f"({'delete' if delete_enabled else 'dry-run'}): "
+        f"selected={result.get('selectedFileCount', 0)} "
+        f"deleted={result.get('deletedFileCount', 0)} freed={result.get('deletedBytes', 0)}",
+        file=sys.stderr,
+    )
+    return result
 
 
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
@@ -7116,6 +10851,7 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
                 webbrowser.open(url)
             return
         raise
+    _run_startup_artifact_cleanup(server)
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)

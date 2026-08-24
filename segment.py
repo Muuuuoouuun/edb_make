@@ -9,6 +9,11 @@ import unicodedata
 
 from PIL import Image, ImageDraw, ImageOps, ImageStat
 
+from passage_detection import (
+    parse_passage_range_candidate,
+    parse_shared_passage_range_header,
+    passage_header_text_looks_corrupted,
+)
 from structured_schema import BlockType, Box, ContentBlock, PageModel, Subject
 
 try:
@@ -66,6 +71,8 @@ LARGE_BLOCK_AREA_RATIO = 0.18
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_PX = 3.0
 PDF_TEXT_MARKER_MIN_HWP_LAYOUT_HEIGHT_RATIO = 0.001
 PDF_CHOICE_MARKERS = ("①", "②", "③", "④", "⑤")
+PDF_PASSAGE_TEXT_EDGE_PADDING_PX = 4.0
+PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
 PDF_PASSAGE_RANGE_BRACKET_RE = re.compile(
     r"^\s*[\[［（(<]"
     r"(?P<start>[0-9０-９]{1,3})\s*[~\-〜－]\s*(?P<end>[0-9０-９]{1,3})\s*(?:번)?"
@@ -797,6 +804,22 @@ def _detect_pdf_visual_column_boxes(image: Image.Image) -> list[Box]:
     return sorted(columns, key=lambda column: column.left)
 
 
+def detect_pdf_visual_column_divider_x(image: Image.Image) -> float | None:
+    """Return the visual gutter/divider between two PDF body columns.
+
+    Official Korean exam pages are not always symmetric around the physical
+    page midpoint. Reusing the segmentation boundary prevents later crop
+    recovery from expanding into the neighbouring column.
+    """
+    columns = _detect_pdf_visual_column_boxes(image)
+    if len(columns) != 2:
+        return None
+    left_column, right_column = sorted(columns, key=lambda box: box.left)
+    if left_column.right >= right_column.left:
+        return None
+    return (float(left_column.right) + float(right_column.left)) * 0.5
+
+
 def _assign_pdf_marker_columns(
     image: Image.Image,
     markers: list[dict[str, Any]],
@@ -1217,28 +1240,13 @@ def _trim_pdf_problem_bottom_to_ink(
 
 
 def _extract_pdf_passage_range(text: Any) -> tuple[int, int] | None:
-    normalized = unicodedata.normalize("NFKC", str(text or ""))
-    compact = re.sub(r"\s+", " ", normalized).strip()
-    if not compact:
-        return None
-    lower = compact.lower()
-    bracket_or_suffix_match = PDF_PASSAGE_RANGE_BRACKET_RE.match(compact) or PDF_PASSAGE_RANGE_KOREAN_RE.match(compact)
-    if bracket_or_suffix_match:
-        match = bracket_or_suffix_match
-    elif any(cue in lower for cue in PDF_PASSAGE_RANGE_CUES):
-        match = PDF_PASSAGE_RANGE_COMPACT_RE.match(compact)
-    else:
-        return None
-    if not match:
-        return None
-    try:
-        start = int(unicodedata.normalize("NFKC", match.group("start")))
-        end = int(unicodedata.normalize("NFKC", match.group("end")))
-    except (TypeError, ValueError):
-        return None
-    if start <= 0 or end <= start or end - start > 12:
-        return None
-    return start, end
+    header = parse_shared_passage_range_header(text)
+    if header is not None:
+        return header.start, header.end
+    candidate = parse_passage_range_candidate(text)
+    if candidate is not None and passage_header_text_looks_corrupted(text):
+        return candidate[0], candidate[1]
+    return None
 
 
 def _pdf_column_bounds_for_x(
@@ -1300,7 +1308,15 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
     if not compact:
         return True
     no_space = re.sub(r"\s+", "", compact)
-    if no_space in {"국어", "영어", "화법과작문", "언어와매체"}:
+    header_label = re.sub(r"[^0-9A-Za-z가-힣]", "", no_space)
+    if header_label in {
+        "국어",
+        "영어",
+        "화법과작문",
+        "언어와매체",
+        "홀수형",
+        "짝수형",
+    }:
         return True
     if compact in {
         "고 1",
@@ -1309,6 +1325,19 @@ def _looks_like_pdf_page_header_text_line(text: Any, box: Box, image_height: int
         "국어 영역",
         "영어 영역",
     }:
+        return True
+    collapsed = re.sub(r"\s+", "", compact)
+    if collapsed in {
+        "고1",
+        "고2",
+        "고3",
+        "국어영역",
+        "수학영역",
+        "영어영역",
+        "영역",
+    }:
+        return True
+    if re.fullmatch(r"고[123]\d{1,2}", collapsed):
         return True
     if re.fullmatch(r"[━─—\-_=·•\s]+", compact):
         return True
@@ -1375,7 +1404,13 @@ def _pdf_pre_question_text_regions(
             continue
         top = max(0.0, min(box.top for box, _text in region_lines) - padding)
         if column_index == first_column:
-            bottom = max(top + 1.0, first_box.top - max(8.0, float(image.height) * 0.004))
+            # Leave a visible gap before the first question marker, but do not
+            # pull the crop boundary so far upward that the last passage line
+            # loses its antialiased baseline on 200-DPI pages.
+            bottom = max(
+                top + 1.0,
+                first_box.top - max(6.0, float(image.height) * 0.002),
+            )
         else:
             bottom = min(
                 float(image.height),
@@ -1448,7 +1483,13 @@ def _pdf_passage_column_text_bottom(
         bottoms.append(line_box.bottom)
     if not bottoms:
         return None
-    return min(bottom, max(bottoms) + max(18.0, float(image_height) * 0.012))
+    # Text-layer boxes already include the glyph body. Keep only a small
+    # rasterization allowance here: the previous 1.2%-of-page outset could
+    # cross a lower frame/separator on high-resolution exam pages.
+    return min(
+        bottom,
+        max(bottoms) + max(PDF_PASSAGE_TEXT_EDGE_PADDING_PX, float(image_height) * 0.002),
+    )
 
 
 def _trim_pdf_passage_column_bottom_to_ink(
@@ -1492,7 +1533,9 @@ def _trim_pdf_passage_column_bottom_to_ink(
     if not meaningful_runs:
         return bottom
     last_run = meaningful_runs[-1]
-    padding = max(16.0, float(image.height) * 0.012)
+    # Stop close to the last real ink run. A large fixed tail is especially
+    # harmful when the next question begins immediately below a passage.
+    padding = max(PDF_PASSAGE_TEXT_EDGE_PADDING_PX, float(image.height) * 0.002)
     trimmed_bottom = min(bottom, float(crop_box[1] + last_run[1]) + padding)
     return trimmed_bottom if trimmed_bottom - top >= 40.0 else bottom
 
@@ -1739,15 +1782,60 @@ def _build_pdf_passage_range_blocks(
             (_marker_bbox(line).left if _marker_bbox(line) else 0.0),
         ),
     )
-    for line in sorted_lines:
+    for line_index, line in enumerate(sorted_lines):
         text = str(line.get("text") or "").strip()
-        passage_range = _extract_pdf_passage_range(text)
-        if passage_range is None:
-            continue
+        range_header = parse_shared_passage_range_header(text)
         header_box = _marker_bbox(line)
+        raw_candidate = parse_passage_range_candidate(text)
+        if range_header is None and raw_candidate is not None and header_box is not None:
+            header_center_x = (header_box.left + header_box.right) / 2.0
+            _column_index, left_bound, right_bound = _pdf_column_bounds_for_x(
+                column_entries,
+                header_center_x,
+                image,
+            )
+            joined_parts = [text]
+            previous_box = header_box
+            same_column_line_count = 0
+            for following_line in sorted_lines[line_index + 1:]:
+                following_box = _marker_bbox(following_line)
+                following_text = str(following_line.get("text") or "").strip()
+                if following_box is None or not following_text:
+                    continue
+                following_center_x = (following_box.left + following_box.right) / 2.0
+                max_gap = max(
+                    24.0,
+                    previous_box.height * 1.6,
+                    following_box.height * 1.6,
+                    float(image.height) * 0.012,
+                )
+                if following_box.top - previous_box.bottom > max_gap:
+                    break
+                if not left_bound - 8.0 <= following_center_x <= right_bound + 8.0:
+                    continue
+                if following_box.top < previous_box.top:
+                    continue
+                joined_parts.append(following_text)
+                same_column_line_count += 1
+                joined_text = " ".join(joined_parts)
+                range_header = parse_shared_passage_range_header(joined_text)
+                if range_header is not None:
+                    text = joined_text
+                    break
+                previous_box = following_box
+                if same_column_line_count >= 2:
+                    break
+        corrupted_header = range_header is None and passage_header_text_looks_corrupted(text)
+        candidate = parse_passage_range_candidate(text) if corrupted_header else None
+        if range_header is None and candidate is None:
+            continue
         if header_box is None:
             continue
-        start, end = passage_range
+        start, end = (
+            (range_header.start, range_header.end)
+            if range_header is not None
+            else (candidate[0], candidate[1])
+        )
         seen_key = (start, end, int(round(header_box.top / 8.0)))
         if seen_key in seen_ranges:
             continue
@@ -1758,7 +1846,61 @@ def _build_pdf_passage_range_blocks(
             header_center_x,
             image,
         )
-        ordered_columns = sorted(column_entries, key=lambda entry: entry[0])
+        # Passage reading order is column-major: finish the physical left
+        # column, then continue at the top of the physical right column.  Do
+        # not trust caller-provided indices here; recovered columns can arrive
+        # in detection order on rotated/noisy pages.
+        ordered_columns = sorted(
+            column_entries,
+            key=lambda entry: (float(entry[2][0]), float(entry[2][1]), entry[0]),
+        )
+        passage_divider_x: float | None = None
+        if len(ordered_columns) == 2:
+            passage_divider_x = (
+                float(ordered_columns[0][2][1]) + float(ordered_columns[1][2][0])
+            ) * 0.5
+        current_column_markers = next(
+            (
+                markers
+                for entry_column_index, markers, _bounds in ordered_columns
+                if entry_column_index == column_index
+            ),
+            [],
+        )
+        preceding_numbers = [
+            int(marker["number"])
+            for marker in current_column_markers
+            if isinstance(marker.get("number"), int)
+            and (marker_box := _marker_bbox(marker)) is not None
+            and marker_box.top < header_box.top
+        ]
+        # A standard shared-passage header precedes its first child question.
+        # If the claimed range has already started in the same column, this
+        # header is content inside that question rather than a new common
+        # passage. This is the main guard against in-question ranges being
+        # exported by the passage-only action.
+        if preceding_numbers and preceding_numbers[-1] >= start:
+            continue
+
+        child_marker_numbers = sorted(
+            {
+                int(marker["number"])
+                for _entry_column_index, markers, _bounds in ordered_columns
+                for marker in markers
+                if isinstance(marker.get("number"), int)
+                and start <= int(marker["number"]) <= end
+            }
+        )
+        if corrupted_header and len(child_marker_numbers) < 2 and header_box.top > image.height * 0.25:
+            continue
+        if corrupted_header:
+            detection_confidence = 0.93 if len(child_marker_numbers) >= 2 else 0.82
+        elif len(child_marker_numbers) >= 2:
+            detection_confidence = range_header.confidence if range_header is not None else 0.98
+        elif len(child_marker_numbers) == 1:
+            detection_confidence = 0.94
+        else:
+            detection_confidence = 0.9
         header_column_position = next(
             (
                 position
@@ -1774,6 +1916,14 @@ def _build_pdf_passage_range_blocks(
             column_markers,
             (fragment_left, fragment_right),
         ) in enumerate(ordered_columns[header_column_position:], start=1):
+            fragment_column_position = next(
+                (
+                    position
+                    for position, (entry_column_index, _markers, _bounds) in enumerate(ordered_columns)
+                    if entry_column_index == fragment_column_index
+                ),
+                0,
+            )
             marker_boundaries: list[Box] = []
             for marker in column_markers:
                 marker_box = _marker_bbox(marker)
@@ -1848,7 +1998,79 @@ def _build_pdf_passage_range_blocks(
                     break
                 continue
 
-            box = Box.from_points(fragment_left, fragment_top, fragment_right, fragment_bottom)
+            fragment_text_lines = [
+                candidate
+                for candidate in sorted_lines
+                if (candidate_box := _marker_bbox(candidate)) is not None
+                and fragment_left <= (candidate_box.left + candidate_box.right) / 2.0 <= fragment_right
+                and fragment_top <= (candidate_box.top + candidate_box.bottom) / 2.0 <= fragment_bottom
+                and str(candidate.get("text") or "").strip()
+                and not _looks_like_pdf_page_header_text_line(
+                    candidate.get("text"),
+                    candidate_box,
+                    image.height,
+                )
+                and not _looks_like_pdf_footer_text_line(
+                    candidate.get("text"),
+                    candidate_box,
+                    image.height,
+                )
+            ]
+            fragment_text_boxes = [
+                candidate_box
+                for candidate in fragment_text_lines
+                if (candidate_box := _marker_bbox(candidate)) is not None
+            ]
+            # Visual column bounds describe the body flow, but a shared-passage
+            # heading can legitimately span beyond that column.  Keep every
+            # text-layer line assigned to this fragment inside the source box;
+            # otherwise a crisp crop can still lose the right end of a long
+            # instruction line while receiving a misleadingly high image score.
+            box_left = min(
+                fragment_left,
+                *(candidate_box.left for candidate_box in fragment_text_boxes),
+            ) if fragment_text_boxes else fragment_left
+            box_right = max(
+                fragment_right,
+                *(candidate_box.right for candidate_box in fragment_text_boxes),
+            ) if fragment_text_boxes else fragment_right
+            if passage_divider_x is not None:
+                if fragment_column_position == 0:
+                    box_right = min(
+                        box_right,
+                        passage_divider_x - PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                    )
+                elif fragment_column_position == 1:
+                    box_left = max(
+                        box_left,
+                        passage_divider_x + PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
+                    )
+            box_bottom = max(
+                fragment_bottom,
+                *(
+                    candidate_box.bottom + PDF_PASSAGE_TEXT_EDGE_PADDING_PX
+                    for candidate_box in fragment_text_boxes
+                ),
+            ) if fragment_text_boxes else fragment_bottom
+            box = Box.from_points(
+                max(0.0, box_left),
+                fragment_top,
+                min(float(image.width), box_right),
+                min(float(image.height), box_bottom),
+            )
+            fragment_texts = [
+                str(candidate.get("text") or "").strip()
+                for candidate in fragment_text_lines
+            ]
+            text_bounds_scores = [
+                (
+                    max(0.0, min(box.right, candidate_box.right) - max(box.left, candidate_box.left))
+                    * max(0.0, min(box.bottom, candidate_box.bottom) - max(box.top, candidate_box.top))
+                )
+                / max(1.0, candidate_box.area)
+                for candidate_box in fragment_text_boxes
+            ]
+            text_bounds_score = min(text_bounds_scores, default=1.0)
             metadata = _enrich_block_segmentation_metadata(
                 {
                     "segmenter": "pdf-passage-range",
@@ -1860,6 +2082,23 @@ def _build_pdf_passage_range_blocks(
                     "passage_range_end": end,
                     "passage_range": {"start": start, "end": end},
                     "passage_fragment_index": fragment_index,
+                    "passage_detection_confidence": detection_confidence,
+                    "passage_detection_cue_language": (
+                        range_header.cue_language if range_header is not None else "corrupted-text-layer"
+                    ),
+                    "passage_child_marker_numbers": child_marker_numbers,
+                    "passage_text_line_count": len(fragment_texts),
+                    "passage_text_character_count": sum(
+                        len(re.sub(r"\s+", "", fragment_text))
+                        for fragment_text in fragment_texts
+                    ),
+                    "passage_text_bounds_score": text_bounds_score,
+                    "passage_center_divider_x": passage_divider_x,
+                    "passage_center_divider_exclusion_px": (
+                        PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX
+                        if passage_divider_x is not None
+                        else 0.0
+                    ),
                     "display_title": text[:120],
                     "force_image_record": True,
                     "shared_passage": True,
@@ -1886,8 +2125,19 @@ def _build_pdf_passage_range_blocks(
                 break
 
         range_fragment_count = len(blocks) - range_blocks_start
-        for block in blocks[range_blocks_start:]:
+        range_blocks = blocks[range_blocks_start:]
+        total_text_line_count = sum(
+            int(block.metadata.get("passage_text_line_count") or 0)
+            for block in range_blocks
+        )
+        total_text_character_count = sum(
+            int(block.metadata.get("passage_text_character_count") or 0)
+            for block in range_blocks
+        )
+        for block in range_blocks:
             block.metadata["passage_fragment_count"] = range_fragment_count
+            block.metadata["passage_total_text_line_count"] = total_text_line_count
+            block.metadata["passage_total_text_character_count"] = total_text_character_count
         seen_ranges.add(seen_key)
 
     return blocks
@@ -1980,11 +2230,27 @@ def _segment_pdf_problem_markers(
         )
         if isinstance(marker.get("number"), int)
     ]
+    leading_main_sequence_ids: set[int] = set()
+    expected_leading_number = 1
+    for marker in ordered_numbered_markers:
+        number = int(marker["number"])
+        if number != expected_leading_number:
+            break
+        leading_main_sequence_ids.add(id(marker))
+        expected_leading_number += 1
+    # A real exam commonly starts at question 1 and reaches double digits on
+    # the same page. The old nested-list guard discarded 1-3 as soon as it saw
+    # question 10 later in the page. Only protect a sufficiently long leading
+    # 1,2,3,4... run; short 1,2 procedure lists before a higher question remain
+    # eligible for the nested-enumeration filter below.
+    if expected_leading_number <= 4:
+        leading_main_sequence_ids.clear()
+
     nested_enumeration_marker_ids: set[int] = set()
     highest_number = 0
     for marker_index, marker in enumerate(ordered_numbered_markers):
         number = int(marker["number"])
-        if number <= 3:
+        if number <= 3 and id(marker) not in leading_main_sequence_ids:
             later_numbers = [
                 int(candidate["number"])
                 for candidate in ordered_numbered_markers[marker_index + 1 :]

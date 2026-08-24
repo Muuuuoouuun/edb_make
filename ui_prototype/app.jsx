@@ -1,6 +1,15 @@
 // 칠판 자료 편집기 — main app
 const { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } = React;
 
+const RUNTIME_PLATFORM = typeof navigator === 'undefined'
+  ? ''
+  : String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '');
+const IS_MAC_PLATFORM = /Mac|iPhone|iPad|iPod/i.test(RUNTIME_PLATFORM);
+const PRIMARY_MODIFIER_LABEL = IS_MAC_PLATFORM ? '⌘' : 'Ctrl';
+const PRIMARY_MODIFIER_NAME = IS_MAC_PLATFORM ? 'Command' : 'Control';
+const ALTERNATE_MODIFIER_LABEL = IS_MAC_PLATFORM ? 'Option' : 'Alt';
+const ALTERNATE_MODIFIER_NAME = IS_MAC_PLATFORM ? 'Option' : 'Alt';
+
 function reportRuntimeDiagnostic(error, detail = {}) {
   const payload = {
     type: detail.type || 'runtime',
@@ -15,6 +24,29 @@ function reportRuntimeDiagnostic(error, detail = {}) {
   }
   if (typeof window.EDB_REPORT_RUNTIME_ERROR === 'function') {
     window.EDB_REPORT_RUNTIME_ERROR(payload);
+  }
+  return payload;
+}
+
+function captureRecoverableDiagnostic(error, detail = {}) {
+  const payload = {
+    type: detail.type || 'operation',
+    message: error?.message || String(error || '알 수 없는 오류'),
+    timestamp: detail.timestamp || new Date().toISOString(),
+    ...detail,
+  };
+  try {
+    console.warn('[board-operation]', payload.message, payload);
+  } catch (_err) {
+    // Console logging is best-effort.
+  }
+  if (typeof window.EDB_CAPTURE_RUNTIME_DIAGNOSTIC === 'function') {
+    window.EDB_CAPTURE_RUNTIME_DIAGNOSTIC(payload);
+  } else if (Array.isArray(window.EDB_RUNTIME_DIAGNOSTICS)) {
+    window.EDB_RUNTIME_DIAGNOSTICS.push(payload);
+    if (window.EDB_RUNTIME_DIAGNOSTICS.length > 50) {
+      window.EDB_RUNTIME_DIAGNOSTICS.splice(0, window.EDB_RUNTIME_DIAGNOSTICS.length - 50);
+    }
   }
   return payload;
 }
@@ -109,8 +141,23 @@ const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, from
   next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, moved);
   return next;
 });
+const reorderItemGroupForDrop = REORDER_HELPERS.reorderItemGroupForDrop || ((items, fromIds, toId, position = 'before') => {
+  const sourceIdSet = new Set((fromIds || []).map(String));
+  const targetId = String(toId || '');
+  if (!Array.isArray(items) || !sourceIdSet.size || !targetId || sourceIdSet.has(targetId)) return items;
+  const moved = items.filter(item => sourceIdSet.has(String(item.id)));
+  const remaining = items.filter(item => !sourceIdSet.has(String(item.id)));
+  const targetIndex = remaining.findIndex(item => String(item.id) === targetId);
+  if (!moved.length || targetIndex < 0) return items;
+  const next = remaining.slice();
+  next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, ...moved);
+  return next.every((item, index) => String(item.id) === String(items[index]?.id)) ? items : next;
+});
 const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
   clientY > rect.top + rect.height / 2 ? 'after' : 'before'
+));
+const scrollContainerContentTop = REORDER_HELPERS.scrollContainerContentTop || ((itemRect, containerRect, scrollTop = 0) => (
+  (Number(itemRect?.top) || 0) - (Number(containerRect?.top) || 0) + (Number(scrollTop) || 0)
 ));
 const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clientY, edgePx = 64, maxPx = 22) => {
   const topStrength = clientY < rect.top + edgePx ? 1 - Math.max(0, clientY - rect.top) / edgePx : 0;
@@ -119,12 +166,97 @@ const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clien
   if (bottomStrength > 0) return Math.max(1, Math.ceil((bottomStrength ** 2) * maxPx));
   return 0;
 });
+const acceleratedEdgeAutoScrollDelta = REORDER_HELPERS.acceleratedEdgeAutoScrollDelta || ((
+  rect,
+  clientY,
+  edgePx = 64,
+  maxPx = 22,
+  holdDurationMs = 0,
+  frameDurationMs = 1000 / 60
+) => {
+  const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
+  if (!baseDelta) return 0;
+  const holdMultiplier = 1 + Math.min(1, Math.max(0, Number(holdDurationMs) || 0) / 900);
+  const frameMultiplier = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60))) / (1000 / 60);
+  return Math.sign(baseDelta) * Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));
+});
 const appendBoundedHistory = REORDER_HELPERS.appendBoundedHistory || ((history, entry, limit = 20) => {
   if (!entry) return history;
   const next = [...history, entry];
   return next.length > limit ? next.slice(next.length - limit) : next;
 });
 const UNDO_HISTORY_LIMIT = 20;
+const adjacentReorderCommand = REORDER_HELPERS.adjacentReorderCommand || ((items, itemId, direction) => {
+  const sourceIndex = items.findIndex(item => String(item.id) === String(itemId));
+  const targetIndex = sourceIndex + (direction === 'up' ? -1 : direction === 'down' ? 1 : 0);
+  if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= items.length || targetIndex === sourceIndex) return null;
+  return {
+    sourceId: String(itemId),
+    targetId: String(items[targetIndex].id),
+    position: targetIndex < sourceIndex ? 'before' : 'after',
+    nextIndex: targetIndex,
+  };
+});
+const adjacentGroupReorderCommand = REORDER_HELPERS.adjacentGroupReorderCommand || ((items, itemIds, direction) => {
+  const sourceIdSet = new Set((itemIds || []).map(String));
+  const sourceIds = items.map(item => String(item.id)).filter(id => sourceIdSet.has(id));
+  if (!sourceIds.length) return null;
+  const indexes = items
+    .map((item, index) => sourceIdSet.has(String(item.id)) ? index : -1)
+    .filter(index => index >= 0);
+  const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+  const edgeIndex = delta < 0 ? Math.min(...indexes) : Math.max(...indexes);
+  const targetIndex = edgeIndex + delta;
+  if (!delta || targetIndex < 0 || targetIndex >= items.length) return null;
+  const targetId = String(items[targetIndex].id);
+  if (sourceIdSet.has(targetId)) return null;
+  const position = delta < 0 ? 'before' : 'after';
+  const reordered = reorderItemGroupForDrop(items, sourceIds, targetId, position);
+  if (reordered === items) return null;
+  return {
+    sourceId: sourceIds[0],
+    sourceIds,
+    targetId,
+    position,
+    nextIndex: reordered.findIndex(item => String(item.id) === sourceIds[0]),
+  };
+});
+const applySelectionClick = REORDER_HELPERS.applySelectionClick || ((orderedIds, selectedIds, anchorId, targetId, modifiers = {}) => {
+  const ids = (orderedIds || []).map(String);
+  const id = String(targetId || '');
+  if (!id || !ids.includes(id)) return { selectedIds: selectedIds || [], anchorId: anchorId || null };
+  if (modifiers.shiftKey) {
+    const anchor = ids.includes(String(anchorId || '')) ? String(anchorId) : id;
+    const start = ids.indexOf(anchor);
+    const end = ids.indexOf(id);
+    const range = ids.slice(Math.min(start, end), Math.max(start, end) + 1);
+    const selected = modifiers.ctrlKey || modifiers.metaKey
+      ? Array.from(new Set([...(selectedIds || []).map(String), ...range]))
+      : range;
+    return { selectedIds: ids.filter(value => selected.includes(value)), anchorId: anchor };
+  }
+  if (modifiers.ctrlKey || modifiers.metaKey) {
+    const selected = new Set((selectedIds || []).map(String));
+    if (selected.has(id)) selected.delete(id);
+    else selected.add(id);
+    return { selectedIds: ids.filter(value => selected.has(value)), anchorId: id };
+  }
+  return { selectedIds: [id], anchorId: id };
+});
+const selectAllItems = REORDER_HELPERS.selectAllItems || (orderedIds => (orderedIds || []).map(String));
+const clearItemSelection = REORDER_HELPERS.clearItemSelection || (() => []);
+const selectionKeyboardCommand = REORDER_HELPERS.selectionKeyboardCommand || ((orderedIds, selectedIds, anchorId, focusId, key, modifiers = {}) => {
+  const ids = (orderedIds || []).map(String);
+  if ((modifiers.ctrlKey || modifiers.metaKey) && String(key).toLowerCase() === 'a') {
+    return {
+      selectedIds: modifiers.shiftKey ? [] : ids,
+      anchorId: modifiers.shiftKey ? null : (anchorId || focusId || ids[0] || null),
+      focusId: focusId || ids[0] || null,
+    };
+  }
+  if (key === 'Escape') return { selectedIds: [], anchorId: null, focusId: focusId || null };
+  return applySelectionClick(ids, selectedIds, anchorId, focusId, modifiers);
+});
 const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positions, targetTop) => {
   if (!positions.length) return -1;
   let nearestIndex = 0;
@@ -154,6 +286,8 @@ const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 const BOARD_COLUMN_MIN = 1;
 const BOARD_COLUMN_MAX = 3;
+const BOARD_PAGE_HEIGHT_PAGES = 1;
+const PLACEMENT_EPSILON_PAGES = 1e-9;
 const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
 const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
@@ -433,11 +567,28 @@ function resetItemPlacement(item){
 
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.ceil((value - 0.001) / slotHeight) * slotHeight;
+  return Math.ceil((value - PLACEMENT_EPSILON_PAGES) / slotHeight) * slotHeight;
+}
+
+function firstPositiveFiniteNumber(...values){
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return null;
 }
 
 function itemHeightPages(item){
-  return Math.max(0.12, item?.heightFrac || item?.actualHeightPages || item?.actual_height_pages || 0.8);
+  const candidates = [
+    item?.heightFrac,
+    item?.actualHeightPages,
+    item?.actual_height_pages,
+    item?.actualContentHeightPages,
+    item?.actual_content_height_pages,
+  ]
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.max(0.12, ...candidates) : 0.8;
 }
 
 function itemUsesContinuousPageFlow(item){
@@ -533,7 +684,10 @@ function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (isContinuousPlacementItem(item)) {
     return Math.max(heightPages, renderedHeightPages, savedSpan);
   }
-  return Math.max(heightPages, renderedHeightPages, savedSpan || snapUpPages(renderedHeightPages, slotHeight));
+  if (renderedHeightPages > slotHeight + PLACEMENT_EPSILON_PAGES) {
+    return Math.max(heightPages, renderedHeightPages);
+  }
+  return Math.max(heightPages, renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight));
 }
 
 function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
@@ -546,21 +700,28 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
   while (index < items.length) {
     const first = items[index];
     const firstContinuous = isContinuousPlacementItem(first);
+    const firstLong = !firstContinuous
+      && itemRenderedHeightPages(first) > slotHeight + PLACEMENT_EPSILON_PAGES;
     const rowItems = [];
-    if (firstContinuous) {
+    if (firstContinuous || firstLong) {
       rowItems.push(first);
       index += 1;
     } else {
       while (index < items.length && rowItems.length < columnCount) {
         const candidate = items[index];
-        if (rowItems.length > 0 && isContinuousPlacementItem(candidate)) break;
+        const candidateContinuous = isContinuousPlacementItem(candidate);
+        const candidateLong = !candidateContinuous
+          && itemRenderedHeightPages(candidate) > slotHeight + PLACEMENT_EPSILON_PAGES;
+        if (rowItems.length > 0 && (candidateContinuous || candidateLong)) break;
         rowItems.push(candidate);
         index += 1;
       }
     }
 
     const rowContinuous = rowItems.length === 1 && isContinuousPlacementItem(rowItems[0]);
-    const rowStartPages = rowContinuous ? cursorPages : snapUpPages(cursorPages, slotHeight);
+    const rowLong = !rowContinuous
+      && rowItems.some(item => itemRenderedHeightPages(item) > slotHeight + PLACEMENT_EPSILON_PAGES);
+    const rowStartPages = cursorPages;
     const rowMetrics = rowItems.map(item => {
       const heightPages = itemHeightPages(item);
       const renderedHeightPages = itemRenderedHeightPages(item);
@@ -572,15 +733,22 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
       ...rowMetrics.map(metric => Math.max(metric.renderedHeightPages, metric.slotSpanPages))
     );
     const flowEndPages = rowStartPages + rowFlowSpanPages;
-    const snappedNextStartYPages = rowContinuous ? flowEndPages : snapUpPages(flowEndPages, slotHeight);
+    const snappedNextStartYPages = rowContinuous
+      ? flowEndPages
+      : rowLong
+        ? Math.max(flowEndPages, snapUpPages(flowEndPages, BOARD_PAGE_HEIGHT_PAGES))
+        : Math.max(flowEndPages, rowStartPages + snapUpPages(rowFlowSpanPages, slotHeight));
     const boardRowHeightPages = Math.max(0, snappedNextStartYPages - rowStartPages);
-    const rowColumnCount = rowContinuous ? BOARD_COLUMN_MIN : columnCount;
+    const rowColumnCount = rowContinuous || rowLong ? BOARD_COLUMN_MIN : columnCount;
 
     rowItems.forEach((item, rowColumnIndex) => {
       const metric = rowMetrics[rowColumnIndex];
       const actualBottomPages = rowStartPages + metric.heightPages;
       const renderedBottomPages = rowStartPages + metric.renderedHeightPages;
-      const slotSpanCount = Math.max(1, Math.ceil((snappedNextStartYPages - rowStartPages - 0.001) / slotHeight));
+      const slotSpanCount = Math.max(
+        1,
+        Math.ceil((snappedNextStartYPages - rowStartPages - PLACEMENT_EPSILON_PAGES) / slotHeight)
+      );
       const autoXRatio = boardColumnXRatio(rowColumnIndex, rowColumnCount);
       const xEdited = Boolean(item.placementXEdited || item.placement_x_edited);
       const rawMagnetColumnIndex = Number(item.placementMagnetColumnIndex ?? item.placement_magnet_column_index);
@@ -634,22 +802,56 @@ const freshInitialItems = () => INITIAL_ITEMS.map(item => ({ ...item }));
 
 // ─── icons ────────────────────────────────────────────────────────────────
 // smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
-function smoothScrollTo(el, top, duration = 380){
-  if (!el) return;
-  if (duration <= 0){ el.scrollTop = top; return; }
-  const start = el.scrollTop;
-  const delta = top - start;
-  if (Math.abs(delta) < 4){ el.scrollTop = top; return; }
+function cancelSmoothScroll(el){
+  if (!el) return false;
   if (el.__scrollRaf) cancelAnimationFrame(el.__scrollRaf);
-  const t0 = performance.now();
-  const ease = u => 1 - Math.pow(1 - u, 3);
-  const step = (now) => {
-    const u = Math.min(1, (now - t0) / duration);
-    el.scrollTop = start + delta * ease(u);
-    if (u < 1) el.__scrollRaf = requestAnimationFrame(step);
-    else el.__scrollRaf = null;
-  };
-  el.__scrollRaf = requestAnimationFrame(step);
+  const resolve = el.__scrollResolve;
+  el.__scrollRaf = null;
+  el.__scrollResolve = null;
+  if (typeof resolve === 'function') resolve(false);
+  return Boolean(resolve);
+}
+
+function clampedScrollTop(el, top){
+  const maximum = Math.max(0, finiteNumber(el?.scrollHeight, 0) - finiteNumber(el?.clientHeight, 0));
+  return Math.max(0, Math.min(maximum, finiteNumber(top, 0)));
+}
+
+function smoothScrollTo(el, top, duration = 380){
+  if (!el) return Promise.resolve(false);
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+    duration = 0;
+  }
+  cancelSmoothScroll(el);
+  const target = clampedScrollTop(el, top);
+  if (duration <= 0){
+    el.scrollTop = target;
+    return Promise.resolve(true);
+  }
+  const start = el.scrollTop;
+  const delta = target - start;
+  if (Math.abs(delta) < 4){
+    el.scrollTop = target;
+    return Promise.resolve(true);
+  }
+  return new Promise(resolve => {
+    el.__scrollResolve = resolve;
+    const t0 = performance.now();
+    const ease = u => 1 - Math.pow(1 - u, 3);
+    const step = (now) => {
+      const u = Math.min(1, (now - t0) / duration);
+      el.scrollTop = start + delta * ease(u);
+      if (u < 1) {
+        el.__scrollRaf = requestAnimationFrame(step);
+        return;
+      }
+      el.scrollTop = target;
+      el.__scrollRaf = null;
+      el.__scrollResolve = null;
+      resolve(true);
+    };
+    el.__scrollRaf = requestAnimationFrame(step);
+  });
 }
 
 const Icon = {
@@ -662,6 +864,7 @@ const Icon = {
   pagePng:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3.5h7l4 4V19a1.8 1.8 0 0 1-1.8 1.8H7A1.8 1.8 0 0 1 5.2 19V5.3A1.8 1.8 0 0 1 7 3.5z"/><path d="M14 3.7v4h4"/><path d="M8.5 12.4h7M8.5 15.3h5.5"/><path d="M3.6 7.3v12.2a2.8 2.8 0 0 0 2.8 2.8h8.2"/></svg>,
   stamp: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 4h6l1 5a3 3 0 0 1-3 3h-2a3 3 0 0 1-3-3l1-5z"/><path d="M8 14h8l1 5H7l1-5z"/><path d="M5 21h14"/><path d="M12 4v8"/></svg>,
   copy:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
+  keyboard:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h.01M11 9h.01M15 9h.01M18 9h.01M7 13h.01M11 13h.01M15 13h.01M8 16h8"/></svg>,
   check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
   download:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>,
@@ -673,8 +876,8 @@ const Icon = {
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
   more:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>,
+  bug:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 8.5h8V15a4 4 0 0 1-8 0V8.5zM9.5 5.5h5M12 5.5V3M5 10h3M16 10h3M5 15h3M16 15h3M8.5 19.5L6.5 22M15.5 19.5l2 2.5"/></svg>,
   close:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>,
-  split:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M5 12h14M9 8h6M9 16h6"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
   scan:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M7 9h10M7 13h7M7 17h5"/></svg>,
@@ -685,6 +888,9 @@ const Icon = {
   arrowDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>,
   arrowLeft:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>,
   arrowRight:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>,
+  grip:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>,
+  chevronUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 14.5L12 9l5.5 5.5"/></svg>,
+  chevronDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"/></svg>,
 };
 
 const PROCESSING_STEPS = new Set(['raw', 's1', 's2', 's3']);
@@ -748,6 +954,378 @@ function ReviewCanvasZoomShell({ children }){
   );
 }
 
+function reviewBoxesEqual(leftBox, rightBox){
+  return ['left', 'top', 'width', 'height'].every(key => (
+    Math.abs(finiteNumber(leftBox?.[key], 0) - finiteNumber(rightBox?.[key], 0)) < 0.5
+  ));
+}
+
+function editableSourceSegmentsForProblem(problem){
+  const sourceSegments = Array.isArray(problem?.sourceSegments || problem?.source_segments)
+    ? (problem.sourceSegments || problem.source_segments)
+    : [];
+  const normalized = sourceSegments.flatMap((segment, index) => {
+    const bbox = segment?.bbox || {};
+    const pageId = String(segment?.sourcePageId || segment?.source_page_id || '').trim();
+    if (!pageId || !finiteNumber(bbox.width, 0) || !finiteNumber(bbox.height, 0)) return [];
+    return [{
+      id: `passage-segment-${index + 1}`,
+      pageId,
+      order: index + 1,
+      columnIndex: [1, 2].includes(Number(segment?.columnIndex ?? segment?.column_index))
+        ? Number(segment?.columnIndex ?? segment?.column_index)
+        : null,
+      bbox: {
+        left: finiteNumber(bbox.left, 0),
+        top: finiteNumber(bbox.top, 0),
+        width: Math.max(1, finiteNumber(bbox.width, 1)),
+        height: Math.max(1, finiteNumber(bbox.height, 1)),
+      },
+    }];
+  });
+  if (normalized.length) return normalized;
+  const fallbackBox = problem?.bbox || {};
+  const fallbackPageId = String(problem?.sourcePageId || problem?.source_page_id || '').trim();
+  if (!fallbackPageId || !finiteNumber(fallbackBox.width, 0) || !finiteNumber(fallbackBox.height, 0)) return [];
+  return [{
+    id: 'passage-segment-1',
+    pageId: fallbackPageId,
+    order: 1,
+    // Legacy passages do not always retain their physical column. Let the
+    // server infer it from the current page divider instead of forcing left.
+    columnIndex: null,
+    bbox: {
+      left: finiteNumber(fallbackBox.left, 0),
+      top: finiteNumber(fallbackBox.top, 0),
+      width: Math.max(1, finiteNumber(fallbackBox.width, 1)),
+      height: Math.max(1, finiteNumber(fallbackBox.height, 1)),
+    },
+  }];
+}
+
+function boxEditSegmentsEqual(leftSegments, rightSegments){
+  const left = leftSegments || [];
+  const right = rightSegments || [];
+  return left.length === right.length && left.every((segment, index) => (
+    String(segment?.pageId || '') === String(right[index]?.pageId || '')
+    && reviewBoxesEqual(segment?.bbox, right[index]?.bbox)
+  ));
+}
+
+function renumberBoxEditSegments(segments){
+  return (segments || []).map((segment, index) => ({ ...segment, order: index + 1 }));
+}
+
+function serializeBoxEditSegments(segments){
+  return renumberBoxEditSegments(segments).map(segment => ({
+    pageId: segment.pageId,
+    order: segment.order,
+    columnIndex: segment.columnIndex,
+    bbox: {
+      left: Math.round(finiteNumber(segment.bbox?.left, 0)),
+      top: Math.round(finiteNumber(segment.bbox?.top, 0)),
+      width: Math.round(Math.max(1, finiteNumber(segment.bbox?.width, 1))),
+      height: Math.round(Math.max(1, finiteNumber(segment.bbox?.height, 1))),
+    },
+  }));
+}
+
+function reviewSourcePageLabel(pages, pageId){
+  const pageIndex = (pages || []).findIndex(page => String(page?.id || '') === String(pageId || ''));
+  if (pageIndex >= 0) return `${pageIndex + 1}페이지`;
+  return '원본 페이지';
+}
+
+function reviewBoxIntersectionOverUnion(leftBox, rightBox){
+  const left = Math.max(finiteNumber(leftBox?.left, 0), finiteNumber(rightBox?.left, 0));
+  const top = Math.max(finiteNumber(leftBox?.top, 0), finiteNumber(rightBox?.top, 0));
+  const right = Math.min(
+    finiteNumber(leftBox?.left, 0) + finiteNumber(leftBox?.width, 0),
+    finiteNumber(rightBox?.left, 0) + finiteNumber(rightBox?.width, 0)
+  );
+  const bottom = Math.min(
+    finiteNumber(leftBox?.top, 0) + finiteNumber(leftBox?.height, 0),
+    finiteNumber(rightBox?.top, 0) + finiteNumber(rightBox?.height, 0)
+  );
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const leftArea = Math.max(0, finiteNumber(leftBox?.width, 0)) * Math.max(0, finiteNumber(leftBox?.height, 0));
+  const rightArea = Math.max(0, finiteNumber(rightBox?.width, 0)) * Math.max(0, finiteNumber(rightBox?.height, 0));
+  const union = leftArea + rightArea - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function boxEditSegmentValidation(segments){
+  const segmentList = segments || [];
+  const hardIssues = [];
+  const warnings = [];
+  if (!segmentList.length) hardIssues.push('이어붙일 영역이 없습니다.');
+  if (segmentList.length > 32) hardIssues.push('한 지문에는 영역을 최대 32개까지 합칠 수 있습니다.');
+  segmentList.forEach((segment, index) => {
+    if (finiteNumber(segment?.bbox?.width, 0) < 8 || finiteNumber(segment?.bbox?.height, 0) < 8) {
+      hardIssues.push(`${index + 1}번째 영역이 너무 작습니다.`);
+    }
+  });
+  for (let leftIndex = 0; leftIndex < segmentList.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < segmentList.length; rightIndex += 1) {
+      const leftSegment = segmentList[leftIndex];
+      const rightSegment = segmentList[rightIndex];
+      if (String(leftSegment?.pageId || '') !== String(rightSegment?.pageId || '')) continue;
+      const overlap = reviewBoxIntersectionOverUnion(leftSegment?.bbox, rightSegment?.bbox);
+      if (overlap >= 0.98) {
+        hardIssues.push(`${leftIndex + 1}번과 ${rightIndex + 1}번이 사실상 같은 영역입니다.`);
+      } else if (overlap >= 0.5) {
+        warnings.push(`${leftIndex + 1}번과 ${rightIndex + 1}번이 많이 겹칩니다.`);
+      }
+    }
+  }
+  return {
+    valid: hardIssues.length === 0,
+    hardIssues: listUnique(hardIssues),
+    warnings: listUnique(warnings),
+  };
+}
+
+function BoxEditPreview({ label, page, box }){
+  const pageWidth = Math.max(1, finiteNumber(page?.width, 1));
+  const cropWidth = Math.max(1, finiteNumber(box?.width, 1));
+  const cropHeight = Math.max(1, finiteNumber(box?.height, 1));
+  return (
+    <div className="box-edit-preview-item">
+      {label && <span>{label}</span>}
+      <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}` }}>
+        {page?.sourceImageUri ? (
+          <img
+            src={filePreviewUrl(page.sourceImageUri)}
+            alt={`${label} 영역 미리보기`}
+            draggable={false}
+            style={{
+              width: `${(pageWidth / cropWidth) * 100}%`,
+              left: `${(-finiteNumber(box?.left, 0) / cropWidth) * 100}%`,
+              top: `${(-finiteNumber(box?.top, 0) / cropHeight) * 100}%`,
+            }}
+          />
+        ) : (
+          <span className="box-edit-preview-empty">미리보기 없음</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BoxEditStitchedPreview({ pages, segments }){
+  const segmentList = segments || [];
+  return (
+    <div className="box-edit-stitched-preview" aria-label="합친 지문 결과 미리보기">
+      <div className="box-edit-stitched-preview-head">
+        <strong>합친 결과</strong>
+        <span>위에서 아래로 {segmentList.length}개 영역</span>
+      </div>
+      <div className="box-edit-stitched-fragments">
+        {segmentList.map((segment, index) => {
+          const sourcePage = (pages || []).find(page => String(page?.id || '') === String(segment?.pageId || ''));
+          return (
+            <div className="box-edit-stitched-fragment" key={segment.id || `${segment.pageId}-${index}`}>
+              <BoxEditPreview
+                label={`${index + 1} · ${reviewSourcePageLabel(pages, segment.pageId)} · ${manualSplitBoxSizeLabel(segment.bbox)}`}
+                page={sourcePage}
+                box={segment.bbox}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BoxEditPanel({
+  page,
+  pages,
+  problem,
+  displayNumber,
+  originalBox,
+  box,
+  originalSegments,
+  segments,
+  selectedSegmentId,
+  multi,
+  addingSegment,
+  mode,
+  mutating,
+  aiAvailable,
+  aiBusy,
+  onModeChange,
+  onToggleAddSegment,
+  onSelectSegment,
+  onDeleteSegment,
+  onMoveSegment,
+  onReset,
+  onCancel,
+  onApply,
+}){
+  const segmentList = segments || [];
+  const selectedSegment = segmentList.find(segment => segment.id === selectedSegmentId) || segmentList[0] || null;
+  const selectedOriginalSegment = (originalSegments || []).find(segment => segment.id === selectedSegment?.id) || null;
+  const selectedPage = (pages || []).find(item => item.id === selectedSegment?.pageId) || page;
+  const selectedBox = selectedSegment?.bbox || box;
+  const selectedOriginalBox = selectedOriginalSegment?.bbox || (multi ? selectedBox : originalBox) || selectedBox;
+  const changed = multi
+    ? !boxEditSegmentsEqual(originalSegments, segmentList)
+    : !reviewBoxesEqual(originalBox, box);
+  const recognizeMode = !multi && mode === 'recognize';
+  const recognizeDisabled = !aiAvailable || aiBusy;
+  const busy = mutating || (recognizeMode && aiBusy);
+  const segmentValidation = boxEditSegmentValidation(segmentList);
+  const canApply = multi ? segmentValidation.valid && changed : recognizeMode || changed;
+  const nearPageEdge = finiteNumber(selectedBox?.left, 0) < 4
+    || finiteNumber(selectedBox?.top, 0) < 4
+    || finiteNumber(selectedBox?.left, 0) + finiteNumber(selectedBox?.width, 0) > finiteNumber(selectedPage?.width, 1) - 4
+    || finiteNumber(selectedBox?.top, 0) + finiteNumber(selectedBox?.height, 0) > finiteNumber(selectedPage?.height, 1) - 4;
+  const sourcePageCount = new Set(segmentList.map(segment => segment.pageId)).size;
+  return (
+    <aside className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 다시 잡기 확인 패널">
+      <div className="box-edit-panel-head">
+        <div>
+          <span>선택된 항목</span>
+          <strong>{multi ? (problem?.title || '선택 지문') : displayNumber ? `${displayNumber}번 문항` : (problem?.title || '선택 문항')}</strong>
+        </div>
+        <button className="icon-btn" type="button" aria-label="영역 편집 취소" onClick={onCancel} disabled={mutating}>
+          {Icon.close}
+        </button>
+      </div>
+      <div className="box-edit-panel-section">
+        <h3>{multi ? '지문 여러 영역 이어붙이기' : '영역 다시 잡기'}</h3>
+        <p>{multi
+          ? '분할선이나 페이지를 넘어가는 지문을 여러 번 드래그하세요. 아래 순서대로 한 지문이 됩니다.'
+          : '시험지 위의 파란 테두리와 조절점을 직접 움직이세요.'}</p>
+      </div>
+      {multi && (
+        <div className="box-edit-panel-section multi-crop-segment-section">
+          <div className="box-edit-section-head">
+            <h4>이어붙일 영역</h4>
+            <button
+              className={`btn ${addingSegment ? 'primary' : ''}`}
+              type="button"
+              aria-pressed={addingSegment}
+              onClick={onToggleAddSegment}
+              disabled={busy || segmentList.length >= 32}
+            >
+              {Icon.crop} {addingSegment ? '페이지에서 드래그…' : '영역 추가'}
+            </button>
+          </div>
+          <p>페이지가 달라도 추가할 수 있습니다. 목록 순서가 최종 읽기 순서입니다.</p>
+          <div className="multi-crop-segment-list">
+            {segmentList.map((segment, index) => (
+              <div key={segment.id} className={`multi-crop-segment-row ${segment.id === selectedSegment?.id ? 'selected' : ''}`}>
+                <button type="button" className="multi-crop-segment-main" onClick={() => onSelectSegment?.(segment.id)}>
+                  <strong>{index + 1}</strong>
+                  <span title={segment.pageId}>{reviewSourcePageLabel(pages, segment.pageId)}<small>{manualSplitBoxSizeLabel(segment.bbox)}</small></span>
+                </button>
+                <div className="multi-crop-segment-actions">
+                  <button type="button" className="icon-btn" aria-label={`${index + 1}번째 영역 위로`} onClick={() => onMoveSegment?.(segment.id, -1)} disabled={busy || index === 0}>{Icon.arrowUp}</button>
+                  <button type="button" className="icon-btn" aria-label={`${index + 1}번째 영역 아래로`} onClick={() => onMoveSegment?.(segment.id, 1)} disabled={busy || index === segmentList.length - 1}>{Icon.arrowDown}</button>
+                  <button type="button" className="icon-btn danger" aria-label={`${index + 1}번째 영역 삭제`} onClick={() => onDeleteSegment?.(segment.id)} disabled={busy || segmentList.length <= 1}>{Icon.trash}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="box-edit-panel-section">
+        <div className="box-edit-section-head">
+          <h4>미리보기</h4>
+          <button className="text-action" type="button" onClick={onReset} disabled={mutating || !changed}>원래 영역으로</button>
+        </div>
+        <div className="box-edit-previews">
+          <BoxEditPreview label="조정 전" page={selectedPage} box={selectedOriginalBox} />
+          <BoxEditPreview label="조정 후" page={selectedPage} box={selectedBox} />
+        </div>
+        {multi && <BoxEditStitchedPreview pages={pages} segments={segmentList} />}
+        <p className="box-edit-keyboard-help">방향키 1px 이동 · Shift+방향키 10px 이동</p>
+      </div>
+      {!multi && <div className="box-edit-panel-section">
+        <h4>적용 방식</h4>
+        <label className={`box-edit-mode ${recognizeMode ? '' : 'selected'}`}>
+          <input
+            type="radio"
+            name="box-edit-mode"
+            checked={!recognizeMode}
+            onChange={() => onModeChange?.('crop')}
+            disabled={busy}
+          />
+          <span><strong>자르기만 적용</strong><small>영역의 크기와 위치만 조정합니다.</small></span>
+        </label>
+        <label
+          className={`box-edit-mode ${recognizeMode ? 'selected' : ''} ${recognizeDisabled ? 'disabled' : ''}`}
+          title={!aiAvailable ? 'Gemini API 키를 먼저 저장해 주세요' : aiBusy ? '다른 AI 인식이 진행 중입니다' : '현재 문항의 ID, 번호, 순서를 유지하며 경계를 다시 찾습니다'}
+        >
+          <input
+            type="radio"
+            name="box-edit-mode"
+            checked={recognizeMode}
+            onChange={() => onModeChange?.('recognize')}
+            disabled={recognizeDisabled || mutating}
+          />
+          <span>
+            <strong>이 영역 다시 인식</strong>
+            <small>
+              {!aiAvailable
+                ? 'Gemini API 키 필요 · 현재 문항은 그대로 유지됩니다.'
+                : aiBusy
+                  ? '다른 AI 인식이 끝난 뒤 사용할 수 있습니다.'
+                  : '여러 후보가 나와도 하나의 경계로 합치며 번호와 순서를 유지합니다.'}
+            </small>
+          </span>
+        </label>
+      </div>}
+      {nearPageEdge && (
+        <div className="box-edit-warning" role="status">
+          <strong>페이지 가장자리에 닿아 있습니다.</strong>
+          <span>글자나 그림이 잘리지 않았는지 미리보기를 확인하세요.</span>
+        </div>
+      )}
+      {multi && segmentValidation.hardIssues.length > 0 && (
+        <div className="box-edit-warning error" role="alert">
+          <strong>합칠 수 없는 영역이 있습니다.</strong>
+          <span>{segmentValidation.hardIssues.join(' ')}</span>
+        </div>
+      )}
+      {multi && segmentValidation.warnings.length > 0 && (
+        <div className="box-edit-warning" role="status">
+          <strong>겹친 내용을 확인하세요.</strong>
+          <span>{segmentValidation.warnings.join(' ')}</span>
+        </div>
+      )}
+      <div className="box-edit-impact">
+        <span>영향 요약</span>
+        <strong>
+          {multi
+            ? `영역 ${segmentList.length}개 · ${sourcePageCount}페이지를 한 지문으로 교체`
+            : displayNumber ? `${displayNumber}번 문항만 교체` : '선택 문항만 교체'}
+          {' '}<small>· ID와 순서 유지</small>
+        </strong>
+      </div>
+      <div className="box-edit-panel-footer">
+        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={busy}>취소</button>
+        <button
+          className="btn primary"
+          type="button"
+          aria-keyshortcuts="Enter"
+          onClick={onApply}
+          disabled={busy || !canApply || (recognizeMode && !aiAvailable)}
+        >
+          {recognizeMode ? Icon.wand : Icon.check}{' '}
+          {multi
+            ? (mutating ? '이어붙이는 중…' : '합치고 다음 검수')
+            : recognizeMode
+            ? (aiBusy ? '인식 중…' : '다시 인식')
+            : (mutating ? '적용 중…' : '적용')}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 function ManualSplitEditor({
   page,
   regions,
@@ -771,8 +1349,12 @@ function ManualSplitEditor({
   onReorderRegion,
   onApply,
   onStampSizeChange,
+  panelSide,
+  onPanelSideChange,
+  shortcutHelpOpen,
 }){
   const dragRegionIdRef = useRef(null);
+  const [listDragState, setListDragState] = useState(null);
   const selectedCount = selectedRegionIds?.size || 0;
   const regionList = regions || [];
   const activeMode = mode === 'stamp' ? 'stamp' : 'draw';
@@ -786,14 +1368,15 @@ function ManualSplitEditor({
   const handleDrop = (evt, targetId) => {
     evt.preventDefault();
     const sourceId = evt.dataTransfer?.getData('text/plain') || dragRegionIdRef.current;
-    dragRegionIdRef.current = null;
-    if (!sourceId || sourceId === targetId) return;
     const position = dropPositionFromClientY(evt.currentTarget.getBoundingClientRect(), evt.clientY);
+    dragRegionIdRef.current = null;
+    setListDragState(null);
+    if (!sourceId || sourceId === targetId) return;
     onReorderRegion?.(sourceId, targetId, position);
   };
 
   return (
-    <div className="manual-split-layout">
+    <div className={`manual-split-layout panel-${panelSide}`}>
       <div className="manual-split-canvas-shell">
         <ReviewCanvasZoomShell>
           <div
@@ -803,7 +1386,7 @@ function ManualSplitEditor({
             onMouseLeave={(evt) => onCanvasMouseLeave?.(evt, page)}
           >
             {page.sourceImageUri ? (
-              <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} draggable={false} />
             ) : (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                 페이지 이미지를 불러올 수 없어요.
@@ -859,8 +1442,20 @@ function ManualSplitEditor({
       </div>
       <aside className="manual-split-panel" aria-label="수동 분할 영역 목록">
         <div className="manual-split-panel-head">
-          <strong>영역 {regionList.length}개</strong>
-          {hasOverlap && <span className="manual-split-warning">겹침 있음</span>}
+          <span className="manual-split-panel-title" aria-live="polite">
+            <strong>영역 {regionList.length}개</strong>
+            {hasOverlap && <span className="manual-split-warning">겹침 있음</span>}
+          </span>
+          <button
+            type="button"
+            className="icon-btn manual-split-panel-move"
+            title={`패널을 ${panelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동`}
+            aria-label={`영역 패널을 ${panelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동`}
+            aria-keyshortcuts="P"
+            onClick={() => onPanelSideChange?.(panelSide === 'right' ? 'left' : 'right')}
+          >
+            {panelSide === 'right' ? Icon.arrowLeft : Icon.arrowRight}
+          </button>
         </div>
         <div className="manual-split-toolset" aria-label="영역 생성 방식">
           <button
@@ -885,76 +1480,100 @@ function ManualSplitEditor({
             <span>스탬프</span>
           </button>
         </div>
-        <div className="manual-stamp-card">
-          <div className="manual-stamp-card-head">
-            <span className="manual-stamp-size">
-              {Icon.stamp}
-              <strong>{manualSplitBoxSizeLabel({ width: stampWidth, height: stampHeight })}</strong>
-            </span>
-            <span className="manual-stamp-scale-actions" aria-label="스탬프 크기 빠른 조절">
-              <button
-                type="button"
-                className="icon-btn"
-                title="스탬프 10% 축소"
-                disabled={mutating}
-                onClick={() => onStampSizeChange?.({
-                  width: Math.round(stampWidth * 0.9),
-                  height: Math.round(stampHeight * 0.9),
-                })}
-              >
-                {Icon.zoomOut}
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                title="스탬프 10% 확대"
-                disabled={mutating}
-                onClick={() => onStampSizeChange?.({
-                  width: Math.round(stampWidth * 1.1),
-                  height: Math.round(stampHeight * 1.1),
-                })}
-              >
-                {Icon.zoomIn}
-              </button>
-            </span>
+        {activeMode === 'stamp' ? (
+          <div className="manual-stamp-card">
+            <div className="manual-stamp-card-head">
+              <span className="manual-stamp-size">
+                {Icon.stamp}
+                <strong>{manualSplitBoxSizeLabel({ width: stampWidth, height: stampHeight })}</strong>
+              </span>
+              <span className="manual-stamp-scale-actions" aria-label="스탬프 크기 빠른 조절">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="스탬프 10% 축소"
+                  disabled={mutating}
+                  onClick={() => onStampSizeChange?.({
+                    width: Math.round(stampWidth * 0.9),
+                    height: Math.round(stampHeight * 0.9),
+                  })}
+                >
+                  {Icon.zoomOut}
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="스탬프 10% 확대"
+                  disabled={mutating}
+                  onClick={() => onStampSizeChange?.({
+                    width: Math.round(stampWidth * 1.1),
+                    height: Math.round(stampHeight * 1.1),
+                  })}
+                >
+                  {Icon.zoomIn}
+                </button>
+              </span>
+            </div>
+            <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
+              <label className="manual-stamp-field">
+                <span>가로</span>
+                <input
+                  type="number"
+                  min="24"
+                  max={pageWidth}
+                  step="10"
+                  value={stampWidth}
+                  disabled={mutating}
+                  onChange={(evt) => onStampSizeChange?.({ width: evt.target.value })}
+                />
+              </label>
+              <label className="manual-stamp-field">
+                <span>세로</span>
+                <input
+                  type="number"
+                  min="24"
+                  max={pageHeight}
+                  step="10"
+                  value={stampHeight}
+                  disabled={mutating}
+                  onChange={(evt) => onStampSizeChange?.({ height: evt.target.value })}
+                />
+              </label>
+            </div>
           </div>
-          <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
-            <label className="manual-stamp-field">
-              <span>가로</span>
-              <input
-                type="number"
-                min="24"
-                max={pageWidth}
-                step="10"
-                value={stampWidth}
-                disabled={mutating}
-                onChange={(evt) => onStampSizeChange?.({ width: evt.target.value })}
-              />
-            </label>
-            <label className="manual-stamp-field">
-              <span>세로</span>
-              <input
-                type="number"
-                min="24"
-                max={pageHeight}
-                step="10"
-                value={stampHeight}
-                disabled={mutating}
-                onChange={(evt) => onStampSizeChange?.({ height: evt.target.value })}
-              />
-            </label>
-          </div>
+        ) : canSaveStamp ? (
           <button
             type="button"
-            className="btn"
-            title="선택 영역 크기를 다음 스탬프로 저장"
-            disabled={mutating || !canSaveStamp}
+            className="manual-stamp-quick"
+            title="선택 영역 크기로 같은 크기 자르기를 계속합니다"
+            disabled={mutating}
             onClick={() => onSaveStampFromSelection?.(selectedRegion?.id)}
           >
-            {Icon.check}
-            이 크기로 계속
+            {Icon.stamp}
+            <span>선택 크기로 반복</span>
+            <strong>{manualSplitBoxSizeLabel(selectedRegion?.bbox)}</strong>
           </button>
+        ) : null}
+        <div className="manual-split-shortcuts" aria-label="수동 분할 단축키">
+          <span>G 드래그</span>
+          <span>S 스탬프</span>
+          <span>P 패널 이동</span>
+          <span>Enter 적용</span>
         </div>
+        {shortcutHelpOpen && (
+          <div className="manual-split-shortcut-guide" id="manual-split-shortcuts" aria-label="수동 자르기 단축키 전체 목록">
+            <span><kbd>G</kbd> 드래그 모드</span>
+            <span><kbd>S</kbd> 스탬프 모드</span>
+            <span><kbd>P</kbd> 패널 좌우 이동</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 전체 선택</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} D</kbd> 선택 복제</span>
+            <span><kbd>방향키</kbd> 1px 이동</span>
+            <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
+            <span><kbd>Delete</kbd> 선택 삭제</span>
+            <span><kbd>Enter</kbd> 분할 적용</span>
+            <span><kbd>Esc</kbd> 선택 해제·취소</span>
+          </div>
+        )}
         {regionList.length === 0 ? (
           <div className="manual-split-empty">
             {activeMode === 'stamp'
@@ -969,21 +1588,41 @@ function ManualSplitEditor({
               return (
                 <div
                   key={region.id}
-                  className={`manual-split-row ${isSelected ? 'selected' : ''}`}
+                  className={[
+                    'manual-split-row',
+                    isSelected ? 'selected' : '',
+                    listDragState?.sourceId === region.id ? 'is-dragging' : '',
+                    listDragState?.targetId === region.id ? `drop-${listDragState.position}` : '',
+                  ].filter(Boolean).join(' ')}
                   draggable={!mutating}
+                  aria-label={`${String(region.order || index + 1).padStart(2, '0')} ${region.title}`}
                   onClick={(evt) => onListSelect?.(region.id, evt)}
                   onDragStart={(evt) => {
                     dragRegionIdRef.current = region.id;
+                    setListDragState({ sourceId: region.id, targetId: null, position: null });
                     evt.dataTransfer.effectAllowed = 'move';
                     evt.dataTransfer.setData('text/plain', region.id);
                   }}
                   onDragOver={(evt) => {
                     evt.preventDefault();
                     evt.dataTransfer.dropEffect = 'move';
+                    const position = dropPositionFromClientY(evt.currentTarget.getBoundingClientRect(), evt.clientY);
+                    setListDragState(state => {
+                      if (state?.targetId === region.id && state?.position === position) return state;
+                      return {
+                        sourceId: state?.sourceId || dragRegionIdRef.current,
+                        targetId: region.id,
+                        position,
+                      };
+                    });
                   }}
                   onDrop={(evt) => handleDrop(evt, region.id)}
-                  onDragEnd={() => { dragRegionIdRef.current = null; }}
+                  onDragEnd={() => {
+                    dragRegionIdRef.current = null;
+                    setListDragState(null);
+                  }}
                 >
+                  <span className="manual-split-row-grip" title="끌어서 순서 변경" aria-hidden="true">{Icon.rows3}</span>
                   <span className="manual-split-row-order">{String(region.order || index + 1).padStart(2, '0')}</span>
                   <button
                     type="button"
@@ -1051,6 +1690,11 @@ function ManualSplitEditor({
           <div className="manual-split-note">{selectedCount}개 선택됨</div>
         )}
         <div className="manual-split-panel-actions">
+          <span className="manual-split-apply-summary" aria-live="polite">
+            {regionList.length
+              ? `${regionList.length}개 영역을 새 문제로 만들어요`
+              : '영역을 하나 이상 만들어 주세요'}
+          </span>
           <button
             type="button"
             className="btn primary"
@@ -1060,7 +1704,7 @@ function ManualSplitEditor({
             onClick={() => onApply?.()}
           >
             {Icon.check}
-            분할 적용 {regionList.length}
+            {mutating ? '분할 적용 중…' : `분할 적용 ${regionList.length}`}
           </button>
         </div>
       </aside>
@@ -1134,10 +1778,18 @@ function TooltipLayer(){
       target?.closest?.('[data-tooltip], [title]')
     );
     const onPointerOver = (event) => {
+      if (event.buttons) {
+        hideTooltip();
+        return;
+      }
       const target = tooltipTarget(event.target);
       if (target) showTooltipFor(target);
     };
     const onPointerMove = (event) => {
+      if (event.buttons) {
+        hideTooltip();
+        return;
+      }
       const target = tooltipTarget(event.target);
       if (target && target !== activeRef.current) {
         showTooltipFor(target);
@@ -1158,7 +1810,7 @@ function TooltipLayer(){
       if (event.key === 'Escape') hideTooltip();
     };
     document.addEventListener('pointerover', onPointerOver, true);
-    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
     document.addEventListener('pointerout', onPointerOut, true);
     document.addEventListener('focusin', onFocusIn, true);
     document.addEventListener('focusout', hideTooltip, true);
@@ -1192,7 +1844,12 @@ function TooltipLayer(){
   );
 }
 
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo, onShutdown, onExportImages, exportingImages, canExportImages }){
+function TopBar({
+  fileName, setFileName, progress, processed, total, onPublish, published, onReset,
+  onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewComplete,
+  recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
+  canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
+}){
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef(null);
   useEffect(() => {
@@ -1220,22 +1877,48 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
       </div>
       <div className="crumb">
         <span>수업 ›</span>
-        <input value={fileName} onChange={e => setFileName(e.target.value)} />
+        <input value={fileName} onChange={e => setFileName(e.target.value)} disabled={pageReviewActive || conflictBlocked} />
       </div>
       <div className="spacer" />
-      <div className="view-toggle" title={reviewAvailable ? '' : '먼저 자료를 업로드하세요'}>
+      <div className="workflow-progress" aria-label="자료 제작 진행 단계">
+        <span className={`workflow-step ${total > 0 ? 'done' : 'active'}`} aria-current={total === 0 ? 'step' : undefined}>
+          1 자료
+        </span>
+        <span
+          className={`workflow-step ${pageReviewActive ? 'active' : reviewAvailable ? 'done' : recognitionBusy ? 'active' : ''}`}
+          aria-current={pageReviewActive || recognitionBusy ? 'step' : undefined}
+        >
+          2 인식
+        </span>
         <button
-          className={view === 'board' ? 'on' : ''}
-          data-tooltip="보드 배치 화면으로 이동"
-          onClick={() => setView && setView('board')}
-        >칠판</button>
-        <button
-          className={view === 'review' ? 'on' : ''}
+          className={`workflow-step ${reviewComplete ? 'done' : !pageReviewActive && view === 'review' ? 'active' : ''}`}
+          type="button"
+          aria-label="검수"
           data-tooltip={reviewAvailable ? 'AI 인식 박스와 문제 분할을 검수' : '먼저 자료를 업로드하세요'}
-          onClick={() => reviewAvailable && setView && setView('review')}
-          disabled={!reviewAvailable}
-          style={!reviewAvailable ? { cursor: 'not-allowed', opacity: .5 } : null}
-        >검수</button>
+          aria-current={!pageReviewActive && view === 'review' ? 'step' : undefined}
+          onClick={() => reviewAvailable && setView?.('review')}
+          disabled={pageReviewActive || !reviewAvailable}
+        >
+          3 검수
+        </button>
+        <button
+          className={`workflow-step ${published ? 'done' : !pageReviewActive && view === 'board' && total > 0 ? 'active' : ''}`}
+          type="button"
+          aria-label="칠판"
+          data-tooltip="보드 배치 화면으로 이동"
+          aria-current={!pageReviewActive && view === 'board' && total > 0 ? 'step' : undefined}
+          onClick={() => total > 0 && setView?.('board')}
+          disabled={pageReviewActive || !total}
+        >
+          4 칠판
+        </button>
+        <span
+          className={`workflow-step ${published ? 'done active' : ''}`}
+          aria-current={published ? 'step' : undefined}
+          aria-disabled={!total ? 'true' : undefined}
+        >
+          5 제작
+        </span>
       </div>
       <div className="progress" title={`${processed} / ${total} 처리됨`}>
         <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
@@ -1245,26 +1928,42 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
         <button
           className="btn ghost icon"
           type="button"
-          title={canReset ? '초기화' : '초기화할 내용이 없습니다'}
-          data-tooltip={canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
+          title={pageReviewActive
+            ? '페이지 확인을 먼저 마쳐 주세요'
+            : conflictBlocked
+              ? '오류 안내에서 최신 상태를 불러오거나 배치를 합친 뒤 초기화할 수 있습니다'
+            : resetBlocked
+              ? '진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다'
+              : operationBusy
+                ? '현재 작업이 끝난 뒤 초기화할 수 있습니다'
+                : canReset ? '초기화' : '초기화할 내용이 없습니다'}
+          data-tooltip={pageReviewActive
+            ? '페이지 확인 중에는 초기화할 수 없습니다'
+            : conflictBlocked
+              ? '최신 상태 선택 후 초기화할 수 있습니다'
+            : resetBlocked
+              ? '진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다'
+              : operationBusy
+                ? '현재 작업이 끝난 뒤 초기화할 수 있습니다'
+                : canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
           aria-label="초기화"
           onClick={onReset}
-          disabled={!canReset}
+          disabled={pageReviewActive || operationBusy || !canReset}
         >
           {Icon.reset}
         </button>
         <button
           className="btn ghost icon"
-          title={canUndo ? '되돌리기 (Ctrl/Cmd+Z)' : '되돌릴 변경이 없습니다'}
+          title={canUndo ? `되돌리기 (${PRIMARY_MODIFIER_LABEL}+Z)` : '되돌릴 변경이 없습니다'}
           data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
           aria-label="되돌리기"
           onClick={onUndo}
-          disabled={!canUndo}
+          disabled={pageReviewActive || operationBusy || !canUndo}
         >{Icon.undo}</button>
         <button
           className="btn ghost icon"
           onClick={onRefresh}
-          disabled={refreshing}
+          disabled={refreshing || pageReviewActive || operationBusy}
           title={refreshing ? '세션 새로고침 중' : '저장된 최신 세션 다시 읽기'}
           data-tooltip={refreshing ? '저장된 최신 세션을 읽는 중' : '디스크에 저장된 최신 세션을 다시 읽기'}
           aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}
@@ -1278,7 +1977,7 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
           data-tooltip={canExportImages ? '현재 선택한 처리 단계 기준으로 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
           aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
           onClick={onExportImages}
-          disabled={!canExportImages || exportingImages}
+          disabled={pageReviewActive || operationBusy || !canExportImages || exportingImages}
         >
           {Icon.download}
         </button>
@@ -1312,8 +2011,13 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
       </div>
       <button
         className={`btn primary ${published ? 'done' : ''}`}
-        data-tooltip={published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
+        data-tooltip={pageReviewActive
+          ? '페이지 확인 후 제작할 수 있습니다'
+          : conflictBlocked
+            ? '오류 안내에서 최신 상태를 먼저 선택해 주세요'
+            : published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
         onClick={onPublish}
+        disabled={pageReviewActive || operationBusy}
       >
         {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
       </button>
@@ -1322,9 +2026,65 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
+function ReviewToolbarGroup({ label, className = '', ariaLabel, children }){
+  return (
+    <div className={`review-toolbar-group ${className}`.trim()} role="group" aria-label={ariaLabel || label}>
+      <span className="review-toolbar-group-label">{label}</span>
+      <div className="review-toolbar-group-content">{children}</div>
+    </div>
+  );
+}
+
+function ReviewFilterTabs({ options, value, onChange }){
+  return (
+    <div className="review-filters" role="group" aria-label="검수 상태 필터">
+      {options.map(([filterValue, label, count]) => (
+        <button
+          key={filterValue}
+          className={value === filterValue ? 'on' : ''}
+          type="button"
+          aria-pressed={value === filterValue}
+          onClick={() => onChange(filterValue)}
+        >
+          {label} <span>{count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function nextUnresolvedReviewTargetAfter(session, anchorPageId, { includeAnchorPage = false } = {}){
+  const targets = sessionReviewSummary(session).unresolvedReviewTargets || [];
+  if (!targets.length) return null;
+  const pageOrder = new Map(
+    (session?.pages || []).map((page, index) => [String(page?.id || ''), index])
+  );
+  const anchorIndex = pageOrder.get(String(anchorPageId || ''));
+  if (!Number.isInteger(anchorIndex)) return targets[0]?.id || null;
+  let nextTarget = null;
+  let nextTargetIndex = Number.POSITIVE_INFINITY;
+  let wrapTarget = null;
+  let wrapTargetIndex = Number.POSITIVE_INFINITY;
+  targets.forEach(target => {
+    const targetIndex = pageOrder.get(String(target?.pageId || ''));
+    if (!Number.isInteger(targetIndex)) return;
+    if (targetIndex < wrapTargetIndex) {
+      wrapTarget = target;
+      wrapTargetIndex = targetIndex;
+    }
+    const followsAnchor = includeAnchorPage ? targetIndex >= anchorIndex : targetIndex > anchorIndex;
+    if (followsAnchor && targetIndex < nextTargetIndex) {
+      nextTarget = target;
+      nextTargetIndex = targetIndex;
+    }
+  });
+  return nextTarget?.id || wrapTarget?.id || targets[0]?.id || null;
+}
+
 function ReviewStage({
   session, items, activeId, setActive, mutateSession, retryAiSession, mutating,
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
+  onEditorModeChange, onOpenBoard, selectedIds, setSelectedIds, reviewUi, setReviewUi,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const problemsById = useMemo(() => {
@@ -1332,6 +2092,10 @@ function ReviewStage({
     (session?.problems || []).forEach(p => { if (p && p.id) map.set(p.id, p); });
     return map;
   }, [session]);
+  const passageOnlyReview = Boolean(
+    (session?.problems || []).length
+    && (session?.problems || []).every(problem => isPassageFragmentProblem(problem))
+  );
   // Problem display number reflects the current rail order (user reordering /
   // excluding is honoured here, so the chip on each bbox matches the rail).
   const orderMap = useMemo(() => {
@@ -1340,61 +2104,171 @@ function ReviewStage({
     return map;
   }, [items]);
 
-  // Multi-select state: ids of bboxes currently selected. Clicking without
-  // shift replaces selection; shift-click toggles.
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
-  // Split mode: when set to a problem id, that bbox shows a draggable
-  // horizontal guideline. The ratio is in (0, 1).
-  const [splitTarget, setSplitTarget] = useState(null);
-  const [splitRatio, setSplitRatio] = useState(0.5);
   const [boxEdit, setBoxEdit] = useState(null);
+  const [boxEditDraftBox, setBoxEditDraftBox] = useState(null);
   const [manualSplit, setManualSplit] = useState(null);
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
-  const [reviewFilter, setReviewFilter] = useState('all');
-  const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
+  const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
+  const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
+  const [reviewDiagnosticsOpen, setReviewDiagnosticsOpen] = useState(false);
+  const [focusedPageReviewTargetId, setFocusedPageReviewTargetId] = useState('');
+  const [pendingReviewNavigation, setPendingReviewNavigation] = useState(null);
+  const reviewFilter = reviewUi?.filter || 'all';
+  const reviewRiskFilter = reviewUi?.riskFilter || null;
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
   const [reviewScopePageIds, setReviewScopePageIds] = useState([]);
-  const [reviewZoom, setReviewZoom] = useState(1);
-  const splitDraggingRef = useRef(false);
-  const splitBoxRef = useRef(null);
+  const reviewZoom = clampReviewZoom(reviewUi?.zoom || 1);
+  const updateReviewUiField = useCallback((field, value) => {
+    setReviewUi?.(prev => {
+      const previous = prev || {};
+      const nextValue = typeof value === 'function' ? value(previous[field]) : value;
+      return previous[field] === nextValue ? previous : { ...previous, [field]: nextValue };
+    });
+  }, [setReviewUi]);
+  const setReviewFilter = useCallback(value => updateReviewUiField('filter', value), [updateReviewUiField]);
+  const setReviewRiskFilter = useCallback(value => updateReviewUiField('riskFilter', value), [updateReviewUiField]);
+  const setReviewZoom = useCallback(value => updateReviewUiField('zoom', value), [updateReviewUiField]);
   const boxEditDragRef = useRef(null);
   const boxEditCommitRef = useRef(false);
+  const boxEditSeqRef = useRef(1);
   const manualSplitDragRef = useRef(null);
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
   const manualSplitFocusRef = useRef('');
-  const pendingBoxEditProblemIdRef = useRef('');
+  const pendingReviewSelectionProblemIdRef = useRef('');
+  const reviewNavigationSeqRef = useRef(0);
+  const reviewSelectionAnchorRef = useRef(null);
   const reviewWrapRef = useRef(null);
+  const reviewScrollSyncFrameRef = useRef(null);
+  const reviewZoomCenterFrameRef = useRef(null);
+  const reviewZoomCenterSecondFrameRef = useRef(null);
+  const reviewWheelFrameRef = useRef(null);
+  const reviewWheelDeltaRef = useRef(0);
+  const reviewScrollTopRef = useRef(Number(reviewUi?.scrollTop) || 0);
+  const [reviewPageNav, setReviewPageNav] = useState({ current: 1, total: pages.length });
+  const reviewEditorActive = Boolean(boxEdit || manualSplit);
 
-  // Cancel split mode if the session changes underneath (e.g. after a mutation).
+  const syncReviewPageNavigation = useCallback((wrap = reviewWrapRef.current) => {
+    if (!wrap) return;
+    const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+    if (!pageNodes.length) {
+      setReviewPageNav(prev => (prev.current === 0 && prev.total === 0 ? prev : { current: 0, total: 0 }));
+      return;
+    }
+    const markerTop = wrap.getBoundingClientRect().top + 24;
+    const currentIndex = Math.max(0, pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop));
+    const next = { current: currentIndex + 1, total: pageNodes.length };
+    setReviewPageNav(prev => (
+      prev.current === next.current && prev.total === next.total ? prev : next
+    ));
+  }, []);
+
+  const jumpReviewPage = useCallback((direction) => {
+    const wrap = reviewWrapRef.current;
+    if (!wrap || manualSplit) return;
+    const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+    if (!pageNodes.length) return;
+    const markerTop = wrap.getBoundingClientRect().top + 24;
+    const visibleIndex = pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop);
+    const currentIndex = visibleIndex < 0 ? pageNodes.length - 1 : visibleIndex;
+    const targetIndex = Math.max(0, Math.min(pageNodes.length - 1, currentIndex + direction));
+    const wrapRect = wrap.getBoundingClientRect();
+    const targetRect = pageNodes[targetIndex].getBoundingClientRect();
+    const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+    setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
+    smoothScrollTo(wrap, targetTop, 220);
+  }, [manualSplit]);
+
+  const handleReviewScroll = useCallback((event) => {
+    const wrap = event.currentTarget;
+    reviewScrollTopRef.current = wrap.scrollTop;
+    if (reviewScrollSyncFrameRef.current != null) return;
+    reviewScrollSyncFrameRef.current = window.requestAnimationFrame(() => {
+      reviewScrollSyncFrameRef.current = null;
+      syncReviewPageNavigation(wrap);
+    });
+  }, [syncReviewPageNavigation]);
+
   useEffect(() => {
-    setSplitTarget(null);
+    onEditorModeChange?.(reviewEditorActive);
+  }, [onEditorModeChange, reviewEditorActive]);
+  useEffect(() => () => onEditorModeChange?.(false), [onEditorModeChange]);
+  useEffect(() => () => {
+    cancelSmoothScroll(reviewWrapRef.current);
+    if (reviewScrollSyncFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewScrollSyncFrameRef.current);
+    }
+    if (reviewZoomCenterFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterFrameRef.current);
+    }
+    if (reviewZoomCenterSecondFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterSecondFrameRef.current);
+    }
+    if (reviewWheelFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewWheelFrameRef.current);
+    }
+  }, []);
+
+  // Reset transient editors if the session changes underneath after a mutation.
+  useEffect(() => {
     boxEditCommitRef.current = false;
+    setBoxEditDraftBox(null);
     manualSplitCommitRef.current = false;
     setManualSplit(null);
     setManualSplitDraftBox(null);
-    setReviewRiskFilter(null);
-    const pendingProblemId = String(pendingBoxEditProblemIdRef.current || '').trim();
-    pendingBoxEditProblemIdRef.current = '';
+    setManualSplitShortcutHelpOpen(false);
+    const pendingProblemId = String(pendingReviewSelectionProblemIdRef.current || '').trim();
+    pendingReviewSelectionProblemIdRef.current = '';
     if (pendingProblemId) {
+      setReviewFilter('all');
+      setReviewRiskFilter(null);
+      setReviewScopeProblemIds([]);
+      setReviewScopePageIds([]);
+      if (pendingProblemId.startsWith('page:')) {
+        const pendingPageId = pendingProblemId.slice(5);
+        setSelectedIds(new Set());
+        setFocusedPageReviewTargetId(pendingProblemId);
+        reviewNavigationSeqRef.current += 1;
+        setPendingReviewNavigation({
+          requestId: reviewNavigationSeqRef.current,
+          pageId: pendingPageId,
+          targetId: pendingProblemId,
+        });
+        setBoxEdit(null);
+        return;
+      }
       const nextProblem = (session?.problems || []).find(problem => String(problem?.id || '') === pendingProblemId);
-      const nextPage = nextProblem
-        ? (session?.pages || []).find(page => page.id === (nextProblem.sourcePageId || nextProblem.source_page_id))
-        : null;
-      if (nextProblem && nextPage) {
+      if (nextProblem) {
+        setFocusedPageReviewTargetId('');
         setSelectedIds(new Set([pendingProblemId]));
         if (setActive) setActive(pendingProblemId);
-        setBoxEdit({
-          problemId: pendingProblemId,
-          pageId: nextPage.id,
-          box: clampReviewBox(nextProblem.bbox, nextPage),
+        reviewNavigationSeqRef.current += 1;
+        setPendingReviewNavigation({
+          requestId: reviewNavigationSeqRef.current,
+          pageId: String(nextProblem.sourcePageId || nextProblem.source_page_id || ''),
+          targetId: pendingProblemId,
         });
+        setBoxEdit(null);
         return;
       }
     }
     setBoxEdit(null);
-    setSelectedIds(new Set());
   }, [session]);
+  useLayoutEffect(() => {
+    const wrap = reviewWrapRef.current;
+    if (!wrap) return undefined;
+    if (reviewScrollTopRef.current > 0) wrap.scrollTop = reviewScrollTopRef.current;
+    return () => {
+      setReviewUi?.(prev => ({
+        ...(prev || {}),
+        scrollTop: reviewScrollTopRef.current,
+      }));
+    };
+  }, [setReviewUi]);
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(() => syncReviewPageNavigation());
+    return () => window.cancelAnimationFrame(frame);
+  }, [pages, reviewFilter, reviewRiskFilter, reviewScopeProblemIds, reviewScopePageIds, manualSplit, syncReviewPageNavigation]);
   useEffect(() => {
     if (reviewFocus === null) {
       setReviewScopeProblemIds([]);
@@ -1455,25 +2329,21 @@ function ReviewStage({
 
   const onBoxClick = (probId, evt) => {
     if (manualSplit) return;
-    if (splitTarget) return;  // ignore clicks while splitting
     if (boxEdit) {
       evt.preventDefault();
       evt.stopPropagation();
-      if (boxEdit.problemId !== probId) {
-        void applyBoxEdit({ continueWithProblemId: probId });
-      }
       return;
     }
-    if (evt.shiftKey) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        if (next.has(probId)) next.delete(probId);
-        else next.add(probId);
-        return next;
-      });
-    } else {
-      setSelectedIds(new Set([probId]));
-    }
+    const orderedIds = items.map(item => String(item.id)).filter(id => problemsById.has(id));
+    const result = applySelectionClick(
+      orderedIds,
+      Array.from(selectedIds || []),
+      reviewSelectionAnchorRef.current,
+      probId,
+      evt
+    );
+    reviewSelectionAnchorRef.current = result.anchorId;
+    setSelectedIds(new Set(result.selectedIds));
     if (setActive) setActive(probId);
   };
 
@@ -1487,33 +2357,55 @@ function ReviewStage({
     : null;
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
+  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
   const statusCounts = useMemo(() => {
     const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(scopedProblems);
-    if (helperCounts) return helperCounts;
-    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
+    const counts = helperCounts
+      ? { ...helperCounts }
+      : { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
     const passageGroups = new Set();
     scopedProblems.forEach(problem => {
+      const passageGroupId = passageGroupIdFor(problem);
+      if (passageGroupId) {
+        passageGroups.add(passageGroupId);
+      }
+      if (helperCounts) return;
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
-      const passageGroupId = passageGroupIdFor(problem);
-      if (passageGroupId) {
-        counts.passage += 1;
-        passageGroups.add(passageGroupId);
-      }
+      if (passageGroupId) counts.passage += 1;
     });
-    counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
-    counts.passageGroups = passageGroups.size;
+    if (!helperCounts) {
+      counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
+      counts.passageGroups = passageGroups.size;
+    }
+    (reviewSummary.reviewTargets || [])
+      .filter(target => target?.type === 'page')
+      .filter(target => !reviewScopeActive || reviewScopePageIdSet.has(target.pageId))
+      .forEach(target => {
+        const status = normalizeReviewStatus(target.status) || 'check_needed';
+        counts.all += 1;
+        counts[status] = (counts[status] || 0) + 1;
+      });
     return counts;
-  }, [scopedProblems]);
+  }, [reviewScopeActive, reviewScopePageIdSet, reviewSummary.reviewTargets, scopedProblems]);
   const sessionCounts = useMemo(
     () => reviewScopeActive ? countSessionProblems(scopedProblems) : sessionProblemCounts(session),
     [reviewScopeActive, scopedProblems, session]
   );
-  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
+  const reviewStageCopy = reviewStageCopyFor(session, sessionCounts, pages.length);
+  const formatCurrentReviewCount = (counts, options = {}) => formatReviewStageCount(
+    reviewStageCopy.mode,
+    counts,
+    options
+  );
   const passageReviewProblemIds = useMemo(
     () => new Set(reviewSummary.passageReviewProblemIds || []),
     [reviewSummary.passageReviewProblemIds]
+  );
+  const reviewTargetById = useMemo(
+    () => new Map((reviewSummary.reviewTargets || []).map(target => [target.id, target])),
+    [reviewSummary.reviewTargets]
   );
   const riskFilterHasProblemMatches = useMemo(() => {
     if (!reviewRiskFilter) return false;
@@ -1534,12 +2426,18 @@ function ReviewStage({
       const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
       const hasProblemRisk = scopedPageProblems
         .some(problem => deriveProblemStatus(problem) !== 'normal');
-      if (pageStatus === 'failed' || (Array.isArray(pageFlags) && pageFlags.length) || !scopedPageProblems.length || hasProblemRisk) {
+      const pageTarget = reviewTargetById.get(pageReviewTargetId(page));
+      if (
+        pageStatus === 'failed'
+        || (Array.isArray(pageFlags) && pageFlags.length)
+        || pageTarget?.status === 'check_needed'
+        || hasProblemRisk
+      ) {
         ids.push(page.id);
       }
     });
     return listUnique(ids.filter(Boolean));
-  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
+  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet, reviewTargetById]);
   const activeReviewFilter = reviewFilter !== 'all' || Boolean(reviewRiskFilter) || reviewScopeActive;
   const visibleReviewScope = useMemo(() => {
     const retryPageIdSet = new Set();
@@ -1576,6 +2474,36 @@ function ReviewStage({
   const actionableProblemIds = useMemo(() => scopedProblems
     .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
     .map(problem => problem.id), [scopedProblems]);
+  const reviewFlow = useMemo(() => reviewFlowState(reviewSummary), [reviewSummary]);
+  const unresolvedProblemIdSet = useMemo(
+    () => new Set(reviewSummary.unresolvedReviewProblemIds || []),
+    [reviewSummary.unresolvedReviewProblemIds]
+  );
+  const selectedUnresolvedProblemIds = useMemo(
+    () => selectedActionIds.filter(id => unresolvedProblemIdSet.has(id)),
+    [selectedActionIds, unresolvedProblemIdSet]
+  );
+  const focusedUnresolvedPageTarget = (reviewSummary.unresolvedReviewTargets || [])
+    .find(target => (
+      target?.type === 'page'
+      && target.id === focusedPageReviewTargetId
+    )) || null;
+  const nextUnresolvedTarget = focusedUnresolvedPageTarget
+    || (reviewSummary.unresolvedReviewTargets || [])[0]
+    || null;
+  const nextUnresolvedProblemId = nextUnresolvedTarget?.id
+    || (reviewSummary.unresolvedReviewProblemIds || [])[0]
+    || null;
+  const nextUnresolvedIsPage = nextUnresolvedTarget
+    ? nextUnresolvedTarget.type === 'page'
+    : String(nextUnresolvedProblemId || '').startsWith('page:');
+  const nextUnresolvedPageFocused = Boolean(
+    nextUnresolvedIsPage
+    && focusedPageReviewTargetId
+    && focusedPageReviewTargetId === nextUnresolvedProblemId
+  );
+  const nextUnresolvedAfterSelectionId = (reviewSummary.unresolvedReviewProblemIds || [])
+    .find(id => !selectedUnresolvedProblemIds.includes(id)) || null;
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
   const selectedCanBoxEdit = Boolean(
@@ -1709,7 +2637,7 @@ function ReviewStage({
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
     setManualSplitDraftBox(null);
-    setSplitTarget(null);
+    setManualSplitShortcutHelpOpen(false);
     setBoxEdit(null);
     setSelectedIds(new Set(replacementIds));
     setManualSplit({
@@ -1746,8 +2674,16 @@ function ReviewStage({
   }, [reviewFocus, pages]);
 
   const centerReviewZoomScrollers = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
+    if (reviewZoomCenterFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterFrameRef.current);
+    }
+    if (reviewZoomCenterSecondFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterSecondFrameRef.current);
+    }
+    reviewZoomCenterFrameRef.current = window.requestAnimationFrame(() => {
+      reviewZoomCenterFrameRef.current = null;
+      reviewZoomCenterSecondFrameRef.current = window.requestAnimationFrame(() => {
+        reviewZoomCenterSecondFrameRef.current = null;
         reviewWrapRef.current?.querySelectorAll?.('.review-canvas-scroll').forEach(scroller => {
           const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
           if (maxScrollLeft > 1) scroller.scrollLeft = maxScrollLeft / 2;
@@ -1780,18 +2716,30 @@ function ReviewStage({
   }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
-    if (!manualSplit) return;
-    if (!evt.ctrlKey && !evt.metaKey) return;
+    if (!evt.ctrlKey && !evt.metaKey) {
+      cancelSmoothScroll(reviewWrapRef.current);
+      return;
+    }
     if (!evt.target?.closest?.('.review-canvas-scroll')) return;
     evt.preventDefault();
-    adjustReviewZoom(evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
-  }, [adjustReviewZoom, manualSplit]);
+    reviewWheelDeltaRef.current += evt.deltaY;
+    if (reviewWheelFrameRef.current != null) return;
+    reviewWheelFrameRef.current = window.requestAnimationFrame(() => {
+      reviewWheelFrameRef.current = null;
+      const delta = reviewWheelDeltaRef.current;
+      reviewWheelDeltaRef.current = 0;
+      if (delta !== 0) {
+        adjustReviewZoom(delta > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
+      }
+    });
+  }, [adjustReviewZoom]);
 
   const cancelManualPageSplit = () => {
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
     setManualSplitDraftBox(null);
     setManualSplit(null);
+    setManualSplitShortcutHelpOpen(false);
   };
 
   const setManualSplitMode = (mode) => {
@@ -1839,6 +2787,49 @@ function ReviewStage({
         selectedRegionIds: [],
       };
     });
+  };
+
+  const selectAllManualSplitRegions = () => {
+    setManualSplit(prev => {
+      if (!prev || !(prev.regions || []).length) return prev;
+      return {
+        ...prev,
+        selectedRegionIds: (prev.regions || []).map(region => region.id),
+      };
+    });
+  };
+
+  const duplicateManualSplitSelected = () => {
+    if (!manualSplitPage) return;
+    setManualSplit(prev => {
+      const selected = new Set(prev?.selectedRegionIds || []);
+      if (!prev || !selected.size) return prev;
+      const offset = Math.max(12, Math.min(36, Math.min(manualSplitPage.width, manualSplitPage.height) * 0.025));
+      const duplicatedIds = [];
+      const nextRegions = (prev.regions || []).flatMap(region => {
+        if (!selected.has(region.id)) return [region];
+        const copy = {
+          ...region,
+          id: `draft-region-${manualSplitSeqRef.current++}`,
+          bbox: clampReviewBox({
+            ...region.bbox,
+            left: finiteNumber(region.bbox?.left, 0) + offset,
+            top: finiteNumber(region.bbox?.top, 0) + offset,
+          }, manualSplitPage),
+        };
+        duplicatedIds.push(copy.id);
+        return [region, copy];
+      });
+      return {
+        ...prev,
+        regions: renumberManualSplitRegions(nextRegions),
+        selectedRegionIds: duplicatedIds,
+      };
+    });
+  };
+
+  const toggleManualSplitPanelSide = () => {
+    setManualSplitPanelSide(side => side === 'right' ? 'left' : 'right');
   };
 
   const duplicateManualSplitRegion = (regionId) => {
@@ -1961,6 +2952,7 @@ function ReviewStage({
       if (!nextSession) return;
       setManualSplit(null);
       setManualSplitDraftBox(null);
+      setManualSplitShortcutHelpOpen(false);
       manualSplitDragRef.current = null;
     } finally {
       manualSplitCommitRef.current = false;
@@ -2109,59 +3101,219 @@ function ReviewStage({
 
   const beginBoxEdit = () => {
     if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
-    setSplitTarget(null);
     setManualSplit(null);
     setManualSplitDraftBox(null);
+    setBoxEditDraftBox(null);
     boxEditCommitRef.current = false;
+    const multi = isPassageFragmentProblem(selectedSingleProblem);
+    const initialSegments = editableSourceSegmentsForProblem(selectedSingleProblem).flatMap(segment => {
+      const segmentPage = pages.find(page => page.id === segment.pageId);
+      return segmentPage ? [{ ...segment, bbox: clampReviewBox(segment.bbox, segmentPage) }] : [];
+    });
+    const fallbackBox = clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage);
+    const segments = initialSegments.length ? initialSegments : [{
+      id: 'passage-segment-1',
+      pageId: selectedSinglePage.id,
+      order: 1,
+      bbox: fallbackBox,
+    }];
+    const firstSegment = segments[0];
+    const initialBox = firstSegment.bbox;
     setBoxEdit({
       problemId: selectedSingleProblem.id,
-      pageId: selectedSinglePage.id,
-      box: clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage),
+      pageId: firstSegment.pageId,
+      originalBox: initialBox,
+      box: initialBox,
+      originalSegments: segments.map(segment => ({ ...segment, bbox: { ...segment.bbox } })),
+      segments,
+      selectedSegmentId: firstSegment.id,
+      multi,
+      addingSegment: false,
+      mode: 'crop',
     });
   };
   const cancelBoxEdit = () => {
     boxEditDragRef.current = null;
     boxEditCommitRef.current = false;
+    setBoxEditDraftBox(null);
     setBoxEdit(null);
   };
-  const applyBoxEdit = useCallback(async (options = {}) => {
+  const resetBoxEdit = () => {
+    boxEditDragRef.current = null;
+    setBoxEditDraftBox(null);
+    setBoxEdit(prev => {
+      if (!prev?.originalBox) return prev;
+      const segments = (prev.originalSegments || []).map(segment => ({ ...segment, bbox: { ...segment.bbox } }));
+      const selected = segments[0] || null;
+      return {
+        ...prev,
+        pageId: selected?.pageId || prev.pageId,
+        originalBox: { ...prev.originalBox },
+        box: selected?.bbox || { ...prev.originalBox },
+        segments,
+        selectedSegmentId: selected?.id || prev.selectedSegmentId,
+        addingSegment: false,
+      };
+    });
+  };
+  const setBoxEditMode = (mode) => {
+    setBoxEdit(prev => prev ? {
+      ...prev,
+      mode: mode === 'recognize' ? 'recognize' : 'crop',
+    } : prev);
+  };
+  const applyBoxEdit = useCallback(async () => {
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
-    const continueWithProblemId = String(options?.continueWithProblemId || '').trim();
-    const shouldContinue = continueWithProblemId && continueWithProblemId !== boxEdit.problemId;
+    const recognizeMode = !boxEdit.multi && boxEdit.mode === 'recognize';
+    if (boxEdit.multi) {
+      if (!(boxEdit.segments || []).length) return;
+      if (!boxEditSegmentValidation(boxEdit.segments).valid) return;
+      if (boxEditSegmentsEqual(boxEdit.originalSegments, boxEdit.segments)) return;
+    }
+    if (!boxEdit.multi && !recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
+    if (recognizeMode && (!aiAvailable || aiBusy)) return;
     boxEditCommitRef.current = true;
-    if (shouldContinue) pendingBoxEditProblemIdRef.current = continueWithProblemId;
     try {
-      const nextSession = await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
-      if (nextSession && !shouldContinue) setBoxEdit(null);
-      if (!nextSession && shouldContinue) pendingBoxEditProblemIdRef.current = '';
+      if (recognizeMode) {
+        const result = await retryAiSession?.({
+          partial: true,
+          preserveProblemIdentity: true,
+          collapseToSingle: true,
+          problemIds: [boxEdit.problemId],
+          cropBox: boxEdit.box,
+        });
+        if (result) setBoxEdit(null);
+        return;
+      }
+      const nextSession = boxEdit.multi
+        ? await mutateSession?.('stitch-crop', {
+            problemId: boxEdit.problemId,
+            segments: serializeBoxEditSegments(boxEdit.segments || []),
+          })
+        : await mutateSession?.('crop', {
+            problemId: boxEdit.problemId,
+            cropBox: boxEdit.box,
+          });
+      if (nextSession) {
+        pendingReviewSelectionProblemIdRef.current = sessionReviewSummary(nextSession).unresolvedReviewTargets?.[0]?.id || '';
+        setBoxEditDraftBox(null);
+        setBoxEdit(null);
+      } else {
+        pendingReviewSelectionProblemIdRef.current = '';
+      }
     } finally {
       boxEditCommitRef.current = false;
     }
-  }, [boxEdit, mutateSession]);
+  }, [boxEdit, mutateSession, retryAiSession, aiAvailable, aiBusy]);
   const applyExpandedCrop = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
     if (!problem?.id || !page?.id) return;
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
     await mutateSession?.('crop', { problemId: problem.id, cropBox: retryBox });
   };
-  const applyExpandedBoxEdit = async () => {
-    if (!boxEdit?.problemId || !boxEdit?.box) return;
-    const problem = problemsById.get(boxEdit.problemId);
-    const page = pages.find(item => item.id === (problem?.sourcePageId || boxEdit.pageId));
-    await applyExpandedCrop(problem, page, boxEdit.box);
-    setBoxEdit(null);
+  const selectBoxEditSegment = (segmentId) => {
+    setBoxEdit(prev => {
+      const segment = (prev?.segments || []).find(item => item.id === segmentId);
+      return prev && segment ? {
+        ...prev,
+        pageId: segment.pageId,
+        box: segment.bbox,
+        selectedSegmentId: segment.id,
+        addingSegment: false,
+      } : prev;
+    });
   };
-  const beginBoxDrag = (evt, mode, page) => {
+  const toggleBoxEditAddSegment = () => {
+    boxEditDragRef.current = null;
+    setBoxEditDraftBox(null);
+    setBoxEdit(prev => prev?.multi && (prev.segments || []).length < 32
+      ? { ...prev, addingSegment: !prev.addingSegment }
+      : prev);
+  };
+  const deleteBoxEditSegment = (segmentId) => {
+    setBoxEdit(prev => {
+      if (!prev?.multi || (prev.segments || []).length <= 1) return prev;
+      const segments = renumberBoxEditSegments((prev.segments || []).filter(segment => segment.id !== segmentId));
+      const selected = segments.find(segment => segment.id === prev.selectedSegmentId) || segments[0];
+      return {
+        ...prev,
+        segments,
+        selectedSegmentId: selected.id,
+        pageId: selected.pageId,
+        box: selected.bbox,
+        addingSegment: false,
+      };
+    });
+  };
+  const moveBoxEditSegment = (segmentId, direction) => {
+    setBoxEdit(prev => {
+      if (!prev?.multi) return prev;
+      const segments = [...(prev.segments || [])];
+      const fromIndex = segments.findIndex(segment => segment.id === segmentId);
+      const toIndex = Math.max(0, Math.min(segments.length - 1, fromIndex + direction));
+      if (fromIndex < 0 || fromIndex === toIndex) return prev;
+      const [segment] = segments.splice(fromIndex, 1);
+      segments.splice(toIndex, 0, segment);
+      return { ...prev, segments: renumberBoxEditSegments(segments) };
+    });
+  };
+  const nudgeBoxEditSelection = useCallback((deltaX, deltaY) => {
+    setBoxEdit(prev => {
+      if (!prev?.box) return prev;
+      const selectedSegment = prev.multi
+        ? (prev.segments || []).find(segment => segment.id === prev.selectedSegmentId)
+        : null;
+      const pageId = selectedSegment?.pageId || prev.pageId;
+      const sourcePage = pages.find(page => String(page?.id || '') === String(pageId || ''));
+      if (!sourcePage) return prev;
+      const currentBox = selectedSegment?.bbox || prev.box;
+      const nextBox = clampReviewBox({
+        ...currentBox,
+        left: finiteNumber(currentBox.left, 0) + deltaX,
+        top: finiteNumber(currentBox.top, 0) + deltaY,
+      }, sourcePage);
+      const nextSegments = selectedSegment
+        ? (prev.segments || []).map(segment => (
+            segment.id === selectedSegment.id ? { ...segment, bbox: nextBox } : segment
+          ))
+        : prev.segments;
+      return { ...prev, box: nextBox, segments: nextSegments };
+    });
+  }, [pages, clampReviewBox]);
+  const beginBoxSegmentDraw = (evt, page) => {
+    if (!boxEdit?.multi || !boxEdit.addingSegment || evt.button !== 0) return;
+    if (!evt.currentTarget?.getBoundingClientRect) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const startPoint = manualSplitPointFromClient(evt.clientX, evt.clientY, page, rect);
+    boxEditDragRef.current = {
+      mode: 'draw-segment',
+      page,
+      rect,
+      startPoint,
+      startX: evt.clientX,
+      startY: evt.clientY,
+      moved: false,
+    };
+  };
+  const beginBoxDrag = (evt, mode, page, segmentId = null) => {
     if (!boxEdit?.box || evt.button !== 0) return;
     evt.preventDefault();
     evt.stopPropagation();
     const canvas = evt.currentTarget.closest?.('.review-page-canvas');
     const rect = canvas?.getBoundingClientRect?.();
     if (!rect?.width || !rect?.height) return;
+    const segment = segmentId
+      ? (boxEdit.segments || []).find(item => item.id === segmentId)
+      : null;
+    const initialBox = segment?.bbox || boxEdit.box;
+    if (segment) selectBoxEditSegment(segment.id);
     boxEditDragRef.current = {
       mode,
+      segmentId: segment?.id || null,
       startX: evt.clientX,
       startY: evt.clientY,
-      initialBox: { ...boxEdit.box },
+      initialBox: { ...initialBox },
       pageWidth: Number(page?.width) || 1,
       pageHeight: Number(page?.height) || 1,
       scaleX: (Number(page?.width) || 1) / rect.width,
@@ -2169,27 +3321,12 @@ function ReviewStage({
     };
   };
 
-  const beginSplit = () => {
-    if (selectedList.length !== 1) return;
-    setBoxEdit(null);
-    setManualSplit(null);
-    setManualSplitDraftBox(null);
-    setSplitTarget(selectedList[0]);
-    setSplitRatio(0.5);
-  };
-  const cancelSplit = () => setSplitTarget(null);
-  const confirmSplit = async () => {
-    if (!splitTarget) return;
-    const ratio = Math.max(0.06, Math.min(0.94, splitRatio));
-    await mutateSession?.('split', { problemId: splitTarget, splitYRatio: ratio });
-  };
   const doMerge = async () => {
     if (!sameSourcePage) return;
     await mutateSession?.('merge', { problemIds: selectedList });
   };
   const doExclude = useCallback(async () => {
     if (selectedActionIds.length === 0 || mutating) return;
-    setSplitTarget(null);
     setBoxEdit(null);
     if (selectedActionIds.length === 1) {
       await mutateSession?.('exclude', { problemId: selectedActionIds[0] });
@@ -2213,6 +3350,184 @@ function ReviewStage({
     setSelectedIds(new Set(visibleReviewScope.problemIds));
     if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
+  const scrollReviewPageIntoView = useCallback((pageId, targetId = '') => {
+    const normalizedPageId = String(pageId || '').trim();
+    if (!normalizedPageId) return false;
+    reviewNavigationSeqRef.current += 1;
+    setPendingReviewNavigation({
+      requestId: reviewNavigationSeqRef.current,
+      pageId: normalizedPageId,
+      targetId: String(targetId || '').trim(),
+    });
+    return true;
+  }, []);
+  useLayoutEffect(() => {
+    if (!pendingReviewNavigation?.pageId) return undefined;
+    const navigation = pendingReviewNavigation;
+    let cancelled = false;
+    let frameId = 0;
+    const navigationDeadline = performance.now() + 1500;
+    const finish = () => {
+      if (cancelled) return;
+      setPendingReviewNavigation(current => (
+        current?.requestId === navigation.requestId ? null : current
+      ));
+    };
+    const findAndScroll = () => {
+      if (cancelled) return;
+      const wrap = reviewWrapRef.current;
+      const pageNodes = wrap ? Array.from(wrap.querySelectorAll('.review-page')) : [];
+      const targetIndex = pageNodes.findIndex(
+        node => String(node.dataset?.pageId || '') === navigation.pageId
+      );
+      if (!wrap || targetIndex < 0) {
+        if (performance.now() < navigationDeadline) {
+          frameId = window.requestAnimationFrame(findAndScroll);
+          return;
+        }
+        reportRuntimeDiagnostic(new Error('검수 페이지 이동 대상을 찾지 못했습니다.'), {
+          type: 'review-navigation',
+          pageId: navigation.pageId,
+          targetId: navigation.targetId,
+        });
+        finish();
+        return;
+      }
+      const target = pageNodes[targetIndex];
+      const wrapRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+      reviewScrollTopRef.current = targetTop;
+      setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
+      void smoothScrollTo(wrap, targetTop, 300).then(finish);
+    };
+    frameId = window.requestAnimationFrame(findAndScroll);
+    return () => {
+      cancelled = true;
+      if (frameId) window.cancelAnimationFrame(frameId);
+      cancelSmoothScroll(reviewWrapRef.current);
+    };
+  }, [
+    pages,
+    pendingReviewNavigation,
+    reviewFilter,
+    reviewRiskFilter,
+    reviewScopePageIds,
+    reviewScopeProblemIds,
+  ]);
+  const focusReviewProblem = useCallback((problemId) => {
+    const normalizedProblemId = String(problemId || '').trim();
+    if (!normalizedProblemId) return;
+    setReviewFilter('all');
+    setReviewRiskFilter(null);
+    clearReviewScope();
+    if (normalizedProblemId.startsWith('page:')) {
+      setSelectedIds(new Set());
+      setFocusedPageReviewTargetId(normalizedProblemId);
+      scrollReviewPageIntoView(normalizedProblemId.slice(5), normalizedProblemId);
+      return;
+    }
+    setFocusedPageReviewTargetId('');
+    setSelectedIds(new Set([normalizedProblemId]));
+    if (setActive) setActive(normalizedProblemId);
+    scrollReviewPageIntoView(
+      problemsById.get(normalizedProblemId)?.sourcePageId,
+      normalizedProblemId
+    );
+  }, [
+    clearReviewScope,
+    problemsById,
+    scrollReviewPageIntoView,
+    setActive,
+    setReviewFilter,
+    setReviewRiskFilter,
+    setSelectedIds,
+  ]);
+  const selectNextUnresolvedProblem = useCallback(() => {
+    focusReviewProblem(nextUnresolvedProblemId);
+  }, [focusReviewProblem, nextUnresolvedProblemId]);
+  const confirmSelectedAndAdvance = useCallback(async () => {
+    if (mutating || selectedUnresolvedProblemIds.length === 0) return false;
+    const pageOrder = new Map(pages.map((page, index) => [String(page?.id || ''), index]));
+    const anchorPageId = selectedUnresolvedProblemIds
+      .map(problemId => String(
+        problemsById.get(problemId)?.sourcePageId
+        || problemsById.get(problemId)?.source_page_id
+        || ''
+      ))
+      .filter(Boolean)
+      .sort((left, right) => (pageOrder.get(right) ?? -1) - (pageOrder.get(left) ?? -1))[0] || '';
+    const confirmedSession = await onConfirm?.(null, {
+      problemIds: selectedUnresolvedProblemIds,
+      bulk: true,
+    });
+    if (!confirmedSession) return false;
+    const nextProblemId = Array.isArray(confirmedSession?.problems)
+      ? nextUnresolvedReviewTargetAfter(confirmedSession, anchorPageId, { includeAnchorPage: true })
+      : nextUnresolvedAfterSelectionId;
+    pendingReviewSelectionProblemIdRef.current = nextProblemId || '';
+    if (nextProblemId) focusReviewProblem(nextProblemId);
+    return true;
+  }, [
+    focusReviewProblem,
+    mutating,
+    nextUnresolvedAfterSelectionId,
+    onConfirm,
+    pages,
+    problemsById,
+    selectedUnresolvedProblemIds,
+  ]);
+  const confirmPageAndAdvance = useCallback(async (pageId) => {
+    const normalizedPageId = String(pageId || '').trim().replace(/^page:/, '');
+    if (mutating || !normalizedPageId) return false;
+    const confirmedSession = await mutateSession?.('confirm-page', {
+      pageIds: [normalizedPageId],
+      decision: 'no_passage',
+    });
+    if (!confirmedSession) return false;
+    const confirmedSummary = sessionReviewSummary(confirmedSession);
+    const nextTargetId = nextUnresolvedReviewTargetAfter(
+      confirmedSession,
+      normalizedPageId,
+    );
+    pendingReviewSelectionProblemIdRef.current = nextTargetId || '';
+    setFocusedPageReviewTargetId('');
+    if (nextTargetId) {
+      focusReviewProblem(nextTargetId);
+    } else if (reviewFlowState(confirmedSummary).complete) {
+      onOpenBoard?.();
+    }
+    return true;
+  }, [focusReviewProblem, mutateSession, mutating, onOpenBoard]);
+
+  useEffect(() => {
+    if (reviewEditorActive || reviewFlow.complete) return undefined;
+    const onReviewConfirmKey = (evt) => {
+      if (evt.defaultPrevented || evt.repeat || mutating || isEditableKeyboardTarget(evt.target)) return;
+      if (evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey) || evt.altKey) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      if (selectedUnresolvedProblemIds.length > 0) {
+        void confirmSelectedAndAdvance();
+      } else if (nextUnresolvedPageFocused) {
+        void confirmPageAndAdvance(nextUnresolvedProblemId);
+      } else {
+        selectNextUnresolvedProblem();
+      }
+    };
+    window.addEventListener('keydown', onReviewConfirmKey);
+    return () => window.removeEventListener('keydown', onReviewConfirmKey);
+  }, [
+    confirmSelectedAndAdvance,
+    confirmPageAndAdvance,
+    mutating,
+    reviewEditorActive,
+    reviewFlow.complete,
+    selectNextUnresolvedProblem,
+    nextUnresolvedPageFocused,
+    nextUnresolvedProblemId,
+    selectedUnresolvedProblemIds.length,
+  ]);
 
   useEffect(() => {
     if (manualSplit || selectedActionIds.length === 0) return undefined;
@@ -2229,62 +3544,18 @@ function ReviewStage({
     return () => window.removeEventListener('keydown', onReviewDeleteKey);
   }, [manualSplit, selectedActionIds, mutating, doExclude]);
 
-  // Drag handler for the split guideline. Tracks against the splitting bbox
-  // element so the ratio is relative to the box, not the page image.
-  useEffect(() => {
-    if (!splitTarget) return;
-    const onMove = (evt) => {
-      if (!splitDraggingRef.current || !splitBoxRef.current) return;
-      const rect = splitBoxRef.current.getBoundingClientRect();
-      const y = evt.clientY - rect.top;
-      const ratio = Math.max(0.06, Math.min(0.94, y / rect.height));
-      setSplitRatio(ratio);
-    };
-    const onUp = () => { splitDraggingRef.current = false; };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [splitTarget]);
-
-  useEffect(() => {
-    if (!boxEdit || mutating) return undefined;
-    const onManualCropOutsideMouseDown = (evt) => {
-      if (boxEditDragRef.current || boxEditCommitRef.current) return;
-      const target = evt.target;
-      if (target?.closest?.('.review-bbox.editing')) return;
-      if (target?.closest?.('.review-bbox')) return;
-      if (target?.closest?.('.crop-frame-handle')) return;
-      if (target?.closest?.('.review-actionbar')) return;
-      evt.preventDefault();
-      evt.stopPropagation();
-      void applyBoxEdit();
-    };
-    window.addEventListener('mousedown', onManualCropOutsideMouseDown, true);
-    return () => window.removeEventListener('mousedown', onManualCropOutsideMouseDown, true);
-  }, [boxEdit, mutating, applyBoxEdit]);
-
-  useEffect(() => {
-    if (!manualSplit || mutating || !(manualSplit.regions || []).length) return undefined;
-    const onManualSplitOutsideMouseDown = (evt) => {
-      if (manualSplitDragRef.current || manualSplitCommitRef.current) return;
-      const target = evt.target;
-      if (target?.closest?.('.manual-split-layout')) return;
-      if (target?.closest?.('.manual-split-actionbar')) return;
-      evt.preventDefault();
-      evt.stopPropagation();
-      void applyManualPageSplit();
-    };
-    window.addEventListener('mousedown', onManualSplitOutsideMouseDown, true);
-    return () => window.removeEventListener('mousedown', onManualSplitOutsideMouseDown, true);
-  }, [manualSplit, mutating, applyManualPageSplit]);
-
   useEffect(() => {
     const onMove = (evt) => {
       const drag = boxEditDragRef.current;
       if (!drag) return;
+      if (drag.mode === 'draw-segment') {
+        const point = manualSplitPointFromClient(evt.clientX, evt.clientY, drag.page, drag.rect);
+        const bbox = manualSplitBoxFromPoints(drag.startPoint, point, drag.page);
+        drag.latestBox = bbox;
+        drag.moved = Math.hypot(evt.clientX - drag.startX, evt.clientY - drag.startY) >= MANUAL_SPLIT_DRAW_THRESHOLD_PX;
+        setBoxEditDraftBox({ pageId: drag.page.id, bbox });
+        return;
+      }
       const dx = (evt.clientX - drag.startX) * drag.scaleX;
       const dy = (evt.clientY - drag.startY) * drag.scaleY;
       const minWidth = Math.min(drag.pageWidth, Math.max(12, Math.min(36, drag.pageWidth * 0.02)));
@@ -2313,9 +3584,37 @@ function ReviewStage({
         { left, top, width: right - left, height: bottom - top },
         { width: drag.pageWidth, height: drag.pageHeight }
       );
-      setBoxEdit(prev => prev ? { ...prev, box: nextBox } : prev);
+      setBoxEdit(prev => {
+        if (!prev) return prev;
+        const segments = drag.segmentId
+          ? (prev.segments || []).map(segment => (
+              segment.id === drag.segmentId ? { ...segment, bbox: nextBox } : segment
+            ))
+          : prev.segments;
+        return { ...prev, box: nextBox, segments };
+      });
     };
     const onUp = () => {
+      const drag = boxEditDragRef.current;
+      if (drag?.mode === 'draw-segment') {
+        if (drag.moved && drag.latestBox) {
+          const id = `manual-passage-segment-${boxEditSeqRef.current++}`;
+          setBoxEdit(prev => {
+            if (!prev?.multi) return prev;
+            const nextSegment = { id, pageId: drag.page.id, bbox: drag.latestBox };
+            const segments = renumberBoxEditSegments([...(prev.segments || []), nextSegment]);
+            return {
+              ...prev,
+              pageId: drag.page.id,
+              box: drag.latestBox,
+              segments,
+              selectedSegmentId: id,
+              addingSegment: false,
+            };
+          });
+        }
+        setBoxEditDraftBox(null);
+      }
       boxEditDragRef.current = null;
     };
     window.addEventListener('mousemove', onMove);
@@ -2325,6 +3624,51 @@ function ReviewStage({
       window.removeEventListener('mouseup', onUp);
     };
   }, [clampReviewBox]);
+
+  useEffect(() => {
+    if (!boxEdit || mutating) return undefined;
+    const onBoxEditKeyDown = (evt) => {
+      if (isEditableKeyboardTarget(evt.target)) return;
+      if (evt.key === 'Escape') {
+        evt.preventDefault();
+        cancelBoxEdit();
+      } else if (evt.key === 'Enter') {
+        evt.preventDefault();
+        void applyBoxEdit();
+      } else {
+        const arrowDelta = {
+          ArrowLeft: [-1, 0],
+          ArrowRight: [1, 0],
+          ArrowUp: [0, -1],
+          ArrowDown: [0, 1],
+        }[evt.key];
+        if (arrowDelta) {
+          evt.preventDefault();
+          const step = evt.shiftKey ? 10 : 1;
+          nudgeBoxEditSelection(arrowDelta[0] * step, arrowDelta[1] * step);
+        }
+      }
+    };
+    window.addEventListener('keydown', onBoxEditKeyDown);
+    return () => window.removeEventListener('keydown', onBoxEditKeyDown);
+  }, [boxEdit, mutating, applyBoxEdit, nudgeBoxEditSelection]);
+
+  useLayoutEffect(() => {
+    const wrap = reviewWrapRef.current;
+    const pageId = String(boxEdit?.pageId || '').trim();
+    if (!wrap || !pageId) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const target = Array.from(wrap.querySelectorAll('.review-page'))
+        .find(node => String(node.dataset?.pageId || '') === pageId);
+      if (!target) return;
+      const wrapRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+      smoothScrollTo(wrap, targetTop, 180);
+      syncReviewPageNavigation(wrap);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [boxEdit?.pageId, syncReviewPageNavigation]);
 
   useEffect(() => {
     const onMove = (evt) => {
@@ -2431,12 +3775,50 @@ function ReviewStage({
     if (!manualSplit) return undefined;
     const onKeyDown = (evt) => {
       const isFormControl = isEditableKeyboardTarget(evt.target);
+      const key = String(evt.key || '').toLowerCase();
+      const primaryModifier = evt.ctrlKey || evt.metaKey;
+      if (manualSplitShortcutHelpOpen && evt.key === 'Escape') {
+        evt.preventDefault();
+        evt.stopPropagation();
+        setManualSplitShortcutHelpOpen(false);
+        return;
+      }
       if (evt.key === 'Escape' && manualSplit.mode === 'stamp') {
         evt.preventDefault();
         setManualSplitMode('draw');
         return;
       }
       if (isFormControl) return;
+      if (primaryModifier && !evt.altKey && key === 'a') {
+        evt.preventDefault();
+        selectAllManualSplitRegions();
+        return;
+      }
+      if (primaryModifier && !evt.altKey && key === 'd') {
+        evt.preventDefault();
+        duplicateManualSplitSelected();
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && evt.key === '?') {
+        evt.preventDefault();
+        setManualSplitShortcutHelpOpen(open => !open);
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 'g') {
+        evt.preventDefault();
+        setManualSplitMode('draw');
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 's') {
+        evt.preventDefault();
+        setManualSplitMode('stamp');
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 'p') {
+        evt.preventDefault();
+        toggleManualSplitPanelSide();
+        return;
+      }
       if (evt.key === 'Delete' || evt.key === 'Backspace') {
         if ((manualSplit.selectedRegionIds || []).length) {
           evt.preventDefault();
@@ -2475,7 +3857,7 @@ function ReviewStage({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [manualSplit, mutating, manualSplitPage]);
+  }, [manualSplit, mutating, manualSplitPage, manualSplitShortcutHelpOpen]);
 
   if (!pages.length) {
     return (
@@ -2501,12 +3883,6 @@ function ReviewStage({
     ['check_needed', '확인 필요', statusCounts.check_needed],
     ['failed', '실패', statusCounts.failed],
   ];
-  if (sessionCounts.supplemental > 0) {
-    filterOptions.push(['supplemental', '자료', sessionCounts.supplemental]);
-  }
-  if (statusCounts.passage > 0) {
-    filterOptions.push(['passage', '지문', statusCounts.passage]);
-  }
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
     : aiBusy
@@ -2522,147 +3898,166 @@ function ReviewStage({
   const bulkRetryPageIds = activeReviewFilter ? visibleReviewScope.retryPageIds : pageRetryIds;
   const bulkRetryProblemCount = activeReviewFilter ? visibleReviewScope.problemCount : riskyCount;
   const showBulkRetry = reviewFilter !== 'normal' && reviewFilter !== 'supplemental' && bulkRetryProblemCount > 0 && bulkRetryPageIds.length > 0;
+  const showOverviewBatchActions = (
+    (activeReviewFilter && visibleReviewScope.problemIds.length > 0)
+    || (!activeReviewFilter && actionableProblemIds.length > 0)
+    || showBulkRetry
+  );
 
   const actionBar = boxEdit ? (
-    <div className="review-actionbar">
-      <span className="count-chip">틀 조정 중</span>
-      <span className="hint">모서리와 변을 끌어 맞춘 뒤 다른 문제를 클릭하면 현재 자르기를 적용하고 다음 틀을 이어 조정합니다.</span>
+    <div className="review-actionbar box-edit-actionbar">
+      <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 다시 잡기'}</span>
+      <span className="hint">
+        {boxEdit.multi
+          ? '페이지를 스크롤하며 영역을 추가하세요. 목록 순서대로 한 지문이 됩니다. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'
+          : '시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'}
+      </span>
       <div className="spacer" />
-      <button className="btn" type="button" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
-      <button
-        className="btn"
-        type="button"
-        title="조정한 틀에 주변 여백을 더해 빠르게 다시 자릅니다"
-        onClick={applyExpandedBoxEdit}
-        disabled={mutating}
-      >
-        주변 포함 빠른 자르기
-      </button>
-      <button className="btn primary" type="button" onClick={applyBoxEdit} disabled={mutating}>
-        자르기 적용
-      </button>
-    </div>
-  ) : splitTarget ? (
-    <div className="review-actionbar">
-      <span className="count-chip">가르기 중</span>
-      <span className="hint">박스 안의 파란 선을 드래그해서 위치를 정한 다음 [가르기]를 눌러주세요.</span>
-      <div className="spacer" />
-      <button className="btn" onClick={cancelSplit} disabled={mutating}>취소</button>
-      <button className="btn primary" onClick={confirmSplit} disabled={mutating}>
-        ✂ {(splitRatio * 100).toFixed(0)}% 위치에서 가르기
-      </button>
+      {boxEdit.multi && (
+        <button
+          className={`btn ${boxEdit.addingSegment ? 'primary' : ''}`}
+          type="button"
+          aria-pressed={boxEdit.addingSegment}
+          onClick={toggleBoxEditAddSegment}
+          disabled={mutating || (boxEdit.segments || []).length >= 32}
+        >
+          {Icon.crop} {boxEdit.addingSegment ? '페이지에서 드래그…' : '영역 추가'}
+        </button>
+      )}
+      <span className="box-edit-actionbar-impact">
+        {boxEdit.multi ? `영역 ${(boxEdit.segments || []).length}개 · 한 지문으로 유지` : '선택 문항만 변경 · 번호와 순서 유지'}
+      </span>
     </div>
   ) : manualSplit ? (
     <div className="review-actionbar manual-split-actionbar">
       <span className="count-chip">수동 분할</span>
-      <span className="hint">
-        드래그로 그리고, 스탬프로 찍고, 선택 영역은 바로 조정하세요.
-        {' '}
-        {(manualSplit.regions || []).length}개 영역
+      <span className="manual-split-toolbar-status" aria-live="polite">
+        영역 {(manualSplit.regions || []).length}개
         {(manualSplit.replaceProblemIds || []).length
           ? ` · ${(manualSplit.replaceProblemIds || []).length}개 항목 교체`
           : ' · 페이지에 추가'}
       </span>
       {manualSplitOverlaps && (
-        <span className="review-summary-chip warn">겹침 허용됨</span>
+        <span className="review-summary-chip warn">겹침 있음</span>
       )}
       <div className="spacer" />
-      <button
-        className="btn"
-        type="button"
-        onClick={autoSortManualSplitRegions}
-        disabled={mutating || !(manualSplit.regions || []).length}
-      >
-        {Icon.align} 자동 정렬
-      </button>
-      <button
-        className="btn danger"
-        type="button"
-        onClick={deleteManualSplitSelected}
-        disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
-      >
-        {Icon.trash} 선택 삭제
-      </button>
-      <button className="btn" type="button" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
-      <button
-        className="btn primary"
-        type="button"
-        onClick={applyManualPageSplit}
-        title="Enter로 분할 적용"
-        aria-keyshortcuts="Enter"
-        disabled={mutating || !(manualSplit.regions || []).length}
-      >
-        {Icon.check} 분할 적용 {(manualSplit.regions || []).length}
-      </button>
+      <div className="manual-split-toolbar-actions" role="toolbar" aria-label="수동 분할 빠른 작업">
+        <button
+          className="btn"
+          type="button"
+          title={`모든 영역 선택 (${PRIMARY_MODIFIER_LABEL}+A)`}
+          aria-keyshortcuts="Control+A Meta+A"
+          onClick={selectAllManualSplitRegions}
+          disabled={mutating || !(manualSplit.regions || []).length || (manualSplit.selectedRegionIds || []).length === (manualSplit.regions || []).length}
+        >
+          {Icon.check} 전체 선택
+        </button>
+        <button
+          className="btn"
+          type="button"
+          title={`선택 영역 복제 (${PRIMARY_MODIFIER_LABEL}+D)`}
+          aria-keyshortcuts="Control+D Meta+D"
+          onClick={duplicateManualSplitSelected}
+          disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
+        >
+          {Icon.copy} 복제
+        </button>
+        <button
+          className="btn"
+          type="button"
+          title="위에서 아래, 왼쪽에서 오른쪽 순서로 자동 정렬"
+          onClick={autoSortManualSplitRegions}
+          disabled={mutating || !(manualSplit.regions || []).length}
+        >
+          {Icon.align} 자동 정렬
+        </button>
+        <button
+          className="btn"
+          type="button"
+          title={`영역 패널을 ${manualSplitPanelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동 (P)`}
+          aria-keyshortcuts="P"
+          onClick={toggleManualSplitPanelSide}
+          disabled={mutating}
+        >
+          {manualSplitPanelSide === 'right' ? Icon.arrowLeft : Icon.arrowRight} 패널 이동
+        </button>
+        <button
+          className={`btn ${manualSplitShortcutHelpOpen ? 'is-active' : ''}`}
+          type="button"
+          title="전체 단축키 보기 (?)"
+          aria-keyshortcuts="?"
+          aria-expanded={manualSplitShortcutHelpOpen}
+          aria-controls="manual-split-shortcuts"
+          onClick={() => setManualSplitShortcutHelpOpen(open => !open)}
+        >
+          {Icon.keyboard} 단축키
+        </button>
+        <span className="manual-split-toolbar-separator" aria-hidden="true" />
+        <button
+          className="btn danger"
+          type="button"
+          title="선택 영역 삭제 (Delete)"
+          aria-keyshortcuts="Delete Backspace"
+          onClick={deleteManualSplitSelected}
+          disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
+        >
+          {Icon.trash} 선택 삭제
+        </button>
+        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
+      </div>
     </div>
   ) : selectedList.length === 0 ? (
-    <div className="review-actionbar">
-      <div className="review-filters" aria-label="검수 상태 필터">
-        {filterOptions.map(([value, label, count]) => (
-          <button
-            key={value}
-            className={reviewFilter === value ? 'on' : ''}
-            type="button"
-            onClick={() => setReviewFilter(value)}
-          >
-            {label} <span>{count}</span>
-          </button>
-        ))}
-      </div>
+    <div className="review-actionbar review-overview-toolbar">
+      <ReviewFilterTabs options={filterOptions} value={reviewFilter} onChange={setReviewFilter} />
       {reviewRiskFilter && (
         <span className="review-risk-filter-active">
-          원인 필터 · {riskFlagLabel(reviewRiskFilter)}
+          원인 · {riskFlagLabel(reviewRiskFilter)}
           <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
         </span>
       )}
       {reviewScopeActive && (
         <span className="review-risk-filter-active">
-          최근 추가 묶음 · {formatProblemCount(sessionCounts)}
-          <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
+          최근 묶음 · {formatCurrentReviewCount(sessionCounts)}
+          <button type="button" onClick={clearReviewScope}>전체 보기</button>
         </span>
       )}
-      <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
       <div className="spacer" />
-      {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
-        <>
-          <button
-            className="btn"
-            type="button"
-            onClick={selectVisibleProblems}
-            disabled={mutating}
-          >
-            표시 항목 선택 {visibleReviewScope.problemIds.length}
-          </button>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
-            disabled={mutating}
-          >
-            표시 항목 확인 완료 {visibleReviewScope.problemIds.length}
-          </button>
-        </>
-      )}
-      {!activeReviewFilter && actionableProblemIds.length > 0 && (
-        <button
-          className="btn"
-          type="button"
-          onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
-          disabled={mutating}
-        >
-          확인 필요 전체 확인 {actionableProblemIds.length}
-        </button>
-      )}
-      {showBulkRetry && (
-        <button
-          className="btn primary"
-          type="button"
-          title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
-          onClick={() => doRetryAi(bulkRetryPageIds)}
-          disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
-        >
-          페이지 전체 AI 재인식 {bulkRetryProblemCount}
-        </button>
+      {showOverviewBatchActions && (
+        <div className="review-toolbar-actions" role="toolbar" aria-label="검수 빠른 작업">
+          {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              title={`${visibleReviewScope.problemIds.length}개 표시 항목 확인`}
+              onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
+              disabled={mutating}
+            >
+              {Icon.check} 표시 항목 확인
+            </button>
+          )}
+          {!activeReviewFilter && actionableProblemIds.length > 0 && (
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              title={`${actionableProblemIds.length}개 확인 필요 항목 확인`}
+              onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
+              disabled={mutating}
+            >
+              {Icon.check} 모두 확인
+            </button>
+          )}
+          {showBulkRetry && (
+            <button
+              className="btn primary review-toolbar-action"
+              type="button"
+              title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
+              onClick={() => doRetryAi(bulkRetryPageIds)}
+              disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
+            >
+              {Icon.wand} 재인식
+            </button>
+          )}
+        </div>
       )}
     </div>
   ) : (
@@ -2673,7 +4068,7 @@ function ReviewStage({
           {selectedHasPageChromeArtifact
             ? '페이지 선/번호가 감지된 문제입니다. 3단계 원문 보존으로 다시 뽑거나 원본 틀을 조정하세요.'
             : selectedList.length === 1
-            ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
+            ? '현재 문항의 테두리를 원본 위에서 바로 조정할 수 있어요.'
             : sameSourcePage
               ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
               : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
@@ -2681,6 +4076,7 @@ function ReviewStage({
       </div>
       <div className="review-actionbar-actions">
         <div className="review-action-group review-action-group-main">
+          <span className="review-action-group-label">보정</span>
           {selectedHasPageChromeArtifact && (
             <button
               className="btn danger"
@@ -2706,49 +4102,29 @@ function ReviewStage({
           {selectedList.length === 1 && (
             <>
               <button
-                className="btn primary"
+                className="btn"
                 type="button"
                 onClick={() => applyExpandedCrop()}
                 disabled={mutating || !selectedCanBoxEdit}
                 title="선택한 박스 주변 여백까지 포함해 빠르게 다시 자르기"
               >
-                {Icon.crop} 주변 포함 빠른 자르기
+                {Icon.crop} 빠른 자르기
               </button>
               <button
-                className="btn"
+                className="btn primary"
                 type="button"
                 onClick={beginBoxEdit}
                 disabled={mutating || !selectedCanBoxEdit}
                 title={selectedCanBoxEdit ? '원본 페이지 위에서 자르기 틀을 직접 조정' : '원본 페이지 이미지가 있어야 합니다'}
               >
-                {Icon.crop} 틀 조정/자르기
+                {Icon.crop} 영역 다시 잡기
               </button>
             </>
           )}
         </div>
-        <div className="review-action-group review-action-group-reshape">
-          {selectedList.length === 1 && (
-            <>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginSplit}
-                disabled={mutating}
-              >
-                {Icon.split} 두 문제로 나누기
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginManualSplitForSelection}
-                disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 원본 페이지를 직접 여러 영역으로 자르기' : '같은 원본 페이지의 항목을 선택해야 합니다'}
-              >
-                {Icon.pen} 수동 쪼개기
-              </button>
-            </>
-          )}
-          {selectedList.length >= 2 && (
+        {selectedList.length >= 2 && (
+          <div className="review-action-group review-action-group-reshape">
+            <span className="review-action-group-label">구조</span>
             <>
               <button
                 className="btn primary"
@@ -2756,7 +4132,7 @@ function ReviewStage({
                 onClick={doMerge}
                 disabled={!sameSourcePage || mutating}
               >
-                {Icon.align} 합치기
+                {Icon.align} 하나로 합치기
               </button>
               <button
                 className="btn"
@@ -2765,20 +4141,13 @@ function ReviewStage({
                 disabled={mutating || !selectedCanManualSplit}
                 title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 수동 분할할 수 있습니다'}
               >
-                {Icon.pen} 수동 쪼개기
+                {Icon.pen} 영역 다시 지정
               </button>
             </>
-          )}
-        </div>
+          </div>
+        )}
         <div className="review-action-group review-action-group-status">
-          <button
-            className="btn soft-success"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: selectedList, bulk: true })}
-            disabled={mutating}
-          >
-            {Icon.check} 확인 완료 {selectedList.length}
-          </button>
+          <span className="review-action-group-label">선택</span>
           <button className="btn danger" type="button" onClick={doExclude} disabled={mutating}>
             {Icon.trash} 제외 {selectedList.length}
           </button>
@@ -2797,66 +4166,131 @@ function ReviewStage({
   );
 
   return (
-    <div className="col center">
+    <div className="col center workspace-stage-surface">
       <div className="stage">
-        <div className="stage-toolbar">
-          <span className="name">검수 — 검출된 문제 박스</span>
-          <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {formatProblemCount(sessionCounts)}</span>
+        <div className="stage-toolbar review-stage-toolbar">
+          <div className="review-stage-heading">
+            <span className="name">{reviewStageCopy.title}</span>
+            <span className="review-stage-subtitle">{reviewStageCopy.subtitle}</span>
+          </div>
+          <span className="pill"><span className="dotc" /> {reviewStageCopy.headerCountLabel}</span>
           <div className="spacer" />
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-            빨간 박스는 인식이 의심됩니다. 클릭 후 가르기·합치기·제외하세요.
-          </span>
-          <div className="review-zoom-controls" aria-label="검수 화면 확대">
+          <div className="review-page-jump" role="group" aria-label="검수 페이지 이동">
             <button
               type="button"
               className="icon-btn"
-              title="문제 이미지 축소"
-              onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
-              disabled={reviewZoom <= REVIEW_ZOOM_MIN}
+              title="이전 검수 페이지"
+              aria-label="이전 검수 페이지"
+              onClick={() => jumpReviewPage(-1)}
+              disabled={!!manualSplit || reviewPageNav.current <= 1}
             >
-              {Icon.zoomOut}
+              {Icon.arrowLeft}
             </button>
-            <input
-              className="review-zoom-range"
-              type="range"
-              min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
-              max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
-              step="1"
-              value={reviewZoomPercent(reviewZoom)}
-              aria-label="검수 이미지 확대율"
-              title="문제 이미지만 확대/축소"
-              onChange={updateReviewZoomPercent}
-            />
-            <button
-              type="button"
-              className="review-zoom-reset"
-              title="100%로 되돌리기"
-              onClick={resetReviewZoom}
-              disabled={Math.abs(reviewZoom - 1) < 0.001}
-            >
-              {reviewZoomPercent(reviewZoom)}%
-            </button>
+            <span className="review-page-jump-status" aria-live="polite">
+              <b>{reviewPageNav.current || 0}</b> / {reviewPageNav.total}
+            </span>
             <button
               type="button"
               className="icon-btn"
-              title="문제 이미지 확대"
-              onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
-              disabled={reviewZoom >= REVIEW_ZOOM_MAX}
+              title="다음 검수 페이지"
+              aria-label="다음 검수 페이지"
+              onClick={() => jumpReviewPage(1)}
+              disabled={!!manualSplit || !reviewPageNav.total || reviewPageNav.current >= reviewPageNav.total}
             >
-              {Icon.zoomIn}
+              {Icon.arrowRight}
             </button>
+          </div>
+          <div className="review-view-control-group" role="group" aria-label="검수 화면 배율">
+            <div className="review-zoom-controls">
+              <button
+                type="button"
+                className="icon-btn"
+                title="문제 이미지 축소"
+                aria-label="문제 이미지 축소"
+                onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
+                disabled={reviewZoom <= REVIEW_ZOOM_MIN}
+              >
+                {Icon.zoomOut}
+              </button>
+              <input
+                className="review-zoom-range"
+                type="range"
+                min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
+                max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
+                step="1"
+                value={reviewZoomPercent(reviewZoom)}
+                aria-label="검수 이미지 확대율"
+                title="문제 이미지만 확대/축소"
+                onChange={updateReviewZoomPercent}
+              />
+              <button
+                type="button"
+                className="review-zoom-reset"
+                title="100%로 되돌리기"
+                onClick={resetReviewZoom}
+                disabled={Math.abs(reviewZoom - 1) < 0.001}
+              >
+                {reviewZoomPercent(reviewZoom)}%
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="문제 이미지 확대"
+                aria-label="문제 이미지 확대"
+                onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
+                disabled={reviewZoom >= REVIEW_ZOOM_MAX}
+              >
+                {Icon.zoomIn}
+              </button>
+            </div>
           </div>
         </div>
         <div
           className={`review-wrap ${manualSplit ? 'manual-split-open' : ''}`}
           style={{ '--review-zoom': String(reviewZoom) }}
           onWheel={handleReviewWheel}
+          onPointerDown={() => cancelSmoothScroll(reviewWrapRef.current)}
+          onScroll={handleReviewScroll}
           ref={reviewWrapRef}
+          aria-busy={mutating || Boolean(pendingReviewNavigation)}
         >
           {actionBar}
           <div className="review-summary-strip">
+            <div className="review-summary-overview">
+              <span className="review-summary-title">검수 현황</span>
+              <span className={`review-summary-chip ${reviewFlow.complete ? 'ok' : 'warn'}`}>
+                {reviewFlow.complete ? '검수 완료' : `남은 확인 ${reviewFlow.remaining}`}
+              </span>
+              {reviewSummary.passageReviewItemCount > 0 && (
+                <button
+                  type="button"
+                  className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
+                  title="확인이 필요한 지문만 보기"
+                  aria-pressed={reviewFilter === 'passage-review'}
+                  onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
+                >
+                  지문 확인 {reviewSummary.passageReviewItemCount}
+                </button>
+              )}
+              {reviewSummary.warningCount > 0 && (
+                <span className="review-summary-chip warn">주의 {reviewSummary.warningCount}</span>
+              )}
+              <div className="spacer" />
+              <button
+                className="btn ghost-action review-summary-toggle"
+                type="button"
+                aria-expanded={reviewDiagnosticsOpen}
+                aria-controls="review-diagnostics-detail"
+                onClick={() => setReviewDiagnosticsOpen(open => !open)}
+              >
+                {reviewDiagnosticsOpen ? '진단 접기' : '상세 진단'}
+                {reviewDiagnosticsOpen ? Icon.chevronUp : Icon.chevronDown}
+              </button>
+            </div>
+            {reviewDiagnosticsOpen && (
+            <div id="review-diagnostics-detail" className="review-summary-details">
             <span className="review-summary-title">검수 요약</span>
-            <span className="review-summary-chip">{formatProblemCount(reviewSummary.counts)}</span>
+            <span className="review-summary-chip">{formatCurrentReviewCount(reviewSummary.counts, { pageCount: pages.length })}</span>
             <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
               주의 {reviewSummary.warningCount}
             </span>
@@ -2869,6 +4303,14 @@ function ReviewStage({
                 {aiStageChipText(stage)}
               </span>
             ))}
+            {reviewSummary.aiCostEventCount > 0 && (
+              <span
+                className="review-summary-chip"
+                title={`공개 단가 기반 추정치 · $${reviewSummary.aiCostUsd.toFixed(4)} · 환율 ${Math.round(reviewSummary.aiCostUsdKrwRate).toLocaleString('ko-KR')}원`}
+              >
+                AI 예상 {Math.round(reviewSummary.aiCostKrw).toLocaleString('ko-KR')}원
+              </span>
+            )}
             {reviewSummary.actionableNeedsReviewCount > 0 && (
               <span className="review-summary-chip warn">
                 확인 {reviewSummary.actionableNeedsReviewCount}
@@ -3012,14 +4454,16 @@ function ReviewStage({
             {reviewSummary.warningPreview && (
               <span className="review-summary-note">{reviewSummary.warningPreview}</span>
             )}
+            </div>
+            )}
           </div>
-          {pages.map(page => {
+          {pages.map((page, pageIndex) => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
               .filter(Boolean)
               .filter(problemInReviewScope);
             const pageId = String(page?.id || '').trim();
-            const pageInScope = !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
+            const pageInScope = boxEdit?.multi || !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
             if (!pageInScope) return null;
             if (manualSplit && page.id !== manualSplit.pageId) return null;
             const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
@@ -3028,20 +4472,46 @@ function ReviewStage({
             const pageProblems = allPageProblems
               .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
               .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
-            if ((reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
+            const pageReviewTarget = reviewTargetById.get(pageReviewTargetId(page));
+            const pageTargetMatchesFilter = Boolean(
+              pageReviewTarget
+              && !reviewRiskFilter
+              && (
+                reviewFilter === 'all'
+                || reviewFilter === pageReviewTarget.status
+              )
+            );
+            if (
+              !boxEdit?.multi
+              && (reviewFilter !== 'all' || reviewRiskFilter)
+              && pageProblems.length === 0
+              && !pageTargetMatchesFilter
+            ) return null;
             const pageCounts = countSessionProblems(allPageProblems);
             const pageRiskFlags = riskFlagsFor(page);
-            const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status)
-              || (!allPageProblems.length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
-            const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
+            const storedPageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
+            const pageStatus = pageReviewTarget?.status
+              || (passageOnlyReview && !pageRiskFlags.length
+                ? 'normal'
+                : storedPageStatus
+                || (!allPageProblems.length && !passageOnlyReview ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal'));
+            const hasRisk = pageRiskFlags.length > 0 || pageReviewTarget?.status === 'check_needed' || pageStatus !== 'normal';
             const pageCanRetry = pageRetryIds.includes(page.id);
+            const editedProblem = boxEdit?.multi ? problemsById.get(boxEdit.problemId) : null;
+            const canvasProblems = editedProblem && !pageProblems.some(problem => problem.id === editedProblem.id)
+              ? [...pageProblems, editedProblem]
+              : pageProblems;
             return (
-              <div key={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
+              <div key={page.id} data-page-id={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
                 <div className="review-page-hd">
                   <span className="pg-num">{page.id}</span>
                   <span className="pg-count">
-                    {reviewFilter === 'all' && !reviewRiskFilter
-                      ? formatProblemCount(pageCounts)
+                    {pageReviewTarget?.type === 'page'
+                      ? pageReviewTarget.status === 'normal' ? '지문 없음 확인됨' : '지문 미검출'
+                      : passageOnlyReview && !allPageProblems.length
+                        ? '지문 없음'
+                      : reviewFilter === 'all' && !reviewRiskFilter
+                      ? formatCurrentReviewCount(pageCounts, { pageCount: 1, compact: true })
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
                   </span>
                   <span className={`status-badge ${reviewStatusClass(pageStatus)}`}>
@@ -3049,10 +4519,23 @@ function ReviewStage({
                   </span>
                   {hasRisk && (
                     <span className="pg-risk" title={pageRiskFlags.join(', ')}>
-                      {pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
+                      {pageReviewTarget?.status === 'check_needed'
+                        ? '지문이 검출되지 않아 확인이 필요합니다'
+                        : pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
                     </span>
                   )}
                   <div className="spacer" />
+                  {pageReviewTarget?.type === 'page' && pageReviewTarget.status === 'check_needed' && (
+                    <button
+                      className="mini-action"
+                      type="button"
+                      title="이 페이지에 별도 지문이 없음을 확인하고 다음 검수 대상으로 이동"
+                      onClick={() => confirmPageAndAdvance(page.id)}
+                      disabled={mutating}
+                    >
+                      {Icon.check} 지문 없음 확인
+                    </button>
+                  )}
                   {pageCanRetry && (
                     <button
                       className="mini-action"
@@ -3067,11 +4550,11 @@ function ReviewStage({
                   <button
                     className="mini-action"
                     type="button"
-                    title={page.sourceImageUri ? '이 페이지를 직접 여러 문제로 자르기' : '페이지 원본 이미지가 있어야 합니다'}
-                    onClick={() => beginManualPageSplit(page, allPageProblems.map(problem => problem.id))}
+                    title={page.sourceImageUri ? '인식에서 누락된 문항 영역을 이 페이지에 추가' : '페이지 원본 이미지가 있어야 합니다'}
+                    onClick={() => beginManualPageSplit(page, [])}
                     disabled={mutating || !!manualSplit || !page.sourceImageUri}
                   >
-                    수동 쪼개기
+                    새 영역 추가
                   </button>
                   <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
                     {page.width}×{page.height}
@@ -3101,33 +4584,44 @@ function ReviewStage({
                     onReorderRegion={reorderManualSplitRegion}
                     onApply={applyManualPageSplit}
                     onStampSizeChange={updateManualSplitStampSize}
+                    panelSide={manualSplitPanelSide}
+                    onPanelSideChange={setManualSplitPanelSide}
+                    shortcutHelpOpen={manualSplitShortcutHelpOpen}
                   />
                 ) : (
-                  <ReviewCanvasZoomShell>
-                    <div className="review-page-canvas">
+                  <div className={`box-edit-layout ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
+                    <ReviewCanvasZoomShell>
+                      <div
+                        className={`review-page-canvas ${boxEdit?.multi && boxEdit.addingSegment ? 'adding-passage-segment' : ''}`}
+                        onMouseDown={boxEdit?.multi && boxEdit.addingSegment
+                          ? (evt) => beginBoxSegmentDraw(evt, page)
+                          : undefined}
+                      >
                     {page.sourceImageUri ? (
-                      <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                      <img
+                        src={filePreviewUrl(page.sourceImageUri)}
+                        alt={page.id}
+                        width={Math.max(1, Number(page.width) || 1)}
+                        height={Math.max(1, Number(page.height) || 1)}
+                        loading={pageIndex < 2 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
+                        draggable={false}
+                      />
                     ) : (
                       <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                         페이지 이미지를 불러올 수 없어요.
                       </div>
                     )}
-                    {pageProblems.map(prob => {
+                    {canvasProblems.flatMap(prob => {
                     const isEditing = boxEdit?.problemId === prob.id;
-                    const bbox = isEditing ? boxEdit.box : (prob.bbox || {});
                     const w = page.width || 1;
                     const h = page.height || 1;
-                    if (!bbox.width || !bbox.height) return null;
-                    const leftPct = (bbox.left / w) * 100;
-                    const topPct = (bbox.top / h) * 100;
-                    const widthPct = (bbox.width / w) * 100;
-                    const heightPct = (bbox.height / h) * 100;
                     const isSelected = selectedIds.has(prob.id);
                     const isActive = prob.id === activeId;
                     const status = deriveProblemStatus(prob);
                     const statusMeta = reviewStatusMeta(status);
                     const isRisky = status !== 'normal';
-                    const isSplitting = splitTarget === prob.id;
                     const passageGroupId = passageGroupIdFor(prob);
                     const isPassage = Boolean(passageGroupId);
                     const order = orderMap.get(prob.id);
@@ -3142,21 +4636,38 @@ function ReviewStage({
                     if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
                     if (hasPageChrome) tooltipParts.push('페이지 선/번호 감지');
                     if (isPassage) tooltipParts.push(`지문 ${passageGroupId}`);
-                    const classes = [
-                      'review-bbox',
-                      isPassage ? 'review-bbox-passage' : '',
-                      hasPageChrome ? 'page-chrome-artifact' : '',
-                      isSelected ? 'selected' : '',
-                      isActive ? 'active' : '',
-                      isRisky ? 'risky' : '',
-                      reviewStatusClass(status),
-                      isSplitting ? 'splitting' : '',
-                      isEditing ? 'editing' : '',
-                    ].filter(Boolean).join(' ');
-                    return (
+                    const editableBoxes = isEditing
+                      ? (boxEdit.multi
+                          ? (boxEdit.segments || []).filter(segment => segment.pageId === page.id)
+                          : [{ id: 'single-box', pageId: page.id, bbox: boxEdit.box, order: 1 }])
+                      : editableSourceSegmentsForProblem(prob).filter(segment => segment.pageId === page.id);
+                    const boxes = editableBoxes.length
+                      ? editableBoxes
+                      : (!isEditing && String(prob.sourcePageId || prob.source_page_id || page.id) === String(page.id)
+                          ? [{ id: `${prob.id}-fallback`, pageId: page.id, bbox: prob.bbox || {}, order: 1 }]
+                          : []);
+                    return boxes.filter(segment => segment.bbox?.width && segment.bbox?.height).map((segment, segmentIndex) => {
+                      const bbox = segment.bbox;
+                      const leftPct = (bbox.left / w) * 100;
+                      const topPct = (bbox.top / h) * 100;
+                      const widthPct = (bbox.width / w) * 100;
+                      const heightPct = (bbox.height / h) * 100;
+                      const segmentSelected = !boxEdit?.multi || segment.id === boxEdit.selectedSegmentId;
+                      const classes = [
+                        'review-bbox',
+                        isPassage ? 'review-bbox-passage' : '',
+                        hasPageChrome ? 'page-chrome-artifact' : '',
+                        isSelected ? 'selected' : '',
+                        isActive ? 'active' : '',
+                        isRisky ? 'risky' : '',
+                        reviewStatusClass(status),
+                        isEditing ? 'editing' : '',
+                        isEditing && boxEdit.multi ? 'passage-segment-box' : '',
+                        isEditing && segmentSelected ? 'segment-selected' : '',
+                      ].filter(Boolean).join(' ');
+                      return (
                       <div
-                        key={prob.id}
-                        ref={isSplitting ? splitBoxRef : null}
+                        key={`${prob.id}-${segment.id || segmentIndex}`}
                         className={classes}
                         style={{
                           left: `${leftPct}%`,
@@ -3164,10 +4675,13 @@ function ReviewStage({
                           width: `${widthPct}%`,
                           height: `${heightPct}%`,
                         }}
-                        onMouseDown={isEditing ? (evt) => beginBoxDrag(evt, 'move', page) : undefined}
+                        onMouseDown={isEditing
+                          ? (evt) => beginBoxDrag(evt, 'move', page, boxEdit.multi ? segment.id : null)
+                          : undefined}
                         onClick={(evt) => {
                           if (isEditing) {
                             evt.stopPropagation();
+                            if (boxEdit.multi) selectBoxEditSegment(segment.id);
                             return;
                           }
                           onBoxClick(prob.id, evt);
@@ -3175,47 +4689,159 @@ function ReviewStage({
                         title={tooltipParts.filter(Boolean).join(' · ')}
                       >
                         <div className="review-bbox-label">
-                          {bboxPrimaryLabel}
+                          {isEditing && boxEdit.multi ? `${segment.order || segmentIndex + 1} · ${bboxPrimaryLabel}` : bboxPrimaryLabel}
                           {isPassage && !isPassageFragment && <span className="review-bbox-passage-tag">지문</span>}
                           {hasPageChrome
                             ? <span className="review-bbox-risk">페이지 장식</span>
                             : isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
-                        {isEditing && (
+                        {isEditing && segmentSelected && (
                           <>
-                            <div className="crop-frame-label">틀 조정</div>
+                            <div className="crop-frame-label">{boxEdit.multi ? `${segment.order || segmentIndex + 1}번째 영역` : '영역 조정'}</div>
                             {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
                               <button
                                 key={mode}
                                 type="button"
                                 className={`crop-frame-handle ${mode}`}
                                 aria-label={`자르기 틀 ${mode}`}
-                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page)}
+                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page, boxEdit.multi ? segment.id : null)}
                                 onClick={(evt) => evt.stopPropagation()}
                               />
                             ))}
                           </>
                         )}
-                        {isSplitting && (
-                          <div
-                            className="split-guide"
-                            style={{ top: `${splitRatio * 100}%` }}
-                            onMouseDown={(evt) => {
-                              evt.stopPropagation();
-                              splitDraggingRef.current = true;
-                            }}
-                          />
-                        )}
                       </div>
-                    );
+                      );
+                    });
                     })}
-                    </div>
-                  </ReviewCanvasZoomShell>
+                    {boxEditDraftBox?.pageId === page.id && boxEditDraftBox.bbox && (
+                      <div
+                        className="review-bbox editing passage-segment-box passage-segment-draft"
+                        style={{
+                          left: `${(boxEditDraftBox.bbox.left / (page.width || 1)) * 100}%`,
+                          top: `${(boxEditDraftBox.bbox.top / (page.height || 1)) * 100}%`,
+                          width: `${(boxEditDraftBox.bbox.width / (page.width || 1)) * 100}%`,
+                          height: `${(boxEditDraftBox.bbox.height / (page.height || 1)) * 100}%`,
+                        }}
+                      >
+                        <div className="crop-frame-label">새 영역</div>
+                      </div>
+                    )}
+                      </div>
+                    </ReviewCanvasZoomShell>
+                    {boxEdit?.pageId === page.id && (
+                      <BoxEditPanel
+                        page={page}
+                        pages={pages}
+                        problem={problemsById.get(boxEdit.problemId)}
+                        displayNumber={orderMap.get(boxEdit.problemId)}
+                        originalBox={boxEdit.originalBox}
+                        box={boxEdit.box}
+                        originalSegments={boxEdit.originalSegments}
+                        segments={boxEdit.segments}
+                        selectedSegmentId={boxEdit.selectedSegmentId}
+                        multi={boxEdit.multi}
+                        addingSegment={boxEdit.addingSegment}
+                        mode={boxEdit.mode}
+                        mutating={mutating}
+                        aiAvailable={aiAvailable}
+                        aiBusy={aiBusy}
+                        onModeChange={setBoxEditMode}
+                        onToggleAddSegment={toggleBoxEditAddSegment}
+                        onSelectSegment={selectBoxEditSegment}
+                        onDeleteSegment={deleteBoxEditSegment}
+                        onMoveSegment={moveBoxEditSegment}
+                        onReset={resetBoxEdit}
+                        onCancel={cancelBoxEdit}
+                        onApply={applyBoxEdit}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             );
           })}
         </div>
+        {!reviewEditorActive && (
+          <div className={`review-completion-bar ${reviewFlow.complete ? 'is-complete' : ''}`} aria-live="polite">
+            <div className="review-completion-progress" aria-label={`검수 ${reviewFlow.reviewed} / ${reviewFlow.total}`}>
+              <span>검수</span>
+              <strong>{reviewFlow.reviewed} / {reviewFlow.total}</strong>
+            </div>
+            <span className={`review-completion-state ${reviewFlow.complete ? 'done' : ''}`}>
+              {reviewFlow.complete ? '모두 확인됨' : `남은 ${reviewFlow.remaining}개`}
+            </span>
+            <span className="review-completion-help">
+              {reviewFlow.complete
+                ? '모든 확인이 끝났어요. 칠판 배치를 바로 확인해 보세요.'
+                : nextUnresolvedPageFocused
+                  ? reviewFlow.remaining === 1
+                    ? `마지막 페이지입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
+                    : `현재 페이지에 별도 지문이 없는지 확인하세요. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하고 다음으로 이동합니다.`
+                : selectedActionIds.length > 0 && selectedUnresolvedProblemIds.length === 0
+                  ? '현재 선택 항목은 이미 정상입니다. 다음 미확인 대상으로 이동할 수 있습니다.'
+                : selectedUnresolvedProblemIds.length === 0 && nextUnresolvedIsPage
+                  ? `지문이 검출되지 않은 페이지를 확인해야 합니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 페이지 검수를 시작하세요.`
+                : reviewFlow.remaining === 1
+                  ? `마지막 항목입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
+                  : `확인하면 다음 항목이 자동으로 선택됩니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 빠르게 진행하세요.`}
+            </span>
+            <div className="review-completion-actions">
+              {reviewFlow.complete ? (
+                <button className="btn primary review-completion-primary review-board-preview-button" type="button" onClick={() => onOpenBoard?.()}>
+                  {Icon.board} 칠판 미리보기
+                </button>
+              ) : selectedUnresolvedProblemIds.length > 0 ? (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={confirmSelectedAndAdvance}
+                  disabled={mutating}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 확인`}
+                >
+                  <span className="review-completion-primary-label">
+                    {Icon.check}
+                    {reviewFlow.remaining === selectedUnresolvedProblemIds.length
+                      ? '마지막 확인 · 칠판 보기'
+                      : selectedUnresolvedProblemIds.length === 1
+                        ? '확인하고 다음'
+                        : `${selectedUnresolvedProblemIds.length}개 확인하고 다음`}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
+              ) : nextUnresolvedPageFocused ? (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={() => confirmPageAndAdvance(nextUnresolvedProblemId)}
+                  disabled={mutating}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 지문 없음 확인 후 다음 검수 대상으로 이동`}
+                >
+                  <span className="review-completion-primary-label">
+                    {Icon.check} {reviewFlow.remaining === 1 ? '마지막 확인 · 칠판 보기' : '지문 없음 확인하고 다음'}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
+              ) : (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={selectNextUnresolvedProblem}
+                  disabled={mutating || !nextUnresolvedProblemId}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 다음 확인 ${nextUnresolvedIsPage ? '페이지 이동' : '항목 선택'}`}
+                >
+                  <span className="review-completion-primary-label">
+                    {nextUnresolvedIsPage ? '페이지 검수 시작' : '다음 확인 항목'} {Icon.arrowRight}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3223,23 +4849,38 @@ function ReviewStage({
 
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
 function ItemsRail({
-  items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
+  session, items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, selectedPendingFileKey, onSelectPendingFile,
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
-  onDownloadItemImage, downloadingItemId,
+  onDownloadPublish, publishDownloadBusy,
+  onDownloadItemImage, downloadingItemId, reorderBusy, moveFeedback,
+  selectedItemIds, setSelectedItemIds,
+  onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
+  onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
 }){
   const dragId = useRef(null);
-  const [draggingId, setDraggingId] = useState(null);
+  const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const [materialFilter, setMaterialFilter] = useState('all');
+  const [dragPreview, setDragPreview] = useState(null);
+  const [pressedItemId, setPressedItemId] = useState(null);
+  const selectionAnchorRef = useRef(null);
+  const railSelectionSnapshotRef = useRef('');
   const railRef = useRef(null);
   const itemRefs = useRef({});
   const previousItemRects = useRef(new Map());
+  const itemLayoutAnimationsRef = useRef(new Map());
   const pointerDragRef = useRef(null);
   const suppressClickRef = useRef(false);
   const dropTargetRef = useRef(null);
   const railAutoScrollRef = useRef({ raf: null, clientX: null, clientY: null });
+  const dragVisualFrameRef = useRef(null);
+  const dragVisualOffsetRef = useRef({ x: 0, y: 0, tilt: 0 });
+  const dragPreviewRef = useRef(null);
+  const pendingKeyboardFocusRef = useRef(null);
+  const [reorderAnnouncement, setReorderAnnouncement] = useState('');
   const [recentSessionsCollapsed, setRecentSessionsCollapsed] = useState(() => {
     try {
       const stored = window.localStorage?.getItem(RECENT_SESSIONS_COLLAPSED_KEY);
@@ -3249,37 +4890,270 @@ function ItemsRail({
     }
   });
   const hasSessionItems = items.length > 0;
+  const railReviewMode = globalThis.EDB_REVIEW_FILTERS?.sessionReviewMode?.(session) || 'problems';
+  const materialCounts = useMemo(() => ({
+    all: items.length,
+    questions: items.filter(item => !isPassageFragmentProblem(item)).length,
+    passages: items.filter(isPassageFragmentProblem).length,
+  }), [items]);
+  const materialFilterOptions = railReviewMode === 'page-as-is'
+    ? [
+        ['all', '전체', materialCounts.all],
+        ['questions', '페이지 원본', materialCounts.questions],
+      ]
+    : railReviewMode === 'shared-passages'
+      ? [
+          ['all', '전체', materialCounts.all],
+          ['passages', '공통 지문', materialCounts.passages],
+        ]
+      : [
+          ['all', '전체', materialCounts.all],
+          ['questions', '문항', materialCounts.questions],
+          ['passages', '공통 지문', materialCounts.passages],
+        ];
+  const visibleItemRows = useMemo(() => items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => materialFilter === 'all'
+      || (materialFilter === 'questions' && !isPassageFragmentProblem(item))
+      || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter]);
+  const filterActive = materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
+  const draggingLayoutSignature = Array.from(draggingIds).join('|');
+  const dropTargetLayoutSignature = dropTarget
+    ? `${String(dropTarget.id)}:${dropTarget.position}`
+    : '';
+  const itemsById = useMemo(
+    () => new Map(items.map(item => [String(item.id), item])),
+    [items]
+  );
+  const displayedItemRows = useMemo(() => {
+    let displayIndex = 0;
+    return visibleItemRows.reduce((rows, row) => {
+      if (draggingIds.has(String(row.item.id))) return rows;
+      rows.push({ ...row, displayIndex });
+      displayIndex += 1;
+      return rows;
+    }, []);
+  }, [visibleItemRows, draggingIds]);
+  const orderedSelectedIds = useMemo(
+    () => items.map(item => String(item.id)).filter(id => selectedItemIds.has(id)),
+    [items, selectedItemIds]
+  );
+  const selectedItemCount = orderedSelectedIds.length;
+  const dragPreviewItem = dragPreview
+    ? itemsById.get(String(dragPreview.id))
+    : null;
+
+  useEffect(() => {
+    if (materialFilterOptions.some(([value]) => value === materialFilter)) return;
+    setMaterialFilter('all');
+  }, [railReviewMode, materialFilter]);
+
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedItemIds(prev => {
+      const filtered = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return filtered.size === prev.size ? prev : filtered;
+    });
+    if (selectionAnchorRef.current && !validIds.has(String(selectionAnchorRef.current))) {
+      selectionAnchorRef.current = null;
+    }
+  }, [itemOrderSignature]);
 
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     const nextRects = new Map();
     items.forEach(it => {
       const el = itemRefs.current[it.id];
-      if (!el) return;
+      if (!el) {
+        const preservedRect = previousItemRects.current.get(it.id);
+        if (draggingIds.has(String(it.id)) && preservedRect) {
+          nextRects.set(it.id, preservedRect);
+        }
+        return;
+      }
+      const previousAnimation = itemLayoutAnimationsRef.current.get(it.id);
+      if (previousAnimation) {
+        previousAnimation.cancel();
+        itemLayoutAnimationsRef.current.delete(it.id);
+      }
       const rect = el.getBoundingClientRect();
       const prevRect = previousItemRects.current.get(it.id);
       if (prevRect && !reduceMotion) {
         const dx = prevRect.left - rect.left;
         const dy = prevRect.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-          el.animate(
-            [
-              { transform: `translate(${dx}px, ${dy}px)` },
-              { transform: 'translate(0, 0)' },
-            ],
-            { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
+          const isMovedItem = String(moveFeedback?.id || '') === String(it.id);
+          const animation = el.animate(
+            isMovedItem
+              ? [
+                  { transform: `translate(${dx}px, ${dy}px) scale(.985)`, opacity: .78 },
+                  { transform: 'translate(0, 0) scale(1.018)', opacity: 1, offset: .72 },
+                  { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+                ]
+              : [
+                  { transform: `translate(${dx}px, ${dy}px)` },
+                  { transform: 'translate(0, 0)' },
+                ],
+            {
+              duration: isMovedItem ? 480 : 380,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.22,1,.36,1)',
+            }
           );
+          itemLayoutAnimationsRef.current.set(it.id, animation);
+          const releaseAnimation = () => {
+            if (itemLayoutAnimationsRef.current.get(it.id) === animation) {
+              itemLayoutAnimationsRef.current.delete(it.id);
+            }
+          };
+          animation.onfinish = releaseAnimation;
+          animation.oncancel = releaseAnimation;
         }
       }
       nextRects.set(it.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
     });
     previousItemRects.current = nextRects;
-  }, [itemOrderSignature]);
+    const focusId = pendingKeyboardFocusRef.current;
+    if (focusId) {
+      pendingKeyboardFocusRef.current = null;
+      window.requestAnimationFrame(() => itemRefs.current[focusId]?.focus?.({ preventScroll: true }));
+    }
+  }, [itemOrderSignature, draggingLayoutSignature, dropTargetLayoutSignature]);
+
+  const selectRailItem = (itemId, event = {}) => {
+    const id = String(itemId);
+    const visibleIds = visibleItemRows.map(({ item }) => String(item.id));
+    const currentSelectionKey = visibleIds
+      .filter(visibleId => selectedItemIds.has(visibleId))
+      .join('|');
+    const railOwnsAnchor = railSelectionSnapshotRef.current === currentSelectionKey;
+    const anchorId = railOwnsAnchor
+      && selectionAnchorRef.current
+      && visibleIds.includes(String(selectionAnchorRef.current))
+      ? String(selectionAnchorRef.current)
+      : (
+          activeId
+          && selectedItemIds.has(String(activeId))
+          && visibleIds.includes(String(activeId))
+            ? String(activeId)
+            : id
+        );
+    const selection = applySelectionClick(
+      visibleIds,
+      Array.from(selectedItemIds),
+      anchorId,
+      id,
+      event
+    );
+    const next = new Set(selection.selectedIds);
+    selectionAnchorRef.current = selection.anchorId;
+    railSelectionSnapshotRef.current = selection.selectedIds.join('|');
+    setSelectedItemIds(next);
+    if (next.has(id)) {
+      setActive(id);
+    } else if (next.size) {
+      const remainingIds = Array.from(next);
+      setActive(remainingIds[remainingIds.length - 1]);
+    } else {
+      setActive(id);
+    }
+  };
+
+  const clearRailSelection = () => {
+    selectionAnchorRef.current = null;
+    railSelectionSnapshotRef.current = '';
+    setSelectedItemIds(new Set());
+  };
+
+  const removeSelectedItems = () => {
+    if (!orderedSelectedIds.length || reorderBusy) return;
+    removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });
+    clearRailSelection();
+    setReorderAnnouncement(`${orderedSelectedIds.length}개 문제를 삭제했습니다.`);
+  };
+
+  useLayoutEffect(() => {
+    const preview = dragPreviewRef.current;
+    if (!dragPreview || !preview) return;
+    const { x, y, tilt } = dragVisualOffsetRef.current;
+    preview.style.setProperty('--drag-preview-x', `${x}px`);
+    preview.style.setProperty('--drag-preview-y', `${y}px`);
+    preview.style.setProperty('--drag-preview-tilt', `${tilt}deg`);
+  }, [dragPreview]);
+
+  const updatePointerDragVisual = (clientX, clientY) => {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
+    drag.lastClientX = Number(clientX);
+    drag.lastClientY = Number(clientY);
+    const unclampedX = drag.lastClientX - drag.grabOffsetX;
+    const maxX = Math.max(4, window.innerWidth - drag.previewWidth - 4);
+    dragVisualOffsetRef.current = {
+      x: Math.max(4, Math.min(maxX, unclampedX)),
+      y: drag.lastClientY - drag.grabOffsetY,
+      tilt: Math.max(-1.1, Math.min(1.1, (drag.lastClientX - drag.startX) / 140)),
+    };
+    if (dragVisualFrameRef.current) return;
+    dragVisualFrameRef.current = window.requestAnimationFrame(() => {
+      dragVisualFrameRef.current = null;
+      const { x, y, tilt } = dragVisualOffsetRef.current;
+      const activeDrag = pointerDragRef.current;
+      if (
+        activeDrag
+        && activeDrag.moved
+        && activeDrag.pointerId === drag.pointerId
+      ) {
+        const target = findPointerDropTarget(
+          activeDrag.lastClientX,
+          activeDrag.lastClientY,
+          activeDrag.sourceIdSet
+        );
+        setCurrentDropTarget(target);
+      }
+      const preview = dragPreviewRef.current;
+      if (!preview) return;
+      preview.style.setProperty('--drag-preview-x', `${x}px`);
+      preview.style.setProperty('--drag-preview-y', `${y}px`);
+      preview.style.setProperty('--drag-preview-tilt', `${tilt}deg`);
+    });
+  };
+
+  const resetPointerDragVisual = () => {
+    if (dragVisualFrameRef.current) {
+      window.cancelAnimationFrame(dragVisualFrameRef.current);
+      dragVisualFrameRef.current = null;
+    }
+    const preview = dragPreviewRef.current;
+    preview?.style.removeProperty('--drag-preview-x');
+    preview?.style.removeProperty('--drag-preview-y');
+    preview?.style.removeProperty('--drag-preview-tilt');
+    dragVisualOffsetRef.current = { x: 0, y: 0, tilt: 0 };
+  };
+
+  const captureDragPreviewRect = (sourceIds) => {
+    const preview = dragPreviewRef.current;
+    if (!preview) return;
+    const previewCard = preview.querySelector('.rail-drag-overlay-card');
+    const rect = (previewCard || preview).getBoundingClientRect();
+    sourceIds.forEach((sourceId, index) => {
+      const item = itemsById.get(String(sourceId));
+      if (!item) return;
+      const fanOffset = Math.min(index, 3) * 2;
+      previousItemRects.current.set(item.id, {
+        top: rect.top + fanOffset,
+        left: rect.left + fanOffset,
+        width: rect.width,
+        height: rect.height,
+      });
+    });
+  };
 
   const clearDragState = () => {
+    resetPointerDragVisual();
     dragId.current = null;
-    setDraggingId(null);
+    setDraggingIds(new Set());
+    setDragPreview(null);
+    setPressedItemId(null);
     dropTargetRef.current = null;
     setDropTarget(null);
   };
@@ -3291,39 +5165,40 @@ function ItemsRail({
     ));
   };
 
-  const updateDropTarget = (event, targetId) => {
-    if (!dragId.current || dragId.current === targetId) {
-      setCurrentDropTarget(null);
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    const position = dropPositionFromClientY(event.currentTarget.getBoundingClientRect(), event.clientY);
-    setCurrentDropTarget({ id: targetId, position });
-  };
-
-  const findPointerDropTarget = (_clientX, clientY, sourceId) => {
+  const findPointerDropTarget = (clientX, clientY, sourceIdSet) => {
     const rail = railRef.current;
     if (!rail) return null;
-    const drag = pointerDragRef.current;
-    const rows = drag?.id === sourceId ? drag.rows : [];
-    if (!rows.length) return null;
     const railRect = rail.getBoundingClientRect();
-    const contentY = clientY - railRect.top + rail.scrollTop;
-    const first = rows[0];
-    if (contentY < first.top) {
-      const id = first.id;
-      return id && id !== sourceId ? { id, position: 'before' } : null;
-    }
-    for (const candidate of rows) {
-      const id = candidate.id;
-      if (contentY < candidate.top + candidate.height / 2) {
-        return id && id !== sourceId ? { id, position: 'before' } : null;
+    if (
+      Number.isFinite(Number(clientX))
+      && (clientX < railRect.left || clientX > railRect.right)
+    ) return null;
+    let first = null;
+    let last = null;
+    for (const { item } of visibleItemRows) {
+      if (sourceIdSet?.has(String(item.id))) continue;
+      const el = itemRefs.current[item.id];
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.height < 1) continue;
+      previousItemRects.current.set(item.id, {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      });
+      const candidate = { id: item.id, top: rect.top, height: rect.height };
+      if (!first) first = candidate;
+      last = candidate;
+      if (clientY < candidate.top + candidate.height / 2) {
+        return { id: candidate.id, position: 'before' };
       }
     }
-    const last = rows[rows.length - 1];
-    const id = last.id;
-    return id && id !== sourceId ? { id, position: 'after' } : null;
+    if (!first || !last) return null;
+    if (clientY < first.top) {
+      return { id: first.id, position: 'before' };
+    }
+    return { id: last.id, position: 'after' };
   };
 
   const stopRailAutoScroll = () => {
@@ -3335,16 +5210,21 @@ function ItemsRail({
 
   const stepRailAutoScroll = () => {
     const rail = railRef.current;
-    const sourceId = dragId.current;
+    const drag = pointerDragRef.current;
     const { clientX, clientY } = railAutoScrollRef.current;
-    if (!rail || !sourceId || clientY == null) {
+    if (!rail || !drag?.ids.length || clientY == null) {
       stopRailAutoScroll();
       return;
     }
-    const delta = edgeAutoScrollDelta(
-      rail.getBoundingClientRect(),
-      clientY,
+    const railRect = rail.getBoundingClientRect();
+    const edgePx = Math.min(
       RAIL_DRAG_AUTOSCROLL_EDGE_PX,
+      Math.max(18, railRect.height * 0.35)
+    );
+    const delta = edgeAutoScrollDelta(
+      railRect,
+      clientY,
+      edgePx,
       RAIL_DRAG_AUTOSCROLL_MAX_PX
     );
     if (!delta) {
@@ -3353,7 +5233,7 @@ function ItemsRail({
     }
     const previousTop = rail.scrollTop;
     rail.scrollTop = Math.max(0, Math.min(rail.scrollHeight - rail.clientHeight, previousTop + delta));
-    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceId);
+    const target = findPointerDropTarget(clientX ?? 0, clientY, drag.sourceIdSet);
     setCurrentDropTarget(target);
     if (rail.scrollTop === previousTop) {
       railAutoScrollRef.current.raf = null;
@@ -3370,24 +5250,91 @@ function ItemsRail({
     }
   };
 
-  useEffect(() => () => stopRailAutoScroll(), []);
+  const removeRailDragWindowListeners = (drag = pointerDragRef.current) => {
+    if (!drag) return;
+    if (drag.windowPointerMove) {
+      window.removeEventListener('pointermove', drag.windowPointerMove);
+      drag.windowPointerMove = null;
+    }
+    if (drag.windowPointerEnd) {
+      window.removeEventListener('pointerup', drag.windowPointerEnd);
+      drag.windowPointerEnd = null;
+    }
+    if (drag.windowPointerCancel) {
+      window.removeEventListener('pointercancel', drag.windowPointerCancel);
+      drag.windowPointerCancel = null;
+    }
+    if (drag.windowBlur) {
+      window.removeEventListener('blur', drag.windowBlur);
+      drag.windowBlur = null;
+    }
+  };
+
+  useEffect(() => () => {
+    stopRailAutoScroll();
+    resetPointerDragVisual();
+    removeRailDragWindowListeners();
+    itemLayoutAnimationsRef.current.forEach(animation => animation.cancel());
+    itemLayoutAnimationsRef.current.clear();
+  }, []);
 
   const startPointerDrag = (event, itemId) => {
-    if (event.button !== 0 || event.target.closest?.('button')) return;
-    const rows = items.map(item => {
-      const el = itemRefs.current[item.id];
-      return el ? { id: item.id, top: el.offsetTop, height: el.offsetHeight } : null;
-    }).filter(Boolean);
-    pointerDragRef.current = {
-      id: itemId,
+    if (
+      reorderBusy
+      || filterActive
+      || event.button !== 0
+      || event.shiftKey
+      || event.ctrlKey
+      || event.metaKey
+      || event.target.closest?.('button')
+    ) return;
+    const id = String(itemId);
+    const sourceIds = selectedItemIds.has(id) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [id];
+    const rail = railRef.current;
+    if (!rail) return;
+    const sourceEl = itemRefs.current[id];
+    if (!sourceEl) return;
+    const sourceRect = sourceEl.getBoundingClientRect();
+    const drag = {
+      id,
+      ids: sourceIds,
+      sourceIdSet: new Set(sourceIds),
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      grabOffsetX: Math.max(0, Math.min(sourceRect.width, event.clientX - sourceRect.left)),
+      grabOffsetY: Math.max(0, Math.min(sourceRect.height, event.clientY - sourceRect.top)),
+      previewWidth: sourceRect.width,
+      previewHeight: sourceRect.height,
       moved: false,
-      rows,
     };
-    dragId.current = itemId;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    drag.windowPointerMove = pointerEvent => movePointerDrag(pointerEvent);
+    drag.windowPointerEnd = pointerEvent => finishPointerDrag(pointerEvent);
+    drag.windowPointerCancel = pointerEvent => finishPointerDrag(pointerEvent);
+    drag.windowBlur = () => {
+      if (pointerDragRef.current !== drag) return;
+      pointerDragRef.current = null;
+      removeRailDragWindowListeners(drag);
+      stopRailAutoScroll();
+      clearDragState();
+    };
+    pointerDragRef.current = drag;
+    dragId.current = id;
+    setCurrentDropTarget(null);
+    setPressedItemId(id);
+    try {
+      rail.setPointerCapture?.(event.pointerId);
+    } catch (_err) {
+      // Window listeners below keep the drag functional if pointer capture is unavailable.
+    }
+    window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
+    window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
+    window.addEventListener('blur', drag.windowBlur);
   };
 
   const movePointerDrag = (event) => {
@@ -3398,33 +5345,110 @@ function ItemsRail({
     if (!drag.moved) {
       if (Math.hypot(dx, dy) < 5) return;
       drag.moved = true;
-      setDraggingId(drag.id);
+      if (!selectedItemIds.has(drag.id)) {
+        selectionAnchorRef.current = drag.id;
+        railSelectionSnapshotRef.current = drag.id;
+        setSelectedItemIds(new Set([drag.id]));
+      }
+      const previewIndex = items.findIndex(item => String(item.id) === drag.id);
+      setDragPreview({
+        id: drag.id,
+        count: drag.ids.length,
+        index: Math.max(0, previewIndex),
+        width: drag.previewWidth,
+        height: drag.previewHeight,
+      });
+      setDraggingIds(new Set(drag.ids));
     }
+    updatePointerDragVisual(event.clientX, event.clientY);
     event.preventDefault();
     applyRailAutoScroll(event.clientX, event.clientY);
-    const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
-    setCurrentDropTarget(target);
   };
 
   const finishPointerDrag = (event) => {
     const drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const target = drag.moved
-      ? findPointerDropTarget(event.clientX, event.clientY, drag.id) || dropTargetRef.current
+    const cancelled = event.type === 'pointercancel';
+    const target = drag.moved && !cancelled
+      ? findPointerDropTarget(event.clientX, event.clientY, drag.sourceIdSet)
       : null;
     if (drag.moved) {
       event.preventDefault();
       suppressClickRef.current = true;
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+      captureDragPreviewRect(drag.ids);
       if (target) {
         setActive(drag.id);
-        reorder(drag.id, target.id, target.position, { resetPlacement: true });
+        reorder(drag.id, target.id, target.position, {
+          resetPlacement: true,
+          sourceIds: drag.ids,
+        });
       }
     }
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    const rail = railRef.current;
     pointerDragRef.current = null;
+    removeRailDragWindowListeners(drag);
+    if (rail?.hasPointerCapture?.(event.pointerId)) {
+      rail.releasePointerCapture(event.pointerId);
+    }
     stopRailAutoScroll();
     clearDragState();
+  };
+
+  const moveItemByKeyboard = (item, direction) => {
+    if (reorderBusy || filterActive) return;
+    const itemId = String(item.id);
+    const sourceIds = selectedItemIds.has(itemId) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [itemId];
+    const command = sourceIds.length > 1
+      ? adjacentGroupReorderCommand(items, sourceIds, direction)
+      : adjacentReorderCommand(items, item.id, direction);
+    if (!command) {
+      setReorderAnnouncement(direction === 'up' ? '선택 묶음이 이미 맨 위입니다.' : '선택 묶음이 이미 맨 아래입니다.');
+      return;
+    }
+    pendingKeyboardFocusRef.current = item.id;
+    setActive(item.id);
+    const moved = reorder(item.id, command.targetId, command.position, {
+      resetPlacement: true,
+      sourceIds,
+    });
+    if (moved !== false) {
+      setReorderAnnouncement(sourceIds.length > 1
+        ? `${sourceIds.length}개 문제를 ${command.nextIndex + 1}번부터 함께 이동했습니다.`
+        : `${command.nextIndex + 1}번으로 이동했습니다: ${problemDisplayName(item, command.nextIndex)}.`);
+    }
+  };
+
+  const applyRailSelectionKeyboard = (item, event) => {
+    if (event.altKey) return false;
+    const visibleIds = visibleItemRows.map(({ item: rowItem }) => String(rowItem.id));
+    const isSelectAll = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a';
+    const isRangeArrow = event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown');
+    if (!isSelectAll && !isRangeArrow && event.key !== 'Escape') return false;
+    const result = selectionKeyboardCommand(
+      visibleIds,
+      Array.from(selectedItemIds),
+      selectionAnchorRef.current,
+      String(item.id),
+      event.key,
+      event
+    );
+    event.preventDefault();
+    selectionAnchorRef.current = result.anchorId;
+    railSelectionSnapshotRef.current = result.selectedIds.join('|');
+    setSelectedItemIds(new Set(result.selectedIds));
+    if (result.focusId && result.selectedIds.includes(result.focusId)) {
+      setActive(result.focusId);
+      pendingKeyboardFocusRef.current = result.focusId;
+    }
+    setReorderAnnouncement(
+      result.selectedIds.length
+        ? `${result.selectedIds.length}개 문제를 선택했습니다.`
+        : '문제 선택을 해제했습니다.'
+    );
+    return nextSession;
   };
 
   const toggleRecentSessionsCollapsed = () => {
@@ -3444,8 +5468,10 @@ function ItemsRail({
     const el = itemRefs.current[activeId];
     const rail = railRef.current;
     if (!el || !rail) return;
-    const top = el.offsetTop;
-    const bot = top + el.offsetHeight;
+    const itemRect = el.getBoundingClientRect();
+    const railRect = rail.getBoundingClientRect();
+    const top = scrollContainerContentTop(itemRect, railRect, rail.scrollTop);
+    const bot = top + itemRect.height;
     const vTop = rail.scrollTop;
     const vBot = vTop + rail.clientHeight;
     if (top < vTop + 16) {
@@ -3459,7 +5485,7 @@ function ItemsRail({
     <div className="col left">
       <div className="col-hd">
         <h2>자료</h2>
-        <span className="count">{items.length}</span>
+        <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
         <div className="spacer" />
         <button className="icon-btn" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
         <button
@@ -3472,9 +5498,64 @@ function ItemsRail({
         <button className="icon-btn" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" onClick={addSample}>{Icon.upload}</button>
       </div>
 
+      {hasSessionItems && (
+        <>
+          <div className="material-filter" role="group" aria-label="자료 모아보기">
+            {materialFilterOptions.map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                className={materialFilter === value ? 'on' : ''}
+                aria-pressed={materialFilter === value}
+                onClick={() => {
+                  setMaterialFilter(value);
+                  const firstMatch = items.find(item => value === 'all'
+                    || (value === 'questions' && !isPassageFragmentProblem(item))
+                    || (value === 'passages' && isPassageFragmentProblem(item)));
+                  if (firstMatch) {
+                    selectionAnchorRef.current = String(firstMatch.id);
+                    setSelectedItemIds(new Set([String(firstMatch.id)]));
+                    setActive(firstMatch.id);
+                  } else {
+                    clearRailSelection();
+                  }
+                }}
+              >
+                <span>{label}</span><b>{count}</b>
+              </button>
+            ))}
+          </div>
+          <div style={{ padding: '0 10px 8px' }}>
+            <button
+              className="btn"
+              type="button"
+              style={{ width: '100%', justifyContent: 'center' }}
+              title={canReextractSharedPassages
+                ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
+                : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
+              onClick={onReextractSharedPassages}
+              disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
+            >
+              {Icon.refresh}
+              <span>{reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '현재 원본에서 공통 지문 다시 추출'}</span>
+            </button>
+          </div>
+        </>
+      )}
+
       <div
         className="items"
         ref={railRef}
+        onScroll={() => {
+          const drag = pointerDragRef.current;
+          if (!drag?.moved) return;
+          const target = findPointerDropTarget(
+            drag.lastClientX,
+            drag.lastClientY,
+            drag.sourceIdSet
+          );
+          setCurrentDropTarget(target);
+        }}
         onDragOver={e => {
           if (!dragId.current || e.dataTransfer?.types?.includes('Files')) return;
           e.preventDefault();
@@ -3541,10 +5622,7 @@ function ItemsRail({
                       <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
                         <div className="name">{entry.sessionName || '이름 없는 작업'}</div>
                         <div className="meta">
-                          {formatProblemCount({
-                            core: entry.coreProblemCount,
-                            supplemental: entry.supplementalItemCount,
-                          })}
+                          {recentSessionCountLabel(entry)}
                           {entry.updatedAt ? ` · ${formatPublishTime(entry.updatedAt)}` : ''}
                           {publish?.recordCountLabel ? ` · ${publish.recordCountLabel}` : ''}
                           {publish?.classinReviewStatusLabel ? ` · ${publish.classinReviewStatusLabel}` : ''}
@@ -3556,8 +5634,8 @@ function ItemsRail({
                             <button
                               className="icon-btn"
                               type="button"
-                              disabled={!publish.canDownload}
-                              onClick={() => downloadPublishSummary(publish)}
+                              disabled={!publish.canDownload || publishDownloadBusy}
+                              onClick={() => onDownloadPublish?.(publish)}
                               title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : '최근 제작본 다운로드'}
                             >
                               {Icon.download}
@@ -3672,6 +5750,15 @@ function ItemsRail({
                     {Icon.aiBatch}
                   </button>
                   <button
+                    className="icon-btn queue-row-action"
+                    title="이 파일에서 여러 문항이 함께 쓰는 공통 지문만 추출"
+                    aria-label="이 파일 공통 지문만 추출"
+                    onClick={e => { e.stopPropagation(); processQueuedFiles('passage-only', key); }}
+                    disabled={queueBusy}
+                  >
+                    {Icon.fileText}
+                  </button>
+                  <button
                     className="icon-btn"
                     title="대기열에서 제거"
                     onClick={e => { e.stopPropagation(); removePendingFile(key); }}
@@ -3710,6 +5797,19 @@ function ItemsRail({
                 </span>
               </button>
               <button
+                className="btn queue-action-card queue-action-passage"
+                type="button"
+                title="대기열 전체에서 여러 문항이 함께 쓰는 공통 지문만 추출"
+                onClick={() => processQueuedFiles('passage-only')}
+                disabled={queueBusy}
+              >
+                <span className="queue-action-icon">{Icon.fileText}</span>
+                <span className="queue-action-copy">
+                  <strong>지문만 추출</strong>
+                  <small>공통 긴 지문만</small>
+                </span>
+              </button>
+              <button
                 className="btn queue-action-card queue-action-manual"
                 type="button"
                 title="대기열 전체를 인식 없이 열고 수동으로 문제 영역을 나누기"
@@ -3719,7 +5819,7 @@ function ItemsRail({
                 <span className="queue-action-icon">{Icon.pen}</span>
                 <span className="queue-action-copy">
                   <strong>수동 쪼개기</strong>
-                  <small>가운데 미리보기에서 Ctrl+휠 확대</small>
+                  <small>가운데 미리보기에서 {PRIMARY_MODIFIER_LABEL}+휠 확대</small>
                 </span>
               </button>
               {!aiAvailable && (
@@ -3732,66 +5832,178 @@ function ItemsRail({
           </div>
         )}
 
-        {items.map((it, i) => {
-          const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
+        {!!items.length && (
+          <div className={`problem-order-status ${selectedItemCount > 1 ? 'is-selection' : ''}`} id="problem-order-help">
+            {selectedItemCount > 1 ? (
+              <>
+                <strong>{selectedItemCount}개 선택</strong>
+                <span><kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 선택 · 드래그/{ALTERNATE_MODIFIER_LABEL} 이동</span>
+                <div className="rail-selection-tools" role="group" aria-label="선택 문제 일괄 작업">
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's1')} disabled={reorderBusy}>
+                    1단계
+                  </button>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's2')} disabled={reorderBusy}>
+                    원문 보존
+                  </button>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's3')} disabled={reorderBusy}>
+                    고화질
+                  </button>
+                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'question')} disabled={reorderBusy}>
+                    문항
+                  </button>
+                  <button className="btn" type="button" onClick={() => onConfirmSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
+                    {Icon.check} 확인
+                  </button>
+                  <button className="btn" type="button" onClick={() => onDownloadSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
+                    {Icon.download} PNG
+                  </button>
+                  <button className="btn rail-selection-clear" type="button" onClick={clearRailSelection} disabled={reorderBusy}>
+                    해제
+                  </button>
+                  <button className="btn danger rail-selection-delete" type="button" onClick={removeSelectedItems} disabled={reorderBusy}>
+                    {Icon.trash} 삭제
+                  </button>
+                </div>
+              </>
+            ) : filterActive ? (
+              <span>모아보기 중 · 순서 변경은 전체 보기에서</span>
+            ) : (
+              <>
+                <span className="problem-order-icon" aria-hidden="true">{Icon.grip}</span>
+                <span><kbd>Shift</kbd> 범위 · <kbd>{PRIMARY_MODIFIER_LABEL}</kbd> 개별 선택</span>
+                <span aria-hidden="true">·</span>
+                <span>드래그 또는 <kbd>{ALTERNATE_MODIFIER_LABEL}</kbd> + <kbd>↑</kbd><kbd>↓</kbd> 이동</span>
+              </>
+            )}
+            {reorderBusy && <strong role="status">순서 저장 중…</strong>}
+          </div>
+        )}
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {reorderAnnouncement}
+        </span>
+        {dragPreview && dragPreviewItem && ReactDOM.createPortal(
+          <div
+            ref={dragPreviewRef}
+            className="rail-drag-overlay"
+            style={{
+              '--drag-preview-width': `${dragPreview.width}px`,
+              '--drag-preview-height': `${dragPreview.height}px`,
+            }}
+            data-drag-count={dragPreview.count}
+            aria-hidden="true"
+          >
+            <div className="item rail-drag-overlay-card">
+              <div className="grip">
+                <span className="grip-icon">{Icon.grip}</span>
+                <span className="idx">{String(dragPreview.index + 1).padStart(2, '0')}</span>
+              </div>
+              <div className="thumb">
+                <TileImage item={dragPreviewItem} forceMode="raw" />
+              </div>
+              <div className="meta">
+                <div className="name">
+                  <span
+                    className={`status-dot ${reviewStatusClass(dragPreviewItem.reviewStatus)}`}
+                  />
+                  {problemDisplayName(dragPreviewItem, dragPreview.index)}
+                </div>
+                <div className="sub">
+                  {dragPreviewItem.step === 's1' && <span className="tag s1">1단계</span>}
+                  {dragPreviewItem.step === 's2' && <span className="tag s2">보존</span>}
+                  {dragPreviewItem.step === 's3' && <span className="tag s3">고화질</span>}
+                  {dragPreviewItem.step === 'raw' && <span className="tag">대기</span>}
+                  <span className="source-label">{problemSourceLabel(dragPreviewItem)}</span>
+                </div>
+              </div>
+            </div>
+            {dragPreview.count > 1 && (
+              <span className="rail-drag-count">{dragPreview.count}개 이동</span>
+            )}
+          </div>,
+          document.body
+        )}
+
+        {displayedItemRows.map(({ item: it, displayIndex: i }) => {
+          const itemId = String(it.id);
+          const isSelected = selectedItemIds.has(itemId);
+          const dropPosition = (
+            String(dropTarget?.id || '') === itemId
+              ? dropTarget.position
+              : null
+          );
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
           const hasPageChrome = hasPageChromeArtifactFlag(it);
+          const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
+          const moveDirection = isJustMoved ? moveFeedback.direction : null;
           const downloadTitle = isDownloading
             ? '다운로드 준비 중'
             : canDownloadItem
               ? '이 자료 PNG 다운로드'
               : '다운로드할 이미지가 아직 없습니다';
           return (
+          <React.Fragment key={it.id}>
+          {dropPosition === 'before' && (
+            <div
+              className="rail-drop-slot"
+              data-drop-position="before"
+              aria-hidden="true"
+            />
+          )}
           <div
-            key={it.id}
             ref={el => {
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${pressedItemId === itemId ? 'is-pressed' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
-            onClick={() => {
+            role="group"
+            tabIndex={0}
+            aria-current={activeId === it.id ? 'true' : undefined}
+            aria-busy={reorderBusy ? 'true' : undefined}
+            aria-roledescription={filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
+            aria-keyshortcuts={filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
+            aria-posinset={i + 1}
+            aria-setsize={displayedItemRows.length}
+            aria-describedby="problem-order-help"
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
+            onClick={e => {
               if (suppressClickRef.current) return;
-              setActive(it.id);
+              selectRailItem(it.id, e);
             }}
-            onPointerDown={e => startPointerDrag(e, it.id)}
-            onPointerMove={movePointerDrag}
-            onPointerUp={finishPointerDrag}
-            onPointerCancel={finishPointerDrag}
-            onDragStart={e => {
-              dragId.current = it.id;
-              setDraggingId(it.id);
-              e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', it.id);
-            }}
-            onDragEnter={e => updateDropTarget(e, it.id)}
-            onDragOver={e => {
-              applyRailAutoScroll(e.clientX, e.clientY);
-              updateDropTarget(e, it.id);
-            }}
-            onDragLeave={e => {
-              if (e.currentTarget.contains(e.relatedTarget)) return;
-              if (dropTargetRef.current?.id === it.id) setCurrentDropTarget(null);
-            }}
-            onDrop={e => {
-              e.preventDefault();
-              const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
-              const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && sourceId !== it.id) {
-                setActive(sourceId);
-                reorder(sourceId, it.id, position, { resetPlacement: true });
+            onKeyDown={e => {
+              if (e.target !== e.currentTarget) return;
+              if (applyRailSelectionKeyboard(it, e)) return;
+              if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                e.preventDefault();
+                moveItemByKeyboard(it, e.key === 'ArrowUp' ? 'up' : 'down');
+                return;
               }
-              stopRailAutoScroll();
-              clearDragState();
-            }}
-            onDragEnd={() => {
-              stopRailAutoScroll();
-              clearDragState();
+              if ((e.key === 'Delete' || e.key === 'Backspace') && selectedItemCount > 0) {
+                e.preventDefault();
+                removeSelectedItems();
+                return;
+              }
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectRailItem(it.id, e);
+              }
             }}
           >
-            <div className="grip" title="끌어 옮기기">
+            <div
+              className="grip"
+              title="잡고 드래그해 순서 이동"
+              data-tooltip="잡고 드래그해 순서 이동"
+              aria-hidden="true"
+              onPointerDown={e => startPointerDrag(e, it.id)}
+            >
+              <span className="grip-icon">{Icon.grip}</span>
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
+              {isJustMoved && (
+                <span className={`move-cue move-${moveDirection}`}>
+                  {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+                </span>
+              )}
             </div>
             <div className="thumb">
               <TileImage item={it} forceMode="raw" />
@@ -3815,6 +6027,34 @@ function ItemsRail({
             </div>
             <div className="actions">
               <button
+                className="icon-btn item-move-action"
+                type="button"
+                title="한 칸 위로"
+                data-tooltip="한 칸 위로 이동"
+                aria-label={`${problemDisplayName(it, i)} 한 칸 위로 이동`}
+                disabled={reorderBusy || filterActive || i === 0}
+                onClick={e => {
+                  e.stopPropagation();
+                  moveItemByKeyboard(it, 'up');
+                }}
+              >
+                {Icon.chevronUp}
+              </button>
+              <button
+                className="icon-btn item-move-action"
+                type="button"
+                title="한 칸 아래로"
+                data-tooltip="한 칸 아래로 이동"
+                aria-label={`${problemDisplayName(it, i)} 한 칸 아래로 이동`}
+                disabled={reorderBusy || filterActive || i === items.length - 1}
+                onClick={e => {
+                  e.stopPropagation();
+                  moveItemByKeyboard(it, 'down');
+                }}
+              >
+                {Icon.chevronDown}
+              </button>
+              <button
                 className="icon-btn item-download-action"
                 type="button"
                 title={downloadTitle}
@@ -3829,19 +6069,56 @@ function ItemsRail({
               >
                 {Icon.download}
               </button>
-              <button className="icon-btn" title="삭제" onClick={e => { e.stopPropagation(); removeItem(it.id); }}>
+              <button
+                className="icon-btn item-delete-action"
+                type="button"
+                title={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '삭제'}
+                data-tooltip={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '이 자료 삭제'}
+                aria-label={isSelected && selectedItemCount > 1
+                  ? `선택한 ${selectedItemCount}개 삭제`
+                  : `${problemDisplayName(it, i)} 삭제`}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (isSelected && selectedItemCount > 1) removeSelectedItems();
+                  else {
+                    removeItem(it.id);
+                    setSelectedItemIds(prev => {
+                      const next = new Set(prev);
+                      next.delete(itemId);
+                      return next;
+                    });
+                  }
+                }}
+              >
                 {Icon.trash}
               </button>
             </div>
           </div>
+          {dropPosition === 'after' && (
+            <div
+              className="rail-drop-slot"
+              data-drop-position="after"
+              aria-hidden="true"
+            />
+          )}
+          </React.Fragment>
         );})}
+        {hasSessionItems && visibleItemRows.length === 0 && (
+          <div className="material-filter-empty">
+            <strong>해당 자료가 없습니다</strong>
+            <small>분류를 수정하거나 전체 보기로 돌아가세요.</small>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ─── CENTER: big scrollable board stage ──
-function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder }){
+function BoardStage({
+  items, activeId, setActive, boardColor, boardColumns, fileName, addSample,
+  setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
+}){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -3850,8 +6127,19 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const syncLock = useRef(0);
   const positionDragRef = useRef(null);
   const suppressClickRef = useRef(null);
+  const selectionAnchorRef = useRef(null);
   const boardDropTargetRef = useRef(null);
-  const autoScrollRef = useRef({ raf: null, clientY: null });
+  const autoScrollRef = useRef({
+    raf: null,
+    clientX: null,
+    clientY: null,
+    direction: 0,
+    edgeEnteredAt: null,
+    lastFrameAt: null,
+  });
+  const scrollSyncFrameRef = useRef(null);
+  const restoredScrollRef = useRef(false);
+  const boardScrollTopRef = useRef(Number(savedScrollTop) || 0);
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
   const [dragMagnet, setDragMagnet] = useState(null);
@@ -3942,6 +6230,18 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const visibleCurrentPage = Math.min(currentPage, layout.totalPages);
 
   useLayoutEffect(() => {
+    if (restoredScrollRef.current || !scrollRef.current) return;
+    restoredScrollRef.current = true;
+    syncLock.current = Date.now();
+    scrollRef.current.scrollTop = Math.max(0, boardScrollTopRef.current);
+    setCurrentPage(Math.min(layout.totalPages, Math.floor(scrollRef.current.scrollTop / pageH) + 1));
+  }, [layout.totalPages, pageH]);
+
+  useEffect(() => () => {
+    onSaveScrollTop?.(boardScrollTopRef.current);
+  }, [onSaveScrollTop]);
+
+  useLayoutEffect(() => {
     const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== boardOrderSignature);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     const nextRects = new Map();
@@ -3954,12 +6254,22 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
         const dx = previous.left - rect.left;
         const dy = previous.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          const isMovedItem = String(moveFeedback?.id || '') === String(item.id);
           el.animate(
-            [
-              { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.72 },
-              { transform: 'translate(0, 0)', opacity: 1 },
-            ],
-            { duration: 360, easing: 'cubic-bezier(.2,.82,.2,1)' }
+            isMovedItem
+              ? [
+                  { transform: `translate(${dx}px, ${dy}px) scale(.97)`, opacity: .68 },
+                  { transform: 'translate(0, 0) scale(1.025)', opacity: 1, offset: .76 },
+                  { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+                ]
+              : [
+                  { transform: `translate(${dx}px, ${dy}px)`, opacity: .76 },
+                  { transform: 'translate(0, 0)', opacity: 1 },
+                ],
+            {
+              duration: isMovedItem ? 520 : 380,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.2,.82,.2,1)',
+            }
           );
         }
       }
@@ -3989,11 +6299,12 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     smoothScrollTo(container, target);
   }, [activeId, boardOrderSignature, pageH, columnCount]);
 
-  const onScroll = () => {
+  const syncBoardScrollState = () => {
     const c = scrollRef.current;
     if (!c) return;
     const nextPage = Math.min(layout.totalPages, Math.floor(c.scrollTop / pageH) + 1);
     setCurrentPage(prev => prev === nextPage ? prev : nextPage);
+    if (positionDragRef.current) return;
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
@@ -4002,9 +6313,35 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     }
   };
 
-  const onTileClick = (id) => {
+  const onScroll = () => {
+    boardScrollTopRef.current = scrollRef.current?.scrollTop || 0;
+    if (scrollSyncFrameRef.current != null) return;
+    scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
+      scrollSyncFrameRef.current = null;
+      syncBoardScrollState();
+    });
+  };
+
+  useEffect(() => () => {
+    if (scrollSyncFrameRef.current != null) {
+      window.cancelAnimationFrame(scrollSyncFrameRef.current);
+      scrollSyncFrameRef.current = null;
+    }
+  }, []);
+
+  const onTileClick = (id, event = {}) => {
     if (suppressClickRef.current === id) return;
     syncLock.current = Date.now();
+    const orderedIds = items.map(item => String(item.id));
+    const result = applySelectionClick(
+      orderedIds,
+      Array.from(selectedIds || []),
+      selectionAnchorRef.current || activeId,
+      id,
+      event
+    );
+    selectionAnchorRef.current = result.anchorId;
+    setSelectedIds?.(new Set(result.selectedIds));
     setActive(id);
   };
 
@@ -4024,32 +6361,75 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     ));
   };
 
-  const findBoardDropTarget = (clientY, sourceId) => {
+  const findBoardDropTarget = (clientX, clientY, sourceId) => {
     const content = contentRef.current;
-    if (!content || !items.length) return null;
-    const rect = content.getBoundingClientRect();
-    const contentY = clientY - rect.top;
-    let lastCandidateId = null;
-    for (let index = 0; index < layout.positions.length; index += 1) {
-      const placement = layout.positions[index];
+    const scroll = scrollRef.current;
+    if (!content || !scroll || !items.length) return null;
+    const scrollRect = scroll.getBoundingClientRect();
+    if (
+      Number.isFinite(Number(clientX))
+      && (clientX < scrollRect.left || clientX > scrollRect.right)
+    ) {
+      return null;
+    }
+    const contentRect = content.getBoundingClientRect();
+    const candidates = [];
+    for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       if (!item?.id || item.id === sourceId) continue;
-      lastCandidateId = item.id;
-      const midpoint = placement.top + (placement.height / 2);
-      if (contentY < midpoint) {
-        return { id: item.id, position: 'before' };
+      const placement = layout.positions[index];
+      const tileRect = tileRefs.current[item.id]?.getBoundingClientRect?.();
+      const fallbackRect = placement ? {
+        top: contentRect.top + placement.top,
+        bottom: contentRect.top + placement.top + placement.height,
+        left: contentRect.left,
+        right: contentRect.right,
+        width: contentRect.width,
+        height: placement.height,
+      } : null;
+      const rect = tileRect && tileRect.height > 0 ? tileRect : fallbackRect;
+      if (rect) candidates.push({ id: item.id, index, rect });
+    }
+    if (!candidates.length) return null;
+
+    let candidateIndex = 0;
+    while (candidateIndex < candidates.length) {
+      const first = candidates[candidateIndex];
+      const row = [first];
+      candidateIndex += 1;
+      while (
+        candidateIndex < candidates.length
+        && Math.abs(candidates[candidateIndex].rect.top - first.rect.top) <= 12
+      ) {
+        row.push(candidates[candidateIndex]);
+        candidateIndex += 1;
+      }
+      const rowTop = Math.min(...row.map(candidate => candidate.rect.top));
+      const rowBottom = Math.max(...row.map(candidate => candidate.rect.bottom));
+      if (clientY < rowTop) {
+        return { id: row[0].id, position: 'before' };
+      }
+      if (clientY <= rowBottom) {
+        const horizontal = row.slice().sort((a, b) => a.rect.left - b.rect.left || a.index - b.index);
+        for (const candidate of horizontal) {
+          if (clientX < candidate.rect.left + candidate.rect.width / 2) {
+            return { id: candidate.id, position: 'before' };
+          }
+        }
+        return { id: horizontal[horizontal.length - 1].id, position: 'after' };
       }
     }
-    return lastCandidateId ? { id: lastCandidateId, position: 'after' } : null;
+    return { id: candidates[candidates.length - 1].id, position: 'after' };
   };
 
-  const updateBoardDropTarget = (clientY, sourceId, force = false) => {
+  const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
     const drag = positionDragRef.current;
-    if (!force && drag && Math.abs(clientY - drag.startY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
+    const dragDistanceY = drag?.contentDy ?? (drag ? clientY - drag.startY : 0);
+    if (!force && drag && Math.abs(dragDistanceY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
       setCurrentBoardDropTarget(null);
       return null;
     }
-    const target = findBoardDropTarget(clientY, sourceId);
+    const target = findBoardDropTarget(clientX, clientY, sourceId);
     setCurrentBoardDropTarget(target);
     return target;
   };
@@ -4058,34 +6438,115 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (autoScrollRef.current.raf) {
       cancelAnimationFrame(autoScrollRef.current.raf);
     }
-    autoScrollRef.current = { raf: null, clientY: null };
+    autoScrollRef.current = {
+      raf: null,
+      clientX: null,
+      clientY: null,
+      direction: 0,
+      edgeEnteredAt: null,
+      lastFrameAt: null,
+    };
   };
 
-  const stepBoardAutoScroll = () => {
+  const updatePositionDragVisual = (drag, clientX, clientY) => {
+    const scroll = scrollRef.current;
+    if (!drag || !scroll) return;
+    drag.lastClientX = clientX;
+    drag.lastClientY = clientY;
+    const rawDx = clientX - drag.startX;
+    const scrollDeltaY = scroll.scrollTop - drag.startScrollTop;
+    const contentDy = clientY - drag.startY + scrollDeltaY;
+    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + rawDx));
+    const visualDx = nextLeft - drag.startLeft;
+    const nextTopOffset = Math.max(
+      0,
+      Math.min(drag.maxTopOffset, drag.startTopOffset + contentDy)
+    );
+    const rawXRatio = drag.maxLeft > 0
+      ? nextLeft / drag.maxLeft
+      : DEFAULT_PLACEMENT_X_RATIO;
+    drag.currentDxPx = visualDx;
+    drag.contentDy = contentDy;
+    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
+    const nextXRatio = magnet.ratio;
+    const nextYRatio = drag.maxTopOffset > 0
+      ? nextTopOffset / drag.maxTopOffset
+      : DEFAULT_PLACEMENT_Y_RATIO;
+    drag.pendingPlacement = {
+      xRatio: nextXRatio,
+      yRatio: nextYRatio,
+      magnetColumnIndex: magnet.snapped ? magnet.index : null,
+    };
+    drag.tile.style.transform = `translate3d(${visualDx}px, ${contentDy}px, 0)`;
+    drag.tile.style.zIndex = '12';
+    const magnetKey = magnet.snapped ? `${magnet.index}:${magnet.ratio}` : '';
+    if (magnetKey !== drag.lastMagnetKey) {
+      drag.lastMagnetKey = magnetKey;
+      setDragMagnet(magnet.snapped ? {
+        index: magnet.index,
+        ratio: magnet.ratio,
+        distancePx: magnet.distancePx,
+      } : null);
+    }
+  };
+
+  const stepBoardAutoScroll = (timestamp) => {
     const drag = positionDragRef.current;
     const scroll = scrollRef.current;
+    const clientX = autoScrollRef.current.clientX;
     const clientY = autoScrollRef.current.clientY;
     if (!drag || !scroll || clientY == null) {
       stopBoardAutoScroll();
       return;
     }
     const rect = scroll.getBoundingClientRect();
-    const delta = edgeAutoScrollDelta(
+    const baseDelta = edgeAutoScrollDelta(
       rect,
       clientY,
       BOARD_DRAG_AUTOSCROLL_EDGE_PX,
       BOARD_DRAG_AUTOSCROLL_MAX_PX
     );
-    if (delta) {
-      scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta));
-      updateBoardDropTarget(clientY, drag.id);
+    const direction = Math.sign(baseDelta);
+    if (!direction) {
+      autoScrollRef.current.direction = 0;
+      autoScrollRef.current.edgeEnteredAt = null;
+      autoScrollRef.current.lastFrameAt = null;
+      autoScrollRef.current.raf = null;
+      return;
+    }
+    if (direction !== autoScrollRef.current.direction) {
+      autoScrollRef.current.direction = direction;
+      autoScrollRef.current.edgeEnteredAt = timestamp;
+      autoScrollRef.current.lastFrameAt = timestamp;
+    }
+    const edgeEnteredAt = autoScrollRef.current.edgeEnteredAt ?? timestamp;
+    const lastFrameAt = autoScrollRef.current.lastFrameAt ?? timestamp;
+    const delta = acceleratedEdgeAutoScrollDelta(
+      rect,
+      clientY,
+      BOARD_DRAG_AUTOSCROLL_EDGE_PX,
+      BOARD_DRAG_AUTOSCROLL_MAX_PX,
+      Math.max(0, timestamp - edgeEnteredAt),
+      Math.max(4, timestamp - lastFrameAt || (1000 / 60))
+    );
+    autoScrollRef.current.lastFrameAt = timestamp;
+    const previousTop = scroll.scrollTop;
+    const nextTop = Math.max(
+      0,
+      Math.min(scroll.scrollHeight - scroll.clientHeight, previousTop + delta)
+    );
+    scroll.scrollTop = nextTop;
+    if (Math.abs(nextTop - previousTop) > 0.01) {
+      updatePositionDragVisual(drag, clientX ?? drag.lastClientX, clientY);
+      updateBoardDropTarget(clientX ?? drag.lastClientX, clientY, drag.id);
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
     } else {
       autoScrollRef.current.raf = null;
     }
   };
 
-  const applyBoardAutoScroll = (clientY) => {
+  const applyBoardAutoScroll = (clientX, clientY) => {
+    autoScrollRef.current.clientX = clientX;
     autoScrollRef.current.clientY = clientY;
     if (!autoScrollRef.current.raf) {
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
@@ -4102,8 +6563,11 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     }
     if (drag.windowPointerEnd) {
       window.removeEventListener('pointerup', drag.windowPointerEnd);
-      window.removeEventListener('pointercancel', drag.windowPointerEnd);
       drag.windowPointerEnd = null;
+    }
+    if (drag.windowPointerCancel) {
+      window.removeEventListener('pointercancel', drag.windowPointerCancel);
+      drag.windowPointerCancel = null;
     }
   };
 
@@ -4111,8 +6575,10 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
   const beginPositionDrag = (evt, item, placement) => {
     if (evt.button !== 0 || !contentRef.current) return;
+    evt.preventDefault();
     const contentRect = contentRef.current.getBoundingClientRect();
     const tileRect = evt.currentTarget.getBoundingClientRect();
+    const scroll = scrollRef.current;
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
     const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
     const startXRatio = normalizePlacementXRatio(placement.xRatio);
@@ -4127,8 +6593,12 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       id: item.id,
       pointerId: evt.pointerId,
       captureTarget: evt.currentTarget,
+      tile: evt.currentTarget,
       startX: evt.clientX,
       startY: evt.clientY,
+      lastClientX: evt.clientX,
+      lastClientY: evt.clientY,
+      startScrollTop: scroll?.scrollTop || 0,
       startLeft: startXRatio * maxLeft,
       startTopOffset: startYRatio * maxTopOffset,
       maxLeft,
@@ -4138,10 +6608,14 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       startMagnetColumnIndex: startMagnet.snapped ? startMagnet.index : null,
       lastXRatio: startXRatio,
       lastYRatio: startYRatio,
+      lastMagnetKey: '',
+      contentDy: 0,
+      pendingPlacement: null,
       moved: false,
     };
     drag.windowPointerMove = event => movePositionDrag(event);
     drag.windowPointerEnd = event => endPositionDrag(event);
+    drag.windowPointerCancel = event => cancelPositionDrag(event);
     positionDragRef.current = drag;
     setPositioningId(item.id);
     setCurrentBoardDropTarget(null);
@@ -4150,7 +6624,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
     window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
     window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
-    window.addEventListener('pointercancel', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
   };
 
   const movePositionDrag = (evt) => {
@@ -4161,54 +6635,55 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     drag.moved = true;
     evt.preventDefault();
-    applyBoardAutoScroll(evt.clientY);
-    updateBoardDropTarget(evt.clientY, drag.id);
-    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
-    const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
-    const rawXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
-    drag.currentDxPx = dx;
-    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
-    const nextXRatio = magnet.ratio;
-    const nextYRatio = drag.maxTopOffset > 0 ? nextTopOffset / drag.maxTopOffset : DEFAULT_PLACEMENT_Y_RATIO;
-    setDragMagnet(magnet.snapped ? {
-      index: magnet.index,
-      ratio: magnet.ratio,
-      distancePx: magnet.distancePx,
-    } : null);
-    if (
-      Math.abs(nextXRatio - drag.lastXRatio) < 0.002 &&
-      Math.abs(nextYRatio - drag.lastYRatio) < 0.002
-    ) {
-      return;
-    }
-    drag.lastXRatio = nextXRatio;
-    drag.lastYRatio = nextYRatio;
-    setPlacement?.(drag.id, {
-      xRatio: nextXRatio,
-      yRatio: nextYRatio,
-      magnetColumnIndex: magnet.snapped ? magnet.index : null,
-    });
+    updatePositionDragVisual(drag, evt.clientX, evt.clientY);
+    applyBoardAutoScroll(evt.clientX, evt.clientY);
+    updateBoardDropTarget(evt.clientX, evt.clientY, drag.id);
   };
 
   const endPositionDrag = (evt) => {
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
-    const canReorder = drag.moved && Math.abs(evt.clientY - drag.startY) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
+    updatePositionDragVisual(drag, evt.clientX, evt.clientY);
+    const canReorder = drag.moved && Math.abs(drag.contentDy) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
     const target = canReorder
-      ? findBoardDropTarget(evt.clientY, drag.id) || boardDropTargetRef.current
+      ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id) || boardDropTargetRef.current
       : null;
+    const reorderedPreview = target?.id
+      ? reorderItemsForDrop(items, drag.id, target.id, target.position)
+      : items;
+    const orderChanged = reorderedPreview !== items
+      && reorderedPreview.map(item => String(item.id)).join('|') !== boardOrderSignature;
     if (drag.moved) {
       suppressClickRef.current = drag.id;
       window.setTimeout(() => {
         if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
       }, 0);
-      if (target && target.id && target.id !== drag.id) {
+      if (orderChanged) {
         reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
+      } else if (drag.pendingPlacement) {
+        setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
+    drag.tile.style.transform = '';
+    drag.tile.style.zIndex = '';
     removePositionDragWindowListeners(drag);
     const captureTarget = drag.captureTarget || evt.currentTarget;
     captureTarget?.releasePointerCapture?.(evt.pointerId);
+    positionDragRef.current = null;
+    setPositioningId(null);
+    setCurrentBoardDropTarget(null);
+    setDragMagnet(null);
+    stopBoardAutoScroll();
+    window.requestAnimationFrame(captureBoardTileRects);
+  };
+
+  const cancelPositionDrag = (evt) => {
+    const drag = positionDragRef.current;
+    if (!drag || drag.pointerId !== evt.pointerId) return;
+    drag.tile.style.transform = '';
+    drag.tile.style.zIndex = '';
+    removePositionDragWindowListeners(drag);
+    drag.captureTarget?.releasePointerCapture?.(evt.pointerId);
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
@@ -4251,7 +6726,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   }
 
   return (
-    <div className="col center">
+    <div className="col center workspace-stage-surface">
       <div className="stage">
         <div className="stage-toolbar">
           <span className="name">실시간 칠판 미리보기</span>
@@ -4329,6 +6804,8 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                   const yRatio = normalizePlacementYRatio(p.yRatio);
                   const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
                   const hasPageChrome = hasPageChromeArtifactFlag(it);
+                  const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
+                  const moveDirection = isJustMoved ? moveFeedback.direction : null;
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
                     height: scaledHeight,
@@ -4338,18 +6815,25 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
-                      onClick={() => onTileClick(it.id)}
+                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+                      onClick={event => onTileClick(it.id, event)}
                       title={problemDisplayName(it, i)}
+                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 드래그하여 배치 또는 순서 이동`}
+                      aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
                       style={tileStyle}
-                      onPointerDown={e => beginPositionDrag(e, it, p)}
-                      onPointerMove={movePositionDrag}
-                      onPointerUp={endPositionDrag}
-                      onPointerCancel={endPositionDrag}
                     >
-                      <div className="tile-hd">
+                      <div
+                        className="tile-hd"
+                        onPointerDown={e => beginPositionDrag(e, it, p)}
+                      >
+                        <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
                         <span className="nm">{problemDisplayName(it, i)}</span>
+                        {isJustMoved && (
+                          <span className={`tile-move-cue move-${moveDirection}`} aria-hidden="true">
+                            {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+                          </span>
+                        )}
                         {p.spans > 1 && (
                           <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
                         )}
@@ -4367,7 +6851,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                         </span>
                       </div>
                       <div className="tile-art">
-                        <TileImage item={it} />
+                        <TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />
                       </div>
                     </button>
                   );
@@ -4397,59 +6881,102 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
           </div>
         </div>
 
-        <div className="stage-status">
-          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
-          <span className="chip">
-            <span className="pip" />
-            {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
-          </span>
-          {activePlacement && (
+        <div className="stage-status" aria-label="미리보기 상태">
+          <div className="stage-status-track">
+            <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
             <span className="chip">
-              행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
+              <span className="pip" />
+              {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
             </span>
-          )}
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
-            1단계 {s1Count}
-          </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
-            원문 보존 {aiCount}
-          </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
-            고화질 {reconstructCount}
-          </span>
-          {rawCount > 0 && (
-            <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
-              미처리 {rawCount}
+            {activePlacement && (
+              <span className="chip">
+                행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
+              </span>
+            )}
+            <span className="chip">
+              <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
+              1단계 {s1Count}
             </span>
-          )}
-          <div className="spacer" />
-          <span style={{fontFamily:'JetBrains Mono, monospace'}}>{processedCount}/{items.length} 처리됨 · {layout.totalPages}p</span>
+            <span className="chip">
+              <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
+              원문 보존 {aiCount}
+            </span>
+            <span className="chip">
+              <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
+              고화질 {reconstructCount}
+            </span>
+            {rawCount > 0 && (
+              <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
+                미처리 {rawCount}
+              </span>
+            )}
+          </div>
+          <span
+            className="stage-status-summary"
+            aria-label={`${processedCount}/${items.length} 처리됨 · ${layout.totalPages}페이지`}
+            title={`${processedCount}/${items.length} 처리됨 · ${layout.totalPages}p`}
+          >
+            {processedCount}/{items.length} · {layout.totalPages}p
+          </span>
         </div>
       </div>
     </div>
   );
 }
 
-function downloadPublishSummary(target){
-  if (!target?.canDownload) return;
+async function downloadPublishSummary(target){
+  if (!target?.canDownload) {
+    return { ok: false, error: new Error('다운로드할 수 있는 EDB 제작본이 없습니다') };
+  }
   const parts = Array.isArray(target.edbParts) && target.edbParts.length
     ? target.edbParts
     : [target];
-  parts
-    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false)
-    .forEach((part, index) => {
-      window.setTimeout(() => {
-        const a = document.createElement('a');
-        a.href = part.edbFileUri || part.edb_file_uri;
-        a.download = part.edbFileName || part.edb_file_name || target.edbFileName || 'classin.edb';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, index * 150);
-    });
+  const downloadableParts = parts
+    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false);
+  if (!downloadableParts.length) {
+    return { ok: false, error: new Error('EDB 제작본 파일을 찾을 수 없습니다') };
+  }
+
+  const edbPaths = downloadableParts
+    .map(part => part.edbPath || part.edb_path)
+    .filter(Boolean);
+  if (edbPaths.length === downloadableParts.length) {
+    try {
+      const resp = await fetch('/api/session/export-edb', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          edbPaths,
+          fileName: target.edbFileName || target.edb_file_name || downloadableParts[0]?.edbFileName || 'classin.edb',
+        }),
+      });
+      const json = await expectOkJson(resp, 'EDB 다운로드 준비 실패');
+      triggerServerFileDownload(json.downloadUrl);
+      return { ok: true };
+    } catch (error) {
+      console.warn('[board] EDB bundle download failed:', error);
+      return { ok: false, error };
+    }
+  }
+
+  const firstUri = downloadableParts[0]?.edbFileUri || downloadableParts[0]?.edb_file_uri;
+  if (firstUri) {
+    try {
+      triggerServerFileDownload(firstUri);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+  return { ok: false, error: new Error('EDB 다운로드 주소가 없습니다') };
+}
+
+function triggerServerFileDownload(downloadUrl){
+  const url = String(downloadUrl || '').trim();
+  if (!url) {
+    throw new Error('다운로드 URL이 없습니다');
+  }
+  window.location.assign(url);
 }
 
 async function openPublishedEdb(target){
@@ -4479,7 +7006,10 @@ function openClassinHandoff(target){
   window.open(url, '_blank', 'noopener');
 }
 
-function PublishResultPanel({ session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages }){
+function PublishResultPanel({
+  session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages,
+  onDownloadPublish, publishDownloadBusy,
+}){
   const summary = useMemo(() => visible ? sessionPublishSummary(session) : null, [session, visible]);
   const history = useMemo(() => visible ? sessionPublishHistory(session) : [], [session, visible]);
   const [open, setOpen] = useState(false);
@@ -4534,8 +7064,8 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
             <button
               className="btn"
               type="button"
-              onClick={() => downloadPublishSummary(summary)}
-              disabled={!summary.canDownload}
+              onClick={() => onDownloadPublish?.(summary)}
+              disabled={!summary.canDownload || publishDownloadBusy || !onDownloadPublish}
               title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'EDB 다시 다운로드'}
             >
               {Icon.download}<span>{summary.edbFileExists === false ? '파일 없음' : '다운로드'}</span>
@@ -4600,8 +7130,8 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
                     className="icon-btn"
                     type="button"
                     title="이 제작본 다운로드"
-                    disabled={!item.canDownload}
-                    onClick={() => downloadPublishSummary(item)}
+                    disabled={!item.canDownload || publishDownloadBusy || !onDownloadPublish}
+                    onClick={() => onDownloadPublish?.(item)}
                   >{Icon.download}</button>
                   <button
                     className="icon-btn"
@@ -4636,13 +7166,14 @@ function SidePanel({
   boardColor, setBoardColor,
   accent, setAccent,
   onConfirm,
-  userSettings, runtimeDiagnostics, onSaveGeminiKey,
+  userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
   onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
-  aiEnabled, setAiEnabled,
+  aiEnabled, onToggleAi, aiToggleBusy,
   inputIntent, setInputIntent,
   onRecognizeSession, canRecognizeSession,
   session, published,
   onClassinReviewComplete,
+  onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
   updateInfo, updateBusy, onCheckUpdate, onOpenUpdate,
   view,
@@ -4665,6 +7196,14 @@ function SidePanel({
   const [movePassageGroupTogether, setMovePassageGroupTogether] = useState(true);
   const [breakGroupOnOverflow, setBreakGroupOnOverflow] = useState(true);
   const [placementApplied, setPlacementApplied] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [bugReportDescription, setBugReportDescription] = useState('');
+  const [bugReportContact, setBugReportContact] = useState('');
+  const [bugReportConsentToContact, setBugReportConsentToContact] = useState(false);
+  const [bugReportIncludeDiagnostics, setBugReportIncludeDiagnostics] = useState(true);
+  const [bugReportBusy, setBugReportBusy] = useState(false);
+  const [bugReportResult, setBugReportResult] = useState(null);
+  const [bugReportError, setBugReportError] = useState('');
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
@@ -4732,14 +7271,17 @@ function SidePanel({
     if (!selectedPassageGroupId) return [item];
     return items.filter(candidate => passageGroupIdFor(candidate) === selectedPassageGroupId);
   }, [item?.id, items, selectedPassageGroupId]);
-  const placementTargets = placementScope === 'all'
-    ? items
-    : placementScope === 'group' && selectedPassageGroupId
-      ? selectedGroupItems
-      : item
-        ? [item]
-        : [];
-  const passageFragmentCount = selectedGroupItems.filter(isPassageFragmentProblem).length;
+  const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);
+  const placementTargets = placementPreset === 'passage-only' && selectedPassageFragments.length
+    ? selectedPassageFragments
+    : placementScope === 'all'
+      ? items
+      : placementScope === 'group' && selectedPassageGroupId
+        ? selectedGroupItems
+        : item
+          ? [item]
+          : [];
+  const passageFragmentCount = selectedPassageFragments.length;
   const passageQuestionCount = Math.max(0, selectedGroupItems.length - passageFragmentCount);
   const placementGroupHeightPages = selectedGroupItems.reduce((total, target) => (
     total + Math.max(0.12, Number(target?.actualHeightPages ?? target?.actual_height_pages ?? target?.heightFrac) || 0.8)
@@ -4779,39 +7321,86 @@ function SidePanel({
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !imageEnhanceBusy;
   const updateStatus = updateInfo?.channelStatus || 'unknown';
+  const updateArchitectureBlocked = isUpdateArchitectureMismatch(updateInfo);
+  const updateArchitectureSteps = updateArchitectureRecoverySteps(updateInfo);
   const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || '';
   const updateStatusLabel = updateBusy
     ? '확인 중'
-    : updateInfo?.updateAvailable
-      ? '새 버전'
-      : updateStatus === 'up_to_date'
-        ? '최신'
-        : updateStatus === 'manual_download'
-          ? '수동'
-          : updateStatus === 'not_configured'
-            ? '미설정'
-            : updateStatus === 'error'
-              ? '오류'
-              : updateStatus === 'invalid_feed'
-                ? '피드 오류'
-              : updateStatus === 'unsupported_platform'
-                ? '미지원'
-                : '확인 전';
-  const updateStatusTone = updateInfo?.updateAvailable
-    ? 'var(--accent)'
-    : updateStatus === 'up_to_date'
-      ? 'var(--ok)'
-      : updateStatus === 'error' || updateStatus === 'invalid_feed'
-        ? 'var(--danger)'
-        : 'var(--muted)';
+    : updateArchitectureBlocked
+      ? '파일 없음'
+      : updateInfo?.updateAvailable
+        ? '새 버전'
+        : updateStatus === 'up_to_date'
+          ? '최신'
+          : updateStatus === 'manual_download'
+            ? '수동'
+            : updateStatus === 'not_configured'
+              ? '미설정'
+              : updateStatus === 'error'
+                ? '오류'
+                : updateStatus === 'invalid_feed'
+                  ? '피드 오류'
+                  : updateStatus === 'unsupported_platform'
+                    ? '미지원'
+                    : '확인 전';
+  const updateStatusTone = updateArchitectureBlocked
+      ? 'var(--danger)'
+      : updateInfo?.updateAvailable
+        ? 'var(--accent)'
+        : updateStatus === 'up_to_date'
+          ? 'var(--ok)'
+          : updateStatus === 'error' || updateStatus === 'invalid_feed'
+            ? 'var(--danger)'
+            : 'var(--muted)';
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
+  const hasBugReportContact = bugReportContact.trim().length > 0;
+  const canSubmitBugReport = bugReportDescription.trim().length >= 5
+    && !bugReportBusy
+    && (!hasBugReportContact || bugReportConsentToContact);
+  const handleBugReportSubmit = async event => {
+    event?.preventDefault?.();
+    if (!canSubmitBugReport) return;
+    setBugReportBusy(true);
+    setBugReportError('');
+    setBugReportResult(null);
+    try {
+      const receipt = await submitBugReport({
+        description: bugReportDescription.trim(),
+        contact: bugReportContact.trim(),
+        consentToContact: hasBugReportContact && bugReportConsentToContact,
+        includeDiagnostics: bugReportIncludeDiagnostics,
+        context: {
+          view,
+          settingsTab: tab,
+          inputIntent: normalizeInputIntent(inputIntent),
+          reviewStatus: published ? 'published' : session ? 'session' : 'empty',
+          itemCount: items.length,
+          pendingCount: pendingFile ? 1 : 0,
+          hangul: {
+            status: hangulDiagnostics?.status || 'unknown',
+            summary: hangulRuntimeSummary(hangulDiagnostics),
+          },
+          runtimeErrors: runtimeErrorsForBugReport(),
+          lastOperationError,
+        },
+      });
+      setBugReportDescription('');
+      setBugReportContact('');
+      setBugReportConsentToContact(false);
+      setBugReportResult(receipt);
+    } catch (error) {
+      setBugReportError(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setBugReportBusy(false);
+    }
+  };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
-  const showItemConfirmBar = !!item && (bulk || item.step !== 'raw');
+  const showItemConfirmBar = view !== 'review' && !!item && (bulk || item.step !== 'raw');
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
@@ -4869,6 +7458,19 @@ function SidePanel({
     setPlacementApplied(false);
     if (preset === 'side-by-side') setBoardColumns?.(2);
     if (preset === 'auto' || preset === 'vertical' || preset === 'passage-only') setBoardColumns?.(1);
+    if (preset === 'passage-only' && selectedPassageFragments.length) {
+      selectedPassageFragments.forEach(target => {
+        setPlacement?.(target.id, {
+          xRatio: DEFAULT_PLACEMENT_X_RATIO,
+          xEdited: false,
+          yRatio: DEFAULT_PLACEMENT_Y_RATIO,
+          scaleRatio: maxPlacementScaleRatio(target),
+          fitWidth: true,
+        });
+      });
+      setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
+      setPlacementApplied(true);
+    }
   };
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
@@ -4943,6 +7545,8 @@ function SidePanel({
         onExportImages={onExportImages}
         exportingImages={exportingImages}
         canExportImages={canExportImages}
+        onDownloadPublish={onDownloadPublish}
+        publishDownloadBusy={publishDownloadBusy}
       />
 
       {tab === 'item' && (
@@ -4963,6 +7567,31 @@ function SidePanel({
                     </div>
                   </div>
                   <div className="pos-tag">{itemPosLabel}</div>
+                </div>
+
+                <div className="item-classification">
+                  <div>
+                    <strong>자료 분류</strong>
+                    <small>이미 잘라진 독립 지문 이미지에만 사용 · 원본 재추출은 왼쪽 버튼</small>
+                  </div>
+                  <div className="item-classification-options" role="radiogroup" aria-label="선택 자료 분류">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={!isPassageFragmentProblem(item)}
+                      className={!isPassageFragmentProblem(item) ? 'on' : ''}
+                      disabled={mutating}
+                      onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'question' })}
+                    >문항</button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={isPassageFragmentProblem(item)}
+                      className={isPassageFragmentProblem(item) ? 'on' : ''}
+                      disabled={mutating}
+                      onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'shared-passage' })}
+                    >독립 지문 이미지</button>
+                  </div>
                 </div>
 
                 <div className="item-preview" ref={wrapRef}>
@@ -5026,13 +7655,13 @@ function SidePanel({
                   </button>
                   <button
                     className={`step-row ${item.step === 's3' ? 'on' : ''}`}
-                    data-tooltip="원문 보존 2K 또는 선택적 AI 재구성으로 고화질 제작"
+                    data-tooltip="원문 보존 2K 또는 선택적 AI 1K 재구성으로 고화질 제작"
                     onClick={() => setStep(item.id, 's3')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">3단계 · 고화질 <span className="ai-badge">2K</span></div>
-                      <div className="d">보존형 2K · 선택적 AI 재구성</div>
+                      <div className="t">3단계 · 고화질 <span className="ai-badge">SAFE</span></div>
+                      <div className="d">보존형 2K · 선택적 AI 1K</div>
                     </div>
                     <div className="meta-r">선택<strong>1~8s</strong></div>
                   </button>
@@ -5157,6 +7786,9 @@ function SidePanel({
                           </label>
                         </div>
                         <div className="manual-crop-actions">
+                          <span className={`manual-crop-state ${cropChanged ? 'ready' : ''}`} aria-live="polite">
+                            {cropChanged ? '변경한 여백을 적용할 수 있어요' : '여백 변경 없음'}
+                          </span>
                           <button
                             className="btn"
                             type="button"
@@ -5168,7 +7800,7 @@ function SidePanel({
                             type="button"
                             disabled={!item || mutating || !cropChanged}
                             onClick={() => applyManualCrop()}
-                          >자르기 적용</button>
+                          >{Icon.check} {mutating ? '적용 중…' : '자르기 적용'}</button>
                         </div>
                       </div>
 
@@ -5191,14 +7823,14 @@ function SidePanel({
                         type="button"
                         style={{width: '100%', justifyContent: 'space-between', marginTop: 7}}
                         onClick={() => onEnhanceImage?.([item.id], { mode: 'ai' })}
-                        disabled={!canEnhanceCurrent || !userSettings?.hasGeminiApiKey}
-                        title={userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
+                        disabled={!canEnhanceCurrent || !aiEnabled || !userSettings?.hasGeminiApiKey}
+                        title={!aiEnabled ? '설정에서 AI 기능을 켜면 선택적으로 사용할 수 있습니다' : userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
                       >
                         <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 선택적 AI 재구성</span>
-                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 2K</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 1K</span>
                       </button>
                       <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
-                        국어·영어는 글자 보존형을 권장합니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
+                        수식·문자·선지가 있는 자료는 글자 보존형이 기본입니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
                       </div>
                     </div>
                   )}
@@ -5231,17 +7863,17 @@ function SidePanel({
               전체 적용
             </label>
             <div className="spacer" />
-            <button className="btn" disabled={!item}>건너뛰기</button>
             <button
               className="btn primary"
               disabled={!item || item.step === 'raw'}
+              title="선택한 처리 방식을 저장하고 확인 상태로 변경"
               onClick={() => {
                 if (!item) return;
                 if (bulk) applyToAll(item.step, { silent: true });
                 onConfirm(item.id, { bulk });
               }}
             >
-              {Icon.check} {bulk ? '일괄 확인' : '확인'}
+              {Icon.check} {bulk ? '전체 처리 적용' : '처리 방식 적용'}
             </button>
           </div>
           )}
@@ -5296,15 +7928,16 @@ function SidePanel({
                   ['auto', '자동 추천'],
                   ['vertical', '세로 연결'],
                   ['side-by-side', '좌우 병렬'],
-                  ['passage-only', '지문 전용'],
+                  ['passage-only', '지문 전체 너비'],
                 ].map(([value, label]) => (
                   <button
                     key={value}
                     type="button"
                     className={placementPreset === value ? 'on' : ''}
                     aria-pressed={placementPreset === value}
-                    disabled={!item}
+                    disabled={!item || (value === 'passage-only' && passageFragmentCount === 0)}
                     onClick={() => applyPlacementPreset(value)}
+                    title={value === 'passage-only' ? '이미 추출된 지문 본문만 1열 최대 읽기 폭으로 맞춥니다' : label}
                   >{value === 'auto' && <span aria-hidden="true">✦</span>}{label}</button>
                 ))}
               </div>
@@ -5577,18 +8210,22 @@ function SidePanel({
 
             <div className="row-control">
               <div className="lbl">
-                AI 보정 사용
-                <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
+                AI 전체 사용
+                <small>
+                  {userSettings?.hasGeminiApiKey
+                    ? 'OCR · 문항 보정 · 생성형 고화질'
+                    : 'API 키 없음 · 로컬 처리만 가능'}
+                </small>
               </div>
-              <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
+              <label className="check" style={{cursor: aiToggleBusy ? 'wait' : 'pointer', opacity: aiToggleBusy ? .6 : 1}}>
                 <input
                   type="checkbox"
-                  checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
-                  disabled={!userSettings?.hasGeminiApiKey}
-                  onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
+                  checked={!!aiEnabled}
+                  disabled={!!aiToggleBusy}
+                  onChange={e => onToggleAi?.(e.target.checked)}
                 />
                 <span style={{fontSize: 12, color: 'var(--muted)'}}>
-                  {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
+                  {aiEnabled ? '켜짐' : '꺼짐'}
                 </span>
               </label>
             </div>
@@ -5715,7 +8352,12 @@ function SidePanel({
                 {updateStatusLabel}
               </span>
             </div>
-            {updateInfo?.error && (
+            {updateArchitectureBlocked ? (
+              <div className="runtime-note warn update-architecture-note" role="status">
+                <strong>이 기기용 업데이트 파일 없음</strong>
+                {updateArchitectureSteps.map(step => <small key={step}>{step}</small>)}
+              </div>
+            ) : updateInfo?.error && (
               <div className="runtime-note warn">
                 {updateInfo.error}
               </div>
@@ -5736,15 +8378,454 @@ function SidePanel({
                 type="button"
                 onClick={() => onOpenUpdate?.()}
                 disabled={updateBusy || !updateDownloadUrl}
-                title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
+                title={updateArchitectureBlocked
+                  ? '현재 아키텍처용 설치 파일을 선택해 주세요'
+                  : updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
               >
                 {Icon.download} 다운로드 열기
               </button>
             </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>문제 신고 <span className="line" /></div>
+
+            <section className={`bug-report-card ${bugReportOpen ? 'open' : ''}`} aria-label="버그 리포트">
+              <div className="bug-report-summary">
+                <span className="bug-report-icon" aria-hidden="true">{Icon.bug}</span>
+                <span>
+                  <strong>사용 중 문제가 있었나요?</strong>
+                  <small>설명, 선택한 진단 정보와 동의한 연락처만 전송합니다.</small>
+                </span>
+                <button
+                  className="btn"
+                  type="button"
+                  aria-expanded={bugReportOpen ? 'true' : 'false'}
+                  onClick={() => {
+                    setBugReportOpen(open => !open);
+                    setBugReportError('');
+                  }}
+                >
+                  {bugReportOpen ? '닫기' : '버그 리포트'}
+                </button>
+              </div>
+
+              {bugReportOpen && (
+                <form className="bug-report-form" onSubmit={handleBugReportSubmit}>
+                  <label htmlFor="bug-report-description">무슨 일이 있었나요?</label>
+                  <textarea
+                    id="bug-report-description"
+                    value={bugReportDescription}
+                    maxLength={4000}
+                    rows={5}
+                    placeholder="문제가 생기기 직전에 한 작업과 화면에 보인 현상을 적어 주세요."
+                    onChange={event => {
+                      setBugReportDescription(event.target.value);
+                      setBugReportError('');
+                      setBugReportResult(null);
+                    }}
+                  />
+                  <div className="bug-report-counter">{bugReportDescription.length.toLocaleString()} / 4,000</div>
+
+                  <label htmlFor="bug-report-contact">회신 받을 연락처 <small>(선택)</small></label>
+                  <input
+                    id="bug-report-contact"
+                    className="bug-report-contact"
+                    type="text"
+                    value={bugReportContact}
+                    maxLength={240}
+                    autoComplete="email"
+                    placeholder="이메일 또는 고객을 확인할 수 있는 ID"
+                    onChange={event => {
+                      setBugReportContact(event.target.value);
+                      setBugReportError('');
+                      setBugReportResult(null);
+                    }}
+                  />
+
+                  <label className="bug-report-diagnostics">
+                    <input
+                      type="checkbox"
+                      checked={bugReportConsentToContact}
+                      disabled={!hasBugReportContact}
+                      onChange={event => setBugReportConsentToContact(event.target.checked)}
+                    />
+                    <span>
+                      <strong>이 문제에 관한 회신에 동의</strong>
+                      <small>입력한 연락처는 이 신고의 확인과 해결 안내에만 사용합니다.</small>
+                    </span>
+                  </label>
+
+                  <label className="bug-report-diagnostics">
+                    <input
+                      type="checkbox"
+                      checked={bugReportIncludeDiagnostics}
+                      onChange={event => setBugReportIncludeDiagnostics(event.target.checked)}
+                    />
+                    <span>
+                      <strong>진단 정보 포함</strong>
+                      <small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small>
+                    </span>
+                  </label>
+
+                  <p className="bug-report-privacy">
+                    원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다. 연락처는 동의한 경우에만 보냅니다.
+                  </p>
+
+                  {bugReportError && (
+                    <div className="bug-report-status error" role="alert">{bugReportError}</div>
+                  )}
+                  {bugReportResult?.reportId && (
+                    <div className="bug-report-status success" role="status" aria-live="polite">
+                      접수됐습니다. 번호 <strong>{bugReportResult.reportId}</strong>
+                      {bugReportResult.contactAccepted ? ' · 입력한 연락처로 회신할 수 있습니다.' : ''}
+                    </div>
+                  )}
+
+                  <div className="bug-report-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={bugReportBusy}
+                      onClick={() => {
+                        setBugReportOpen(false);
+                        setBugReportError('');
+                      }}
+                    >
+                      취소
+                    </button>
+                    <button className="btn primary" type="submit" disabled={!canSubmitBugReport}>
+                      {bugReportBusy ? '보내는 중...' : '리포트 보내기'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
+  const [contact, setContact] = useState('');
+  const [consentToContact, setConsentToContact] = useState(false);
+  const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const dialogRef = useRef(null);
+  const descriptionRef = useRef(null);
+  const submitInFlightRef = useRef(false);
+  const errorSnapshot = request?.errorSnapshot || null;
+  const draftText = String(draft || '').trim();
+  const hasContact = contact.trim().length > 0;
+  const canSubmit = (draftText.length >= 5 || Boolean(errorSnapshot))
+    && !busy
+    && !result?.reportId
+    && (!hasContact || consentToContact);
+
+  useLayoutEffect(() => {
+    if (!request) return undefined;
+    setResult(null);
+    setErrorMessage('');
+    const previousFocus = document.activeElement;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const frame = window.requestAnimationFrame(() => descriptionRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.style.overflow = previousBodyOverflow;
+      previousFocus?.focus?.();
+    };
+  }, [request?.id]);
+
+  if (!request) return null;
+
+  const handleKeyDown = event => {
+    if (event.key === 'Escape' && !busy) {
+      event.preventDefault();
+      onClose?.();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll(
+      'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    ) || []);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const handleSubmit = async event => {
+    event.preventDefault();
+    if (!canSubmit || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    setBusy(true);
+    setErrorMessage('');
+    setResult(null);
+    try {
+      const receipt = await submitBugReport({
+        description: draftText || `자동 첨부 오류 리포트 · ${errorSnapshot?.code || 'unknown'}`,
+        contact: contact.trim(),
+        consentToContact: hasContact && consentToContact,
+        includeDiagnostics,
+        context: {
+          ...(context || {}),
+          runtimeErrors: runtimeErrorsForBugReport(),
+          lastOperationError: errorSnapshot,
+        },
+      });
+      setResult(receipt);
+      onDraftChange?.('');
+      setContact('');
+      setConsentToContact(false);
+    } catch (error) {
+      setErrorMessage(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      submitInFlightRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bug-report-dialog-backdrop" onMouseDown={event => {
+      if (event.target === event.currentTarget && !busy) onClose?.();
+    }}>
+      <section
+        ref={dialogRef}
+        className="bug-report-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bug-report-dialog-title"
+        aria-describedby="bug-report-dialog-help"
+        onKeyDown={handleKeyDown}
+      >
+        <header>
+          <div>
+            <strong id="bug-report-dialog-title">버그 리포트 보내기</strong>
+            <small id="bug-report-dialog-help">설정 → 문제 신고에서 언제든 다시 열 수 있습니다.</small>
+          </div>
+          <button className="icon-btn" type="button" aria-label="버그 리포트 닫기" disabled={busy} onClick={onClose}>
+            {Icon.close}
+          </button>
+        </header>
+        {errorSnapshot && (
+          <div className="bug-report-error-snapshot" role="status">
+            <span>자동 첨부 오류</span>
+            <strong>{operationRecoverySummary(errorSnapshot)}</strong>
+            <code>{errorSnapshot.code || 'unknown'}</code>
+          </div>
+        )}
+        <form className="bug-report-form" onSubmit={handleSubmit}>
+          <label htmlFor="global-bug-report-description">추가로 알려주실 내용</label>
+          <textarea
+            ref={descriptionRef}
+            id="global-bug-report-description"
+            value={draft || ''}
+            maxLength={4000}
+            rows={6}
+            disabled={Boolean(result?.reportId)}
+            placeholder="문제가 생기기 직전에 한 작업과 화면에 보인 현상을 적어 주세요. 자동 첨부 오류와 별도로 보관됩니다."
+            onChange={event => {
+              onDraftChange?.(event.target.value);
+              setErrorMessage('');
+              setResult(null);
+            }}
+          />
+          <div className="bug-report-counter">{String(draft || '').length.toLocaleString()} / 4,000</div>
+          <label htmlFor="global-bug-report-contact">회신 받을 연락처 <small>(선택)</small></label>
+          <input
+            id="global-bug-report-contact"
+            className="bug-report-contact"
+            type="text"
+            value={contact}
+            maxLength={240}
+            autoComplete="email"
+            disabled={Boolean(result?.reportId)}
+            placeholder="이메일 또는 고객을 확인할 수 있는 ID"
+            onChange={event => setContact(event.target.value)}
+          />
+          <label className="bug-report-diagnostics">
+            <input type="checkbox" checked={consentToContact} disabled={!hasContact || Boolean(result?.reportId)} onChange={event => setConsentToContact(event.target.checked)} />
+            <span><strong>이 문제에 관한 회신에 동의</strong><small>입력한 연락처는 이 신고의 확인과 해결 안내에만 사용합니다.</small></span>
+          </label>
+          <label className="bug-report-diagnostics">
+            <input type="checkbox" checked={includeDiagnostics} disabled={Boolean(result?.reportId)} onChange={event => setIncludeDiagnostics(event.target.checked)} />
+            <span><strong>진단 정보 포함</strong><small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small></span>
+          </label>
+          <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
+          {errorMessage && <div className="bug-report-status error" role="alert">{errorMessage}</div>}
+          {result?.reportId && (
+            <div className="bug-report-status success" role="status" aria-live="polite">
+              접수됐습니다. 번호 <strong>{result.reportId}</strong>
+            </div>
+          )}
+          <div className="bug-report-actions">
+            <button className="btn" type="button" disabled={busy} onClick={onClose}>닫기</button>
+            <button className="btn primary" type="submit" disabled={!canSubmit}>
+              {result?.reportId ? '접수 완료' : busy ? '보내는 중...' : '리포트 보내기'}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function OperationRecoveryBanner({
+  recovery,
+  onRetry,
+  onRestore,
+  onExport,
+  onReset,
+  onReport,
+  onCopy,
+  onDismiss,
+  onLoadLatest,
+  onRebase,
+  retryBusy,
+  restoreBusy,
+  exportBusy,
+  resetBusy,
+  resetBlocked,
+  downloadBusy,
+  canRestore,
+  canExport,
+}){
+  const error = recovery?.error || null;
+  if (!error) return null;
+  const summary = operationRecoverySummary(error);
+  const kind = recovery?.kind || 'publish';
+  const isDownload = kind === 'download';
+  const isQueue = kind === 'recognition' || kind === 'registration';
+  const isReset = kind === 'reset';
+  const isRestore = kind === 'restore';
+  const hasConflict = Boolean(recovery?.conflict);
+  const latestSessionIsEmpty = hasConflict && !recovery.conflict.latestSession;
+  const conflictNeedsResolution = hasConflict && !isReset;
+  const retryDisallowed = error.retryable === false && !hasConflict;
+  const anyBusy = retryBusy || restoreBusy || exportBusy || resetBusy || downloadBusy;
+  const recoverySteps = Array.isArray(error.recoverySteps)
+    ? error.recoverySteps
+      .map(step => String(step || '').trim())
+      .filter((step, index, steps) => step && steps.indexOf(step) === index && step !== summary)
+      .slice(0, 3)
+    : [];
+  const title = isDownload
+    ? 'EDB 제작은 완료됐습니다'
+    : isQueue
+      ? '원본 파일과 대기열은 그대로 있습니다'
+      : isReset
+        ? '초기화를 마치지 못했습니다'
+        : isRestore
+          ? '최근 작업을 열지 못했습니다'
+          : '제작을 마치지 못했지만 편집 내용은 안전합니다';
+  const guidance = conflictNeedsResolution
+    ? (latestSessionIsEmpty
+      ? '서버의 최신 상태는 빈 작업입니다. ‘빈 최신 상태 불러오기’로 새로 시작하거나, 현재 편집본이 더 필요하면 오류를 신고한 뒤 초기화 여부를 선택하세요.'
+      : '다른 작업이 먼저 저장됐습니다. ‘최신 상태 불러오기’는 서버 내용을 사용하고, ‘내 배치 안전하게 합치기’는 최신 문항에 현재 보드 배치만 적용합니다.')
+    : hasConflict && isReset
+      ? (latestSessionIsEmpty
+        ? '서버는 이미 빈 상태입니다. ‘초기화 다시 시도’로 현재 화면도 정리하거나 ‘빈 최신 상태 불러오기’로 서버 상태에 맞추세요.'
+        : '‘초기화 다시 시도’는 최신 버전을 기준으로 작업 목록을 비우고, ‘최신 상태 불러오기’는 초기화를 취소하고 최신 작업으로 돌아갑니다.')
+      : retryDisallowed
+        ? '같은 요청을 바로 반복해도 해결되지 않습니다. 아래 권장 순서대로 원본이나 문항 구성을 수정한 뒤 다시 제작하세요.'
+      : isDownload
+        ? (canExport
+          ? '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도하거나 PNG로 먼저 저장할 수 있습니다.'
+          : '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도해 주세요.')
+        : isQueue
+          ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 쪼개기를 이용할 수 있습니다.'
+          : isReset
+            ? (error.code === 'artifact_cleanup_busy'
+              ? '진행 중인 제작·다운로드가 끝나거나 취소된 뒤 초기화를 다시 시도하세요.'
+              : '잠시 기다린 뒤 초기화를 다시 시도하세요. 계속 실패하면 앱을 다시 실행해 주세요.')
+            : isRestore
+              ? '현재 화면의 배치는 보존했습니다. 같은 최근 작업을 다시 열거나 버그 리포트를 보내 주세요.'
+              : '먼저 EDB를 다시 제작하세요. 계속 실패하면 PNG로 대체 저장하거나 초기화 후 원본 PDF를 다시 등록해 주세요.';
+  const retryLabel = conflictNeedsResolution
+    ? '먼저 최신 상태 선택'
+    : retryDisallowed
+      ? '권장 조치 후 다시 시도'
+    : isDownload
+    ? (downloadBusy ? '다운로드 준비 중…' : 'EDB 다운로드 다시 시도')
+    : isQueue
+      ? (retryBusy ? '다시 처리 중…' : recovery?.retryLabel || '자료 처리 다시 시도')
+      : isReset
+        ? (resetBusy ? '초기화 중…' : resetBlocked ? '진행 작업 완료 후 초기화' : '초기화 다시 시도')
+        : isRestore
+          ? (restoreBusy ? '여는 중…' : recovery?.retryLabel || '최근 작업 다시 열기')
+          : (retryBusy ? '제작 중…' : 'EDB 다시 제작');
+  return (
+    <section className="operation-recovery-banner" role="region" aria-labelledby="operation-recovery-title" aria-describedby="operation-recovery-summary">
+      <div className="operation-recovery-copy" role="alert" aria-live="assertive" aria-atomic="true">
+        <strong id="operation-recovery-title">{title}</strong>
+        <span id="operation-recovery-summary">{summary}</span>
+        <small>{guidance} 해결되지 않으면 <b>설정 → 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</small>
+        {recoverySteps.length > 0 && (
+          <ol className="operation-recovery-steps" aria-label="권장 해결 순서">
+            {recoverySteps.map(step => <li key={step}>{step}</li>)}
+          </ol>
+        )}
+        {error.code && <code>오류 코드 · {error.code}</code>}
+      </div>
+      <div className="operation-recovery-actions" role="group" aria-label="오류 복구 작업">
+        <button className="btn primary" type="button" onClick={onRetry} disabled={anyBusy || retryDisallowed || conflictNeedsResolution || (isReset && resetBlocked)}>
+          {isDownload ? Icon.download : Icon.refresh} {retryLabel}
+        </button>
+        {recovery?.conflict && (
+          <>
+            <button className="btn" type="button" onClick={onLoadLatest} disabled={anyBusy}>{Icon.refresh} {latestSessionIsEmpty ? '빈 최신 상태 불러오기' : '최신 상태 불러오기'}</button>
+            {!latestSessionIsEmpty && !isReset && !isRestore && <button className="btn" type="button" onClick={onRebase} disabled={anyBusy}>{Icon.undo} 내 배치 안전하게 합치기</button>}
+          </>
+        )}
+        {!isQueue && !isReset && !isDownload && !isRestore && <button className="btn" type="button" onClick={onRestore} disabled={!canRestore || anyBusy || conflictNeedsResolution}>
+          {Icon.folder} {restoreBusy ? '여는 중…' : '최근 저장본 열기'}
+        </button>}
+        {isQueue && recovery?.alternativeLabel && (
+          <button className="btn" type="button" onClick={onExport} disabled={anyBusy || conflictNeedsResolution}>{Icon.pagePng} {recovery.alternativeLabel}</button>
+        )}
+        {!isReset && !isQueue && !isRestore && (!isDownload || canExport) && <button className="btn" type="button" onClick={onExport} disabled={!canExport || anyBusy || conflictNeedsResolution}>
+          {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
+        </button>}
+        {!isDownload && !isReset && <button
+          className="btn"
+          type="button"
+          onClick={onReset}
+          disabled={anyBusy || resetBlocked}
+          title={resetBlocked
+            ? '진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다'
+            : hasConflict
+              ? '서버의 최신 버전을 기준으로 현재 작업을 초기화합니다'
+              : '확인 후 현재 작업을 비우고 원본 PDF부터 다시 시작합니다'}
+        >
+          {Icon.reset} 초기화 후 다시 시작
+        </button>}
+        <button className="btn" type="button" onClick={onReport} disabled={anyBusy}>
+          {Icon.bug} 버그 리포트 열기
+        </button>
+        <button className="btn" type="button" onClick={onCopy} disabled={anyBusy}>
+          {Icon.copy} 오류 내용 복사
+        </button>
+      </div>
+      <button
+        className="operation-recovery-dismiss"
+        type="button"
+        onClick={onDismiss}
+        disabled={anyBusy || hasConflict}
+        title={hasConflict ? '최신 상태를 선택한 뒤 안내를 닫을 수 있습니다' : '오류 복구 안내 닫기'}
+        aria-label={hasConflict ? '최신 상태 선택 전에는 오류 복구 안내를 닫을 수 없습니다' : '오류 복구 안내 닫기'}
+      >
+        {Icon.close}
+      </button>
+    </section>
   );
 }
 
@@ -5754,7 +8835,7 @@ function LoadingOverlay({ label, hint, startedAt }){
     if (!startedAt) { setElapsed(0); return; }
     const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     tick();
-    const id = setInterval(tick, 500);
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [startedAt]);
   const fmt = (s) => s >= 60 ? `${Math.floor(s/60)}분 ${s%60}초` : `${s}초`;
@@ -5772,12 +8853,13 @@ function LoadingOverlay({ label, hint, startedAt }){
 
 function BackgroundJobsPanel({ jobs, onCancel, onDismiss }){
   const visibleJobs = (jobs || []).filter(job => job.status !== 'dismissed');
+  const hasRunningJob = visibleJobs.some(job => job.status === 'running');
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!visibleJobs.some(job => job.status === 'running')) return;
-    const id = setInterval(() => setNow(Date.now()), 500);
+    if (!hasRunningJob) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [visibleJobs]);
+  }, [hasRunningJob]);
   if (!visibleJobs.length) return null;
 
   const elapsedLabel = (startedAt) => {
@@ -5826,7 +8908,7 @@ function RecognitionCancelBanner({ job, onCancel }){
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!job?.startedAt) return;
-    const id = setInterval(() => setNow(Date.now()), 500);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [job?.startedAt]);
 
@@ -5857,9 +8939,12 @@ function RecognitionCancelBanner({ job, onCancel }){
   );
 }
 
-function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
+function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel }){
   const previewSession = review?.session;
   const targetPageIds = review?.pageIds || null;
+  const [activePageIndex, setActivePageIndex] = useState(0);
+  const [recognitionZoom, setRecognitionZoom] = useState(1);
+  const previewRef = useRef(null);
   const pages = useMemo(() => {
     const allPages = Array.isArray(previewSession?.pages) ? previewSession.pages : [];
     if (!targetPageIds?.length) return allPages;
@@ -5877,68 +8962,208 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
     () => summarizeRecognitionSession(previewSession, targetPageIds),
     [previewSession, targetPageIds]
   );
+  const hasActionableReview = useMemo(
+    () => recognitionReviewNeedsAttention(previewSession),
+    [previewSession]
+  );
+  const passageOnly = normalizeContentTarget(review?.contentTarget) === 'shared-passages';
+  const resultLabel = passageOnly ? `공통 지문 ${summary.problems}개` : summary.problemLabel;
+
+  useEffect(() => {
+    setActivePageIndex(0);
+    setRecognitionZoom(1);
+    if (previewRef.current) previewRef.current.scrollTop = 0;
+  }, [review?.id]);
+
+  const safePageIndex = pages.length
+    ? Math.max(0, Math.min(activePageIndex, pages.length - 1))
+    : 0;
+  const pageRows = useMemo(() => pages.map(page => {
+    const problems = (page.problemIds || page.problem_ids || [])
+      .map(id => problemsById.get(id))
+      .filter(Boolean);
+    return {
+      page,
+      problems,
+      riskCount: problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length,
+    };
+  }), [pages, problemsById]);
+  const scrollRecognitionPageToIndex = useCallback((pageIndex) => {
+    const preview = previewRef.current;
+    if (!preview || !pageRows.length) return;
+    const nextIndex = Math.max(0, Math.min(pageRows.length - 1, pageIndex));
+    const node = preview.querySelector(`[data-recognition-page-index="${nextIndex}"]`);
+    if (!node) return;
+    const previewRect = preview.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    setActivePageIndex(nextIndex);
+    smoothScrollTo(preview, Math.max(0, preview.scrollTop + nodeRect.top - previewRect.top - 12), 220);
+  }, [pageRows.length]);
+
+  const syncRecognitionPageIndex = useCallback((preview) => {
+    const pageNodes = Array.from(preview?.querySelectorAll?.('.recognition-page') || []);
+    if (!pageNodes.length) return;
+    const markerTop = preview.getBoundingClientRect().top + 28;
+    const visibleIndex = pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop);
+    const nextIndex = visibleIndex < 0 ? pageNodes.length - 1 : visibleIndex;
+    setActivePageIndex(previous => previous === nextIndex ? previous : nextIndex);
+  }, []);
+
+  const handleRecognitionWheel = useCallback((evt) => {
+    if (!evt.ctrlKey && !evt.metaKey) return;
+    evt.preventDefault();
+    const delta = evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP;
+    setRecognitionZoom(previous => clampReviewZoom(previous + delta));
+  }, []);
 
   if (!review) return null;
-  const title = review.title || 'AI 인식 결과 확인';
-  const movesToReview = review?.kind === 'queue-recognition';
+  const title = review.title || (passageOnly ? '공통 지문 페이지 확인' : '인식된 원본 페이지 확인');
+  const partialRetry = review?.kind === 'retry-ai' && !!review?.partial;
+  const passageReextract = review?.kind === 'session-passage-reextract';
+  const movesToReview = review?.kind === 'queue-recognition' || passageReextract || partialRetry;
   const subtitle = review.subtitle || (
     movesToReview
-      ? `${summary.problemLabel}로 분할했습니다. 맞으면 검수 화면에서 경계를 확인합니다.`
-      : `${summary.problemLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
+      ? `${resultLabel}로 미리 분할했습니다. 문제 목록에 적용하기 전에 원본 페이지를 한 장씩 확인하세요.`
+      : `${resultLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
   );
-  const confirmLabel = movesToReview ? '맞아요, 검수로 이동' : '맞아요, 칠판에 붙이기';
-  const confirmingLabel = movesToReview ? '검수로 이동 중...' : '붙이는 중...';
+  const confirmLabel = partialRetry
+    ? '이 영역으로 적용'
+    : movesToReview
+      ? (passageOnly ? '지문 검수로 이동' : '맞아요, 검수로 이동')
+      : '맞아요, 칠판에 붙이기';
+  const confirmingLabel = partialRetry
+    ? '영역 적용 중...'
+    : movesToReview
+      ? (passageOnly ? '지문 검수로 이동 중...' : '검수로 이동 중...')
+      : '붙이는 중...';
   const cancelLabel = movesToReview ? '적용 안 함' : '취소';
 
   return (
-    <div className="recognition-modal-shell" role="dialog" aria-modal="true" aria-labelledby="recognition-review-title">
-      <div className="recognition-modal-backdrop" onClick={confirming ? undefined : onCancel} />
-      <div className="recognition-modal">
-        <div className="recognition-modal-hd">
-          <div>
-            <span className="recognition-eyebrow">AI 인식 결과</span>
-            <h2 id="recognition-review-title">{title}</h2>
-            <p>{subtitle}</p>
+    <section className="recognition-page-review-stage" aria-labelledby="recognition-page-review-title">
+      <header className="recognition-page-review-hd">
+        <div>
+          <div className="recognition-page-review-title-row">
+            <span className="recognition-eyebrow">페이지별 원본 확인</span>
+            <h2 id="recognition-page-review-title">{title}</h2>
           </div>
-          <button className="modal-x" type="button" onClick={onCancel} disabled={confirming} title="닫기">×</button>
+          <p>
+            {subtitle}
+            <span className="recognition-page-review-note"> · 문제는 이미 파싱되어 있습니다. 원본과 분할 경계만 확인하세요.</span>
+          </p>
         </div>
+        <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
+      </header>
 
-        <div className="recognition-summary">
-          {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
-          <span>{summary.pages} 페이지</span>
-          <span>{summary.problemLabel}</span>
-          <span className={summary.riskCount ? 'warn' : ''}>
-            {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
+      <div className="recognition-summary">
+        {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
+        <span>{summary.pages} 페이지</span>
+        <span>{resultLabel}</span>
+        {passageOnly && Number.isFinite(summary.passageQualityScore) && (
+          <span className={summary.passageQualityReviewCount ? 'warn' : ''}>
+            텍스트·화질 {summary.passageQualityScore.toFixed(1)}/10
+            {summary.passageQualityReviewCount ? ` · 확인 ${summary.passageQualityReviewCount}` : ''}
           </span>
+        )}
+        <span className={summary.riskCount ? 'warn' : ''}>
+          {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
+        </span>
+        <div className="recognition-zoom-controls review-zoom-controls" role="group" aria-label="원본 페이지 배율">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="원본 페이지 축소"
+            onClick={() => setRecognitionZoom(previous => clampReviewZoom(previous - REVIEW_ZOOM_STEP))}
+            disabled={recognitionZoom <= REVIEW_ZOOM_MIN}
+          >
+            {Icon.zoomOut}
+          </button>
+          <button
+            type="button"
+            className="review-zoom-reset"
+            title="100%로 되돌리기"
+            onClick={() => setRecognitionZoom(1)}
+            disabled={Math.abs(recognitionZoom - 1) < 0.001}
+          >
+            {reviewZoomPercent(recognitionZoom)}%
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="원본 페이지 확대"
+            onClick={() => setRecognitionZoom(previous => clampReviewZoom(previous + REVIEW_ZOOM_STEP))}
+            disabled={recognitionZoom >= REVIEW_ZOOM_MAX}
+          >
+            {Icon.zoomIn}
+          </button>
+          <small>⌘+휠</small>
         </div>
+      </div>
 
-        <div className="recognition-preview">
-          {pages.length ? pages.map(page => {
-            const pageProblems = (page.problemIds || page.problem_ids || [])
-              .map(id => problemsById.get(id))
-              .filter(Boolean);
+      <div className="recognition-page-workspace">
+        <nav className="recognition-page-nav" aria-label="인식 원본 페이지">
+          {pageRows.map((row, pageIndex) => (
+            <button
+              key={row.page.id}
+              className={`recognition-page-nav-item ${pageIndex === safePageIndex ? 'active' : ''}`}
+              type="button"
+              onClick={() => scrollRecognitionPageToIndex(pageIndex)}
+              aria-current={pageIndex === safePageIndex ? 'page' : undefined}
+            >
+              <span><b>{pageIndex + 1}페이지</b></span>
+              <span>{formatProblemCount(countSessionProblems(row.problems))}</span>
+              {row.riskCount ? <em>{row.riskCount} 확인</em> : null}
+            </button>
+          ))}
+        </nav>
+
+        <div
+          className="recognition-preview"
+          ref={previewRef}
+          style={{ '--recognition-zoom': String(recognitionZoom) }}
+          onWheel={handleRecognitionWheel}
+          onScroll={event => syncRecognitionPageIndex(event.currentTarget)}
+        >
+          {pageRows.length ? pageRows.map(({ page, problems: pageProblems }, pageIndex) => {
             return (
-              <div key={page.id} className="recognition-page">
+              <div key={page.id} className="recognition-page" data-recognition-page-index={pageIndex}>
                 <div className="recognition-page-hd">
-                  <strong>{page.id}</strong>
+                  <strong>{pageIndex + 1} / {pages.length} 페이지</strong>
                   <span>{formatProblemCount(countSessionProblems(pageProblems))}</span>
                   <span>{page.width}×{page.height}</span>
                 </div>
                 <div className="recognition-page-canvas">
                   {page.sourceImageUri ? (
-                    <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                    <img
+                      src={filePreviewUrl(page.sourceImageUri)}
+                      alt={`${pageIndex + 1}페이지 원본`}
+                      loading={pageIndex < 2 ? 'eager' : 'lazy'}
+                      decoding="async"
+                      fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
+                      draggable={false}
+                    />
                   ) : (
                     <div className="recognition-page-empty">페이지 이미지를 불러올 수 없어요.</div>
                   )}
-                  {pageProblems.map((problem, index) => {
-                    const bbox = problem.bbox || {};
+                  {pageProblems.flatMap((problem, index) => {
                     const w = page.width || 1;
                     const h = page.height || 1;
-                    if (!bbox.width || !bbox.height) return null;
+                    const sourceSegments = Array.isArray(problem.sourceSegments || problem.source_segments)
+                      ? (problem.sourceSegments || problem.source_segments)
+                      : [];
+                    const pageSegments = sourceSegments.filter(segment => (
+                      String(segment?.sourcePageId || segment?.source_page_id || '') === String(page.id)
+                      && Number(segment?.bbox?.width || 0) > 0
+                      && Number(segment?.bbox?.height || 0) > 0
+                    ));
+                    const boxes = pageSegments.length
+                      ? pageSegments.map(segment => segment.bbox)
+                      : String(problem.sourcePageId || '') === String(page.id)
+                        ? [problem.bbox || {}]
+                        : [];
                     const status = deriveProblemStatus(problem);
-                    return (
+                    return boxes.filter(bbox => bbox.width && bbox.height).map((bbox, segmentIndex) => (
                       <div
-                        key={problem.id}
+                        key={`${problem.id}-${segmentIndex}`}
                         className={`recognition-box ${reviewStatusClass(status)}`}
                         style={{
                           left: `${(bbox.left / w) * 100}%`,
@@ -5948,9 +9173,12 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
                         }}
                         title={problem.title || problem.id}
                       >
-                        <span>{String(index + 1).padStart(2, '0')}</span>
+                        <span>
+                          {String(index + 1).padStart(2, '0')}
+                          {boxes.length > 1 ? `.${segmentIndex + 1}` : ''}
+                        </span>
                       </div>
-                    );
+                    ));
                   })}
                 </div>
               </div>
@@ -5959,22 +9187,67 @@ function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
             <div className="recognition-empty">확인할 페이지가 없습니다.</div>
           )}
         </div>
-
-        <div className="recognition-modal-foot">
-          <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
-          <button className="btn primary" type="button" onClick={onConfirm} disabled={confirming || !summary.problems}>
-            {confirming ? confirmingLabel : confirmLabel}
-          </button>
-        </div>
       </div>
-    </div>
+
+      <footer className="recognition-page-review-foot">
+        {pages.length > 1 && (
+          <div className="recognition-page-stepper" role="group" aria-label="페이지 이동">
+            <button className="btn" type="button" onClick={() => scrollRecognitionPageToIndex(safePageIndex - 1)} disabled={safePageIndex === 0}>
+              이전 페이지
+            </button>
+            <span>{safePageIndex + 1} / {pages.length}</span>
+            <button className="btn" type="button" onClick={() => scrollRecognitionPageToIndex(safePageIndex + 1)} disabled={safePageIndex === pages.length - 1}>
+              다음 페이지
+            </button>
+          </div>
+        )}
+        <span className="recognition-page-review-foot-copy">
+          {confirming
+            ? confirmingLabel
+            : `페이지 확인 후 적용할 화면을 선택하세요${passageReextract ? ' · 기존 문항은 유지됩니다' : ''}.`}
+        </span>
+        <div className="recognition-transition-actions" role="group" aria-label="인식 결과 적용 후 이동">
+          {partialRetry ? (
+            <button className="btn primary" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
+              {confirming ? confirmingLabel : confirmLabel}
+            </button>
+          ) : (
+            <>
+              {hasActionableReview && (
+                <button className="btn primary" type="button" onClick={() => onConfirm('review-needed')} disabled={confirming || !summary.problems}>
+                  확인 필요만 검수
+                </button>
+              )}
+              <button className={`btn ${hasActionableReview ? '' : 'primary'}`} type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
+                전체 검수
+              </button>
+              <button className="btn" type="button" onClick={() => onConfirm('board')} disabled={confirming || !summary.problems}>
+                바로 칠판
+              </button>
+            </>
+          )}
+        </div>
+      </footer>
+    </section>
   );
 }
 
 // renders a real image when the item came from the backend; falls back to
 // the SVG ItemArt for mock data. forceMode overrides the step→variant mapping
 // (useful for side-panel preview tabs).
-function TileImage({ item, forceMode }){
+const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024;
+
+function filePreviewUrl(url, maxDimension = CENTER_PANEL_PREVIEW_MAX_DIMENSION){
+  const normalizedUrl = String(url || '');
+  if (!normalizedUrl.startsWith('/api/file?')) return normalizedUrl;
+  const resolvedMax = Math.max(256, Math.min(2048, Math.round(Number(maxDimension) || CENTER_PANEL_PREVIEW_MAX_DIMENSION)));
+  if (/[?&]previewMax=/.test(normalizedUrl)) {
+    return normalizedUrl.replace(/([?&]previewMax=)[^&]*/i, `$1${resolvedMax}`);
+  }
+  return `${normalizedUrl}&previewMax=${resolvedMax}`;
+}
+
+function TileImage({ item, forceMode, previewMaxDimension }){
   const wantChalk = forceMode ? forceMode === 'chalk' : item.step !== 's1';
   const chalk = item.chalkUrl;
   const raw = item.imageUrl;
@@ -5982,9 +9255,14 @@ function TileImage({ item, forceMode }){
     ? (chalk || raw)
     : (raw || chalk);
   if (url) {
+    const displayUrl = previewMaxDimension
+      ? filePreviewUrl(url, previewMaxDimension)
+      : url;
     return (
-      <img src={url} alt={item.name || ''}
+      <img src={displayUrl} alt={item.name || ''}
            className={`tile-img ${wantChalk ? 'is-chalk' : 'is-raw'}`}
+           loading="lazy"
+           decoding="async"
            draggable={false} />
     );
   }
@@ -6125,6 +9403,15 @@ function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPr
         >
           {Icon.aiBatch}<span>AI 인식</span>
         </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => runQueueAction('passage-only')}
+          disabled={queueBusy}
+          title="여러 문항이 함께 쓰는 공통 지문만 추출"
+        >
+          {Icon.fileText}<span>지문만 추출</span>
+        </button>
       </div>
     </div>
   );
@@ -6143,6 +9430,32 @@ function fileToBase64(file){
     reader.onerror = () => reject(reader.error || new Error('file read failed'));
     reader.readAsDataURL(file);
   });
+}
+
+const MAX_EXPORT_JSON_BYTES = 64 * 1024 * 1024;
+const EXPORT_JSON_SAFETY_BYTES = 256 * 1024;
+
+function estimatedExportPayloadBytes(files){
+  return (Array.isArray(files) ? files : []).reduce((total, file) => {
+    const rawBytes = Math.max(0, Number(file?.size) || 0);
+    const base64Bytes = 4 * Math.ceil(rawBytes / 3);
+    const metadataBytes = 256 + (String(file?.name || '').length * 4);
+    return total + base64Bytes + metadataBytes;
+  }, 2048);
+}
+
+function assertExportPayloadFits(files){
+  const estimatedBytes = estimatedExportPayloadBytes(files);
+  const usableBytes = MAX_EXPORT_JSON_BYTES - EXPORT_JSON_SAFETY_BYTES;
+  if (estimatedBytes <= usableBytes) return estimatedBytes;
+  const rawBytes = (Array.isArray(files) ? files : []).reduce(
+    (total, file) => total + Math.max(0, Number(file?.size) || 0),
+    0
+  );
+  throw new Error(
+    `업로드 용량 ${formatBytes(rawBytes)}가 한 번에 처리할 수 있는 범위를 넘었습니다. `
+    + '파일을 나누어 등록하거나 PDF를 압축해 주세요.'
+  );
 }
 
 function fileQueueKey(file){
@@ -6202,7 +9515,10 @@ function makeUniqueId(baseId, existingIds){
 
 function applyItemStateToProblem(problem, item){
   const next = { ...problem };
-  const actualHeightPages = Math.max(0.12, item.heightFrac || next.actualHeightPages || next.actual_height_pages || 0.8);
+  const actualHeightPages = itemHeightPages({
+    ...next,
+    ...item,
+  });
   const startYPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
   const snappedNextStartYPages = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startYPages || 0, item.snappedNextStartYPages)
@@ -6255,7 +9571,16 @@ function applyItemStateToProblem(problem, item){
   if (snappedNextStartYPages !== null) {
     next.snappedNextStartYPages = Number(snappedNextStartYPages.toFixed(6));
     next.snapped_next_start_y_pages = next.snappedNextStartYPages;
-    next.slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - (startYPages || 0)) / DEFAULT_SLOT_HEIGHT_PAGES));
+    next.slotSpanCount = Math.max(
+      1,
+      Math.ceil(
+        (
+          snappedNextStartYPages
+          - (startYPages || 0)
+          - PLACEMENT_EPSILON_PAGES
+        ) / DEFAULT_SLOT_HEIGHT_PAGES
+      )
+    );
     next.slot_span_count = next.slotSpanCount;
   }
   if (startYPages !== null) {
@@ -6350,6 +9675,68 @@ function materializeSessionForItems(rawSession, items, fileName, boardColumns = 
   return snapshot;
 }
 
+function rebaseSessionBoardLayout(latestSession, localDraft, boardColumns = BOARD_COLUMN_MIN){
+  const latest = cloneSession(latestSession);
+  const draft = cloneSession(localDraft);
+  if (!latest || !Array.isArray(latest.problems) || !draft || !Array.isArray(draft.problems)) return null;
+  const localItemsById = new Map(draft.problems.map((problem, index) => [
+    String(problem.id),
+    mapProblemToItem(problem, index),
+  ]));
+  const localOrder = new Map(draft.problems.map((problem, index) => [String(problem.id), index]));
+  const fallbackOrder = draft.problems.length;
+  const latestProblems = latest.problems
+    .map((problem, index) => ({ problem, index }))
+    .sort((a, b) => {
+      const aOrder = localOrder.has(String(a.problem.id)) ? localOrder.get(String(a.problem.id)) : fallbackOrder + a.index;
+      const bOrder = localOrder.has(String(b.problem.id)) ? localOrder.get(String(b.problem.id)) : fallbackOrder + b.index;
+      return aOrder - bOrder;
+    })
+    .map(({ problem }, index) => {
+      const localItem = localItemsById.get(String(problem.id));
+      if (!localItem) return problem;
+      const latestItem = mapProblemToItem(problem, index);
+      return applyItemStateToProblem(problem, {
+        ...latestItem,
+        placementMode: localItem.placementMode,
+        placementXRatio: localItem.placementXRatio,
+        placementXEdited: localItem.placementXEdited,
+        placementYRatio: localItem.placementYRatio,
+        placementScaleRatio: localItem.placementScaleRatio,
+        boardColumnCount: localItem.boardColumnCount,
+        boardColumnIndex: localItem.boardColumnIndex,
+        placementMagnetColumnIndex: localItem.placementMagnetColumnIndex,
+        boardRowHeightPages: localItem.boardRowHeightPages,
+        startYPages: localItem.startYPages,
+        snappedNextStartYPages: localItem.snappedNextStartYPages,
+      });
+    });
+  latest.problems = latestProblems;
+  latest.session_name = latest.session_name || '새 세션';
+  latest.boardColumns = normalizeBoardColumns(boardColumns);
+  latest.board_columns = latest.boardColumns;
+  latest.edb_path = null;
+  latest.edb_file_uri = null;
+  latest.edbPath = null;
+  latest.edbFileUri = null;
+  applyProblemCounts(latest, latestProblems);
+  if (Array.isArray(latest.pages)) {
+    const orderIndex = new Map(latestProblems.map((problem, index) => [String(problem.id), index]));
+    latest.pages = latest.pages.map(page => ({
+      ...page,
+      problemIds: (page.problemIds || page.problem_ids || [])
+        .filter(id => orderIndex.has(String(id)))
+        .sort((a, b) => (orderIndex.get(String(a)) ?? 999999) - (orderIndex.get(String(b)) ?? 999999)),
+    }));
+  }
+  return latest;
+}
+
+function conflictSafeUndoHistory(latestSession){
+  const snapshot = cloneSession(latestSession);
+  return snapshot && Array.isArray(snapshot.problems) ? [snapshot] : [];
+}
+
 function fitWidthPageAsIsSession(rawSession, options = {}){
   const snapshot = cloneSession(rawSession);
   if (!snapshot || !Array.isArray(snapshot.problems) || snapshot.problems.length === 0) return rawSession;
@@ -6441,6 +9828,258 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   return merged;
 }
 
+function sessionReusableSourcePaths(rawSession){
+  const inputCandidates = rawSession?.input_files || rawSession?.inputFiles || [];
+  const candidates = (Array.isArray(inputCandidates) ? inputCandidates : [inputCandidates])
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!candidates.length) {
+    (rawSession?.pages || []).forEach(page => {
+      const sourcePath = page?.sourceImagePath
+        || page?.source_image_path
+        || page?.sourceImageUri
+        || page?.source_image_uri;
+      if (sourcePath) candidates.push(String(sourcePath).trim());
+    });
+  }
+  return listUnique(
+    candidates.filter(Boolean)
+  );
+}
+
+function problemClassificationSource(problem){
+  return String(
+    problem?.classificationSource
+    || problem?.classification_source
+    || problem?.metadata?.classificationSource
+    || problem?.metadata?.classification_source
+    || ''
+  ).trim().toLowerCase();
+}
+
+function isManualIndependentPassage(problem){
+  return isPassageFragmentProblem(problem)
+    && problemClassificationSource(problem) === 'manual'
+    && passageGroupIdFor(problem).startsWith('manual-passage-');
+}
+
+function isManualMisclassifiedChildQuestion(problem){
+  return isPassageFragmentProblem(problem)
+    && problemClassificationSource(problem) === 'manual'
+    && !passageGroupIdFor(problem).startsWith('manual-passage-');
+}
+
+function restoreManualPassageToChildQuestion(problem){
+  const metadata = { ...(problem?.metadata || {}) };
+  metadata.passageRole = 'child_question';
+  metadata.passage_role = 'child_question';
+  metadata.supplementalItem = false;
+  metadata.supplemental_item = false;
+  return {
+    ...problem,
+    passageRole: 'child_question',
+    passage_role: 'child_question',
+    supplementalItem: false,
+    supplemental_item: false,
+    metadata,
+  };
+}
+
+function questionNumberForPassageInsertion(problem){
+  const candidates = [
+    problem?.questionNumber,
+    problem?.question_number,
+    problem?.number,
+    problem?.metadata?.questionNumber,
+    problem?.metadata?.question_number,
+    problem?.metadata?.number,
+  ];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const titleMatch = String(problem?.title || '').match(/(?:^|\s)(\d{1,3})(?:번|\s|[.)])/);
+  return titleMatch ? Number(titleMatch[1]) : null;
+}
+
+function normalizedSourceIdentity(value){
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase();
+}
+
+function pageIdentityKeys(page){
+  const keys = [];
+  const id = String(page?.id || '').trim();
+  if (id) keys.push(`id:${id}`);
+  const sourcePath = normalizedSourceIdentity(
+    page?.sourceImagePath
+    || page?.source_image_path
+    || page?.sourcePath
+    || page?.source_path
+  );
+  if (sourcePath) keys.push(`path:${sourcePath}`);
+  const sourceUri = normalizedSourceIdentity(page?.sourceImageUri || page?.source_image_uri);
+  if (sourceUri) keys.push(`uri:${sourceUri}`);
+  const sourceIndex = Number(page?.sourceIndex ?? page?.source_index);
+  const pageNumber = Number(page?.pageNumber ?? page?.page_number ?? page?.index);
+  if (Number.isFinite(sourceIndex) && Number.isFinite(pageNumber)) {
+    keys.push(`source-page:${sourceIndex}:${pageNumber}`);
+  }
+  return keys;
+}
+
+function passageInsertionIndex(problems, passage){
+  const groupId = passageGroupIdFor(passage);
+  if (groupId) {
+    const exactChildIndex = problems.findIndex(problem => (
+      !isPassageFragmentProblem(problem)
+      && passageGroupIdFor(problem) === groupId
+    ));
+    if (exactChildIndex >= 0) return exactChildIndex;
+  }
+  const range = passage?.passageRange
+    || passage?.passage_range
+    || passage?.metadata?.passageRange
+    || passage?.metadata?.passage_range;
+  const start = Number(range?.start);
+  const end = Number(range?.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end >= start) {
+    const rangeChildIndex = problems.findIndex(problem => {
+      if (isPassageFragmentProblem(problem)) return false;
+      const questionNumber = questionNumberForPassageInsertion(problem);
+      return Number.isFinite(questionNumber) && questionNumber >= start && questionNumber <= end;
+    });
+    if (rangeChildIndex >= 0) return rangeChildIndex;
+  }
+  return problems.length;
+}
+
+function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
+  const base = cloneSession(baseSession);
+  const incoming = cloneSession(incomingSession);
+  if (!base) return incoming;
+  if (!incoming) return base;
+
+  const retainedProblems = [];
+  const removedPassageIds = new Set();
+  (base.problems || []).forEach(problem => {
+    if (!isPassageFragmentProblem(problem) || isManualIndependentPassage(problem)) {
+      retainedProblems.push(problem);
+      return;
+    }
+    if (isManualMisclassifiedChildQuestion(problem)) {
+      retainedProblems.push(restoreManualPassageToChildQuestion(problem));
+      return;
+    }
+    if (problem?.id) removedPassageIds.add(problem.id);
+  });
+
+  const incomingFragments = (incoming.problems || []).filter(isPassageFragmentProblem);
+  if (!incomingFragments.length) return base;
+
+  const existingProblemIds = new Set(retainedProblems.map(problem => problem?.id).filter(Boolean));
+  const basePages = (base.pages || []).map(page => ({
+    ...page,
+    problemIds: [...(page.problemIds || page.problem_ids || [])]
+      .filter(id => !removedPassageIds.has(id)),
+  }));
+  const existingPageIds = new Set(basePages.map(page => page?.id).filter(Boolean));
+  const pageIdByIdentity = new Map();
+  basePages.forEach(page => {
+    pageIdentityKeys(page).forEach(key => {
+      if (!pageIdByIdentity.has(key)) pageIdByIdentity.set(key, page.id);
+    });
+  });
+
+  const incomingPageIdMap = new Map();
+  const appendedPages = [];
+  (incoming.pages || []).forEach(page => {
+    const matchedPageId = pageIdentityKeys(page)
+      .map(key => pageIdByIdentity.get(key))
+      .find(Boolean);
+    if (matchedPageId) {
+      incomingPageIdMap.set(page.id, matchedPageId);
+      return;
+    }
+    const nextId = makeUniqueId(page.id, existingPageIds);
+    incomingPageIdMap.set(page.id, nextId);
+    const appended = {
+      ...page,
+      id: nextId,
+      problemIds: [],
+    };
+    appendedPages.push(appended);
+    pageIdentityKeys(appended).forEach(key => {
+      if (!pageIdByIdentity.has(key)) pageIdByIdentity.set(key, nextId);
+    });
+  });
+
+  const preparedFragments = incomingFragments.map(problem => {
+    const nextId = makeUniqueId(problem.id, existingProblemIds);
+    const incomingPageId = problem.sourcePageId || problem.source_page_id;
+    const nextPageId = incomingPageIdMap.get(incomingPageId) || incomingPageId;
+    return {
+      ...problem,
+      id: nextId,
+      sourcePageId: nextPageId,
+      source_page_id: nextPageId,
+    };
+  });
+
+  const insertions = new Map();
+  preparedFragments.forEach(problem => {
+    const index = passageInsertionIndex(retainedProblems, problem);
+    const bucket = insertions.get(index) || [];
+    bucket.push(problem);
+    insertions.set(index, bucket);
+  });
+  const mergedProblems = [];
+  retainedProblems.forEach((problem, index) => {
+    mergedProblems.push(...(insertions.get(index) || []), problem);
+  });
+  mergedProblems.push(...(insertions.get(retainedProblems.length) || []));
+
+  const mergedPages = [...basePages, ...appendedPages];
+  const problemOrder = new Map(mergedProblems.map((problem, index) => [problem.id, index]));
+  const pageProblemIds = new Map();
+  mergedProblems.forEach(problem => {
+    const pageId = problem?.sourcePageId || problem?.source_page_id;
+    if (!pageId) return;
+    const ids = pageProblemIds.get(pageId) || [];
+    ids.push(problem.id);
+    pageProblemIds.set(pageId, ids);
+  });
+  mergedPages.forEach(page => {
+    const ids = pageProblemIds.get(page.id) || [];
+    const orderedIds = listUnique(ids)
+      .sort((a, b) => (problemOrder.get(a) ?? 999999) - (problemOrder.get(b) ?? 999999));
+    page.problemIds = orderedIds;
+    page.problem_ids = [...orderedIds];
+  });
+
+  const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
+  const merged = {
+    ...base,
+    session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    input_file_count: sessionReusableSourcePaths(base).length,
+    input_files: sessionReusableSourcePaths(base),
+    rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
+    rendered_page_file_uris: concatUnique(base.rendered_page_file_uris || [], incoming.rendered_page_file_uris || []),
+    warning_messages: concatUnique(
+      base.warning_messages || base.warningMessages || [],
+      incoming.warning_messages || incoming.warningMessages || []
+    ),
+    problems: mergedProblems,
+    pages: mergedPages,
+    source_page_count: mergedPages.length,
+    edb_path: null,
+    edb_file_uri: null,
+    edbPath: null,
+    edbFileUri: null,
+  };
+  applyProblemCounts(merged, mergedProblems);
+  return merged;
+}
+
 function reviewScopeForNewSession(baseSession, nextSession){
   const existingProblemIds = new Set((baseSession?.problems || []).map(problem => String(problem?.id || '').trim()).filter(Boolean));
   const existingPageIds = new Set((baseSession?.pages || []).map(page => String(page?.id || '').trim()).filter(Boolean));
@@ -6492,6 +10131,17 @@ function mapProblemToItem(problem, idx){
     problem.placementScaleRatio ?? problem.placement_scale_ratio,
     problemUsesContinuousFlow ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX
   );
+  const actualHeightPages = firstPositiveFiniteNumber(
+    problem.actualHeightPages,
+    problem.actual_height_pages,
+    problem.actualContentHeightPages,
+    problem.actual_content_height_pages
+  ) || 0.8;
+  const startYPages = firstPositiveFiniteNumber(problem.startYPages, problem.start_y_pages);
+  const snappedNextStartYPages = firstPositiveFiniteNumber(
+    problem.snappedNextStartYPages,
+    problem.snapped_next_start_y_pages
+  );
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -6499,9 +10149,9 @@ function mapProblemToItem(problem, idx){
     type: 'image',
     kind: KIND_BY_SUBJECT[problem.subject] || 'paragraph',
     step,
-    heightFrac: typeof problem.actualHeightPages === 'number' && problem.actualHeightPages > 0
-      ? problem.actualHeightPages
-      : 0.8,
+    heightFrac: actualHeightPages,
+    actualHeightPages,
+    actual_height_pages: actualHeightPages,
     imageUrl: problem.imagePath || null,
     chalkUrl: problem.boardRenderPath || null,
     subject: problem.subject || 'unknown',
@@ -6514,14 +10164,23 @@ function mapProblemToItem(problem, idx){
     parseConfidence: typeof problem.parseConfidence === 'number' ? problem.parseConfidence : null,
     confidence: problem.confidence || null,
     aiStatus: problem.aiStatus || 'unknown',
+    passageGroupId: problem.passageGroupId || problem.passage_group_id || problem.metadata?.passageGroupId || problem.metadata?.passage_group_id || null,
+    passageRole: problem.passageRole || problem.passage_role || problem.metadata?.passageRole || problem.metadata?.passage_role || null,
+    passageRange: problem.passageRange || problem.passage_range || problem.metadata?.passageRange || problem.metadata?.passage_range || null,
+    passageChildProblemNumbers: problem.passageChildProblemNumbers || problem.passage_child_problem_numbers || problem.metadata?.passageChildProblemNumbers || problem.metadata?.passage_child_problem_numbers || [],
+    supplementalItem: Boolean(problem.supplementalItem || problem.supplemental_item || problem.metadata?.supplementalItem || problem.metadata?.supplemental_item),
     inputIntent: problemInputIntent ? normalizeInputIntent(problemInputIntent) : null,
     forceFullPageBounds: Boolean(problem.forceFullPageBounds || problem.force_full_page_bounds),
     placementMode: problemPlacementMode,
-    startYPages: typeof problem.startYPages === 'number' ? problem.startYPages : null,
-    snappedNextStartYPages: typeof problem.snappedNextStartYPages === 'number' ? problem.snappedNextStartYPages : null,
-    overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
+    startYPages: startYPages ?? 0,
+    snappedNextStartYPages: snappedNextStartYPages ?? null,
+    overflowAmountPages: Number.isFinite(Number(problem.overflowAmountPages ?? problem.overflow_amount_pages))
+      ? Number(problem.overflowAmountPages ?? problem.overflow_amount_pages)
+      : 0,
     overflowViolation: Boolean(problem.overflowViolation),
-    slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
+    slotSpanCount: Number.isInteger(Number(problem.slotSpanCount ?? problem.slot_span_count))
+      ? Number(problem.slotSpanCount ?? problem.slot_span_count)
+      : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
@@ -6540,11 +10199,76 @@ function mapProblemToItem(problem, idx){
   };
 }
 
+let latestServerSessionRevision = null;
+let latestServerSessionEpoch = null;
+const retiredServerSessionEpochs = new Set();
+
+function sessionEpochGeneration(epoch){
+  const match = /^(\d{20})-/.exec(String(epoch || '').trim());
+  return match ? match[1] : null;
+}
+
+function sessionEpochIsOlder(candidateEpoch, referenceEpoch){
+  const candidateGeneration = sessionEpochGeneration(candidateEpoch);
+  const referenceGeneration = sessionEpochGeneration(referenceEpoch);
+  return Boolean(
+    candidateGeneration
+    && referenceGeneration
+    && candidateGeneration < referenceGeneration
+  );
+}
+
+function sessionResponseRevisionIsStale(payload){
+  if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'session')) return false;
+  const responseEpoch = String(payload.sessionEpoch || '').trim();
+  if (responseEpoch && retiredServerSessionEpochs.has(responseEpoch)) return true;
+  if (responseEpoch && latestServerSessionEpoch && sessionEpochIsOlder(responseEpoch, latestServerSessionEpoch)) return true;
+  if (responseEpoch && latestServerSessionEpoch && responseEpoch !== latestServerSessionEpoch) return false;
+  const rawRevision = payload.sessionRevision;
+  const revision = rawRevision === null || rawRevision === undefined ? Number.NaN : Number(rawRevision);
+  return Number.isInteger(revision)
+    && Number.isInteger(latestServerSessionRevision)
+    && revision < latestServerSessionRevision;
+}
+
+function captureSessionRevision(payload){
+  const responseEpoch = String(payload?.sessionEpoch || '').trim();
+  if (responseEpoch && retiredServerSessionEpochs.has(responseEpoch)) return payload;
+  if (responseEpoch && latestServerSessionEpoch && sessionEpochIsOlder(responseEpoch, latestServerSessionEpoch)) return payload;
+  if (responseEpoch && responseEpoch !== latestServerSessionEpoch) {
+    if (latestServerSessionEpoch) retiredServerSessionEpochs.add(latestServerSessionEpoch);
+    latestServerSessionEpoch = responseEpoch;
+    latestServerSessionRevision = null;
+  }
+  const rawRevision = payload?.sessionRevision;
+  const revision = rawRevision === null || rawRevision === undefined ? Number.NaN : Number(rawRevision);
+  const shouldCapture = Number.isInteger(revision)
+    && revision >= 0
+    && (
+      !Number.isInteger(latestServerSessionRevision)
+      || revision >= latestServerSessionRevision
+    );
+  if (shouldCapture) latestServerSessionRevision = revision;
+  return payload;
+}
+
+function withExpectedSessionRevision(payload = {}){
+  return {
+    ...(payload || {}),
+    expectedSessionRevision: latestServerSessionRevision,
+    expectedSessionEpoch: latestServerSessionEpoch,
+  };
+}
+
 async function fetchLatestSession(){
-  const resp = await fetch('/api/session/latest');
-  if (resp.status === 404) return null;
-  const json = await expectOkJson(resp, '세션 로드 실패');
+  const json = await fetchLatestSessionState();
   return json.session;
+}
+
+async function fetchLatestSessionState(){
+  const resp = await fetch('/api/session/latest');
+  if (resp.status === 404) return { ok: true, session: null };
+  return expectOkJson(resp, '세션 로드 실패');
 }
 
 async function fetchSessionHistory(){
@@ -6557,7 +10281,7 @@ async function postRestoreSessionHistory(id){
   const resp = await fetch('/api/session/history/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
+    body: JSON.stringify(withExpectedSessionRevision({ id })),
   });
   const json = await expectOkJson(resp, '작업 열기 실패');
   return json;
@@ -6579,8 +10303,12 @@ const AI_MODEL_LABELS = {
   'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
   'gemini-3-pro-preview': 'Gemini 3 Pro',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-3.6-flash': 'Gemini 3.6 Flash',
 };
 const DEFAULT_INPUT_INTENT = 'multi-problem';
+const DEFAULT_CONTENT_TARGET = 'all';
+const DEFAULT_RECOGNITION_MAX_DIMENSION = 4096;
+const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);
 const INPUT_INTENT_OPTIONS = [
   {
     value: 'multi-problem',
@@ -6601,10 +10329,10 @@ const INPUT_INTENT_OPTIONS = [
   {
     value: 'page-as-is',
     label: '원본 페이지 이어붙이기',
-    description: '너비에 맞춰 키우고 높이는 비율대로 이어 배치',
+    description: '페이지를 나누지 않고 1열로, 보드 너비에 맞춰 이어 배치',
     icon: 'rows3',
     badgeLabel: '원본 이어붙임',
-    pills: ['3단계 고화질', '너비 맞춤', '비율 높이', '연속 이어붙이기'],
+    pills: ['원본 해상도 우선', '200 DPI', '1열 기본', '너비 맞춤'],
     exportMode: 'question',
   },
 ];
@@ -6630,6 +10358,11 @@ function normalizeInputIntent(value){
   const normalized = String(value || DEFAULT_INPUT_INTENT).trim().toLowerCase().replace(/_/g, '-');
   if (normalized === 'auto') return DEFAULT_INPUT_INTENT;
   return INPUT_INTENT_META_BY_VALUE[normalized] ? normalized : DEFAULT_INPUT_INTENT;
+}
+
+function normalizeContentTarget(value){
+  const normalized = String(value || DEFAULT_CONTENT_TARGET).trim().toLowerCase().replace(/_/g, '-');
+  return CONTENT_TARGETS.has(normalized) ? normalized : DEFAULT_CONTENT_TARGET;
 }
 
 function inputIntentMeta(value){
@@ -6664,6 +10397,7 @@ const RISK_FLAG_META = {
   no_problem_markers: '문항 번호 부족',
   ocr_disabled: 'OCR 미사용',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   passage_group_source_reuse: '지문 겹침',
   passage_cross_page_merge_check: '병합 확인',
   problem_per_block: '블록 단위 분리',
@@ -6675,10 +10409,13 @@ const RISK_FLAG_META = {
 
 const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   board_placement_overlap: '판서 배치 겹침',
+  duplicate_problem_id: '문항 ID 중복',
   duplicate_problem_number: '중복 번호',
   low_ink_problem_image: '이미지 내용 부족',
+  missing_problem_id: '문항 ID 누락',
   missing_problem_image: '문항 이미지 없음',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   passage_review_queue_remaining: '지문 확인 필요',
   passage_group_source_reuse: '지문 겹침',
   review_flags_remaining: '검수 플래그 남음',
@@ -6696,6 +10433,7 @@ const PASSAGE_REVIEW_REASON_LABELS = {
   passage_fragment: '지문 본문',
   passage_group_source_reuse: '지문 겹침',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   source_problem_bbox_overlap: '문항 영역 겹침',
 };
 
@@ -7304,6 +11042,89 @@ function collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts){
   return matched;
 }
 
+function pageReviewProblemIds(page){
+  const rawIds = Array.isArray(page?.problemIds)
+    ? page.problemIds
+    : Array.isArray(page?.problem_ids)
+      ? page.problem_ids
+      : [];
+  return rawIds.map(id => String(id || '').trim()).filter(Boolean);
+}
+
+function pageReviewTargetId(page){
+  const pageId = String(page?.id || '').trim();
+  return pageId ? `page:${pageId}` : '';
+}
+
+function pageReviewConfirmed(page){
+  return Boolean(page?.pageReviewConfirmed || page?.page_review_confirmed);
+}
+
+function collectReviewTargets(session, actionableRiskFlagCounts){
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const problemsById = new Map();
+  problems.forEach((problem, index) => {
+    const id = String(problem?.id || problem?.problem_id || `problem-index-${index}`);
+    problemsById.set(id, problem);
+  });
+  const unresolvedIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
+  const targets = [];
+  const seenProblemIds = new Set();
+  const addProblemTarget = (problemId) => {
+    if (!problemId || seenProblemIds.has(problemId)) return;
+    const problem = problemsById.get(problemId);
+    if (!problem) return;
+    seenProblemIds.add(problemId);
+    const sourceStatus = deriveProblemStatus(problem);
+    targets.push({
+      id: problemId,
+      type: 'problem',
+      pageId: String(problem?.sourcePageId || problem?.source_page_id || '').trim(),
+      problemIds: [problemId],
+      status: unresolvedIds.has(problemId)
+        ? (sourceStatus === 'failed' ? 'failed' : 'check_needed')
+        : 'normal',
+      sourceStatus,
+      reason: riskFlagsFor(problem)[0] || (sourceStatus === 'failed' ? 'parse_failed' : ''),
+    });
+  };
+
+  pages.forEach(page => {
+    const problemIds = pageReviewProblemIds(page);
+    problemIds.forEach(addProblemTarget);
+    if (problemIds.length) return;
+    const id = pageReviewTargetId(page);
+    if (!id) return;
+    const confirmed = pageReviewConfirmed(page);
+    if (!confirmed && !unresolvedIds.has(id)) return;
+    targets.push({
+      id,
+      type: 'page',
+      pageId: String(page.id || '').trim(),
+      problemIds: [],
+      status: confirmed ? 'normal' : 'check_needed',
+      sourceStatus: normalizeReviewStatus(page?.reviewStatus || page?.review_status) || 'check_needed',
+      reason: confirmed
+        ? String(page?.pageReviewDecision || page?.page_review_decision || 'no_passage')
+        : riskFlagsFor(page)[0] || 'no_passage_detected',
+      decision: String(page?.pageReviewDecision || page?.page_review_decision || ''),
+    });
+  });
+  problemsById.forEach((_problem, id) => addProblemTarget(id));
+  return targets;
+}
+
+function collectReviewTargetStatusCounts(targets){
+  const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
+  (targets || []).forEach(target => {
+    const status = normalizeReviewStatus(target?.status) || 'check_needed';
+    counts.all += 1;
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  return counts;
+}
+
 function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
   const matched = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
   return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
@@ -7584,8 +11405,11 @@ function sessionReviewSummary(session){
   const riskFlagCounts = fallbackRiskFlagCounts;
   const actionableRiskFlagCounts = filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
   const actionableReviewProblemIds = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
-  const unresolvedReviewProblemIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
-  const actionableNeedsReviewCount = countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
+  const reviewTargets = collectReviewTargets(session, actionableRiskFlagCounts);
+  const unresolvedReviewTargets = reviewTargets.filter(target => target.status !== 'normal');
+  const unresolvedReviewProblemIds = new Set(unresolvedReviewTargets.map(target => target.id));
+  const reviewTargetStatusCounts = collectReviewTargetStatusCounts(reviewTargets);
+  const actionableNeedsReviewCount = unresolvedReviewTargets.length;
   const passageReviewSummary = collectPassageReviewSummary(session, { actionableProblemIds: unresolvedReviewProblemIds });
   const topRiskFlags = normalizeFilterableRiskFlagItems(session, actionableRiskFlagCounts);
   const warningMessages = Array.isArray(raw.warningMessages)
@@ -7627,6 +11451,11 @@ function sessionReviewSummary(session){
     ?? 0
   );
   const aiStages = normalizeAiStageSummaries(session);
+  const aiCost = session?.ai_cost_summary || session?.aiCostSummary || {};
+  const aiCostEventCount = nonNegativeNumber(aiCost.event_count ?? aiCost.eventCount);
+  const aiCostUsd = nonNegativeNumber(aiCost.estimated_usd ?? aiCost.estimatedUsd);
+  const aiCostKrw = nonNegativeNumber(aiCost.estimated_krw ?? aiCost.estimatedKrw);
+  const aiCostUsdKrwRate = nonNegativeNumber(aiCost.usd_krw_rate ?? aiCost.usdKrwRate) || 1400;
   const duplicateProblemNumberGroups = Array.isArray(session?.duplicateProblemNumberGroups)
     ? session.duplicateProblemNumberGroups
     : Array.isArray(session?.duplicate_problem_number_groups)
@@ -7686,10 +11515,16 @@ function sessionReviewSummary(session){
   return {
     counts,
     reviewStatusCounts,
+    reviewTargetStatusCounts,
     coreReviewStatusCounts: rawCoreStatusCounts,
     supplementalReviewStatusCounts: rawSupplementalStatusCounts,
     needsReviewCount: Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
     actionableNeedsReviewCount,
+    unresolvedReviewProblemIds: Array.from(unresolvedReviewProblemIds),
+    reviewTargets,
+    unresolvedReviewTargets,
+    pageReviewTargetCount: reviewTargets.filter(target => target.type === 'page').length,
+    pendingPageReviewTargetCount: unresolvedReviewTargets.filter(target => target.type === 'page').length,
     riskFlagCounts,
     actionableRiskFlagCounts,
     topRiskFlags,
@@ -7709,6 +11544,10 @@ function sessionReviewSummary(session){
     hwpRendererCacheHitCount: Number.isFinite(hwpRendererCacheHitCount) ? Math.max(0, hwpRendererCacheHitCount) : 0,
     hwpNormalizedCacheHitCount: Number.isFinite(hwpNormalizedCacheHitCount) ? Math.max(0, hwpNormalizedCacheHitCount) : 0,
     aiStages,
+    aiCostEventCount,
+    aiCostUsd,
+    aiCostKrw,
+    aiCostUsdKrwRate,
     hwpProblemCountMismatchCount: Number.isFinite(hwpProblemCountMismatchCount) ? Math.max(0, hwpProblemCountMismatchCount) : 0,
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
@@ -7734,6 +11573,41 @@ function sessionReviewSummary(session){
     passageReviewPreview: passageReviewSummary.passageReviewPreview,
     passageReviewReasonLabel: passageReviewSummary.passageReviewReasonLabel,
   };
+}
+
+function reviewFlowState(reviewSummary){
+  const targetCounts = reviewSummary?.reviewTargetStatusCounts || reviewSummary?.reviewStatusCounts || {};
+  const total = Math.max(0, Number(targetCounts.all) || 0);
+  const unresolvedTargets = Array.isArray(reviewSummary?.unresolvedReviewTargets)
+    ? reviewSummary.unresolvedReviewTargets.filter(target => target?.id)
+    : Array.isArray(reviewSummary?.unresolvedReviewProblemIds)
+      ? reviewSummary.unresolvedReviewProblemIds.filter(Boolean)
+      : [];
+  const remaining = Math.min(total, Math.max(
+    unresolvedTargets.length,
+    Number(reviewSummary?.actionableNeedsReviewCount) || 0,
+    Number(reviewSummary?.passageReviewItemCount) || 0
+  ));
+  return {
+    total,
+    remaining,
+    reviewed: Math.max(0, total - remaining),
+    complete: total > 0 && remaining === 0,
+  };
+}
+
+function recognitionReviewNeedsAttention(session){
+  const summary = sessionReviewSummary(session);
+  return (
+    (summary.unresolvedReviewProblemIds || []).length > 0
+    || Number(summary.actionableNeedsReviewCount) > 0
+    || Number(summary.passageReviewItemCount) > 0
+  );
+}
+
+function resolveRecognitionReviewDestination(session, destination){
+  if (destination !== 'review-needed') return destination;
+  return recognitionReviewNeedsAttention(session) ? destination : 'review-all';
 }
 
 function publishReviewWarningMessage(session, publishReviewSummary){
@@ -8293,28 +12167,53 @@ function formatProblemCount(counts){
   return `${core}문항`;
 }
 
+function formatReviewStageCount(mode, counts, options = {}){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.formatReviewModeCount;
+  if (typeof helper === 'function') return helper(mode, counts, options);
+  if (mode === 'shared-passages') {
+    const total = Number(counts?.total ?? counts?.all ?? 0);
+    return `${options.compact ? '지문' : '공통 지문'} ${Number.isFinite(total) ? Math.max(0, total) : 0}개`;
+  }
+  if (mode === 'page-as-is') {
+    const pageCount = Number(options.pageCount ?? counts?.total ?? counts?.all ?? 0);
+    return options.compact ? '페이지 원본' : `${Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0}페이지`;
+  }
+  return formatProblemCount(counts);
+}
+
+function reviewStageCopyFor(session, counts, pageCount){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.reviewModeCopy;
+  if (typeof helper === 'function') return helper(session, counts, { pageCount });
+  const passageOnly = normalizeContentTarget(session?.contentTarget || session?.content_target) === 'shared-passages';
+  const pageAsIs = normalizeInputIntent(session?.inputIntent || session?.input_intent) === 'page-as-is';
+  const mode = passageOnly ? 'shared-passages' : pageAsIs ? 'page-as-is' : 'problems';
+  const countLabel = formatReviewStageCount(mode, counts, { pageCount });
+  const compactCountLabel = formatReviewStageCount(mode, counts, { pageCount, compact: true });
+  if (mode === 'shared-passages') {
+    return { mode, title: '지문 검수', subtitle: '공통 지문 영역', countLabel, headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}` };
+  }
+  if (mode === 'page-as-is') {
+    return { mode, title: '페이지 검수', subtitle: '원본 보존', countLabel, headerCountLabel: `${pageCount}페이지 원본` };
+  }
+  return { mode, title: '문항 검수', subtitle: '검출 영역', countLabel, headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}` };
+}
+
+function recentSessionCountLabel(entry){
+  const pageCount = Number(entry?.pageCount ?? entry?.page_count ?? 0);
+  return reviewStageCopyFor(entry, {
+    core: entry?.coreProblemCount ?? entry?.core_problem_count,
+    supplemental: entry?.supplementalItemCount ?? entry?.supplemental_item_count,
+    total: entry?.detectedProblemCount ?? entry?.detected_problem_count,
+  }, Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0).countLabel;
+}
+
 function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
 }
 
-function sessionRiskCount(session){
-  const problemRiskCount = (session?.problems || []).filter(p => Array.isArray(p?.riskFlags) && p.riskFlags.length > 0).length;
-  const pageRiskCount = (session?.pages || []).filter(page => {
-    const flags = page?.riskFlags || page?.risk_flags || [];
-    return Array.isArray(flags) && flags.length > 0;
-  }).length;
-  const warningCount = Array.isArray(session?.warning_messages)
-    ? session.warning_messages.length
-    : Array.isArray(session?.warningMessages)
-      ? session.warningMessages.length
-      : 0;
-  return problemRiskCount + pageRiskCount + warningCount;
-}
-
 function shouldOpenReview(session){
   if (!hasReviewPages(session)) return false;
-  const problemCount = Array.isArray(session?.problems) ? session.problems.length : 0;
-  return problemCount > 1 || sessionRiskCount(session) > 0;
+  return reviewFlowState(sessionReviewSummary(session)).remaining > 0;
 }
 
 function summarizeRecognitionSession(session, pageIds){
@@ -8330,6 +12229,19 @@ function summarizeRecognitionSession(session, pageIds){
   });
   const riskCount = problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length;
   const counts = countSessionProblems(problems);
+  const passageQualities = problems
+    .filter(problem => isPassageFragmentProblem(problem))
+    .map(problem => problem?.passageQuality || problem?.passage_quality)
+    .filter(quality => quality && typeof quality === 'object');
+  const passageQualityScores = passageQualities
+    .map(quality => Number(quality.score_10 ?? quality.score10))
+    .filter(score => Number.isFinite(score));
+  const passageQualityScore = passageQualityScores.length
+    ? passageQualityScores.reduce((total, score) => total + score, 0) / passageQualityScores.length
+    : null;
+  const passageQualityReviewCount = passageQualities.filter(quality => (
+    String(quality.grade || '').toLowerCase() !== 'good'
+  )).length;
   return {
     pages: visiblePages.length,
     problems: counts.total,
@@ -8337,6 +12249,9 @@ function summarizeRecognitionSession(session, pageIds){
     supplementalItems: counts.supplemental,
     problemLabel: formatProblemCount(counts),
     riskCount,
+    passageQualityCount: passageQualities.length,
+    passageQualityScore,
+    passageQualityReviewCount,
   };
 }
 
@@ -8516,7 +12431,21 @@ async function readJsonResponse(resp, fallbackMessage){
 
 function assertOkJson(resp, json, fallbackMessage){
   if (!resp.ok || !json.ok) {
-    throw new Error(json?.error || `${fallbackMessage || '요청 실패'} (${resp.status})`);
+    const error = new Error(formatApiError(json, fallbackMessage || `요청 실패 (${resp.status})`));
+    error.code = json?.code || null;
+    error.latestSession = json?.session || null;
+    error.hasLatestSessionState = Boolean(
+      json && Object.prototype.hasOwnProperty.call(json, 'session')
+    );
+    error.sessionRevision = json?.sessionRevision !== null
+      && json?.sessionRevision !== undefined
+      && Number.isInteger(Number(json.sessionRevision))
+      ? Number(json.sessionRevision)
+      : null;
+    error.sessionEpoch = String(json?.sessionEpoch || '').trim() || null;
+    error.retryable = json?.retryable !== false;
+    error.recoverySteps = Array.isArray(json?.recoverySteps) ? json.recoverySteps.slice(0, 5) : [];
+    throw error;
   }
   return json;
 }
@@ -8537,12 +12466,20 @@ function edbFileNameFromSessionName(value, fallback = 'classin'){
 
 async function expectOkJson(resp, fallbackMessage){
   const json = await readJsonResponse(resp, fallbackMessage);
-  return assertOkJson(resp, json, fallbackMessage);
+  const checked = assertOkJson(resp, json, fallbackMessage);
+  if (sessionResponseRevisionIsStale(checked)) {
+    const error = new Error('더 최신 작업이 완료되어 늦게 도착한 응답을 적용하지 않았습니다.');
+    error.code = 'stale_session_response';
+    throw error;
+  }
+  return captureSessionRevision(checked);
 }
 
 async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT, options = {}){
   const resolvedInputIntent = normalizeInputIntent(inputIntent);
+  const resolvedContentTarget = normalizeContentTarget(options.contentTarget);
   const inputIntentConfig = INPUT_INTENT_BY_VALUE[resolvedInputIntent] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
+  assertExportPayloadFits(files);
   const filesPayload = await Promise.all(files.map(async (f) => ({
     fileName: f.name,
     fileDataBase64: await fileToBase64(f),
@@ -8552,12 +12489,14 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withExpectedSessionRevision({
       files: filesPayload,
       preview: !!options.preview,
       exportMode: inputIntentConfig.exportMode,
       inputIntent: resolvedInputIntent,
       input_intent: resolvedInputIntent,
+      contentTarget: resolvedContentTarget,
+      content_target: resolvedContentTarget,
       sourceMode: 'auto',
       source_mode: 'auto',
       subject: 'unknown',
@@ -8569,12 +12508,72 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
         : files.some(f => !isDocumentLikeFile(f)),
       skipDeskew: !!options.skipDeskew,
       skipCrop: !!options.skipCrop,
-      maxDimension: options.maxDimension || 2400,
+      pdfDpi: options.pdfDpi || 200,
+      // Full-page exports are the display master. Recognition keeps ordinary
+      // 200/300-DPI sources intact and only bounds unusually large scans.
+      maxDimension: resolvedInputIntent === 'page-as-is'
+        ? null
+        : (options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION),
+      // Full-page input stays as one page/one column by default. Column tiling
+      // remains an explicit API option, never an implicit page-as-is behavior.
+      pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off',
+      aiEnabled: options.aiEnabled !== false,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
-    }),
+    })),
   });
   const json = await readJsonResponse(resp, '파싱 실행 실패');
-  if (!resp.ok || !json.ok) throw new Error(formatApiError(json, `파싱 실행 실패 (${resp.status})`));
+  if (!resp.ok || !json.ok) {
+    throw operationErrorFromResponse(json, resp, 'session_export', `파싱 실행 실패 (${resp.status})`);
+  }
+  if (sessionResponseRevisionIsStale(json)) {
+    throw new Error('더 최신 작업이 완료되어 늦게 도착한 파싱 결과를 적용하지 않았습니다.');
+  }
+  captureSessionRevision(json);
+  return json.session;
+}
+
+async function postReextractSharedPassages(options = {}){
+  const sourcePaths = sessionReusableSourcePaths(options.session);
+  if (!sourcePaths.length) {
+    throw new Error('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.');
+  }
+  const resp = await fetch('/api/export', {
+    method: 'POST',
+    signal: options.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(withExpectedSessionRevision({
+      preview: true,
+      exportEdb: false,
+      reuseSessionSources: true,
+      reuse_session_sources: true,
+      exportMode: 'question',
+      inputIntent: 'multi-problem',
+      input_intent: 'multi-problem',
+      contentTarget: 'shared-passages',
+      content_target: 'shared-passages',
+      sourceMode: 'auto',
+      source_mode: 'auto',
+      subject: 'korean',
+      ocr: options.ocr || 'auto',
+      edbName: edbFileNameFromSessionName(options.edbName, sourcePaths[0] || 'classin'),
+      detectPerspective: false,
+      skipDeskew: false,
+      skipCrop: false,
+      pdfDpi: options.pdfDpi || 200,
+      maxDimension: options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION,
+      pageTileMode: 'off',
+      aiEnabled: options.aiEnabled !== false,
+      aiFallback: AI_FALLBACK_OFF,
+    })),
+  });
+  const json = await readJsonResponse(resp, '공통 지문 재추출 실패');
+  if (!resp.ok || !json.ok) {
+    throw new Error(formatApiError(json, `공통 지문 재추출 실패 (${resp.status})`));
+  }
+  if (sessionResponseRevisionIsStale(json)) {
+    throw new Error('더 최신 작업이 완료되어 늦게 도착한 공통 지문 결과를 적용하지 않았습니다.');
+  }
+  captureSessionRevision(json);
   return json.session;
 }
 
@@ -8587,10 +12586,102 @@ function formatApiError(payload, fallbackMessage){
   return `${baseMessage}\n\n다음 조치:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`;
 }
 
+function operationErrorFromResponse(payload, response, operation, fallbackMessage){
+  const error = new Error(formatApiError(payload, fallbackMessage));
+  error.code = String(payload?.code || `http_${response?.status || 'unknown'}`).slice(0, 120);
+  error.operation = String(payload?.operation || operation || 'ui_action').slice(0, 80);
+  error.status = Number(response?.status) || 0;
+  error.retryable = payload?.retryable !== false;
+  error.recoverySteps = Array.isArray(payload?.recoverySteps) ? payload.recoverySteps.slice(0, 5) : [];
+  error.latestSession = payload?.session || null;
+  error.hasLatestSessionState = Boolean(
+    payload && Object.prototype.hasOwnProperty.call(payload, 'session')
+  );
+  error.sessionRevision = payload?.sessionRevision !== null
+    && payload?.sessionRevision !== undefined
+    && Number.isInteger(Number(payload.sessionRevision))
+    ? Number(payload.sessionRevision)
+    : null;
+  error.sessionEpoch = String(payload?.sessionEpoch || '').trim() || null;
+  return error;
+}
+
+function operationErrorClipboardText(error){
+  if (!error) return '';
+  return [
+    'ClassIn EDB 작업 오류',
+    `시각: ${error.timestamp || new Date().toISOString()}`,
+    `작업: ${error.operation || 'session_publish'}`,
+    `코드: ${error.code || 'unknown'}`,
+    error.status ? `HTTP: ${error.status}` : '',
+    `내용: ${String(error.message || '알 수 없는 오류').trim()}`,
+  ].filter(Boolean).join('\n');
+}
+
+const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
+  publish_output_unavailable: '제작 파일을 저장할 폴더를 사용할 수 없습니다.',
+  publish_build_failed: '자료를 EDB 형식으로 구성하는 중 문제가 발생했습니다.',
+  edb_write_failed: '완성된 EDB 파일을 저장하는 중 문제가 발생했습니다.',
+  publish_connection_failed: '앱과의 연결이 끊겨 제작 요청을 완료하지 못했습니다.',
+  publish_unknown_failed: '예상하지 못한 오류로 EDB 제작을 완료하지 못했습니다.',
+  publish_download_failed: 'EDB 제작은 완료됐지만 다운로드를 시작하지 못했습니다.',
+  publish_download_unavailable: 'EDB 제작은 완료됐지만 내려받을 제작본을 찾지 못했습니다.',
+  session_conflict: '다른 작업이 먼저 저장되어 현재 화면과 최신 저장 상태가 달라졌습니다.',
+  session_missing: '서버의 최신 작업이 빈 상태로 바뀌어 현재 화면과 달라졌습니다.',
+  artifact_cleanup_busy: '다른 작업이 제작 파일을 사용 중이라 초기화를 마치지 못했습니다.',
+  recognition_failed: 'PDF 또는 이미지에서 문제를 인식하는 중 문제가 발생했습니다.',
+  recognition_connection_failed: '인식 중 앱과의 연결이 끊겼습니다.',
+  registration_failed: 'PDF 또는 이미지 페이지를 등록하는 중 문제가 발생했습니다.',
+  registration_connection_failed: '자료 등록 중 앱과의 연결이 끊겼습니다.',
+  reset_failed: '작업 목록과 최근 저장 상태를 초기화하는 중 문제가 발생했습니다.',
+  reset_connection_failed: '초기화 중 앱과의 연결이 끊겼습니다.',
+  restore_failed: '최근 저장 상태를 불러오는 중 문제가 발생했습니다.',
+  restore_connection_failed: '최근 저장 상태를 불러오는 중 앱과의 연결이 끊겼습니다.',
+  session_rebase_failed: '최신 저장 상태에 현재 배치를 합치지 못했습니다.',
+  pdf_preprocess_failed: 'PDF를 수업 자료용 페이지로 변환하는 중 문제가 발생했습니다.',
+  pdf_render_failed: 'PDF 페이지를 이미지로 만드는 중 문제가 발생했습니다.',
+  payload_too_large: '등록할 파일이 한 번에 처리할 수 있는 크기를 넘었습니다.',
+  session_rebased_ready: '최신 저장 상태에 현재 배치를 안전하게 합쳤습니다. 작업을 다시 시도해 주세요.',
+});
+
+function operationRecoverySummary(error){
+  const knownSummary = OPERATION_RECOVERY_SUMMARIES[String(error?.code || '')];
+  if (knownSummary) return knownSummary;
+  return String(error?.message || 'EDB 제작 중 예상하지 못한 오류가 발생했습니다.').split('\n')[0];
+}
+
+function operationRecoveryStateTransition(state, event){
+  const current = state && typeof state === 'object'
+    ? state
+    : { recovery: null, dismissed: false };
+  if (event?.type === 'activate') {
+    return { recovery: event.recovery || null, dismissed: false };
+  }
+  if (event?.type === 'dismiss') {
+    if (current.recovery?.conflict) return current;
+    return current.recovery ? { ...current, dismissed: true } : current;
+  }
+  if (event?.type === 'replace') {
+    return { recovery: event.recovery || null, dismissed: Boolean(event.dismissed) };
+  }
+  if (event?.type === 'clear') {
+    return { recovery: null, dismissed: false };
+  }
+  return current;
+}
+
+function isNetworkRequestError(error){
+  const raw = String(error?.message || error || '').trim();
+  return /failed to fetch|networkerror|load failed|network/i.test(raw);
+}
+
 function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   const raw = String(error?.message || error || '').trim();
-  if (/failed to fetch|networkerror|load failed|network/i.test(raw)) {
-    return `${fallbackMessage} · 로컬 앱 연결 확인`;
+  if (isNetworkRequestError(error)) {
+    return `${fallbackMessage} · 앱을 다시 실행해 주세요`;
+  }
+  if (/한 번에 처리할 수 있는 범위|파일을 나누어 등록/i.test(raw)) {
+    return `${fallbackMessage} · 파일을 나누어 등록하세요`;
   }
   if (/413|too large|payload|용량|크기/i.test(raw)) {
     return `${fallbackMessage} · 파일이 너무 큽니다`;
@@ -8619,14 +12710,74 @@ async function fetchRuntimeDiagnostics(){
   return json;
 }
 
+function runtimeErrorsForBugReport(entries = window.EDB_RUNTIME_DIAGNOSTICS){
+  if (!Array.isArray(entries)) return [];
+  return entries.slice(-10).map(entry => {
+    const detail = entry && typeof entry === 'object' ? entry : {};
+    const rawError = detail.error || detail.reason;
+    const message = detail.message || rawError?.message || rawError || '알 수 없는 오류';
+    const safe = {
+      type: String(detail.type || 'runtime').slice(0, 80),
+      message: String(message).slice(0, 1500),
+    };
+    if (detail.filename) safe.filename = String(detail.filename).slice(0, 240);
+    if (detail.componentStack) safe.componentStack = String(detail.componentStack).slice(0, 4000);
+    if (detail.operation) safe.operation = String(detail.operation).slice(0, 80);
+    if (detail.code) safe.code = String(detail.code).slice(0, 120);
+    if (detail.timestamp) safe.timestamp = String(detail.timestamp).slice(0, 100);
+    if (Number.isFinite(Number(detail.lineno))) safe.lineno = Number(detail.lineno);
+    if (Number.isFinite(Number(detail.colno))) safe.colno = Number(detail.colno);
+    if (Number.isFinite(Number(detail.status))) safe.status = Number(detail.status);
+    if ('retryable' in detail) safe.retryable = Boolean(detail.retryable);
+    return safe;
+  });
+}
+
+async function submitBugReport(payload){
+  const resp = await fetch('/api/bug-report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return expectOkJson(resp, '리포트 전송 실패');
+}
+
 async function fetchAppUpdateStatus(){
   const resp = await fetch('/api/app/update');
   const json = await expectOkJson(resp, '업데이트 확인 실패');
   return json;
 }
 
+function isUpdateArchitectureMismatch(info){
+  const channelStatus = String(info?.channelStatus || '').trim();
+  const code = String(info?.code || '').trim();
+  return channelStatus === 'unsupported_architecture'
+    || code === 'update_architecture_mismatch'
+    || code === 'unsupported_architecture';
+}
+
+function updateArchitectureRecoverySteps(info){
+  const provided = Array.isArray(info?.recoverySteps)
+    ? info.recoverySteps.map(step => String(step || '').trim()).filter(Boolean)
+    : [];
+  return listUnique([
+    '현재 아키텍처용 설치 파일을 선택해 주세요.',
+    ...provided,
+    '지원 파일이 보이지 않으면 설정 → 문제 신고에서 버그 리포트를 보내 주세요.',
+  ]).slice(0, 3);
+}
+
+function updateArchitectureNotice(info){
+  return `이 기기용 업데이트 파일 없음 · ${updateArchitectureRecoverySteps(info).join(' ')}`;
+}
+
 async function clearSession(){
-  const resp = await fetch('/api/session/latest', { method: 'DELETE' });
+  const revision = latestServerSessionRevision;
+  const queryParams = new URLSearchParams();
+  if (Number.isInteger(revision)) queryParams.set('expectedSessionRevision', String(revision));
+  if (latestServerSessionEpoch) queryParams.set('expectedSessionEpoch', latestServerSessionEpoch);
+  const query = queryParams.size ? `?${queryParams.toString()}` : '';
+  const resp = await fetch(`/api/session/latest${query}`, { method: 'DELETE' });
   if (resp.status === 404) return { history: [] }; // already cleared
   const json = await expectOkJson(resp, '세션 초기화 실패');
   return json;
@@ -8652,7 +12803,7 @@ async function postMutate(action, args){
   const resp = await fetch('/api/session/mutate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...args }),
+    body: JSON.stringify(withExpectedSessionRevision({ action, ...args })),
   });
   const json = await expectOkJson(resp, '검수 수정 실패');
   return json.session;
@@ -8690,11 +12841,11 @@ async function fetchProblemImageDownload(problemId, args = {}){
     ? await fetch('/api/session/problem-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(withExpectedSessionRevision({
           problemId: id,
           variant: args?.variant || 'board',
           session: payloadSession,
-        }),
+        })),
       })
     : await fetch(`/api/session/problem-image?problemId=${encodeURIComponent(id)}&variant=${encodeURIComponent(args?.variant || 'board')}`);
   if (!resp.ok) {
@@ -8724,7 +12875,7 @@ async function postRetryAi(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(args || {}), preview: !!options.preview }),
+    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), preview: !!options.preview })),
   });
   const json = await expectOkJson(resp, 'AI 재인식 실패');
   return json;
@@ -8735,7 +12886,7 @@ async function postEnhanceImage(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args || {}),
+    body: JSON.stringify(withExpectedSessionRevision(args || {})),
   });
   const json = await expectOkJson(resp, '고화질 처리 실패');
   return json;
@@ -8745,7 +12896,7 @@ async function postRestore(snapshot){
   const resp = await fetch('/api/session/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session: snapshot }),
+    body: JSON.stringify(withExpectedSessionRevision({ session: snapshot })),
   });
   const json = await expectOkJson(resp, '이전 상태 복원 실패');
   return json.session;
@@ -8755,7 +12906,7 @@ async function postClassinReviewResult(payload){
   const resp = await fetch('/api/session/classin-review', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload || {}),
+    body: JSON.stringify(withExpectedSessionRevision(payload || {})),
   });
   const json = await expectOkJson(resp, 'ClassIn 검수 저장 실패');
   return json.session;
@@ -8802,11 +12953,13 @@ function App(){
 
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
+  const [moveFeedback, setMoveFeedback] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
   const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
+  const [initialSessionLoaded, setInitialSessionLoaded] = useState(false);
   const [loading, setLoading] = useState(null); // {label, hint, startedAt} when busy
   const [backgroundJobs, setBackgroundJobs] = useState([]);
   const [recognitionReview, setRecognitionReview] = useState(null);
@@ -8819,8 +12972,25 @@ function App(){
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiToggleBusy, setAiToggleBusy] = useState(false);
   const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedProblemIds, setSelectedProblemIds] = useState(() => new Set());
+  const [reviewUi, setReviewUi] = useState({
+    filter: 'all',
+    riskFilter: null,
+    zoom: 1,
+    scrollTop: 0,
+  });
+  const [boardScrollTop, setBoardScrollTop] = useState(0);
+  const [actionToast, setActionToast] = useState(null);
+  const [viewTransitionBanner, setViewTransitionBanner] = useState(null);
+  const [operationRecoveryState, setOperationRecoveryState] = useState({ recovery: null, dismissed: false });
+  const [bugReportRequest, setBugReportRequest] = useState(null);
+  const [bugReportDraft, setBugReportDraft] = useState('');
+  const [resetBusy, setResetBusy] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -8829,24 +12999,64 @@ function App(){
   const initialViewConsumedRef = useRef(false);
   const [view, setView] = useState(initialViewRef.current);
   const [reviewFocus, setReviewFocus] = useState(null);
+  const [reviewEditorActive, setReviewEditorActive] = useState(false);
   const [mutating, setMutating] = useState(false);
   const mutatingRef = useRef(false);
+  const resetInFlightRef = useRef(false);
+  const restoreInFlightRef = useRef(false);
+  const publishInFlightRef = useRef(false);
+  const downloadInFlightRef = useRef(false);
+  const bugReportSequenceRef = useRef(0);
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
   const [historyStack, setHistoryStack] = useState([]);
+  const historyStackRef = useRef([]);
   const boardColumns = normalizeBoardColumns(t.boardColumns);
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const moveFeedbackTimerRef = useRef(null);
+  const moveSequenceRef = useRef(0);
+  const actionToastTimerRef = useRef(null);
+  const viewTransitionTimerRef = useRef(null);
+  const activeViewTransitionRef = useRef(null);
   const jobControllersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
+  const recognitionInFlightRef = useRef(false);
+  const queueRegistrationInFlightRef = useRef(false);
+  const sessionRecognitionInFlightRef = useRef(false);
+  const sessionRecognitionGuardUntilRef = useRef(0);
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
+  const reviewComplete = useMemo(
+    () => Boolean(session && reviewFlowState(sessionReviewSummary(session)).complete),
+    [session]
+  );
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
   }, [view, reviewAvailable]);
+  useEffect(() => {
+    if (view !== 'review') setReviewEditorActive(false);
+  }, [view]);
+  useEffect(() => {
+    historyStackRef.current = historyStack;
+  }, [historyStack]);
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedProblemIds(prev => {
+      const next = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items]);
+  useEffect(() => () => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    if (moveFeedbackTimerRef.current) window.clearTimeout(moveFeedbackTimerRef.current);
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    activeViewTransitionRef.current?.skipTransition?.();
+  }, []);
   const canUndo = historyStack.length > 0 && !mutating;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
@@ -8855,14 +13065,23 @@ function App(){
     () => pendingFiles.find(file => fileQueueKey(file) === selectedPendingFileKey) || null,
     [pendingFiles, selectedPendingFileKey]
   );
+  const reusableSessionSourcePaths = useMemo(
+    () => sessionReusableSourcePaths(session),
+    [session]
+  );
   const processed = items.filter(i => i.step !== 'raw').length;
   const progress = items.length ? processed / items.length : 0;
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
   const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
+  const hasRunningBackgroundJobs = backgroundJobs.some(job => job.status === 'running');
   const runningRecognitionJob = backgroundJobs.find(job => (
     job.status === 'running' && String(job.scope || '').includes('recognition')
   )) || null;
+  const operationRecovery = operationRecoveryState.recovery;
+  const operationRecoveryDismissed = operationRecoveryState.dismissed;
+  const lastOperationError = operationRecovery?.error || null;
+  const hasPendingSessionConflict = Boolean(operationRecovery?.conflict);
 
   const showToast = useCallback((msg) => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
@@ -8870,10 +13089,108 @@ function App(){
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
 
-  const showSimpleErrorToast = useCallback((error, fallbackMessage) => {
-    console.warn(`[board] ${fallbackMessage || '작업 실패'}:`, error);
+  const showActionToast = useCallback((message, actionLabel, onAction) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast(null);
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    setActionToast({ message, actionLabel, onAction });
+    actionToastTimerRef.current = window.setTimeout(() => setActionToast(null), 6500);
+  }, []);
+
+  const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {
+    const diagnostic = captureRecoverableDiagnostic(error, {
+      operation: detail.operation || error?.operation || 'ui_action',
+      code: detail.code || error?.code || 'ui_action_failed',
+      status: detail.status ?? error?.status ?? 0,
+      retryable: detail.retryable ?? error?.retryable ?? true,
+      recoverySteps: Array.isArray(error?.recoverySteps)
+        ? error.recoverySteps.map(step => String(step || '').trim()).filter(Boolean).slice(0, 5)
+        : [],
+    });
     showToast(simpleToastErrorMessage(error, fallbackMessage));
+    return diagnostic;
   }, [showToast]);
+
+  const clearOperationRecovery = useCallback(() => {
+    setOperationRecoveryState(state => operationRecoveryStateTransition(state, { type: 'clear' }));
+  }, []);
+
+  const activateOperationRecovery = useCallback((error, fallbackMessage, detail = {}, recovery = {}) => {
+    const diagnostic = showSimpleErrorToast(error, fallbackMessage, detail);
+    const isSessionStateConflict = (
+      error?.code === 'session_conflict' || error?.code === 'session_missing'
+    ) && error?.hasLatestSessionState;
+    const conflict = isSessionStateConflict
+      ? {
+          latestSession: error.latestSession,
+          hasLatestSessionState: true,
+          sessionRevision: error.sessionRevision,
+          sessionEpoch: error.sessionEpoch,
+          localDraft: recovery.localDraft || null,
+        }
+      : recovery.conflict || null;
+    const { localDraft: _localDraft, conflict: _conflict, ...safeRecovery } = recovery;
+    const nextRecovery = {
+      ...safeRecovery,
+      kind: recovery.kind || 'publish',
+      error: diagnostic,
+      conflict,
+    };
+    setOperationRecoveryState(state => operationRecoveryStateTransition(state, {
+      type: 'activate',
+      recovery: nextRecovery,
+    }));
+    return diagnostic;
+  }, [showSimpleErrorToast]);
+
+  const requestViewChange = useCallback((nextView, options = {}) => {
+    const target = nextView === 'review' ? 'review' : 'board';
+    if (target === view && typeof options.beforeCommit !== 'function') return true;
+    if (reviewEditorActive && !options.force) {
+      showToast('영역 편집을 적용하거나 취소한 뒤 화면을 이동해 주세요');
+      return false;
+    }
+    const commitView = () => {
+      if (typeof ReactDOM.flushSync === 'function') {
+        ReactDOM.flushSync(() => {
+          options.beforeCommit?.();
+          setView(target);
+        });
+      } else {
+        options.beforeCommit?.();
+        setView(target);
+      }
+    };
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const canAnimate = !reduceMotion && typeof document.startViewTransition === 'function';
+    if (canAnimate) {
+      activeViewTransitionRef.current?.skipTransition?.();
+      try {
+        const transition = document.startViewTransition(commitView);
+        activeViewTransitionRef.current = transition;
+        void transition.finished
+          .catch(() => {})
+          .finally(() => {
+            if (activeViewTransitionRef.current === transition) {
+              activeViewTransitionRef.current = null;
+            }
+          });
+      } catch (_error) {
+        commitView();
+      }
+    } else {
+      commitView();
+    }
+    const selectedCount = selectedProblemIds.size;
+    setViewTransitionBanner(
+      target === 'review'
+        ? `검수로 이동 · ${selectedCount ? `선택 ${selectedCount}개와 ` : ''}필터·배율을 유지했어요`
+        : `칠판으로 이동 · ${selectedCount ? `선택 ${selectedCount}개를 ` : ''}그대로 이어갑니다`
+    );
+    if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    viewTransitionTimerRef.current = window.setTimeout(() => setViewTransitionBanner(null), 2600);
+    return true;
+  }, [reviewEditorActive, selectedProblemIds.size, showToast, view]);
 
   const selectBoardItem = useCallback((id) => {
     setSelectedPendingFileKey(null);
@@ -8921,6 +13238,7 @@ function App(){
 
   const updateStatusToast = (info) => {
     if (!info) return '업데이트 정보를 확인하지 못했습니다';
+    if (isUpdateArchitectureMismatch(info)) return updateArchitectureNotice(info);
     if (info.updateAvailable) {
       const latestVersion = info.latest?.version || '새 버전';
       return `업데이트 가능 · ${latestVersion}`;
@@ -8956,6 +13274,10 @@ function App(){
       return;
     }
     const info = updateInfo || await checkForUpdates({ silent: true });
+    if (isUpdateArchitectureMismatch(info)) {
+      showToast(updateArchitectureNotice(info));
+      return;
+    }
     const url = info?.downloadUrl || info?.latest?.downloadUrl || '';
     if (!url) {
       showToast('업데이트 다운로드 URL이 없습니다');
@@ -9171,8 +13493,12 @@ function App(){
       label: action === 'split' ? '문제를 가르는 중…'
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
+        : action === 'stitch-crop' ? '지문 영역을 이어붙이는 중…'
         : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
+        : action === 'confirm' ? '확인 상태를 저장하는 중…'
+        : action === 'confirm-page' ? '페이지 확인 상태를 저장하는 중…'
+        : action === 'classify' ? '자료 분류를 저장하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
     });
@@ -9187,11 +13513,26 @@ function App(){
         action === 'split' ? '문제를 두 개로 갈랐어요'
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
+        : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
         : action === 'bulk-crop' ? '수동 분할을 적용했어요'
+        : action === 'confirm' ? '확인 상태를 저장했어요'
+        : action === 'confirm-page' ? '지문 없음으로 확인했어요'
+        : action === 'classify' ? '자료 분류를 변경했어요'
         : '문제를 제외했어요'
       );
       return next;
     } catch (e) {
+      if (e?.code === 'session_conflict' && e.latestSession) {
+        const conflictPayload = {
+          session: e.latestSession,
+          sessionRevision: e.sessionRevision,
+          sessionEpoch: e.sessionEpoch,
+        };
+        if (!sessionResponseRevisionIsStale(conflictPayload)) {
+          captureSessionRevision(conflictPayload);
+          adoptMutatedSession(e.latestSession, snapshotBefore);
+        }
+      }
       showSimpleErrorToast(e, '수정 실패');
       return null;
     } finally {
@@ -9210,6 +13551,19 @@ function App(){
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
     }
+    if (!aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
+      return;
+    }
+    if (
+      sessionRecognitionInFlightRef.current
+      || Date.now() < sessionRecognitionGuardUntilRef.current
+    ) {
+      showToast('이미 세션 인식 작업을 진행 중입니다');
+      return;
+    }
+    sessionRecognitionInFlightRef.current = true;
+    sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
     const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
     const problemIds = listUnique((args?.problemIds || args?.problem_ids || []).filter(Boolean));
     const isPartialRetry = Boolean(args?.partial || args?.partialRetry || args?.partial_retry) && problemIds.length > 0;
@@ -9239,7 +13593,7 @@ function App(){
       settleBackgroundJob(job.id, {
         status: 'done',
         label: 'AI 인식 완료',
-        hint: '결과 확인 팝업에서 문제 경계를 확인하세요.',
+        hint: '페이지별 원본 확인 화면에서 문제 경계를 확인하세요.',
       });
       setRecognitionReview({
         id: `review-${job.id}`,
@@ -9257,6 +13611,7 @@ function App(){
         snapshotBefore,
         retrySummary: result.retry || [],
       });
+      return result;
     } catch (e) {
       if (e?.name === 'AbortError') {
         settleBackgroundJob(job.id, {
@@ -9272,12 +13627,18 @@ function App(){
         hint: e.message,
       }, 5000);
       showSimpleErrorToast(e, 'AI 재인식 실패');
+    } finally {
+      sessionRecognitionInFlightRef.current = false;
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
       showToast('문제 인식할 원본 페이지가 없습니다');
+      return;
+    }
+    if (!aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
       return;
     }
     if (!userSettings?.hasGeminiApiKey) {
@@ -9286,17 +13647,113 @@ function App(){
     }
     const pageIds = listUnique(session.pages.map(page => page.id).filter(Boolean));
     await retryAiSession({ pageIds });
-  }, [session, userSettings, retryAiSession]);
+  }, [session, userSettings, aiEnabled, retryAiSession]);
 
-  const exportSessionImages = useCallback(async () => {
+  const reextractSharedPassagesFromSession = useCallback(async () => {
+    if (!session || usingMock) {
+      showToast('공통 지문을 다시 추출할 실제 세션이 없습니다');
+      return;
+    }
+    if (!sessionReusableSourcePaths(session).length) {
+      showToast('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다');
+      return;
+    }
+    if (
+      mutatingRef.current
+      || hasRunningSessionRecognition
+      || sessionRecognitionInFlightRef.current
+      || Date.now() < sessionRecognitionGuardUntilRef.current
+    ) {
+      showToast('진행 중인 세션 작업이 끝난 뒤 다시 시도해 주세요');
+      return;
+    }
+    sessionRecognitionInFlightRef.current = true;
+    sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
+    const job = startBackgroundJob({
+      scope: 'session-recognition',
+      label: '현재 원본에서 공통 지문 추출 중',
+      hint: '원본 PDF·이미지를 다시 읽습니다. 기존 문항은 결과를 적용할 때 그대로 유지됩니다.',
+    });
+    try {
+      const incomingSession = await postReextractSharedPassages({
+        session,
+        signal: job.controller.signal,
+        edbName: fileName,
+        ocr: aiEnabled ? 'auto' : 'local',
+        aiEnabled,
+      });
+      if (job.controller.signal.aborted) return;
+      const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
+      const summary = summarizeRecognitionSession(incomingSession);
+      settleBackgroundJob(job.id, {
+        status: 'done',
+        label: '공통 지문 재추출 완료',
+        hint: incomingFragments.length
+          ? `${incomingFragments.length}개 결과를 확인한 뒤 적용할 수 있습니다.`
+          : '찾은 공통 지문이 없습니다. 원본과 문항 범위를 확인해 주세요.',
+      });
+      setRecognitionReview({
+        id: `review-${job.id}`,
+        kind: 'session-passage-reextract',
+        title: incomingFragments.length
+          ? `현재 원본에서 공통 지문 ${incomingFragments.length}개를 찾았어요`
+          : '현재 원본에서 공통 지문을 찾지 못했어요',
+        subtitle: incomingFragments.length
+          ? '기존 문항 crop은 유지하고 자동 지문만 교체합니다. 문항에 잘못 붙인 공통 지문 표시는 문항으로 되돌립니다.'
+          : '기존 문항과 지문은 변경되지 않습니다. 적용하지 않고 닫아 주세요.',
+        contentTarget: 'shared-passages',
+        session: incomingSession,
+        incomingSession,
+        fileCount: reusableSessionSourcePaths.length,
+        sourcePaths: reusableSessionSourcePaths,
+        summary,
+      });
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        settleBackgroundJob(job.id, {
+          status: 'canceled',
+          label: '공통 지문 재추출 취소됨',
+          hint: '결과를 적용하지 않았습니다.',
+        });
+        return;
+      }
+      const connectionLost = isNetworkRequestError(e);
+      settleBackgroundJob(job.id, {
+        status: 'failed',
+        label: connectionLost ? '로컬 앱 연결 끊김' : '공통 지문 재추출 실패',
+        hint: connectionLost
+          ? '앱을 다시 실행한 뒤 공통 지문 추출을 다시 눌러 주세요.'
+          : e.message,
+      }, 5000);
+      showSimpleErrorToast(e, '공통 지문 재추출 실패');
+    } finally {
+      sessionRecognitionInFlightRef.current = false;
+    }
+  }, [
+    session,
+    usingMock,
+    hasRunningSessionRecognition,
+    fileName,
+    aiEnabled,
+    reusableSessionSourcePaths,
+    startBackgroundJob,
+    settleBackgroundJob,
+    showSimpleErrorToast,
+    showToast,
+  ]);
+
+  const exportSessionImages = useCallback(async (requestedProblemIds = null) => {
     if (!session) {
       showToast('다운로드할 세션이 없습니다');
       return;
     }
     const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;
+    const requestedIdSet = Array.isArray(requestedProblemIds)
+      ? new Set(requestedProblemIds.map(String))
+      : null;
     const problemIds = listUnique(itemsForExport
-      .filter(item => item?.id && !item.excluded)
+      .filter(item => item?.id && !item.excluded && (!requestedIdSet || requestedIdSet.has(String(item.id))))
       .map(item => item.id));
     if (!problemIds.length) {
       showToast('다운로드할 이미지가 없습니다');
@@ -9308,12 +13765,7 @@ function App(){
       if (!result?.downloadUrl) {
         throw new Error('다운로드 URL이 없습니다');
       }
-      const a = document.createElement('a');
-      a.href = result.downloadUrl;
-      a.download = result.fileName || `${(session.session_name || fileName || 'classin').trim() || 'classin'}_images.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      triggerServerFileDownload(result.downloadUrl);
       const missingCount = Array.isArray(result.missing) ? result.missing.length : 0;
       showToast(missingCount
         ? `PNG 묶음을 준비했어요 · 누락 ${missingCount}개는 manifest에서 확인`
@@ -9324,6 +13776,9 @@ function App(){
       setExportingImages(false);
     }
   }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
+  const exportSelectedImages = useCallback((problemIds) => {
+    void exportSessionImages(problemIds);
+  }, [exportSessionImages]);
 
   const downloadItemImage = useCallback(async (item) => {
     if (!session) {
@@ -9349,8 +13804,9 @@ function App(){
   }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
 
   const undoMutation = useCallback(async () => {
-    if (historyStack.length === 0) return;
-    const snapshot = historyStack[historyStack.length - 1];
+    const currentHistory = historyStackRef.current;
+    if (currentHistory.length === 0) return;
+    const snapshot = currentHistory[currentHistory.length - 1];
     const viewBeforeUndo = view;
     const activeBeforeUndo = activeId;
     mutatingRef.current = true;
@@ -9358,7 +13814,11 @@ function App(){
     setLoading({ label: '되돌리는 중…', startedAt: Date.now() });
     try {
       const restored = await postRestore(snapshot);
-      setHistoryStack(prev => prev.slice(0, -1));
+      setHistoryStack(prev => {
+        const next = prev.slice(0, -1);
+        historyStackRef.current = next;
+        return next;
+      });
       applySession(restored);
       setView(viewBeforeUndo);
       if ((restored?.problems || []).some(problem => problem?.id === activeBeforeUndo)) {
@@ -9373,7 +13833,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, view, activeId, applySession, refreshSessionHistory, showSimpleErrorToast]);
+  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -9402,6 +13862,8 @@ function App(){
         if (s) applySession(s);
       } catch (e) {
         if (!cancelled) console.warn('[board] session load skipped:', e.message);
+      } finally {
+        if (!cancelled) setInitialSessionLoaded(true);
       }
     })();
     return () => { cancelled = true; };
@@ -9419,8 +13881,7 @@ function App(){
         const s = await fetchUserSettings();
         if (cancelled) return;
         setUserSettings(s);
-        // default AI on if key is present
-        setAiEnabled(!!s?.hasGeminiApiKey);
+        setAiEnabled(s?.aiEnabled !== false);
       } catch (e) {
         if (!cancelled) console.warn('[board] user-settings load skipped:', e.message);
       }
@@ -9445,6 +13906,7 @@ function App(){
     try {
       const s = await saveUserSettings({ geminiApiKey: key || '' });
       setUserSettings(s);
+      setAiEnabled(s?.aiEnabled !== false);
       showToast(key ? 'Gemini 키 저장됨' : 'Gemini 키 삭제됨');
     } catch (e) {
       showSimpleErrorToast(e, '저장 실패');
@@ -9461,12 +13923,32 @@ function App(){
     }
   }, [showSimpleErrorToast, showToast]);
 
+  const onToggleAi = useCallback(async (enabled) => {
+    setAiToggleBusy(true);
+    try {
+      const s = await saveUserSettings({ aiEnabled: !!enabled });
+      setUserSettings(s);
+      setAiEnabled(s?.aiEnabled !== false);
+      showToast(enabled
+        ? (s?.hasGeminiApiKey ? 'AI 기능을 켰어요' : 'AI를 켰어요 · API 키를 저장하면 사용할 수 있어요')
+        : 'AI 기능을 껐어요 · OCR과 보정은 로컬로 처리합니다');
+    } catch (e) {
+      showSimpleErrorToast(e, 'AI 설정 저장 실패');
+    } finally {
+      setAiToggleBusy(false);
+    }
+  }, [showSimpleErrorToast, showToast]);
+
   const enhanceImageSession = useCallback(async (problemIds, options = {}) => {
     if (!session) {
       showToast('변경할 세션이 없습니다');
       return;
     }
     const mode = ['auto', 'preserve', 'ai'].includes(options?.mode) ? options.mode : 'auto';
+    if (mode === 'ai' && !aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
+      return;
+    }
     if (mode === 'ai' && !userSettings?.hasGeminiApiKey) {
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
@@ -9485,10 +13967,11 @@ function App(){
         : (ids.length === 1 ? '고화질 재구성 중' : `${ids.length}개 문항 고화질 처리 중`),
       hint: isPreserve
         ? '원본 글자 형태를 유지하며 로컬 2K 확대와 투명 배경 처리를 적용합니다.'
-        : '과목에 맞는 보존형 또는 Nano Banana 2K 경로를 선택합니다.',
+        : '원문 보존형 또는 선택형 Nano Banana 1K 경로를 사용합니다.',
     });
     try {
-      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode, size: '2K' }, { signal: job.controller.signal });
+      const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       const appliedRows = (result.enhance || []).filter(row => row.status === 'applied');
@@ -9520,35 +14003,69 @@ function App(){
       }, 5000);
       showSimpleErrorToast(e, '고화질 처리 실패');
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast]);
 
   const resetSession = useCallback(async () => {
-    if (loading) {
+    if (recognitionInFlightRef.current || queueRegistrationInFlightRef.current) {
+      showToast('자료 처리가 끝난 뒤 초기화해 주세요');
+      return false;
+    }
+    if (downloadInFlightRef.current || downloadBusy) {
+      showToast('EDB 다운로드 준비가 끝난 뒤 초기화해 주세요');
+      return false;
+    }
+    if (publishInFlightRef.current || publishBusy) {
+      showToast('EDB 제작이 끝난 뒤 초기화해 주세요');
+      return false;
+    }
+    if (loading || resetInFlightRef.current) {
       showToast('작업 중에는 초기화할 수 없습니다');
-      return;
+      return false;
+    }
+    if (backgroundJobs.some(job => job.status === 'running')) {
+      showToast('진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요');
+      return false;
     }
     if (!session && items.length === 0 && pendingFiles.length === 0 && recentSessions.length === 0) {
       showToast('이미 빈 세션입니다');
-      return;
+      return false;
     }
-    if (!window.confirm('세션을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 모두 사라집니다.')) return;
+    if (!window.confirm('작업 목록을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 사라집니다. 이미 만든 EDB·PNG 출력 파일은 보관됩니다.')) return false;
+    const localDraft = materializeSessionForItems(session, items, fileName, boardColumns) || session;
+    resetInFlightRef.current = true;
+    setResetBusy(true);
+    setLoading({ label: '작업 목록을 초기화하는 중…', startedAt: Date.now() });
     try {
+      if (session || recentSessions.length) {
+        const result = await clearSession();
+        setRecentSessionsAuthoritative(result?.history);
+      }
       jobControllersRef.current.forEach(controller => controller.abort());
       jobControllersRef.current.clear();
       setBackgroundJobs([]);
       setRecognitionReview(null);
       setConfirmingRecognition(false);
-      if (session || recentSessions.length) {
-        const result = await clearSession();
-        setRecentSessionsAuthoritative(result?.history);
-      }
       setPendingFilesTracked([]);
       setReviewFocus(null);
       hideMockItems('초기화 완료 · 빈 세션');
+      clearOperationRecovery();
+      return true;
     } catch (e) {
-      showSimpleErrorToast(e, '초기화 실패');
+      activateOperationRecovery(e, '초기화 실패', {
+        operation: 'session_reset',
+        code: e?.code || (isNetworkRequestError(e) ? 'reset_connection_failed' : 'reset_failed'),
+      }, {
+        kind: 'reset',
+        retryLabel: '초기화 다시 시도',
+        localDraft,
+      });
+      return false;
+    } finally {
+      resetInFlightRef.current = false;
+      setResetBusy(false);
+      setLoading(null);
     }
-  }, [loading, session, items.length, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, showSimpleErrorToast, showToast]);
+  }, [loading, downloadBusy, publishBusy, backgroundJobs, session, items, fileName, boardColumns, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   const shutdownApp = useCallback(async () => {
     if (!window.confirm('로컬 앱을 종료할까요? 브라우저 창은 직접 닫으면 됩니다.')) return;
@@ -9578,15 +14095,27 @@ function App(){
         }
         showToast(usingMock ? '저장된 세션 없음 · 더미 유지' : '저장된 세션 없음 · 빈 세션');
       }
+      clearOperationRecovery();
     } catch (e) {
       showSimpleErrorToast(e, '새로고침 실패');
     } finally {
       setRefreshing(false);
     }
-  }, [applySession, usingMock, refreshSessionHistory, showSimpleErrorToast, showToast]);
+  }, [applySession, usingMock, refreshSessionHistory, clearOperationRecovery, showSimpleErrorToast, showToast]);
 
-  const restoreRecentSession = useCallback(async (id) => {
-    if (!id || restoringSessionId) return;
+  const restoreRecentSession = useCallback(async (id, options = {}) => {
+    if (!id) return false;
+    if (restoreInFlightRef.current || restoringSessionId) {
+      showToast('이미 최근 작업을 여는 중입니다');
+      return false;
+    }
+    const recoveryDraft = options.recoveryDraft
+      || materializeSessionForItems(session, items, fileName, boardColumns)
+      || session;
+    if (recoveryDraft && options.confirmOverwrite !== false && !window.confirm(
+      '최근 저장본을 열면 현재 화면의 저장되지 않은 배치를 덮어씁니다. 현재 배치는 되돌리기용으로 보관하고 계속할까요?'
+    )) return false;
+    restoreInFlightRef.current = true;
     setRestoringSessionId(id);
     setLoading({ label: '최근 작업을 여는 중…', startedAt: Date.now() });
     try {
@@ -9594,16 +14123,31 @@ function App(){
       if (Array.isArray(result.history)) setRecentSessionsAuthoritative(result.history);
       setRecognitionReview(null);
       applySession(result.session);
-      setHistoryStack([]);
+      setHistoryStack(recoveryDraft
+        ? prev => appendBoundedHistory(prev, recoveryDraft, UNDO_HISTORY_LIMIT)
+        : []);
       setReviewFocus(null);
+      clearOperationRecovery();
       showToast('최근 작업을 열었어요');
+      return true;
     } catch (e) {
-      showSimpleErrorToast(e, '작업 열기 실패');
+      activateOperationRecovery(e, '작업 열기 실패', {
+        operation: 'session_restore_history',
+        code: e?.code || (isNetworkRequestError(e) ? 'restore_connection_failed' : 'restore_failed'),
+      }, {
+        kind: 'restore',
+        retryLabel: '최근 작업 다시 열기',
+        restoreSessionId: id,
+        recoveryDraft,
+        localDraft: recoveryDraft,
+      });
+      return false;
     } finally {
+      restoreInFlightRef.current = false;
       setRestoringSessionId(null);
       setLoading(null);
     }
-  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, showSimpleErrorToast, showToast]);
+  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, session, items, fileName, boardColumns, showToast]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -9632,14 +14176,21 @@ function App(){
 
   const removePendingFile = useCallback((key) => {
     setPendingFilesTracked(prev => prev.filter(file => fileQueueKey(file) !== key));
-  }, [setPendingFilesTracked]);
+    if (
+      (operationRecovery?.kind === 'recognition' || operationRecovery?.kind === 'registration')
+      && operationRecovery.retryTargetKey === key
+    ) clearOperationRecovery();
+  }, [operationRecovery, setPendingFilesTracked, clearOperationRecovery]);
 
   const clearPendingFiles = useCallback(() => {
     setRecognitionReview(null);
     setSelectedPendingFileKey(null);
     setPendingFilesTracked([]);
+    if (operationRecovery?.kind === 'recognition' || operationRecovery?.kind === 'registration') {
+      clearOperationRecovery();
+    }
     showToast('업로드 대기열을 비웠어요');
-  }, [setPendingFilesTracked]);
+  }, [operationRecovery, setPendingFilesTracked, clearOperationRecovery, showToast]);
 
   useEffect(() => {
     if (recognitionReview?.kind !== 'queue-recognition') return;
@@ -9649,6 +14200,18 @@ function App(){
   }, [recognitionReview, pendingFiles, queueRequestIsCurrent]);
 
   const processQueuedFiles = useCallback(async (mode, targetKey = null) => {
+    if (!initialSessionLoaded) {
+      showToast('기존 작업을 불러오는 중입니다. 잠시 후 다시 시도해 주세요');
+      return;
+    }
+    if (operationRecovery?.conflict) {
+      showToast('먼저 최신 상태를 불러오거나 현재 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    if (recognitionInFlightRef.current || queueRegistrationInFlightRef.current) {
+      showToast('이미 자료를 처리하고 있습니다');
+      return;
+    }
     const files = targetKey
       ? pendingFiles.filter(file => fileQueueKey(file) === targetKey)
       : [...pendingFiles];
@@ -9656,23 +14219,34 @@ function App(){
       showToast(targetKey ? '해당 파일이 대기열에 없습니다' : '대기열에 파일이 없습니다');
       return;
     }
-    const isRecognition = mode === 'recognize';
+    const isPassageOnly = mode === 'passage-only';
+    const isRecognition = mode === 'recognize' || isPassageOnly;
     const isManualSplit = mode === 'manual-split';
     const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
-    const fastImageRecognition = isRecognition && isImageOnlyFileBatch(files);
-    const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
+    const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);
+    const aiFallback = isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
-    const recognitionOcr = fastImageRecognition ? 'none' : 'auto';
+    const recognitionOcr = fastImageRecognition ? 'none' : (aiEnabled ? 'auto' : 'local');
     if (isRecognition) {
+      if (recognitionInFlightRef.current) {
+        showToast('이미 인식을 진행 중입니다');
+        return;
+      }
+      clearOperationRecovery();
+      recognitionInFlightRef.current = true;
       const fileKeys = files.map(fileQueueKey);
       const queueGeneration = queueGenerationRef.current;
       const job = startBackgroundJob({
         scope: 'queue-recognition',
-        label: fastImageRecognition
+        label: isPassageOnly
+          ? (files.length === 1 ? '1개 파일 공통 지문 추출 중' : `${files.length}개 파일 공통 지문 추출 중`)
+          : fastImageRecognition
           ? (files.length === 1 ? '1개 이미지 빠른 문항 분할 중' : `${files.length}개 이미지 빠른 문항 분할 중`)
           : (files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`),
-        hint: fastImageRecognition
+        hint: isPassageOnly
+          ? '여러 문항이 함께 쓰는 긴 지문만 찾아 1열 전체 너비로 준비합니다.'
+          : fastImageRecognition
           ? '이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다.'
           : aiFallback.enabled
           ? 'Gemini AI 보정으로 문항 경계를 확인합니다.'
@@ -9684,8 +14258,10 @@ function App(){
           preview: true,
           edbName: fileName,
           ocr: recognitionOcr,
+          aiEnabled,
           detectPerspective: !fastImageRecognition,
           skipDeskew: fastImageRecognition,
+          contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
         });
         if (job.controller.signal.aborted) return;
         if (!queueRequestIsCurrent(queueGeneration, fileKeys)) {
@@ -9701,16 +14277,21 @@ function App(){
         const summary = summarizeRecognitionSession(incomingSession);
         settleBackgroundJob(job.id, {
           status: 'done',
-          label: '문제 인식 완료',
-          hint: `${summary.problemLabel}을 찾았습니다.`,
+          label: isPassageOnly ? '공통 지문 추출 완료' : '문제 인식 완료',
+          hint: isPassageOnly ? `공통 지문 ${summary.problems}개를 찾았습니다.` : `${summary.problemLabel}을 찾았습니다.`,
         });
         setRecognitionReview({
           id: `review-${job.id}`,
           kind: 'queue-recognition',
-          title: files.length === 1
-            ? `${files[0].name || '파일'} · ${summary.problemLabel}로 인식했어요`
-            : `${summary.problemLabel}로 인식했어요`,
-          subtitle: '문제 경계가 맞으면 검수 화면에서 원본 위 박스를 확인합니다.',
+          title: isPassageOnly
+            ? `${files.length === 1 ? files[0].name || '파일' : `${files.length}개 파일`} · 공통 지문 ${summary.problems}개를 찾았어요`
+            : files.length === 1
+              ? `${files[0].name || '파일'} · ${summary.problemLabel}로 인식했어요`
+              : `${summary.problemLabel}로 인식했어요`,
+          subtitle: isPassageOnly
+            ? '문제 목록에 적용하기 전에 긴 지문 경계와 여러 열·페이지 연결 순서를 페이지별로 확인합니다.'
+            : '문제는 미리 분할했습니다. 문제 목록에 적용하기 전에 원본 페이지를 한 장씩 확인하세요.',
+          contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
           session: incomingSession,
           incomingSession,
           fileKeys,
@@ -9722,22 +14303,36 @@ function App(){
         if (e?.name === 'AbortError') {
           settleBackgroundJob(job.id, {
             status: 'canceled',
-            label: '문제 인식 취소됨',
+            label: isPassageOnly ? '공통 지문 추출 취소됨' : '문제 인식 취소됨',
             hint: '대기열은 그대로 유지했습니다.',
           });
           return;
         }
         settleBackgroundJob(job.id, {
           status: 'failed',
-          label: '문제 인식 실패',
+          label: isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패',
           hint: e.message,
         }, 5000);
-        showSimpleErrorToast(e, '문제 인식 실패');
+        activateOperationRecovery(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패', {
+          operation: isPassageOnly ? 'queue_passage_recognition' : 'queue_recognition',
+          code: e?.code || (isNetworkRequestError(e) ? 'recognition_connection_failed' : 'recognition_failed'),
+        }, {
+          kind: 'recognition',
+          retryMode: mode,
+          retryTargetKey: targetKey,
+          retryLabel: isPassageOnly ? '공통 지문 다시 추출' : '문제 인식 다시 시도',
+          alternativeMode: 'register',
+          alternativeLabel: '페이지 PNG로 등록',
+          localDraft: materializeSessionForItems(session, items, fileName, boardColumns) || session,
+        });
       } finally {
+        recognitionInFlightRef.current = false;
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
       return;
     }
+    queueRegistrationInFlightRef.current = true;
+    clearOperationRecovery();
     setLoading({
       label: isRecognition
         ? `${files.length}개 파일에서 문제 인식 중...`
@@ -9760,8 +14355,10 @@ function App(){
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
         edbName: fileName,
         ocr: recognitionOcr,
+        aiEnabled,
         preview: true,
         exportEdb: false,
+        contentTarget: DEFAULT_CONTENT_TARGET,
       });
       const registeredSession = isManualSplit ? s : fitWidthPageAsIsSession(s, { fileName, boardColumns });
       let sessionToApply = registeredSession;
@@ -9800,15 +14397,27 @@ function App(){
       refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
       setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
-      const intentLabel = isRecognition ? '문항 AI 인식' : isManualSplit ? '수동 쪼개기 준비' : '페이지 PNG 등록';
+      const intentLabel = isPassageOnly ? '공통 지문 추출' : isRecognition ? '문항 AI 인식' : isManualSplit ? '수동 쪼개기 준비' : '페이지 PNG 등록';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
     } catch (e) {
-      showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패');
+      activateOperationRecovery(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패', {
+        operation: isManualSplit ? 'queue_manual_split' : 'queue_registration',
+        code: e?.code || (isNetworkRequestError(e) ? 'registration_connection_failed' : 'registration_failed'),
+      }, {
+        kind: 'registration',
+        retryMode: mode,
+        retryTargetKey: targetKey,
+        retryLabel: isManualSplit ? '수동 쪼개기 다시 열기' : '페이지 PNG 등록 다시 시도',
+        alternativeMode: isManualSplit ? 'register' : 'manual-split',
+        alternativeLabel: isManualSplit ? '페이지 PNG로 등록' : '수동 쪼개기로 열기',
+        localDraft: materializeSessionForItems(session, items, fileName, boardColumns) || session,
+      });
     } finally {
+      queueRegistrationInFlightRef.current = false;
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, showSimpleErrorToast]);
+  }, [initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   const cancelRecognitionReview = useCallback(() => {
     if (confirmingRecognition) return;
@@ -9816,12 +14425,66 @@ function App(){
     showToast('인식 결과를 적용하지 않았어요');
   }, [confirmingRecognition]);
 
-  const confirmRecognitionReview = useCallback(async () => {
+  const confirmRecognitionReview = useCallback(async (destination = 'review-needed') => {
     const review = recognitionReview;
     if (!review) return;
+    const resolvedDestination = resolveRecognitionReviewDestination(
+      review.incomingSession || review.session,
+      destination
+    );
+    let destinationView = null;
     setConfirmingRecognition(true);
     try {
-      if (review.kind === 'queue-recognition') {
+      if (review.kind === 'session-passage-reextract') {
+        const incomingSession = review.incomingSession || review.session;
+        const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
+        if (!incomingFragments.length) {
+          showToast('적용할 공통 지문이 없습니다');
+          return;
+        }
+        const currentSnapshot = session && !usingMock
+          ? materializeSessionForItems(session, items, fileName, boardColumns)
+          : null;
+        if (!currentSnapshot) {
+          throw new Error('기존 문항을 보존할 현재 세션을 찾지 못했습니다.');
+        }
+        const candidate = mergeReextractedSharedPassages(
+          currentSnapshot,
+          incomingSession,
+          fileName
+        );
+        const restored = await postRestore(candidate);
+        setHistoryStack(prev => appendBoundedHistory(
+          prev,
+          currentSnapshot,
+          UNDO_HISTORY_LIMIT
+        ));
+        applySession(restored);
+        const reextractedIds = (restored?.problems || [])
+          .filter(problem => (
+            isPassageFragmentProblem(problem)
+            && !isManualIndependentPassage(problem)
+          ))
+          .map(problem => problem.id)
+          .filter(Boolean);
+        if (resolvedDestination === 'board') {
+          setReviewFocus(null);
+          destinationView = 'board';
+        } else {
+          setReviewFocus({
+            filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
+            problemIds: reextractedIds,
+            source: 'session-passage-reextract',
+          });
+          destinationView = 'review';
+        }
+        refreshSessionHistory();
+        showToast(
+          resolvedDestination === 'board'
+            ? `공통 지문 ${incomingFragments.length}개 교체 · 기존 문항 유지`
+            : `공통 지문 ${incomingFragments.length}개 검수 · 기존 문항 crop 유지·오분류 문항 복원`
+        );
+      } else if (review.kind === 'queue-recognition') {
         if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
           setRecognitionReview(null);
           showToast('Upload queue changed. Please run recognition again.');
@@ -9836,13 +14499,29 @@ function App(){
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
         applySession(restored);
-        setReviewFocus(reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition'));
+        const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
+        if (resolvedDestination === 'board') {
+          setReviewFocus(null);
+          destinationView = 'board';
+        } else {
+          setReviewFocus({
+            ...(nextScope || {}),
+            filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
+            source: 'queue-recognition',
+          });
+          destinationView = 'review';
+        }
         refreshSessionHistory();
-        setView('review');
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
-        showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
+        showToast(
+          resolvedDestination === 'board'
+            ? `칠판으로 이동 · ${summary.problemLabel} 적용`
+            : resolvedDestination === 'review-needed'
+              ? `확인 필요 항목 검수 · ${summary.problemLabel}`
+              : `전체 검수로 이동 · ${summary.problemLabel}`
+        );
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
           ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
@@ -9863,11 +14542,42 @@ function App(){
           applySession(restored);
         }
         refreshSessionHistory();
-        setView('board');
-        const summary = summarizeRecognitionSession(restored, review.pageIds);
-        showToast(`AI 인식 적용 · ${summary.problemLabel}`);
+        if (review.partial) {
+          setReviewFocus({
+            filter: 'all',
+            problemIds: review.problemIds || [],
+            source: 'partial-retry',
+          });
+          destinationView = 'review';
+          showToast('영역 재인식 적용 · 번호와 순서를 유지했어요');
+        } else {
+          if (resolvedDestination === 'board') {
+            setReviewFocus(null);
+            destinationView = 'board';
+          } else {
+            setReviewFocus({
+              filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
+              problemIds: review.problemIds || [],
+              source: 'retry-ai',
+            });
+            destinationView = 'review';
+          }
+          const summary = summarizeRecognitionSession(restored, review.pageIds);
+          showToast(
+            resolvedDestination === 'board'
+              ? `AI 인식 적용 · ${summary.problemLabel}`
+              : `${resolvedDestination === 'review-needed' ? '확인 필요 항목' : '전체'} 검수 · ${summary.problemLabel}`
+          );
+        }
       }
-      setRecognitionReview(null);
+      if (destinationView) {
+        requestViewChange(destinationView, {
+          force: true,
+          beforeCommit: () => setRecognitionReview(null),
+        });
+      } else {
+        setRecognitionReview(null);
+      }
     } catch (e) {
       showSimpleErrorToast(e, '적용 실패');
     } finally {
@@ -9885,6 +14595,7 @@ function App(){
     adoptMutatedSession,
     refreshSessionHistory,
     queueRequestIsCurrent,
+    requestViewChange,
     setPendingFilesTracked,
     showSimpleErrorToast,
   ]);
@@ -9893,6 +14604,40 @@ function App(){
     const nextStep = normalizeProcessingStep(step);
     setItems(it => it.map(x => x.id === id ? { ...x, step: nextStep } : x));
     setPublished(false);
+  };
+  const applySelectedStep = (problemIds, step) => {
+    const selectedIdSet = new Set((problemIds || []).map(String));
+    if (!selectedIdSet.size) return;
+    const nextStep = normalizeProcessingStep(step);
+    const previousSteps = new Map(items
+      .filter(item => selectedIdSet.has(String(item.id)))
+      .map(item => [String(item.id), item.step]));
+    setItems(prev => prev.map(item => (
+      selectedIdSet.has(String(item.id)) ? { ...item, step: nextStep } : item
+    )));
+    setPublished(false);
+    showActionToast(
+      `${selectedIdSet.size}개 문제를 ${stepLabel(nextStep)}로 변경했어요`,
+      '실행 취소',
+      () => {
+        setItems(prev => prev.map(item => (
+          previousSteps.has(String(item.id))
+            ? { ...item, step: previousSteps.get(String(item.id)) }
+            : item
+        )));
+        setActionToast(null);
+        showToast('처리 단계 변경을 취소했어요');
+      }
+    );
+  };
+  const classifySelected = async (problemIds, classification) => {
+    const ids = listUnique((problemIds || []).map(String).filter(Boolean));
+    if (!ids.length) return;
+    if (!session) {
+      showToast('실제 세션에서만 자료 분류를 변경할 수 있어요');
+      return;
+    }
+    await mutateSession('classify', { problemIds: ids, classification });
   };
   const applyToAll = (step, options = {}) => {
     if (!items.length) {
@@ -9939,15 +14684,44 @@ function App(){
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
     if (mutatingRef.current) {
       showToast('이전 변경을 적용하는 중입니다');
-      return;
+      return false;
     }
-    const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
-    if (reordered === items) return;
+    const requestedSourceIds = Array.isArray(options?.sourceIds) && options.sourceIds.length
+      ? options.sourceIds
+      : [fromId];
+    const sourceIdSet = new Set(requestedSourceIds.map(id => String(id)));
+    const sourceIds = items
+      .map(item => String(item.id))
+      .filter(id => sourceIdSet.has(id));
+    const reordered = sourceIds.length > 1
+      ? reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)
+      : reorderItemsForDrop(items, fromId, toId, dropPosition);
+    if (reordered === items) return false;
+    const previousOrder = items.map(item => String(item.id)).join('|');
+    const nextOrder = reordered.map(item => String(item.id)).join('|');
+    if (previousOrder === nextOrder) return false;
+    const previousIndex = items.findIndex(item => String(item.id) === String(fromId));
     const snapshotBefore = session
       ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
       : null;
-    const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
+    const resetItems = reordered.map(item => sourceIdSet.has(String(item.id)) ? resetItemPlacement(item) : item);
     const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const nextIndex = nextItems.findIndex(item => String(item.id) === String(fromId));
+    moveSequenceRef.current += 1;
+    setMoveFeedback({
+      id: fromId,
+      direction: nextIndex < previousIndex ? 'up' : 'down',
+      fromIndex: previousIndex,
+      toIndex: nextIndex,
+      sequence: moveSequenceRef.current,
+    });
+    if (moveFeedbackTimerRef.current) {
+      window.clearTimeout(moveFeedbackTimerRef.current);
+    }
+    moveFeedbackTimerRef.current = window.setTimeout(() => {
+      setMoveFeedback(null);
+      moveFeedbackTimerRef.current = null;
+    }, 900);
     setItems(nextItems);
     setActiveId(fromId);
     if (session) {
@@ -9960,34 +14734,87 @@ function App(){
       setMutating(true);
       postRestore(nextSession)
         .then(() => refreshSessionHistory())
-        .catch(e => showSimpleErrorToast(e, '순서 저장 실패'))
+        .catch(e => {
+          if (snapshotBefore) {
+            const rollbackItems = reflowItemsForBoardOrder(
+              (snapshotBefore.problems || []).map((problem, index) => mapProblemToItem(problem, index)),
+              DEFAULT_SLOT_HEIGHT_PAGES,
+              boardColumns
+            );
+            setItems(rollbackItems);
+            setSession(snapshotBefore);
+            setActiveId(rollbackItems.some(item => String(item.id) === String(fromId)) ? fromId : rollbackItems[0]?.id || null);
+            setHistoryStack(prev => prev[prev.length - 1] === snapshotBefore ? prev.slice(0, -1) : prev);
+          }
+          showSimpleErrorToast(e, '순서 저장 실패 · 이전 순서로 복구했습니다');
+        })
         .finally(() => {
           mutatingRef.current = false;
           setMutating(false);
         });
     }
     setPublished(false);
-    showToast('문제 순서를 변경했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요');
+    showToast(sourceIds.length > 1
+      ? `${sourceIds.length}개 문제를 ${Math.max(0, nextIndex) + 1}번부터 함께 이동했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`
+      : `문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`);
+    return true;
   };
-  const removeItem = (id) => {
+  const removeItem = async (id, options = {}) => {
+    const requestedIds = Array.isArray(options?.problemIds) && options.problemIds.length
+      ? options.problemIds
+      : [id];
+    const existingIdSet = new Set(items.map(item => String(item.id)));
+    const problemIds = listUnique(requestedIds.map(value => String(value)).filter(value => existingIdSet.has(value)));
+    if (!problemIds.length) return false;
     if (session) {
       if (mutating) {
         showToast('이전 변경을 적용하는 중입니다');
-        return;
+        return false;
       }
-      void mutateSession('exclude', { problemId: id });
-      return;
+      const nextSession = problemIds.length === 1
+        ? await mutateSession('exclude', { problemId: id })
+        : await mutateSession('exclude', { problemIds });
+      if (!nextSession) return false;
+      showActionToast(
+        `${problemIds.length}개 문제를 삭제했어요`,
+        '실행 취소',
+        () => { void undoMutation(); }
+      );
+      return true;
     }
-    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const previousItems = items;
+    const previousActiveId = activeId;
+    const previousUsingMock = usingMock;
+    const previousFileName = fileName;
+    const problemIdSet = new Set(problemIds);
+    const firstRemovedIndex = items.findIndex(item => problemIdSet.has(String(item.id)));
+    const nextItems = reflowItemsForBoardOrder(items.filter(
+      x => !problemIdSet.has(String(x.id))
+    ), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
     setItems(nextItems);
-    if (activeId === id) {
-      setActiveId(nextItems[0]?.id || null);
+    if (problemIdSet.has(String(activeId))) {
+      const fallbackIndex = Math.max(0, Math.min(firstRemovedIndex, nextItems.length - 1));
+      setActiveId(nextItems[fallbackIndex]?.id || null);
     }
     if (!session && usingMock && nextItems.length === 0) {
       setUsingMock(false);
       setFileName('새 세션');
     }
     setPublished(false);
+    showActionToast(
+      `${problemIds.length}개 문제를 삭제했어요`,
+      '실행 취소',
+      () => {
+        setItems(previousItems);
+        setActiveId(previousActiveId);
+        setUsingMock(previousUsingMock);
+        setFileName(previousFileName);
+        setSelectedProblemIds(new Set(problemIds));
+        setActionToast(null);
+        showToast('삭제를 취소했어요');
+      }
+    );
+    return true;
   };
   const addMockSample = () => {
     if (session) {
@@ -10028,33 +14855,44 @@ function App(){
     triggerUpload();
   };
 
-  const onConfirm = (id, options = {}) => {
+  const onConfirm = async (id, options = {}) => {
     const explicitProblemIds = Array.isArray(options.problemIds) ? options.problemIds : null;
     const targetIds = explicitProblemIds?.length
       ? explicitProblemIds
       : options.bulk ? items.map(item => item.id) : [id];
     const confirmedIds = new Set(targetIds.filter(Boolean));
-    if (!confirmedIds.size) return;
-    const nextItemsForSnapshot = items.map(item => (
-      confirmedIds.has(item.id) ? confirmedItemState(item) : item
-    ));
-    const confirmedSession = markSessionProblemsConfirmed(session, confirmedIds);
-    const nextSession = confirmedSession
-      ? (materializeSessionForItems(confirmedSession, nextItemsForSnapshot, fileName, boardColumns) || confirmedSession)
-      : null;
-    setItems(prev => prev.map(item => (
-      confirmedIds.has(item.id) ? confirmedItemState(item) : item
-    )));
-    setSession(prev => nextSession || markSessionProblemsConfirmed(prev, confirmedIds));
-    if (nextSession) {
-      postRestore(nextSession).catch(e => console.warn('[board] confirm persist failed:', e.message));
+    if (!confirmedIds.size) return false;
+    if (!session) {
+      const allItemsConfirmedByBulk = options.bulk
+        && items.length > 0
+        && items.every(item => confirmedIds.has(item.id));
+      setItems(prev => prev.map(item => (
+        confirmedIds.has(item.id) ? confirmedItemState(item) : item
+      )));
+      setPublished(false);
+      if (allItemsConfirmedByBulk) {
+        setReviewFocus(null);
+        requestViewChange('board', { force: true });
+        showToast('일괄 확인 완료 · 칠판 미리보기로 이동했어요');
+      } else {
+        showToast(options.bulk
+          ? `전체 ${confirmedIds.size}개 확인 완료`
+          : `"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+      }
+      return true;
     }
-    setPublished(false);
-    if (options.bulk) {
-      showToast(`전체 ${confirmedIds.size}개 확인 완료`);
-      return;
+    const beforeFlow = reviewFlowState(sessionReviewSummary(session));
+    const nextSession = await mutateSession('confirm', { problemIds: [...confirmedIds] });
+    if (!nextSession) return false;
+    const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));
+    if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk)) {
+      setReviewFocus(null);
+      requestViewChange('board', { force: true });
+      showToast(options.bulk
+        ? '일괄 확인 완료 · 칠판 미리보기로 이동했어요'
+        : '검수 완료 · 칠판 미리보기로 이동했어요');
     }
-    showToast(`"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+    return nextSession;
   };
 
   const markClassinReviewComplete = useCallback(async () => {
@@ -10081,6 +14919,15 @@ function App(){
       showToast('내보낼 자료가 없습니다. 먼저 파싱해 주세요.');
       return;
     }
+    if (publishInFlightRef.current) {
+      showToast('이미 EDB를 제작 중입니다');
+      return;
+    }
+    if (operationRecovery?.conflict) {
+      showToast('오류 안내에서 최신 상태를 먼저 불러오거나 현재 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    clearOperationRecovery();
     const sessionIds = new Set(session.problems.map(p => p.id));
     const currentIds = items.map(i => i.id);
     const order = currentIds.filter(id => sessionIds.has(id));
@@ -10155,6 +15002,8 @@ function App(){
           scaleRatio: normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item)),
         }])
     );
+    publishInFlightRef.current = true;
+    setPublishBusy(true);
     setLoading({
       label: '편집된 .edb 파일 생성 중...',
       hint: order.length === sessionIds.size
@@ -10166,16 +15015,50 @@ function App(){
       const resp = await fetch('/api/session/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(withExpectedSessionRevision({
           order,
           excluded,
           placements,
           edbName: edbFileNameFromSessionName(fileName, sessionForPublish?.session_name || 'classin'),
           session: sessionForPublish,
-        }),
+        })),
       });
       const json = await readJsonResponse(resp, 'publish 실패');
       if (!resp.ok || !json.ok) {
+        if (resp.status === 404 && /no session available/i.test(String(json?.error || ''))) {
+          const missingSessionError = operationErrorFromResponse(
+            json,
+            resp,
+            'session_publish',
+            '서버의 최신 작업을 찾지 못했습니다.'
+          );
+          missingSessionError.code = 'session_missing';
+          missingSessionError.message = '서버의 최신 작업이 빈 상태로 바뀌어 현재 편집본을 바로 제작할 수 없습니다.';
+          missingSessionError.retryable = false;
+          missingSessionError.latestSession = null;
+          missingSessionError.hasLatestSessionState = true;
+          missingSessionError.recoverySteps = [
+            '빈 최신 상태를 불러와 새 원본부터 시작해 주세요.',
+            '현재 편집본이 필요하면 초기화하기 전에 버그 리포트로 오류를 보내 주세요.',
+          ];
+          try {
+            const latestState = await fetchLatestSessionState();
+            missingSessionError.latestSession = latestState.session || null;
+            missingSessionError.hasLatestSessionState = Object.prototype.hasOwnProperty.call(latestState, 'session');
+            missingSessionError.sessionRevision = Number.isInteger(Number(latestState.sessionRevision))
+              ? Number(latestState.sessionRevision)
+              : null;
+            missingSessionError.sessionEpoch = String(latestState.sessionEpoch || '').trim() || null;
+            if (latestState.session) {
+              missingSessionError.code = 'session_conflict';
+              missingSessionError.message = '제작 요청 후 서버에 더 최신 작업이 확인됐습니다.';
+            }
+          } catch (_latestStateError) {
+            // The publish 404 already proves that its server-side session was empty.
+            // Keep the conflict boundary even when the follow-up revision refresh fails.
+          }
+          throw missingSessionError;
+        }
         const blockedPublish = normalizePublishPreflightBlock(json);
         if (blockedPublish) {
           const markedSession = applyPublishPreflightIssuesToSession(sessionForPublish, blockedPublish);
@@ -10192,20 +15075,320 @@ function App(){
           );
           return;
         }
-        throw new Error(json.error || `publish 실패 (${resp.status})`);
+        throw operationErrorFromResponse(
+          json,
+          resp,
+          'session_publish',
+          `EDB 제작 실패 (${resp.status})`
+        );
       }
+      if (sessionResponseRevisionIsStale(json)) {
+        throw new Error('더 최신 작업이 완료되어 늦게 도착한 제작 결과를 적용하지 않았습니다.');
+      }
+      captureSessionRevision(json);
       setSession(json.session);
       refreshSessionHistory();
       const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
       const normalizedPublishSummary = normalizePublishSummary(publishSummary, json.session);
-      if (normalizedPublishSummary?.canDownload) {
-        downloadPublishSummary(normalizedPublishSummary);
-      }
       setPublished(true);
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
+      if (!normalizedPublishSummary?.canDownload) {
+        const downloadError = new Error('EDB 제작본은 저장됐지만 다운로드할 파일을 찾지 못했습니다.');
+        downloadError.code = 'publish_download_unavailable';
+        activateOperationRecovery(downloadError, '다운로드 실패', {
+          operation: 'publish_download',
+          code: downloadError.code,
+        }, {
+          kind: 'download',
+          downloadTarget: normalizedPublishSummary,
+          retryLabel: 'EDB 다운로드 다시 시도',
+        });
+        return;
+      }
+      setDownloadBusy(true);
+      let downloadResult;
+      try {
+        downloadResult = await downloadPublishSummary(normalizedPublishSummary);
+      } catch (downloadError) {
+        downloadResult = { ok: false, error: downloadError };
+      }
+      setDownloadBusy(false);
+      if (!downloadResult?.ok) {
+        const downloadError = downloadResult?.error || new Error('EDB 다운로드를 시작하지 못했습니다.');
+        downloadError.code = downloadError.code || 'publish_download_failed';
+        activateOperationRecovery(downloadError, '다운로드 실패', {
+          operation: 'publish_download',
+          code: downloadError.code,
+        }, {
+          kind: 'download',
+          downloadTarget: normalizedPublishSummary,
+          retryLabel: 'EDB 다운로드 다시 시도',
+        });
+        return;
+      }
+      clearOperationRecovery();
       showToast(`${publishLabel}로 EDB 제작 완료 · 다운로드 시작`);
     } catch (e) {
-      showSimpleErrorToast(e, '제작 실패');
+      setDownloadBusy(false);
+      activateOperationRecovery(e, '제작 실패', {
+        operation: 'session_publish',
+        code: e?.code || (isNetworkRequestError(e) ? 'publish_connection_failed' : 'publish_unknown_failed'),
+      }, {
+        kind: 'publish',
+        retryLabel: 'EDB 다시 제작',
+        localDraft: sessionForPublish,
+      });
+      setPublished(false);
+    } finally {
+      publishInFlightRef.current = false;
+      setPublishBusy(false);
+      setDownloadBusy(false);
+      setLoading(null);
+    }
+  };
+
+  const handlePublishDownload = async (target) => {
+    if (!target || downloadInFlightRef.current) return false;
+    downloadInFlightRef.current = true;
+    setDownloadBusy(true);
+    let result;
+    try {
+      result = await downloadPublishSummary(target);
+    } catch (error) {
+      result = { ok: false, error };
+    } finally {
+      downloadInFlightRef.current = false;
+      setDownloadBusy(false);
+    }
+    if (result?.ok) {
+      if (operationRecovery?.kind === 'download') clearOperationRecovery();
+      showToast('EDB 다운로드를 시작했습니다');
+      return true;
+    }
+    const error = result?.error || new Error('EDB 다운로드를 시작하지 못했습니다.');
+    error.code = error.code || 'publish_download_failed';
+    activateOperationRecovery(error, '다운로드 실패', {
+      operation: 'publish_download',
+      code: error.code,
+    }, {
+      kind: 'download',
+      downloadTarget: target,
+      retryLabel: 'EDB 다운로드 다시 시도',
+    });
+    return false;
+  };
+
+  const reopenLatestAfterPublishError = async () => {
+    const latest = recentSessions[0];
+    if (!latest?.id) {
+      showToast('열 수 있는 최근 작업이 없습니다');
+      return;
+    }
+    const recoveryDraft = materializeSessionForItems(session, items, fileName, boardColumns) || session;
+    const restored = await restoreRecentSession(latest.id, { recoveryDraft });
+    if (restored) clearOperationRecovery();
+  };
+
+  const copyLastOperationError = async () => {
+    const text = operationErrorClipboardText(lastOperationError);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('오류 정보를 복사했습니다');
+    } catch (error) {
+      showSimpleErrorToast(error, '오류 정보 복사 실패', { operation: 'copy_operation_error' });
+    }
+  };
+
+  const openBugReportAfterOperationError = () => {
+    const snapshot = lastOperationError ? {
+      type: lastOperationError.type,
+      message: lastOperationError.message,
+      timestamp: lastOperationError.timestamp,
+      operation: lastOperationError.operation,
+      code: lastOperationError.code,
+      status: lastOperationError.status,
+      retryable: lastOperationError.retryable,
+      recoverySteps: Array.isArray(lastOperationError.recoverySteps) ? [...lastOperationError.recoverySteps] : [],
+    } : null;
+    bugReportSequenceRef.current += 1;
+    setBugReportRequest({ id: bugReportSequenceRef.current, errorSnapshot: snapshot });
+  };
+
+  const retryRecoveryOperation = () => {
+    const recovery = operationRecovery;
+    if (!recovery) return;
+    if (recovery.conflict && recovery.kind !== 'reset') {
+      showToast('먼저 최신 상태를 불러오거나 내 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    if (recovery.error?.retryable === false && !recovery.conflict) {
+      showToast('표시된 권장 조치를 먼저 적용한 뒤 다시 제작해 주세요');
+      return;
+    }
+    if (recovery.kind === 'download') {
+      void handlePublishDownload(recovery.downloadTarget);
+      return;
+    }
+    if (recovery.kind === 'recognition' || recovery.kind === 'registration') {
+      if (
+        recovery.retryTargetKey
+        && !pendingFiles.some(file => fileQueueKey(file) === recovery.retryTargetKey)
+      ) {
+        clearOperationRecovery();
+        showToast('실패한 원본 파일이 대기열에 없습니다. 파일을 다시 추가해 주세요');
+        return;
+      }
+      void processQueuedFiles(recovery.retryMode || 'register', recovery.retryTargetKey || null);
+      return;
+    }
+    if (recovery.kind === 'restore') {
+      void restoreRecentSession(recovery.restoreSessionId, {
+        recoveryDraft: recovery.recoveryDraft,
+        confirmOverwrite: false,
+      });
+      return;
+    }
+    if (recovery.kind === 'reset') {
+      if (recovery.conflict) {
+        const payload = {
+          session: recovery.conflict.latestSession || null,
+          sessionRevision: recovery.conflict.sessionRevision,
+          sessionEpoch: recovery.conflict.sessionEpoch,
+        };
+        if (!sessionResponseRevisionIsStale(payload)) captureSessionRevision(payload);
+      }
+      void resetSession();
+      return;
+    }
+    void onPublish();
+  };
+
+  const resetAfterOperationError = () => {
+    const conflict = operationRecovery?.conflict;
+    if (conflict) {
+      const payload = {
+        session: conflict.latestSession || null,
+        sessionRevision: conflict.sessionRevision,
+        sessionEpoch: conflict.sessionEpoch,
+      };
+      if (sessionResponseRevisionIsStale(payload)) {
+        showToast('충돌 안내보다 더 최신 상태가 있습니다. 새로고침 후 초기화해 주세요');
+        return;
+      }
+      captureSessionRevision(payload);
+    }
+    void resetSession();
+  };
+
+  const runRecoveryAlternative = () => {
+    const recovery = operationRecovery;
+    if (recovery?.kind === 'recognition' || recovery?.kind === 'registration') {
+      if (
+        recovery.retryTargetKey
+        && !pendingFiles.some(file => fileQueueKey(file) === recovery.retryTargetKey)
+      ) {
+        clearOperationRecovery();
+        showToast('실패한 원본 파일이 대기열에 없습니다. 파일을 다시 추가해 주세요');
+        return;
+      }
+      void processQueuedFiles(recovery.alternativeMode || 'register', recovery.retryTargetKey || null);
+      return;
+    }
+    void exportSessionImages();
+  };
+
+  const loadLatestConflictSession = () => {
+    const conflict = operationRecovery?.conflict;
+    if (!conflict) return;
+    const latestSessionIsEmpty = !conflict.latestSession;
+    const confirmMessage = latestSessionIsEmpty
+      ? '서버의 최신 상태는 빈 작업입니다. 현재 화면의 편집 내용을 닫고 빈 상태로 시작할까요?'
+      : '최신 저장 상태를 불러올까요? 충돌 전 편집 내용은 종료되고 서버의 최신 문항과 검수 상태를 유지합니다.';
+    if (!window.confirm(confirmMessage)) return;
+    const payload = {
+      session: conflict.latestSession || null,
+      sessionRevision: conflict.sessionRevision,
+      sessionEpoch: conflict.sessionEpoch,
+    };
+    if (sessionResponseRevisionIsStale(payload)) {
+      showToast('이미 더 최신 상태를 불러왔습니다');
+      return;
+    }
+    captureSessionRevision(payload);
+    historyStackRef.current = [];
+    setHistoryStack([]);
+    if (latestSessionIsEmpty) {
+      setSession(null);
+      setItems([]);
+      setActiveId(null);
+      setUsingMock(false);
+      setFileName('새 세션');
+      setPublished(false);
+      setRecognitionReview(null);
+      setReviewFocus(null);
+      setView('board');
+      refreshSessionHistory();
+    } else {
+      applySession(conflict.latestSession);
+    }
+    clearOperationRecovery();
+    showToast(latestSessionIsEmpty
+      ? '빈 최신 상태를 불러왔습니다 · 새 원본부터 시작하세요'
+      : '최신 저장 상태를 불러왔습니다 · 이전 충돌 상태는 되돌리기에 남기지 않았습니다');
+  };
+
+  const rebaseConflictSession = async () => {
+    const recovery = operationRecovery;
+    const conflict = recovery?.conflict;
+    if (!conflict?.latestSession) return;
+    const localDraft = conflict.localDraft || materializeSessionForItems(session, items, fileName, boardColumns) || session;
+    const rebased = rebaseSessionBoardLayout(conflict.latestSession, localDraft, boardColumns);
+    if (!rebased) {
+      showToast('합칠 수 있는 최신 상태 또는 현재 배치가 없습니다');
+      return;
+    }
+    if (!window.confirm('최신 저장 상태의 내용은 유지하고, 같은 자료의 현재 보드 순서와 배치만 합칠까요? 새 자료와 서버의 검수 내용은 보존됩니다.')) return;
+    const payload = {
+      session: conflict.latestSession,
+      sessionRevision: conflict.sessionRevision,
+      sessionEpoch: conflict.sessionEpoch,
+    };
+    if (sessionResponseRevisionIsStale(payload)) {
+      showToast('충돌 정보보다 더 최신 상태가 이미 적용됐습니다');
+      return;
+    }
+    captureSessionRevision(payload);
+    setLoading({ label: '최신 상태에 현재 배치를 안전하게 합치는 중…', startedAt: Date.now() });
+    try {
+      const restored = await postRestore(rebased);
+      const safeUndoHistory = conflictSafeUndoHistory(conflict.latestSession);
+      historyStackRef.current = safeUndoHistory;
+      setHistoryStack(safeUndoHistory);
+      applySession(restored);
+      setOperationRecoveryState(state => operationRecoveryStateTransition(state, {
+        type: 'replace',
+        recovery: state.recovery ? {
+        ...state.recovery,
+        conflict: null,
+        error: {
+          ...state.recovery.error,
+          code: 'session_rebased_ready',
+          message: '최신 저장 상태에 현재 보드 순서와 배치를 합쳤습니다.',
+          timestamp: new Date().toISOString(),
+        },
+      } : null,
+        dismissed: false,
+      }));
+      showToast('배치를 안전하게 합쳤습니다 · 작업을 다시 시도해 주세요');
+    } catch (error) {
+      activateOperationRecovery(error, '배치 합치기 실패', {
+        operation: 'session_conflict_rebase',
+        code: error?.code || 'session_rebase_failed',
+      }, {
+        ...recovery,
+        localDraft,
+      });
     } finally {
       setLoading(null);
     }
@@ -10224,10 +15407,16 @@ function App(){
         onReset={resetSession}
         onRefresh={refreshSession}
         refreshing={refreshing}
-        canReset={(!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading}
+        canReset={(!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading && !resetBusy && !publishBusy && !downloadBusy && !hasRunningBackgroundJobs && !hasPendingSessionConflict}
         view={view}
-        setView={setView}
+        setView={requestViewChange}
         reviewAvailable={reviewAvailable}
+        reviewComplete={reviewComplete}
+        recognitionBusy={Boolean(runningRecognitionJob)}
+        pageReviewActive={Boolean(recognitionReview)}
+        operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
+        resetBlocked={hasRunningBackgroundJobs}
+        conflictBlocked={hasPendingSessionConflict}
         onUndo={undoMutation}
         canUndo={canUndo}
         onShutdown={shutdownApp}
@@ -10235,8 +15424,64 @@ function App(){
         exportingImages={exportingImages}
         canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
       />
-      <div className="main">
+      {viewTransitionBanner && (
+        <div className="view-transition-banner" role="status" aria-live="polite">
+          {viewTransitionBanner}
+        </div>
+      )}
+      <OperationRecoveryBanner
+        recovery={operationRecoveryDismissed ? null : operationRecovery}
+        onRetry={retryRecoveryOperation}
+        onRestore={() => void reopenLatestAfterPublishError()}
+        onExport={runRecoveryAlternative}
+        onReset={resetAfterOperationError}
+        onReport={openBugReportAfterOperationError}
+        onCopy={() => void copyLastOperationError()}
+        onDismiss={() => setOperationRecoveryState(state => operationRecoveryStateTransition(state, { type: 'dismiss' }))}
+        onLoadLatest={loadLatestConflictSession}
+        onRebase={() => void rebaseConflictSession()}
+        retryBusy={Boolean(loading) || publishBusy || hasRunningQueueRecognition}
+        restoreBusy={Boolean(restoringSessionId)}
+        exportBusy={exportingImages}
+        resetBusy={resetBusy}
+        resetBlocked={hasRunningBackgroundJobs}
+        downloadBusy={downloadBusy}
+        canRestore={Boolean(recentSessions[0]?.id)}
+        canExport={!!session && items.some(item => item?.id && !item.excluded)}
+      />
+      <BugReportDialog
+        request={bugReportRequest}
+        draft={bugReportDraft}
+        onDraftChange={setBugReportDraft}
+        onClose={() => setBugReportRequest(null)}
+        context={{
+          view,
+          settingsTab: 'recovery-dialog',
+          inputIntent: normalizeInputIntent(inputIntent),
+          reviewStatus: published ? 'published' : session ? 'session' : 'empty',
+          itemCount: items.length,
+          pendingCount: pendingFiles.length,
+          hangul: {
+            status: runtimeDiagnostics?.hangul?.status || 'unknown',
+            summary: hangulRuntimeSummary(runtimeDiagnostics?.hangul || null),
+          },
+        }}
+      />
+      <div
+        className={`main ${recognitionReview ? 'recognition-page-review-mode' : (view === 'review' && reviewEditorActive ? 'review-editor-focus' : '')}`}
+        inert={hasPendingSessionConflict ? '' : undefined}
+      >
+        {recognitionReview ? (
+          <RecognitionPageReviewStage
+            review={recognitionReview}
+            confirming={confirmingRecognition}
+            onConfirm={confirmRecognitionReview}
+            onCancel={cancelRecognitionReview}
+          />
+        ) : (
+          <>
         <ItemsRail
+          session={session}
           items={items}
           activeId={activeId}
           setActive={selectBoardItem}
@@ -10251,15 +15496,33 @@ function App(){
           removePendingFile={removePendingFile}
           clearPendingFiles={clearPendingFiles}
           processQueuedFiles={processQueuedFiles}
-          queueBusy={!!loading || hasRunningQueueRecognition}
-          aiAvailable={!!userSettings?.hasGeminiApiKey}
+          queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
+          aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
           addMockSample={addMockSample}
-          canAddDummy={!session && !loading && pendingFiles.length === 0}
+          canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0 && !hasPendingSessionConflict}
           recentSessions={recentSessions}
           restoringSessionId={restoringSessionId}
           onRestoreRecentSession={restoreRecentSession}
+          onDownloadPublish={target => void handlePublishDownload(target)}
+          publishDownloadBusy={downloadBusy}
           onDownloadItemImage={downloadItemImage}
           downloadingItemId={downloadingItemId}
+          reorderBusy={mutating}
+          moveFeedback={moveFeedback}
+          selectedItemIds={selectedProblemIds}
+          setSelectedItemIds={setSelectedProblemIds}
+          onApplySelectedStep={applySelectedStep}
+          onClassifySelected={classifySelected}
+          onConfirmSelected={problemIds => onConfirm(null, { problemIds, bulk: true })}
+          onDownloadSelected={exportSelectedImages}
+          onReextractSharedPassages={reextractSharedPassagesFromSession}
+          canReextractSharedPassages={
+            !!session
+            && !usingMock
+            && reusableSessionSourcePaths.length > 0
+            && !loading
+          }
+          reextractSharedPassagesBusy={hasRunningSessionRecognition}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -10269,13 +15532,19 @@ function App(){
             setActive={selectBoardItem}
             mutateSession={mutateSession}
             retryAiSession={retryAiSession}
-            mutating={mutating}
-            aiAvailable={!!userSettings?.hasGeminiApiKey}
+            mutating={mutating || hasPendingSessionConflict}
+            aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
             aiBusy={hasRunningSessionRecognition}
             onConfirm={onConfirm}
             reviewFocus={reviewFocus}
             onEnhanceImage={enhanceImageSession}
             imageEnhanceBusy={hasRunningImageEnhance}
+            onEditorModeChange={setReviewEditorActive}
+            onOpenBoard={() => requestViewChange('board')}
+            selectedIds={selectedProblemIds}
+            setSelectedIds={setSelectedProblemIds}
+            reviewUi={reviewUi}
+            setReviewUi={setReviewUi}
           />
         ) : (
           <BoardStage
@@ -10288,9 +15557,14 @@ function App(){
             addSample={addSample}
             setPlacement={setPlacement}
             reorder={reorder}
+            moveFeedback={moveFeedback}
+            selectedIds={selectedProblemIds}
+            setSelectedIds={setSelectedProblemIds}
+            savedScrollTop={boardScrollTop}
+            onSaveScrollTop={setBoardScrollTop}
           />
         )}
-        <SidePanel
+            <SidePanel
           item={active}
           items={items}
           activeIndex={activeIndex}
@@ -10310,19 +15584,23 @@ function App(){
           onConfirm={onConfirm}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
+          lastOperationError={lastOperationError}
           onSaveGeminiKey={onSaveGeminiKey}
           onSaveOpenAiKey={onSaveOpenAiKey}
           onEnhanceImage={enhanceImageSession}
           imageEnhanceBusy={hasRunningImageEnhance}
           aiEnabled={aiEnabled}
-          setAiEnabled={setAiEnabled}
+          onToggleAi={onToggleAi}
+          aiToggleBusy={aiToggleBusy}
           inputIntent={inputIntent}
           setInputIntent={setInputIntent}
           onRecognizeSession={recognizeCurrentSession}
-          canRecognizeSession={!!session && pendingFiles.length === 0 && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
+          canRecognizeSession={!!session && pendingFiles.length === 0 && aiEnabled && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition && !hasPendingSessionConflict}
           session={session}
           published={published}
           onClassinReviewComplete={markClassinReviewComplete}
+          onDownloadPublish={target => void handlePublishDownload(target)}
+          publishDownloadBusy={downloadBusy}
           onExportImages={exportSessionImages}
           exportingImages={exportingImages}
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
@@ -10334,9 +15612,11 @@ function App(){
           pendingFile={selectedPendingFile}
           pendingFileKey={selectedPendingFileKey}
           processQueuedFiles={processQueuedFiles}
-          queueBusy={!!loading || hasRunningQueueRecognition}
+          queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           onPendingPreviewError={showPendingPreviewError}
-        />
+            />
+          </>
+        )}
       </div>
 
       <BackgroundJobsPanel
@@ -10350,16 +15630,30 @@ function App(){
         onCancel={cancelBackgroundJob}
       />
 
-      <RecognitionReviewModal
-        review={recognitionReview}
-        confirming={confirmingRecognition}
-        onConfirm={confirmRecognitionReview}
-        onCancel={cancelRecognitionReview}
-      />
-
       <TooltipLayer />
 
-      {toast && <div className="toast">{Icon.check}<span>{toast}</span></div>}
+      {toast && (
+        <div className="toast" role="status" aria-live="polite" aria-atomic="true">
+          {Icon.check}<span>{toast}</span>
+        </div>
+      )}
+      {actionToast && (
+        <div className="undo-toast" role="status" aria-live="polite" aria-atomic="true">
+          <span className="undo-toast-copy">{actionToast.message}</span>
+          <button
+            className="undo-toast-action"
+            type="button"
+            onClick={() => {
+              const action = actionToast.onAction;
+              setActionToast(null);
+              action?.();
+            }}
+            disabled={mutating}
+          >
+            {actionToast.actionLabel}
+          </button>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}

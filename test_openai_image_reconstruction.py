@@ -81,20 +81,23 @@ class TestImageReconstructionMutation(unittest.TestCase):
             },
         )
 
-    def test_enhance_image_defaults_to_gemini_without_user_visible_review(self):
+    def test_explicit_ai_enhance_uses_gemini_and_requires_semantic_review(self):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             session = self._build_session(root)
 
             with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as mock_reconstruct:
-                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
 
             problem = updated["problems"][0]
             self.assertNotEqual(problem["imagePath"], problem["originalImagePath"])
             self.assertEqual(problem["boardRenderPath"], problem["imagePath"])
             self.assertEqual(problem["processingStep"], "s3")
-            self.assertEqual(problem["reviewStatus"], "normal")
-            self.assertNotIn("ai_image_reconstructed_check_text", problem["riskFlags"])
+            self.assertEqual(problem["reviewStatus"], "check_needed")
+            self.assertIn("ai_image_reconstructed_check_text", problem["riskFlags"])
             self.assertEqual(problem["aiImageReconstruction"]["deliveryMode"], "ai_primary")
             self.assertFalse(problem["aiImageReconstruction"]["autoRecovered"])
             self.assertEqual(problem["aiImageReconstruction"]["provider"], "gemini")
@@ -105,6 +108,7 @@ class TestImageReconstructionMutation(unittest.TestCase):
             called_kwargs = mock_reconstruct.call_args.kwargs
             self.assertEqual(called_kwargs["provider"], "gemini")
             self.assertEqual(called_kwargs["model"], DEFAULT_GEMINI_IMAGE_MODEL)
+            self.assertEqual(called_kwargs["size"], "1k")
             self.assertTrue(called_kwargs["transparent_background"])
             self.assertTrue(called_kwargs["sharpen"])
 
@@ -112,6 +116,23 @@ class TestImageReconstructionMutation(unittest.TestCase):
             self.assertEqual(summary[0]["status"], "applied")
             self.assertEqual(summary[0]["provider"], "gemini")
             self.assertEqual(summary[0]["problemId"], "problem-1")
+
+    def test_enhance_image_caps_explicit_2k_request_at_1k(self):
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            session = self._build_session(root)
+
+            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as reconstruct:
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "size": "2k", "mode": "ai"},
+                )
+
+            self.assertEqual("1k", reconstruct.call_args.kwargs["size"])
+            metadata = updated["problems"][0]["aiImageReconstruction"]
+            self.assertEqual("2k", metadata["requestedSize"])
+            self.assertEqual("1k", metadata["size"])
+            self.assertTrue(metadata["highResolutionSkipped"])
 
     def test_gemini_nano_banana_2k_request_sets_native_image_size(self):
         with TemporaryDirectory() as raw_tmp:
@@ -190,12 +211,15 @@ class TestImageReconstructionMutation(unittest.TestCase):
                 return result
 
             with patch.object(app_server, "reconstruct_problem_image", side_effect=reconstruct_then_recover) as mock_reconstruct:
-                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
 
             problem = updated["problems"][0]
             self.assertEqual(2, mock_reconstruct.call_count)
-            self.assertEqual("normal", problem["reviewStatus"])
-            self.assertEqual([], problem["riskFlags"])
+            self.assertEqual("check_needed", problem["reviewStatus"])
+            self.assertEqual(["ai_image_reconstructed_check_text"], problem["riskFlags"])
             self.assertEqual("ai_content_retry", problem["aiImageReconstruction"]["deliveryMode"])
             self.assertTrue(problem["aiImageReconstruction"]["autoRecovered"])
             self.assertEqual(2, len(problem["aiImageReconstruction"]["attempts"]))
@@ -206,7 +230,10 @@ class TestImageReconstructionMutation(unittest.TestCase):
             root = Path(raw_tmp)
             session = self._build_session(root)
             with self.assertRaises(ValueError) as ctx:
-                app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+                app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
             self.assertIn("Gemini API", str(ctx.exception))
             self.assertNotIn("ai_image_reconstruction_summary", session)
             self.assertNotIn("aiImageReconstruction", session["problems"][0])
@@ -334,7 +361,7 @@ class TestImageReconstructionMutation(unittest.TestCase):
             with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as mock_reconstruct:
                 updated = app_server._mutate_enhance_image(
                     session,
-                    {"problemIds": ["problem-1"], "provider": "openai"},
+                    {"problemIds": ["problem-1"], "provider": "openai", "mode": "ai"},
                 )
 
             problem = updated["problems"][0]
@@ -373,7 +400,10 @@ class TestImageReconstructionMutation(unittest.TestCase):
                 patch.object(app_server, "reconstruct_problem_image", side_effect=reconstruct_with_loss),
                 patch.object(app_server, "build_content_safe_upscale", side_effect=reconstruct_with_loss),
             ):
-                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
 
             problem = updated["problems"][0]
             self.assertIn("ai_image_formula_loss_suspected", problem["riskFlags"])
@@ -403,7 +433,10 @@ class TestImageReconstructionMutation(unittest.TestCase):
                 return result
 
             with patch.object(app_server, "reconstruct_problem_image", side_effect=rejected_reconstruct) as reconstruct:
-                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
 
             problem = updated["problems"][0]
             self.assertEqual(2, reconstruct.call_count)
@@ -419,7 +452,10 @@ class TestImageReconstructionMutation(unittest.TestCase):
             session = self._build_session(root)
 
             with patch.object(app_server, "reconstruct_problem_image", side_effect=RuntimeError("provider timeout")):
-                updated = app_server._mutate_enhance_image(session, {"problemIds": ["problem-1"]})
+                updated = app_server._mutate_enhance_image(
+                    session,
+                    {"problemIds": ["problem-1"], "mode": "ai"},
+                )
 
             problem = updated["problems"][0]
             self.assertEqual("normal", problem["reviewStatus"])

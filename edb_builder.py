@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import gzip
 import io
+import os
 import struct
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +34,14 @@ V2_HEADER_FLAG_IMAGE_ONLY = 0
 V2_VERSION_STRING = "6.0.5.3913"
 V1_HEADER_FLAG_IMAGE_ONLY = 4
 V1_VERSION_STRING = "6.0.7.3141"
+
+# ClassIn can read either embedded bitmap from a v1 image record. Regular
+# problem crops retain the legacy lightweight preview, while a full-page
+# record keeps enough secondary pixels for small text to survive zooming.
+V1_SECONDARY_PREVIEW_MAX_SIZE = (768, 768)
+V1_PAGE_AS_IS_SECONDARY_MAX_EDGE_PX = 4096
+V1_PAGE_AS_IS_SECONDARY_MAX_PIXELS = 8_000_000
+V1_PAGE_AS_IS_SECONDARY_JPEG_QUALITY = 92
 
 # Whitespace-trim threshold used when producing the tight image_secondary in v2 mode.
 # Pixels with all RGB channels above this value are treated as background.
@@ -171,6 +181,8 @@ def build_edb(
     terminal_eof_plus_one: bool = True,
     page_count_hint: int = DEFAULT_PAGE_COUNT_HINT,
 ) -> bytes:
+    if not records:
+        raise ValueError("EDB requires at least one record")
     final_records = list(records)
     if len(final_records) > 1:
         final_records[:-1] = [_append_record_separator(record) for record in final_records[:-1]]
@@ -187,7 +199,40 @@ def build_edb(
 
 
 def write_edb(path: str | Path, payload: bytes) -> None:
-    Path(path).write_bytes(payload)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        descriptor, raw_temporary_path = tempfile.mkstemp(
+            prefix=".edb-write.",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        temporary_path = Path(raw_temporary_path)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+        try:
+            directory_fd = os.open(target.parent, os.O_RDONLY)
+        except (AttributeError, OSError):
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                try:
+                    os.fsync(directory_fd)
+                except OSError:
+                    pass
+            finally:
+                os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (512, 512), format_hint: str | None = None, quality: int = 88) -> bytes:
@@ -200,6 +245,58 @@ def build_preview_image_bytes(image_bytes: bytes, max_size: tuple[int, int] = (5
         image.save(output, format="PNG")
     else:
         image.save(output, format="JPEG", quality=quality, optimize=True)
+    return output.getvalue()
+
+
+def build_v1_secondary_image_bytes(
+    image_bytes: bytes,
+    *,
+    page_as_is: bool,
+    format_hint: str | None = None,
+) -> bytes:
+    """Build the v1 secondary bitmap without degrading full-page text."""
+    if not page_as_is:
+        return build_preview_image_bytes(
+            image_bytes,
+            max_size=V1_SECONDARY_PREVIEW_MAX_SIZE,
+            format_hint=format_hint,
+            quality=88,
+        )
+
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        width, height = source.size
+        if (
+            max(width, height) <= V1_PAGE_AS_IS_SECONDARY_MAX_EDGE_PX
+            and width * height <= V1_PAGE_AS_IS_SECONDARY_MAX_PIXELS
+        ):
+            # Reusing the immutable bytes avoids a second decode/encode pass and
+            # preserves every source pixel for ordinary 200-DPI pages.
+            return image_bytes
+
+        edge_scale = V1_PAGE_AS_IS_SECONDARY_MAX_EDGE_PX / max(width, height, 1)
+        pixel_scale = (
+            V1_PAGE_AS_IS_SECONDARY_MAX_PIXELS / max(width * height, 1)
+        ) ** 0.5
+        scale = min(1.0, edge_scale, pixel_scale)
+        target_size = (
+            max(1, int(width * scale)),
+            max(1, int(height * scale)),
+        )
+        ext = (format_hint or source.format or "JPEG").upper()
+        image = source.convert("RGBA" if ext == "PNG" and "A" in source.getbands() else "RGB")
+        if image.size != target_size:
+            image = image.resize(target_size, Image.Resampling.LANCZOS)
+
+    output = io.BytesIO()
+    if ext == "PNG":
+        image.save(output, format="PNG")
+    else:
+        image.save(
+            output,
+            format="JPEG",
+            quality=V1_PAGE_AS_IS_SECONDARY_JPEG_QUALITY,
+            optimize=True,
+        )
     return output.getvalue()
 
 

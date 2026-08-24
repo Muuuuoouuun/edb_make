@@ -2,59 +2,93 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import importlib.metadata
 import io
 import json
+import math
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from PIL import Image
 
+from ai_usage import normalize_gemini_token_usage
 from structured_schema import Box
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_OCR_MODEL = "gemini-3.5-flash"
+ECONOMY_GEMINI_OCR_MODEL = "gemini-3.5-flash-lite"
+GEMINI_OCR_PROFILE_ENV = "EDB_GEMINI_OCR_PROFILE"
 GEMINI_OCR_MODEL_ENV = "EDB_GEMINI_OCR_MODEL"
 GEMINI_OCR_THINKING_LEVEL_ENV = "EDB_GEMINI_OCR_THINKING_LEVEL"
-DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL = "low"
-FALLBACK_GEMINI_OCR_MODEL = "gemini-2.5-pro"
+DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL = "minimal"
+DEFAULT_GEMINI_FALLBACK_OCR_THINKING_LEVEL = "low"
+FALLBACK_GEMINI_OCR_MODEL = "gemini-3.6-flash"
 DEPRECATED_GEMINI_OCR_MODELS = {"gemini-3-pro-preview", "gemini-3.1-pro-preview"}
+DEFAULT_GEMINI_FAILURE_BACKOFF_SECONDS = 8.0
+DEFAULT_GEMINI_FATAL_BACKOFF_SECONDS = 120.0
+MAX_GEMINI_FAILURE_BACKOFF_SECONDS = 300.0
+DEFAULT_OCR_NEGATIVE_CAPABILITY_TTL_SECONDS = 30.0
+OCR_CACHE_SCHEMA_VERSION = "ocr_result_v4"
+GEMINI_OCR_PROMPT_VERSION = "korean_exam_exact_text_v4_compact"
+
+_OCR_CAPABILITY_LOCK = threading.RLock()
+_GEMINI_FAILURE_LOCK = threading.RLock()
+
+
+@dataclass(slots=True)
+class _GeminiFailureState:
+    reason: str
+    failure_count: int
+    retry_at: float
+
+
+_GEMINI_FAILURES: dict[tuple[str, str], _GeminiFailureState] = {}
+_TESSERACT_NEGATIVE_PROBE_AT: dict[tuple[str, str], float] = {}
 
 # Gemini's responseSchema follows an OpenAPI 3.0 subset: no `additionalProperties`,
 # no `$ref`, no `oneOf`. Keep the shape simple and rely on `required` instead.
 _OCR_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "text": {
-            "type": "string",
-            "description": "Full extracted text from the image, preserving line breaks with \\n.",
-        },
+        "text": {"type": "string"},
         "block_type": {
             "type": "string",
             "enum": ["stem", "choice", "figure", "formula", "title", "explanation", "unknown"],
-            "description": (
-                "Classification of the block. 'stem' for problem body text, "
-                "'choice' for answer options (①②③④⑤ or ㄱㄴㄷ lists), "
-                "'figure' for diagrams/tables/images with little text, "
-                "'formula' for math equations, 'title' for problem-number headings, "
-                "'explanation' for solution/commentary text."
-            ),
         },
-        "confidence": {
-            "type": "number",
-            "description": "Confidence in the OCR result, 0.0 to 1.0.",
-        },
-        "lines": {
-            "type": "array",
-            "description": "Individual text lines recognized, in reading order.",
-            "items": {"type": "string"},
-        },
+        "confidence": {"type": "number"},
     },
-    "required": ["text", "block_type", "confidence", "lines"],
+    "required": ["text", "block_type", "confidence"],
 }
+
+GEMINI_OCR_PROMPT = (
+    "Transcribe this Korean exam crop exactly. Return every visible character in reading order "
+    "and preserve visual line breaks. Include all numbered questions/options and text above or "
+    "below figures. Preserve Korean, Latin, digits, punctuation, math symbols, ①–⑤, and ㄱ/ㄴ/ㄷ. "
+    "Use visible Unicode/plain text only: keep π as π and sin as sin; never emit LaTeX or "
+    "backslash commands. Do not summarize, solve, correct, infer, or omit. Classify block_type "
+    "as title, stem, choice, formula, figure, explanation, or unknown; use figure only when "
+    "there is no useful text. Set confidence from 0 to 1 by legibility."
+)
+GEMINI_OCR_FALLBACK_PROMPT = (
+    "This is a cropped block from a Korean exam paper. Extract ALL visible text exactly as "
+    "written; do not summarize, paraphrase, solve, correct, repeat, or skip anything. Read the "
+    "entire crop from top to bottom, including text above and below tables, diagrams, and "
+    "figures. Include every visible problem number and all following answer choices. Preserve "
+    "Korean characters, line breaks, math symbols, circled numbers ①②③④⑤, ㄱ/ㄴ/ㄷ markers, "
+    "digits, parentheses, and punctuation. Return visible Unicode/plain text, never LaTeX or "
+    "backslash commands: π stays π and sin stays sin. Classify block_type as title for a problem "
+    "heading, stem for the question body, choice for standalone final options, formula for an "
+    "equation, figure for a diagram/table/photo with no useful text, explanation for solution "
+    "text, or unknown. Set confidence from 0 to 1 by legibility. Return exactly one schema JSON "
+    "object and stop immediately after it."
+)
 
 try:
     from paddleocr import PaddleOCR  # type: ignore
@@ -80,7 +114,12 @@ def resolve_gemini_ocr_model(model: str | None = None) -> str:
     if requested:
         return requested
     env_model = os.environ.get(GEMINI_OCR_MODEL_ENV, "").strip()
-    return env_model or DEFAULT_GEMINI_OCR_MODEL
+    if env_model:
+        return env_model
+    profile = os.environ.get(GEMINI_OCR_PROFILE_ENV, "balanced").strip().lower()
+    if profile in {"economy", "economic", "low-cost", "lite"}:
+        return ECONOMY_GEMINI_OCR_MODEL
+    return DEFAULT_GEMINI_OCR_MODEL
 
 
 def resolve_gemini_ocr_thinking_level(model: str, thinking_level: str | None = None) -> str:
@@ -91,8 +130,12 @@ def resolve_gemini_ocr_thinking_level(model: str, thinking_level: str | None = N
     if env_level:
         return env_level
     normalized_model = (model or "").strip().lower()
+    if normalized_model == ECONOMY_GEMINI_OCR_MODEL:
+        return "minimal"
     if normalized_model == "gemini-3.5-flash":
         return DEFAULT_GEMINI_FLASH_OCR_THINKING_LEVEL
+    if normalized_model == "gemini-3.6-flash":
+        return DEFAULT_GEMINI_FALLBACK_OCR_THINKING_LEVEL
     return ""
 
 
@@ -162,6 +205,132 @@ def _is_fatal_gemini_error(exc: Exception) -> bool:
     ):
         return True
     return False
+
+
+def _env_enabled(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _gemini_failure_key(api_key: str, model: str) -> tuple[str, str]:
+    # Never store the API key itself in process-wide diagnostic state.
+    fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    return fingerprint, model
+
+
+def _gemini_failure_reason(exc: Exception | None) -> str:
+    if exc is None:
+        return "empty_response"
+    if _is_fatal_gemini_error(exc):
+        return "authentication_or_quota_unavailable"
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"http_{int(exc.code)}"
+    if isinstance(exc, (TimeoutError, urllib.error.URLError)):
+        return "network_or_timeout"
+    return "upstream_unavailable"
+
+
+def _gemini_fallback_message(reason: str) -> str:
+    if reason == "authentication_or_quota_unavailable":
+        return (
+            "Gemini OCR authentication or quota is unavailable. "
+            "The block remains image-based for review."
+        )
+    if reason in {"invalid_json_response", "empty_response"}:
+        return (
+            "Gemini OCR returned an unreadable response. "
+            "The block remains image-based for review."
+        )
+    return (
+        "Gemini OCR is temporarily unavailable. "
+        "The block remains image-based for review."
+    )
+
+
+def _gemini_backoff_status(
+    key: tuple[str, str],
+) -> tuple[_GeminiFailureState | None, int]:
+    now = time.monotonic()
+    with _GEMINI_FAILURE_LOCK:
+        state = _GEMINI_FAILURES.get(key)
+        if state is None or state.retry_at <= now:
+            return state, 0
+        remaining_ms = max(1, int(round((state.retry_at - now) * 1000.0)))
+        return state, remaining_ms
+
+
+def _record_gemini_failure(
+    key: tuple[str, str],
+    reason: str,
+    *,
+    fatal: bool,
+) -> int:
+    env_name = (
+        "EDB_GEMINI_OCR_FATAL_BACKOFF_SECONDS"
+        if fatal
+        else "EDB_GEMINI_OCR_FAILURE_BACKOFF_SECONDS"
+    )
+    default_seconds = (
+        DEFAULT_GEMINI_FATAL_BACKOFF_SECONDS
+        if fatal
+        else DEFAULT_GEMINI_FAILURE_BACKOFF_SECONDS
+    )
+    base_seconds = _env_float(
+        env_name,
+        default_seconds,
+        minimum=0.0,
+        maximum=MAX_GEMINI_FAILURE_BACKOFF_SECONDS,
+    )
+    now = time.monotonic()
+    with _GEMINI_FAILURE_LOCK:
+        previous = _GEMINI_FAILURES.get(key)
+        if previous is not None and previous.retry_at > now:
+            # Several OCR blocks can already be in flight when one upstream
+            # quota/auth incident occurs. Treat their near-simultaneous
+            # failures as one circuit event instead of exponentiating the
+            # cooldown once per block (120s -> 240s -> 300s).
+            remaining_seconds = previous.retry_at - now
+            if fatal and remaining_seconds < base_seconds:
+                previous = _GeminiFailureState(
+                    reason=reason,
+                    failure_count=previous.failure_count,
+                    retry_at=now + base_seconds,
+                )
+                _GEMINI_FAILURES[key] = previous
+                remaining_seconds = base_seconds
+            return int(round(remaining_seconds * 1000.0))
+        failure_count = (previous.failure_count + 1) if previous else 1
+        delay_seconds = min(
+            MAX_GEMINI_FAILURE_BACKOFF_SECONDS,
+            base_seconds * (2 ** min(failure_count - 1, 4)),
+        )
+        _GEMINI_FAILURES[key] = _GeminiFailureState(
+            reason=reason,
+            failure_count=failure_count,
+            retry_at=now + delay_seconds,
+        )
+    return int(round(delay_seconds * 1000.0))
+
+
+def _record_gemini_success(key: tuple[str, str]) -> None:
+    with _GEMINI_FAILURE_LOCK:
+        _GEMINI_FAILURES.pop(key, None)
+
+
+def clear_gemini_failure_backoff() -> None:
+    with _GEMINI_FAILURE_LOCK:
+        _GEMINI_FAILURES.clear()
 
 
 def _prep_crop_for_ocr(image: Image.Image) -> Image.Image:
@@ -251,6 +420,9 @@ def _build_ocr_metadata(
         diagnostics["error"] = error
     if extra:
         diagnostics.update(extra)
+    if error:
+        # Backend/network/tool failures must never become durable blank OCR.
+        diagnostics["cacheable"] = False
     return diagnostics
 
 
@@ -260,6 +432,10 @@ class OCRBackend:
     @property
     def engine_name(self) -> str:
         return self.name
+
+    @property
+    def cache_fingerprint(self) -> str:
+        return ocr_cache_fingerprint(self.engine_name)
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
         raise NotImplementedError
@@ -300,7 +476,17 @@ class PaddleOCRBackend(OCRBackend):
     def __init__(self, *, lang: str = "korean", use_angle_cls: bool = True) -> None:
         if PaddleOCR is None:
             raise RuntimeError("paddleocr is not installed")
+        self.lang = lang
+        self.use_angle_cls = bool(use_angle_cls)
         self.engine = PaddleOCR(lang=lang, use_angle_cls=use_angle_cls, show_log=False)
+
+    @property
+    def cache_fingerprint(self) -> str:
+        return ocr_cache_fingerprint(
+            self.engine_name,
+            lang=self.lang,
+            use_angle_cls=self.use_angle_cls,
+        )
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
         started_at = time.perf_counter()
@@ -369,6 +555,10 @@ class TesseractOCRBackend(OCRBackend):
         if pytesseract is None:
             raise RuntimeError("pytesseract is not installed")
         self.lang = lang
+
+    @property
+    def cache_fingerprint(self) -> str:
+        return ocr_cache_fingerprint(self.engine_name, lang=self.lang)
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
         started_at = time.perf_counter()
@@ -446,6 +636,7 @@ class GeminiOCRBackend(OCRBackend):
         max_tokens: int = 1024,
         max_retries: int = 1,
         thinking_level: str | None = None,
+        failure_backoff: bool = True,
     ) -> None:
         self.model = resolve_gemini_ocr_model(model)
         self.thinking_level = resolve_gemini_ocr_thinking_level(self.model, thinking_level)
@@ -455,6 +646,17 @@ class GeminiOCRBackend(OCRBackend):
         self.timeout_s = timeout_ms / 1000.0
         self.max_tokens = max_tokens
         self.max_retries = max(0, max_retries)
+        self.failure_backoff = bool(failure_backoff)
+        self._failure_key = _gemini_failure_key(self.api_key, self.model)
+
+    @property
+    def cache_fingerprint(self) -> str:
+        return ocr_cache_fingerprint(
+            self.engine_name,
+            model=self.model,
+            thinking_level=self.thinking_level,
+            max_tokens=self.max_tokens,
+        )
 
     def _encode_image(self, image: Image.Image) -> tuple[str, str]:
         """Pick JPEG for large crops (smaller payload), PNG for small crops
@@ -475,25 +677,33 @@ class GeminiOCRBackend(OCRBackend):
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
         started_at = time.perf_counter()
-        prompt = (
-            "This is a cropped block from a Korean exam paper. "
-            "Extract ALL visible text exactly as written — do not summarize, paraphrase, or skip anything. "
-            "Read the entire crop from top to bottom, including text above and below tables, diagrams, and figures. "
-            "If a table or diagram is followed by numbered questions or answer choices, include those lines too. "
-            "If multiple problem numbers are visible in one crop, include every problem number on its own line. "
-            "Preserve Korean characters, math symbols, circled numbers ①②③④⑤, and ㄱ/ㄴ/ㄷ markers. "
-            "Use \\n between visual lines. Keep digits, parentheses, and punctuation as-is. "
-            "Classify the block by content:\n"
-            "  - 'title' : a problem-number heading like '1.', '문제 3', '[4]'\n"
-            "  - 'stem'  : main question body text\n"
-            "  - 'choice': stand-alone answer-option block (① ② ③ ④ ⑤ or A–E)\n"
-            "  - 'formula': a math equation or expression line\n"
-            "  - 'figure': diagram/table/photo with little or no text\n"
-            "  - 'explanation': solution or commentary text\n"
-            "Set confidence based on how legible the text is (0.0–1.0). "
-            "If the block is mostly figure with no useful text, return text='' and block_type='figure'."
-        )
-
+        if self.failure_backoff and _env_enabled("EDB_GEMINI_OCR_FAILURE_BACKOFF", True):
+            failure_state, remaining_ms = _gemini_backoff_status(self._failure_key)
+            if failure_state is not None and remaining_ms > 0:
+                reason = failure_state.reason
+                return OCRResult(
+                    text="",
+                    confidence=None,
+                    lines=[],
+                    backend_name=self.name,
+                    metadata=_build_ocr_metadata(
+                        backend=self.name,
+                        started_at=started_at,
+                        text="",
+                        confidence=None,
+                        lines=[],
+                        error="Gemini OCR request paused after a recent failure",
+                        extra={
+                            "model": self.model,
+                            "fallback_reason": reason,
+                            "fallback_message": _gemini_fallback_message(reason),
+                            "circuit_open": True,
+                            "retry_after_ms": remaining_ms,
+                            "cacheable": False,
+                            "model_attempts": [],
+                        },
+                    ),
+                )
         prepped = _prep_crop_for_ocr(image)
         media_type, image_data = self._encode_image(prepped)
         payload = {
@@ -502,7 +712,7 @@ class GeminiOCRBackend(OCRBackend):
                     "role": "user",
                     "parts": [
                         {"inline_data": {"mime_type": media_type, "data": image_data}},
-                        {"text": prompt},
+                        {"text": GEMINI_OCR_PROMPT},
                     ],
                 }
             ],
@@ -522,6 +732,9 @@ class GeminiOCRBackend(OCRBackend):
         def _body_for_model(model: str) -> bytes:
             generation_config = dict(payload["generationConfig"])
             generation_config.pop("thinkingConfig", None)
+            if model in {ECONOMY_GEMINI_OCR_MODEL, "gemini-3.6-flash"}:
+                # Newer Gemini models reject or ignore legacy sampling controls.
+                generation_config.pop("temperature", None)
             thinking_level = (
                 self.thinking_level
                 if model == self.model
@@ -535,17 +748,34 @@ class GeminiOCRBackend(OCRBackend):
             else:
                 thinking_levels_by_model[model] = ""
             model_payload = dict(payload)
+            if model == FALLBACK_GEMINI_OCR_MODEL:
+                model_payload["contents"] = [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "inline_data": {
+                                    "mime_type": media_type,
+                                    "data": image_data,
+                                }
+                            },
+                            {"text": GEMINI_OCR_FALLBACK_PROMPT},
+                        ],
+                    }
+                ]
             model_payload["generationConfig"] = generation_config
             return json.dumps(model_payload).encode("utf-8")
 
         last_exc: Exception | None = None
         response_data: dict[str, Any] | None = None
+        request_attempt_count = 0
         for attempt in range(self.max_retries + 1):
             if attempt > 0:
                 time.sleep(min(1.5 * attempt, 4.0))
             try:
                 body = _body_for_model(used_model)
                 req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+                request_attempt_count += 1
                 with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                     response_data = json.loads(resp.read().decode("utf-8"))
                 break
@@ -574,6 +804,7 @@ class GeminiOCRBackend(OCRBackend):
                     try:
                         body = _body_for_model(used_model)
                         req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+                        request_attempt_count += 1
                         with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                             response_data = json.loads(resp.read().decode("utf-8"))
                         break
@@ -595,6 +826,14 @@ class GeminiOCRBackend(OCRBackend):
             model_attempts.append({"model": used_model, "status": "ok"})
 
         if response_data is None:
+            failure_reason = _gemini_failure_reason(last_exc)
+            cooldown_ms = 0
+            if self.failure_backoff and _env_enabled("EDB_GEMINI_OCR_FAILURE_BACKOFF", True):
+                cooldown_ms = _record_gemini_failure(
+                    self._failure_key,
+                    failure_reason,
+                    fatal=bool(last_exc and _is_fatal_gemini_error(last_exc)),
+                )
             return OCRResult(
                 text="",
                 confidence=None,
@@ -607,15 +846,34 @@ class GeminiOCRBackend(OCRBackend):
                     confidence=None,
                     lines=[],
                     error=_format_gemini_error(last_exc) if last_exc else "no response",
-                    extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
+                    extra={
+                        "retry_count": self.max_retries,
+                        "request_attempt_count": request_attempt_count,
+                        "model_attempts": model_attempts,
+                        "fallback_reason": failure_reason,
+                        "fallback_message": _gemini_fallback_message(failure_reason),
+                        "circuit_open": False,
+                        "retry_after_ms": cooldown_ms,
+                        "cacheable": False,
+                    },
                 ),
             )
+
+        token_usage = normalize_gemini_token_usage(response_data)
 
         # Gemini returns structured output as a JSON string inside the first
         # text part of candidate[0].
         json_text = _gemini_extract_text(response_data)
         if not json_text:
             finish_reason = _gemini_finish_reason(response_data)
+            failure_reason = "empty_response"
+            cooldown_ms = 0
+            if self.failure_backoff and _env_enabled("EDB_GEMINI_OCR_FAILURE_BACKOFF", True):
+                cooldown_ms = _record_gemini_failure(
+                    self._failure_key,
+                    failure_reason,
+                    fatal=False,
+                )
             return OCRResult(
                 text="",
                 confidence=None,
@@ -628,13 +886,31 @@ class GeminiOCRBackend(OCRBackend):
                     confidence=None,
                     lines=[],
                     error=f"no text in response (finish={finish_reason})",
-                    extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
+                    extra={
+                        "retry_count": self.max_retries,
+                        "request_attempt_count": request_attempt_count,
+                        "model_attempts": model_attempts,
+                        "fallback_reason": failure_reason,
+                        "fallback_message": _gemini_fallback_message(failure_reason),
+                        "circuit_open": False,
+                        "retry_after_ms": cooldown_ms,
+                        "cacheable": False,
+                        "token_usage": token_usage,
+                    },
                 ),
             )
 
         try:
-            parsed: dict[str, Any] = json.loads(json_text)
+            parsed: Any = json.loads(json_text)
         except json.JSONDecodeError as exc:
+            failure_reason = "invalid_json_response"
+            cooldown_ms = 0
+            if self.failure_backoff and _env_enabled("EDB_GEMINI_OCR_FAILURE_BACKOFF", True):
+                cooldown_ms = _record_gemini_failure(
+                    self._failure_key,
+                    failure_reason,
+                    fatal=False,
+                )
             return OCRResult(
                 text="",
                 confidence=None,
@@ -647,13 +923,67 @@ class GeminiOCRBackend(OCRBackend):
                     confidence=None,
                     lines=[],
                     error=f"json decode failed: {exc}",
-                    extra={"retry_count": self.max_retries, "model_attempts": model_attempts},
+                    extra={
+                        "retry_count": self.max_retries,
+                        "request_attempt_count": request_attempt_count,
+                        "model_attempts": model_attempts,
+                        "fallback_reason": failure_reason,
+                        "fallback_message": _gemini_fallback_message(failure_reason),
+                        "circuit_open": False,
+                        "retry_after_ms": cooldown_ms,
+                        "cacheable": False,
+                        "token_usage": token_usage,
+                    },
                 ),
             )
 
+        if not isinstance(parsed, dict):
+            parsed = {}
         raw_text = str(parsed.get("text", "")).strip()
-        raw_lines = parsed.get("lines") or []
-        confidence = float(parsed.get("confidence", 0.8))
+        # The API returns text once. Derive line objects locally instead of
+        # paying output tokens for a duplicate `lines` array.
+        raw_lines = raw_text.splitlines()
+        if not raw_text:
+            failure_reason = "empty_response"
+            cooldown_ms = 0
+            if self.failure_backoff and _env_enabled("EDB_GEMINI_OCR_FAILURE_BACKOFF", True):
+                cooldown_ms = _record_gemini_failure(
+                    self._failure_key,
+                    failure_reason,
+                    fatal=False,
+                )
+            return OCRResult(
+                text="",
+                confidence=None,
+                lines=[],
+                backend_name=self.name,
+                metadata=_build_ocr_metadata(
+                    backend=self.name,
+                    started_at=started_at,
+                    text="",
+                    confidence=None,
+                    lines=[],
+                    error="structured OCR response contained no usable text",
+                    extra={
+                        "retry_count": self.max_retries,
+                        "request_attempt_count": request_attempt_count,
+                        "model_attempts": model_attempts,
+                        "fallback_reason": failure_reason,
+                        "fallback_message": _gemini_fallback_message(failure_reason),
+                        "circuit_open": False,
+                        "retry_after_ms": cooldown_ms,
+                        "cacheable": False,
+                        "token_usage": token_usage,
+                    },
+                ),
+            )
+        try:
+            confidence = float(parsed.get("confidence", 0.8))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if not math.isfinite(confidence):
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
         block_type_hint = str(parsed.get("block_type", "unknown"))
 
         # Build OCRLine list (Gemini does not return per-line bboxes; use even
@@ -675,6 +1005,7 @@ class GeminiOCRBackend(OCRBackend):
                 )
             )
 
+        _record_gemini_success(self._failure_key)
         return OCRResult(
             text=raw_text,
             confidence=confidence,
@@ -690,7 +1021,10 @@ class GeminiOCRBackend(OCRBackend):
                     "block_type_hint": block_type_hint,
                     "model": used_model,
                     "model_attempts": model_attempts,
+                    "request_attempt_count": request_attempt_count,
                     "thinking_level": thinking_levels_by_model.get(used_model, ""),
+                    "token_usage": token_usage,
+                    "cacheable": True,
                 },
             ),
         )
@@ -720,8 +1054,8 @@ def _gemini_finish_reason(response: dict[str, Any]) -> str:
     return str(candidates[0].get("finishReason") or "unknown")
 
 
-def _tesseract_binary_available() -> bool:
-    """Return True only if the tesseract binary is actually callable."""
+@lru_cache(maxsize=16)
+def _tesseract_binary_available_cached(path_env: str, command: str) -> bool:
     if pytesseract is None:
         return False
     try:
@@ -731,10 +1065,180 @@ def _tesseract_binary_available() -> bool:
         return False
 
 
-def build_ocr_backend(name: str = "auto") -> OCRBackend:
+def _tesseract_binary_available(*, refresh: bool = False) -> bool:
+    """Return True only if the tesseract binary is callable.
+
+    Version probing starts a subprocess in pytesseract, so cache it by PATH and
+    configured command. ``refresh=True`` handles a binary installed while the
+    desktop process is already running.
+    """
+
+    command = ""
+    if pytesseract is not None:
+        command = str(getattr(getattr(pytesseract, "pytesseract", None), "tesseract_cmd", ""))
+    with _OCR_CAPABILITY_LOCK:
+        cache_key = (os.environ.get("PATH", ""), command)
+        if refresh:
+            _tesseract_binary_available_cached.cache_clear()
+            _TESSERACT_NEGATIVE_PROBE_AT.clear()
+        negative_checked_at = _TESSERACT_NEGATIVE_PROBE_AT.get(cache_key)
+        if negative_checked_at is not None:
+            negative_ttl = _env_float(
+                "EDB_OCR_NEGATIVE_CAPABILITY_TTL_SECONDS",
+                DEFAULT_OCR_NEGATIVE_CAPABILITY_TTL_SECONDS,
+                minimum=0.0,
+                maximum=300.0,
+            )
+            if time.monotonic() - negative_checked_at >= negative_ttl:
+                _tesseract_binary_available_cached.cache_clear()
+                _TESSERACT_NEGATIVE_PROBE_AT.pop(cache_key, None)
+        available = _tesseract_binary_available_cached(*cache_key)
+        if available:
+            _TESSERACT_NEGATIVE_PROBE_AT.pop(cache_key, None)
+        else:
+            _TESSERACT_NEGATIVE_PROBE_AT.setdefault(cache_key, time.monotonic())
+        return available
+
+
+def clear_ocr_capability_cache() -> None:
+    with _OCR_CAPABILITY_LOCK:
+        _tesseract_binary_available_cached.cache_clear()
+        _TESSERACT_NEGATIVE_PROBE_AT.clear()
+
+
+def clear_ocr_runtime_cache() -> None:
+    """Refresh local capability probes and forget temporary Gemini failures."""
+
+    clear_ocr_capability_cache()
+    clear_gemini_failure_backoff()
+
+
+@lru_cache(maxsize=16)
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unavailable"
+
+
+@lru_cache(maxsize=4)
+def _tesseract_tool_version() -> str:
+    if pytesseract is None:
+        return "unavailable"
+    try:
+        return str(pytesseract.get_tesseract_version())
+    except Exception:
+        return "unavailable"
+
+
+def ocr_cache_fingerprint(
+    backend_name: str | None,
+    *,
+    model: str | None = None,
+    thinking_level: str | None = None,
+    max_tokens: int = 1024,
+    lang: str | None = None,
+    use_angle_cls: bool = True,
+) -> str:
+    """Return a code-owned cache namespace for OCR behavior and tool versions."""
+
+    raw_backend_name = str(backend_name or "none").strip()
+    normalized = raw_backend_name.lower()
+    if normalized.startswith("gemini-") and model is None:
+        model = raw_backend_name
+    if normalized in {"google", "claude", "anthropic"} or normalized.startswith("gemini-"):
+        normalized = "gemini"
+    payload: dict[str, Any] = {
+        "schema": OCR_CACHE_SCHEMA_VERSION,
+        "backend": normalized,
+    }
+    if normalized in {"gemini", "gemini_escalated"}:
+        resolved_model = resolve_gemini_ocr_model(model)
+        payload.update(
+            {
+                "model": resolved_model,
+                "thinking_level": resolve_gemini_ocr_thinking_level(
+                    resolved_model,
+                    thinking_level,
+                ),
+                "max_tokens": int(max_tokens),
+                "prompt_version": GEMINI_OCR_PROMPT_VERSION,
+                "response_schema": _OCR_RESPONSE_SCHEMA,
+            }
+        )
+    elif normalized == "tesseract":
+        command = str(getattr(getattr(pytesseract, "pytesseract", None), "tesseract_cmd", ""))
+        payload.update(
+            {
+                "lang": lang or "kor+eng",
+                "pytesseract_version": _distribution_version("pytesseract"),
+                "tesseract_version": _tesseract_tool_version(),
+                "command": command,
+            }
+        )
+    elif normalized in {"paddle", "paddleocr"}:
+        payload.update(
+            {
+                "backend": "paddleocr",
+                "lang": lang or "korean",
+                "use_angle_cls": bool(use_angle_cls),
+                "paddleocr_version": _distribution_version("paddleocr"),
+                "paddlepaddle_version": _distribution_version("paddlepaddle"),
+            }
+        )
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def preferred_ocr_backend_name(name: str = "auto") -> str:
+    """Resolve the backend family without constructing heavyweight engines."""
+
+    normalized = str(name or "auto").strip().lower()
+    if normalized in {"none", "noop"}:
+        return "none"
+    if normalized in {"local", "offline"}:
+        if PaddleOCR is not None:
+            return "paddleocr"
+        if _tesseract_binary_available():
+            return "tesseract"
+        return "none"
+    if normalized in {"paddle", "paddleocr"}:
+        return "paddleocr"
+    if normalized == "tesseract":
+        return "tesseract"
+    if normalized in {"gemini", "google", "claude", "anthropic"} or normalized.startswith("gemini-"):
+        return "gemini"
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
+    if PaddleOCR is not None:
+        return "paddleocr"
+    if _tesseract_binary_available():
+        return "tesseract"
+    return "none"
+
+
+def build_ocr_backend(name: str = "auto", *, refresh_capabilities: bool = False) -> OCRBackend:
     raw_name = (name or "auto").strip()
     normalized = raw_name.lower()
     if normalized in {"none", "noop"}:
+        return NoOcrBackend()
+    if normalized in {"local", "offline"}:
+        if PaddleOCR is not None:
+            try:
+                return PaddleOCRBackend()
+            except Exception:
+                pass
+        if _tesseract_binary_available(refresh=refresh_capabilities):
+            try:
+                return TesseractOCRBackend()
+            except Exception:
+                pass
+        print(
+            "[ocr_backend] WARNING: local OCR requested but no PaddleOCR or "
+            "Tesseract engine is available; using NoOcrBackend.",
+            flush=True,
+        )
         return NoOcrBackend()
     if normalized in {"paddle", "paddleocr"}:
         return PaddleOCRBackend()
@@ -760,7 +1264,7 @@ def build_ocr_backend(name: str = "auto") -> OCRBackend:
             return PaddleOCRBackend()
         except Exception:
             pass
-    if _tesseract_binary_available():
+    if _tesseract_binary_available(refresh=refresh_capabilities):
         try:
             return TesseractOCRBackend()
         except Exception:
@@ -778,8 +1282,8 @@ def build_ocr_backend(name: str = "auto") -> OCRBackend:
     return NoOcrBackend()
 
 
-def create_ocr_backend(name: str = "auto") -> OCRBackend:
-    return build_ocr_backend(name)
+def create_ocr_backend(name: str = "auto", *, refresh_capabilities: bool = False) -> OCRBackend:
+    return build_ocr_backend(name, refresh_capabilities=refresh_capabilities)
 
 
 OcrResult = OCRResult
