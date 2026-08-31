@@ -165,7 +165,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
-        preview_block = side_panel.split("<div className=\"item-preview\" ref={wrapRef}>", 1)[1]
+        preview_block = side_panel.split("className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`}", 1)[1]
         preview_block = preview_block.split("<div className=\"panel-section-hd\">", 1)[0]
         detail_block = side_panel.split("detail-settings-toggle", 1)[1]
 
@@ -182,6 +182,22 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("자르기 프리셋", side_panel)
         self.assertIn("showItemConfirmBar", side_panel)
         self.assertIn("view === 'review'", side_panel)
+
+    def test_side_panel_image_preview_is_collapsed_by_default_and_accessible(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn("const [previewExpanded, setPreviewExpanded] = useState(false)", side_panel)
+        self.assertIn('className="item-preview-toggle"', side_panel)
+        self.assertIn("aria-expanded={previewExpanded}", side_panel)
+        self.assertIn('aria-controls="item-image-preview-content"', side_panel)
+        self.assertIn("{previewExpanded && (", side_panel)
+        self.assertIn('id="item-image-preview-content"', side_panel)
+        self.assertIn("setPreviewExpanded(true)", side_panel)
+        self.assertIn(".item-preview-toggle{", html)
+        self.assertIn(".item-preview.is-expanded .item-preview-toggle{", html)
 
     def test_side_panel_exposes_three_tabs_and_group_placement_rules(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -372,15 +388,33 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("conflictBase: cloneSession(latestSession)", retry_flow)
         self.assertIn("invalid_placement_save_response", source)
 
-    def test_board_dividers_show_classin_12_page_number(self) -> None:
+    def test_board_dividers_and_page_indicator_use_true_classin_12_grid(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
         board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
 
         self.assertIn("function classinBoardPageNumberAtOffset(offsetPages)", source)
-        self.assertIn("classinPage: classinBoardPageNumberAtOffset(i)", board_stage)
-        self.assertIn("(클래스인 1.2 기준 {divider.classinPage}p)", board_stage)
+        self.assertIn("const offsetPages = i * DEFAULT_SLOT_HEIGHT_PAGES", board_stage)
+        self.assertIn("top: offsetPages * pageH", board_stage)
+        self.assertIn("className={`page-divider is-classin-grid", board_stage)
+        self.assertIn("ClassIn {divider.classinPage}p", board_stage)
+        self.assertIn("Math.max(1, previewEstimate.classinPageCount)", board_stage)
+        self.assertIn(">ClassIn</span>", board_stage)
+        self.assertIn("C{tileClassinStartPage}–C{tileClassinEndPage}", board_stage)
+        self.assertIn("`예상 C${previewEstimate.classinPageCount}`", board_stage)
         self.assertIn(".page-divider .label .classin-page", board)
+
+    def test_board_preview_exposes_estimate_and_active_gap_guides(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn('className="stage-estimate-bar"', board_stage)
+        self.assertIn('role="status"', board_stage)
+        self.assertIn('aria-live="polite"', board_stage)
+        self.assertIn("예상 ClassIn {previewEstimate.classinPageCount}페이지", board_stage)
+        self.assertIn('className="active-slot-gap"', board_stage)
+        self.assertIn('className="active-next-boundary"', board_stage)
+        self.assertIn('aria-hidden="true"', board_stage)
 
     def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

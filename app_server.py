@@ -60,6 +60,7 @@ CROP_FORMAT_V2 = "v2"
 DEFAULT_BOARD_THEME = "charcoal"
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 CLASSIN_MAX_BOARD_PAGE_COUNT = 50
+REGULAR_PLACEMENT_SCALE_MAX = 1.6
 DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER = "gemini"
 ACTIVE_IMAGE_ENHANCE_SIZE = "1k"
 HIGH_RES_IMAGE_SIZE_ALIASES = {"2K", "2048", "2048PX", "4K", "4096", "4096PX"}
@@ -237,6 +238,10 @@ def split_problem_entries_for_classin_page_limit(*args: Any, **kwargs: Any) -> A
 
 def _validate_record_page_count_hints(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "_validate_record_page_count_hints", *args, **kwargs)
+
+
+def _validate_sequential_record_placements(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_validate_sequential_record_placements", *args, **kwargs)
 
 
 def write_classin_limited_edb_files(*args: Any, **kwargs: Any) -> Any:
@@ -1529,6 +1534,35 @@ def _coerce_placement_scale_ratio(value: Any) -> float | None:
     return max(0.6, min(3.0, ratio))
 
 
+def _problem_preserves_legacy_placement_scale(problem: dict[str, Any]) -> bool:
+    metadata = problem.get("metadata")
+    sources = (problem, metadata if isinstance(metadata, dict) else {})
+    for source in sources:
+        for key in ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"):
+            marker = source.get(key)
+            if isinstance(marker, bool):
+                return marker
+            if isinstance(marker, (int, float)) and marker == 1:
+                return True
+            if isinstance(marker, str) and marker.strip().lower() in {"1", "true", "yes", "on"}:
+                return True
+    return False
+
+
+def _problem_has_persisted_legacy_placement_scale(problem: dict[str, Any]) -> bool:
+    input_intent = (
+        str(problem.get("inputIntent") or problem.get("input_intent") or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+    )
+    placement_mode = str(problem.get("placementMode") or problem.get("placement_mode") or "").strip().lower()
+    if input_intent == "page-as-is" or placement_mode == "continuous-page-as-is":
+        return False
+    scale_ratio = _coerce_placement_scale_ratio(problem)
+    return scale_ratio is not None and scale_ratio > REGULAR_PLACEMENT_SCALE_MAX
+
+
 APP_DEFAULT_CROP_FORMAT = CROP_FORMAT_V1
 
 
@@ -2079,13 +2113,15 @@ def _write_classin_limited_edb_files_local(
                 dark_board=dark_board,
                 board_theme=board_theme,
                 crop_format=crop_format,
-                reserve_image_layout_height=False,
+                reserve_image_layout_height=True,
                 expand_board_capacity=False,
             )
         _validate_record_page_count_hints(
             part_placements,
             expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
         )
+        if not part_template.metadata.get("preserve_source_layout"):
+            _validate_sequential_record_placements(part_placements)
         return {
             "entries": list(chunk_entries),
             "records": part_records,
@@ -3847,6 +3883,7 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                 placement_x_ratio=_coerce_placement_x_ratio(problem),
                 placement_y_ratio=_coerce_placement_y_ratio(problem),
                 placement_scale_ratio=_coerce_placement_scale_ratio(problem),
+                preserve_legacy_placement_scale=_problem_preserves_legacy_placement_scale(problem),
                 processing_step=_normalize_processing_step(
                     problem.get("processingStep")
                     or problem.get("processing_step")
@@ -4528,6 +4565,7 @@ def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[s
         ("inputIntent", "input_intent"),
         ("placementMode", "placement_mode"),
         ("forceFullPageBounds", "force_full_page_bounds"),
+        ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"),
     ):
         _copy_session_metadata_aliases_overwrite(target, source, aliases)
 
@@ -8401,6 +8439,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         for problem in sequence:
             problem_copy = dict(problem)
             problem_id = str(problem_copy.get("id") or "")
+            preserve_legacy_scale = (
+                _problem_preserves_legacy_placement_scale(problem_copy)
+                or _problem_has_persisted_legacy_placement_scale(problem_copy)
+            )
             x_ratio = _coerce_placement_x_ratio(placement_payload.get(problem_id))
             if x_ratio is None:
                 x_ratio = _coerce_placement_x_ratio(problem_copy)
@@ -8416,6 +8458,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 scale_ratio = _coerce_placement_scale_ratio(problem_copy)
             if scale_ratio is not None:
                 problem_copy["placementScaleRatio"] = scale_ratio
+            if preserve_legacy_scale:
+                # Provenance comes from the persisted session value, never from
+                # this request's placement patch. New explicit edits therefore
+                # remain subject to the regular 1.6 editor/export ceiling.
+                problem_copy["preserveLegacyPlacementScale"] = True
+                problem_copy["preserve_legacy_placement_scale"] = True
             sequence_with_placements.append(problem_copy)
         sequence = sequence_with_placements
 

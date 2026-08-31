@@ -563,6 +563,45 @@ class TestEdbPublishFlow(unittest.TestCase):
                 self.assertGreaterEqual(crop.width, 900)
                 self.assertGreaterEqual(crop.height, 420)
 
+    def test_regular_problem_scale_above_editor_limit_requires_legacy_marker(self):
+        unmarked = ProblemUnit(
+            unit_id="unmarked",
+            subject=Subject.MATH,
+            title="1.",
+            stem_block_ids=[],
+            metadata={"placement_scale_ratio": 2.4},
+        )
+        marked = ProblemUnit(
+            unit_id="marked",
+            subject=Subject.MATH,
+            title="2.",
+            stem_block_ids=[],
+            metadata={
+                "placement_scale_ratio": 2.4,
+                "preserveLegacyPlacementScale": True,
+            },
+        )
+        marked_above_compatibility_limit = ProblemUnit(
+            unit_id="marked-max",
+            subject=Subject.MATH,
+            title="3.",
+            stem_block_ids=[],
+            metadata={
+                "placement_scale_ratio": 4.0,
+                "preserve_legacy_placement_scale": True,
+            },
+        )
+
+        self.assertEqual(
+            problem_board.PLACEMENT_SCALE_MAX,
+            problem_board._default_placement_scale_for_problem(unmarked),
+        )
+        self.assertEqual(2.4, problem_board._default_placement_scale_for_problem(marked))
+        self.assertEqual(
+            problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX,
+            problem_board._default_placement_scale_for_problem(marked_above_compatibility_limit),
+        )
+
     def _make_source_image(self, path: Path) -> None:
         image = Image.new("RGB", (860, 620), "white")
         draw = ImageDraw.Draw(image)
@@ -1533,6 +1572,23 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertAlmostEqual(50.2, problem_board._placement_summaries_flow_end_pages(placements))
         self.assertEqual(1, problem_board._first_placement_over_page_limit(placements, 50))
 
+    def test_classin_writer_rejects_sequential_record_overlap(self):
+        placements = [
+            {
+                "problem_id": "problem-1",
+                "record_top_y_pages": 0.0,
+                "record_bottom_y_pages": 2.0,
+            },
+            {
+                "problem_id": "problem-2",
+                "record_top_y_pages": 1.2,
+                "record_bottom_y_pages": 2.4,
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, r"problem-1->problem-2 \(0\.800000 pages\)"):
+            problem_board._validate_sequential_record_placements(placements)
+
     def test_classin_split_counts_slot_rounding_for_long_problem(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1636,8 +1692,8 @@ class TestEdbPublishFlow(unittest.TestCase):
                     crop_format=CROP_FORMAT_V1,
                 )
 
-            self.assertEqual([40, 2], [len(part["problemIds"]) for part in parts])
-            self.assertEqual(["height-gap_part01.edb", "height-gap_part02.edb"], [
+            self.assertEqual([20, 20, 2], [len(part["problemIds"]) for part in parts])
+            self.assertEqual(["height-gap_part01.edb", "height-gap_part02.edb", "height-gap_part03.edb"], [
                 Path(part["edbPath"]).name for part in parts
             ])
             for part in parts:
@@ -1646,6 +1702,11 @@ class TestEdbPublishFlow(unittest.TestCase):
                     max(placement["record_bottom_y_pages"] for placement in part["placements"]),
                     50,
                 )
+                for current, next_placement in zip(part["placements"], part["placements"][1:]):
+                    self.assertLessEqual(
+                        current["record_bottom_y_pages"],
+                        next_placement["record_top_y_pages"],
+                    )
                 validation = validate_edb_file(part["edbPath"], expected_min_records=part["recordCount"])
                 self.assertLessEqual(validation["pageCountHint"], 50)
 
@@ -5796,6 +5857,103 @@ class TestEdbPublishFlow(unittest.TestCase):
                 placements[-1]["snapped_next_start_y_pages"],
             )
 
+    def test_classin_v1_part_rerender_reserves_final_record_height(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = LayoutTemplate(
+                name="academy-default",
+                board_page_count=58,
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+            entries = [
+                self._make_problem_entry(root, f"problem-{index}", Box(0, 0, 380, 850))
+                for index in range(1, 3)
+            ]
+            for entry in entries:
+                entry.actual_height_pages = problem_board.estimate_height_pages(
+                    (380, 850),
+                    template,
+                )
+
+            parts = write_classin_limited_edb_files(
+                entries,
+                template,
+                root,
+                "long-v1.edb",
+                record_mode="image-only",
+                text_confidence_threshold=0.78,
+                dark_board=False,
+                board_theme=problem_board.DEFAULT_BOARD_THEME,
+                crop_format=CROP_FORMAT_V1,
+            )
+
+            self.assertEqual(1, len(parts))
+            placements = parts[0]["placements"]
+            self.assertEqual([0.0, 2.4], [item["start_y_pages"] for item in placements])
+            self.assertEqual([2.4, 4.8], [item["snapped_next_start_y_pages"] for item in placements])
+            self.assertLessEqual(
+                placements[0]["record_bottom_y_pages"],
+                placements[1]["record_top_y_pages"],
+            )
+            self.assertLessEqual(parts[0]["flowEndPages"], problem_board.CLASSIN_MAX_BOARD_PAGE_COUNT)
+
+            parsed = parse_edb(Path(parts[0]["edbPath"]))
+            image_records = [record for record in parsed.records if record.embedded_images]
+            self.assertEqual(2, len(image_records))
+            first_bottom_pages = (
+                float(image_records[0].pos_y) + float(image_records[0].height_hint)
+            ) * parsed.page_count_hint
+            second_top_pages = float(image_records[1].pos_y) * parsed.page_count_hint
+            self.assertLessEqual(first_bottom_pages, second_top_pages)
+
+    def test_classin_v2_part_rerender_remains_non_overlapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = LayoutTemplate(
+                name="academy-default",
+                board_page_count=58,
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+            entries = [
+                self._make_problem_entry(root, f"problem-{index}", Box(0, 0, 380, 850))
+                for index in range(1, 3)
+            ]
+            for entry in entries:
+                entry.actual_height_pages = problem_board.estimate_height_pages(
+                    (380, 850),
+                    template,
+                )
+
+            parts = write_classin_limited_edb_files(
+                entries,
+                template,
+                root,
+                "long-v2.edb",
+                record_mode="image-only",
+                text_confidence_threshold=0.78,
+                dark_board=False,
+                board_theme=problem_board.DEFAULT_BOARD_THEME,
+                crop_format=edb_builder.CROP_FORMAT_V2,
+            )
+
+            placements = parts[0]["placements"]
+            self.assertEqual([0.0, 1.2], [item["start_y_pages"] for item in placements])
+            self.assertEqual([1.2, 2.4], [item["snapped_next_start_y_pages"] for item in placements])
+            self.assertLessEqual(
+                placements[0]["record_bottom_y_pages"],
+                placements[1]["record_top_y_pages"],
+            )
+            self.assertLessEqual(parts[0]["flowEndPages"], problem_board.CLASSIN_MAX_BOARD_PAGE_COUNT)
+
+            parsed = parse_edb(Path(parts[0]["edbPath"]))
+            image_records = [record for record in parsed.records if record.embedded_images]
+            self.assertEqual(2, len(image_records))
+            first_bottom_pages = (
+                float(image_records[0].pos_y) + float(image_records[0].height_hint)
+            ) * parsed.page_count_hint
+            second_top_pages = float(image_records[1].pos_y) * parsed.page_count_hint
+            self.assertLessEqual(first_bottom_pages, second_top_pages)
+
     def test_build_image_only_records_parallelizes_encoding_without_reordering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5913,6 +6071,73 @@ class TestEdbPublishFlow(unittest.TestCase):
                 placement["image_pixel_height"] / placement["image_pixel_width"],
                 places=3,
             )
+
+    def test_v2_legacy_regular_scale_preserves_ratio_and_reserves_grid_height(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = LayoutTemplate(
+                name="academy-default",
+                base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            )
+            unmarked = self._make_problem_entry(root, "unmarked", Box(0, 0, 380, 300))
+            unmarked.placement_scale_ratio = 2.4
+            following = self._make_problem_entry(root, "following", Box(0, 0, 380, 300))
+
+            _records, unmarked_placements = build_image_only_records(
+                [unmarked, following],
+                template,
+                crop_format=problem_board.CROP_FORMAT_V2,
+            )
+
+            self.assertEqual(1.6, unmarked_placements[0]["placement_scale_ratio"])
+            self.assertEqual(1.2, unmarked_placements[1]["start_y_pages"])
+            self.assertFalse(unmarked_placements[0]["preserve_legacy_placement_scale"])
+
+            marked = self._make_problem_entry(root, "marked", Box(0, 0, 380, 300))
+            marked.placement_scale_ratio = 2.4
+            marked.preserve_legacy_placement_scale = True
+            marked_following = self._make_problem_entry(root, "marked-following", Box(0, 0, 380, 300))
+
+            inputs = problem_board.placement_inputs([marked, marked_following])
+            self.assertEqual(2.4, inputs[0].metadata["placement_scale_ratio"])
+            self.assertTrue(inputs[0].metadata["reserve_scaled_height"])
+
+            _records, marked_placements = build_image_only_records(
+                [marked, marked_following],
+                template,
+                crop_format=problem_board.CROP_FORMAT_V2,
+            )
+
+            self.assertEqual(2.4, marked_placements[0]["placement_scale_ratio"])
+            self.assertEqual(2.4, marked_placements[0]["snapped_next_start_y_pages"])
+            self.assertEqual(2.4, marked_placements[1]["start_y_pages"])
+            self.assertTrue(marked_placements[0]["preserve_legacy_placement_scale"])
+            self.assertLessEqual(
+                marked_placements[0]["record_bottom_y_pages"],
+                marked_placements[1]["record_top_y_pages"],
+            )
+
+    def test_problem_entry_conversion_accepts_legacy_scale_only_with_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crop_path = root / "problem.png"
+            Image.new("RGB", (380, 300), "white").save(crop_path)
+            base_problem = {
+                "id": "problem-1",
+                "title": "1.",
+                "subject": "math",
+                "imagePath": crop_path.resolve().as_uri(),
+                "bbox": {"left": 0, "top": 0, "width": 380, "height": 300},
+                "placementScaleRatio": 2.4,
+            }
+
+            unmarked = _problems_to_entries([base_problem])[0]
+            marked = _problems_to_entries([
+                {**base_problem, "preserveLegacyPlacementScale": True}
+            ])[0]
+
+            self.assertFalse(unmarked.preserve_legacy_placement_scale)
+            self.assertTrue(marked.preserve_legacy_placement_scale)
 
     def test_v2_preserves_safe_300_dpi_page_and_bounds_oversized_scan(self):
         self.assertEqual(

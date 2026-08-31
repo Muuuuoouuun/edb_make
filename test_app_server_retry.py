@@ -38,6 +38,20 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("https://example.test/update.json", app_server._normalize_update_url("https://example.test/update.json"))
         self.assertEqual("http://127.0.0.1:9999/update.json", app_server._normalize_update_url("http://127.0.0.1:9999/update.json"))
 
+    def test_persisted_noncontinuous_scale_marks_only_legacy_session_values(self):
+        self.assertTrue(app_server._problem_has_persisted_legacy_placement_scale({
+            "placementScaleRatio": 2.4,
+            "inputIntent": "single-problem",
+        }))
+        self.assertFalse(app_server._problem_has_persisted_legacy_placement_scale({
+            "placementScaleRatio": 1.6,
+            "inputIntent": "single-problem",
+        }))
+        self.assertFalse(app_server._problem_has_persisted_legacy_placement_scale({
+            "placementScaleRatio": 2.4,
+            "inputIntent": "page-as-is",
+        }))
+
     def test_update_config_normalizes_local_snake_case_overrides(self):
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
@@ -3972,7 +3986,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
                 )
 
             self.assertEqual([50], captured["render_page_counts"])
-            self.assertFalse(captured["reserve_image_layout_height"])
+            self.assertTrue(captured["reserve_image_layout_height"])
             self.assertFalse(captured["expand_board_capacity"])
             self.assertEqual([50], captured["page_count_hints"])
             self.assertEqual(50, parts[0]["pageCountHint"])

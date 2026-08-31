@@ -286,7 +286,6 @@ const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 const BOARD_COLUMN_MIN = 1;
 const BOARD_COLUMN_MAX = 3;
-const BOARD_PAGE_HEIGHT_PAGES = 1;
 const PLACEMENT_EPSILON_PAGES = 1e-9;
 const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
 const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
@@ -297,6 +296,7 @@ const DEFAULT_PLACEMENT_SCALE_RATIO = 1;
 const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_FIT_WIDTH_SCALE_RATIO = 3.0;
+const AUTO_SCALE_MAX_REDUCTION_RATIO = 0.06;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
 const ADJACENT_RETRY_PADDING_RATIO = 0.16;
@@ -605,7 +605,29 @@ function itemUsesContinuousPageFlow(item){
 }
 
 function placementScaleLimitForItem(item){
-  return itemUsesContinuousPageFlow(item) ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX;
+  if (itemUsesContinuousPageFlow(item)) return PLACEMENT_FIT_WIDTH_SCALE_RATIO;
+  const persistedScale = Number(item?.placementScaleRatio ?? item?.placement_scale_ratio);
+  if (Number.isFinite(persistedScale) && persistedScale > PLACEMENT_SCALE_MAX) {
+    // Older sessions could persist a regular item above today's editor limit.
+    // Preserve that value until the user explicitly changes it instead of
+    // silently rewriting the session while it is merely being loaded.
+    return Math.min(PLACEMENT_FIT_WIDTH_SCALE_RATIO, persistedScale);
+  }
+  return PLACEMENT_SCALE_MAX;
+}
+
+function initialPlacementScaleRatio(problem, usesContinuousFlow = false){
+  const rawScale = problem?.placementScaleRatio ?? problem?.placement_scale_ratio;
+  const numericScale = Number(rawScale);
+  const preserveLegacyScale = !usesContinuousFlow
+    && Number.isFinite(numericScale)
+    && numericScale > PLACEMENT_SCALE_MAX;
+  return normalizePlacementScaleRatio(
+    rawScale,
+    usesContinuousFlow || preserveLegacyScale
+      ? PLACEMENT_FIT_WIDTH_SCALE_RATIO
+      : PLACEMENT_SCALE_MAX
+  );
 }
 
 function itemRenderedHeightPages(item, scaleRatio = item?.placementScaleRatio){
@@ -615,10 +637,158 @@ function itemRenderedHeightPages(item, scaleRatio = item?.placementScaleRatio){
   return heightPages * scale;
 }
 
+function scaleNearPreviousSlotBoundary(item, startPages, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  const currentScale = normalizePlacementScaleRatio(
+    item?.placementScaleRatio ?? item?.placement_scale_ratio,
+    placementScaleLimitForItem(item)
+  );
+  if (
+    !item
+    || itemUsesContinuousPageFlow(item)
+    || currentScale < DEFAULT_PLACEMENT_SCALE_RATIO
+    || currentScale > PLACEMENT_SCALE_MAX
+    || !Number.isFinite(slotHeight)
+    || slotHeight <= 0
+  ) {
+    return currentScale;
+  }
+  const heightPages = itemHeightPages(item);
+  const rowStartPages = Number.isFinite(startPages) ? Math.max(0, startPages) : 0;
+  const renderedBottomPages = rowStartPages + heightPages * currentScale;
+  const previousBoundaryPages = Math.floor(
+    (renderedBottomPages + PLACEMENT_EPSILON_PAGES) / slotHeight
+  ) * slotHeight;
+  if (renderedBottomPages - previousBoundaryPages <= PLACEMENT_EPSILON_PAGES) {
+    return currentScale;
+  }
+  const targetScale = (previousBoundaryPages - rowStartPages) / heightPages;
+  const scaleReductionRatio = currentScale > 0
+    ? (currentScale - targetScale) / currentScale
+    : Infinity;
+  return targetScale >= PLACEMENT_SCALE_MIN
+    && targetScale < currentScale
+    && scaleReductionRatio <= AUTO_SCALE_MAX_REDUCTION_RATIO + PLACEMENT_EPSILON_PAGES
+    ? targetScale
+    : currentScale;
+}
+
+function autoScaleItemNearPreviousSlotBoundary(item, startPages, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  if (!item) return item;
+  const currentScale = normalizePlacementScaleRatio(
+    item.placementScaleRatio ?? item.placement_scale_ratio,
+    placementScaleLimitForItem(item)
+  );
+  const resolvedScale = scaleNearPreviousSlotBoundary(item, startPages, slotHeight);
+  if (Math.abs(resolvedScale - currentScale) <= PLACEMENT_EPSILON_PAGES) return item;
+  return {
+    ...item,
+    placementScaleRatio: resolvedScale,
+    placement_scale_ratio: resolvedScale,
+    _previewAutoScaleAdjusted: true,
+    _previewOriginalScaleRatio: currentScale,
+  };
+}
+
+function classinPageNumberForRenderedEnd(endPages, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  const normalizedSlotHeight = Number.isFinite(slotHeight) && slotHeight > 0
+    ? slotHeight
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  const normalizedEndPages = Number.isFinite(endPages) ? Math.max(0, endPages) : 0;
+  return Math.max(
+    1,
+    Math.ceil((normalizedEndPages - PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight)
+  );
+}
+
+function deriveBoardPreviewEstimate(layoutItems, activeId, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  const items = Array.isArray(layoutItems) ? layoutItems : [];
+  const normalizedSlotHeight = Number.isFinite(slotHeight) && slotHeight > 0
+    ? slotHeight
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  const rows = new Map();
+  let reservedEndPages = 0;
+  let autoScaleAdjustedCount = 0;
+
+  items.forEach(item => {
+    const startPages = Number.isFinite(Number(item?.startYPages))
+      ? Math.max(0, Number(item.startYPages))
+      : 0;
+    const renderedHeightPages = itemRenderedHeightPages(item);
+    const renderedBottomPages = Number.isFinite(Number(item?.renderedBottomYPages))
+      ? Math.max(startPages, Number(item.renderedBottomYPages))
+      : startPages + renderedHeightPages;
+    const nextStartPages = Number.isFinite(Number(item?.snappedNextStartYPages))
+      ? Math.max(renderedBottomPages, Number(item.snappedNextStartYPages))
+      : renderedBottomPages;
+    const rowKey = startPages.toFixed(6);
+    rows.set(rowKey, Math.max(rows.get(rowKey) || 0, renderedBottomPages - startPages));
+    reservedEndPages = Math.max(reservedEndPages, nextStartPages);
+    if (item?._previewAutoScaleAdjusted === true) autoScaleAdjustedCount += 1;
+  });
+
+  const usedHeightPages = [...rows.values()].reduce((sum, heightPages) => sum + heightPages, 0);
+  const blankHeightPages = Math.max(0, reservedEndPages - usedHeightPages);
+  const classinPageCount = items.length
+    ? Math.max(1, Math.ceil((reservedEndPages - PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight))
+    : 0;
+  const displayPageCount = items.length
+    ? Math.max(1, Math.ceil(reservedEndPages - PLACEMENT_EPSILON_PAGES))
+    : 1;
+  const activeItem = activeId == null
+    ? null
+    : items.find(item => String(item?.id) === String(activeId)) || null;
+  let active = null;
+  if (activeItem) {
+    const startPages = Number.isFinite(Number(activeItem.startYPages))
+      ? Math.max(0, Number(activeItem.startYPages))
+      : 0;
+    const renderedBottomPages = Number.isFinite(Number(activeItem.renderedBottomYPages))
+      ? Math.max(startPages, Number(activeItem.renderedBottomYPages))
+      : startPages + itemRenderedHeightPages(activeItem);
+    const nextStartPages = Number.isFinite(Number(activeItem.snappedNextStartYPages))
+      ? Math.max(renderedBottomPages, Number(activeItem.snappedNextStartYPages))
+      : renderedBottomPages;
+    const scaleRatio = normalizePlacementScaleRatio(
+      activeItem.placementScaleRatio ?? activeItem.placement_scale_ratio,
+      placementScaleLimitForItem(activeItem)
+    );
+    const originalScaleRatio = activeItem._previewAutoScaleAdjusted === true
+      && Number.isFinite(Number(activeItem._previewOriginalScaleRatio))
+      ? Number(activeItem._previewOriginalScaleRatio)
+      : null;
+    active = {
+      startPages,
+      renderedBottomPages,
+      nextStartPages,
+      blankHeightPages: Math.max(0, nextStartPages - renderedBottomPages),
+      scaleRatio,
+      classinStartPage: Math.floor((startPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
+      classinEndPage: classinPageNumberForRenderedEnd(renderedBottomPages, normalizedSlotHeight),
+      classinNextPage: Math.floor((nextStartPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
+      autoScaleAdjusted: originalScaleRatio !== null && originalScaleRatio > scaleRatio + PLACEMENT_EPSILON_PAGES,
+      autoScaleReductionRatio: originalScaleRatio !== null && originalScaleRatio > 0
+        ? Math.max(0, (originalScaleRatio - scaleRatio) / originalScaleRatio)
+        : 0,
+    };
+  }
+
+  return {
+    classinPageCount,
+    displayPageCount,
+    reservedEndPages,
+    usedHeightPages,
+    blankHeightPages,
+    utilizationRatio: reservedEndPages > 0 ? Math.min(1, usedHeightPages / reservedEndPages) : 0,
+    autoScaleAdjustedCount,
+    active,
+  };
+}
+
 function placementSlotHeightPages(item){
   if (!item) return 0;
   const heightPages = itemHeightPages(item);
   const renderedHeightPages = itemRenderedHeightPages(item);
+  if (itemUsesContinuousPageFlow(item)) return renderedHeightPages;
   const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
   const snappedNext = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startPages + renderedHeightPages, item.snappedNextStartYPages)
@@ -631,7 +801,10 @@ function maxPlacementScaleRatio(item){
   if (itemUsesContinuousPageFlow(item)) return PLACEMENT_FIT_WIDTH_SCALE_RATIO;
   const heightPages = itemHeightPages(item);
   const slotHeightPages = placementSlotHeightPages(item);
-  return Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, slotHeightPages / heightPages));
+  return Math.max(
+    PLACEMENT_SCALE_MIN,
+    Math.min(placementScaleLimitForItem(item), slotHeightPages / heightPages)
+  );
 }
 
 function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio){
@@ -652,9 +825,13 @@ function applyPlacementPatchToItem(item, patch){
     }
   }
   if (patch.fitWidth) {
+    delete next._previewAutoScaleAdjusted;
+    delete next._previewOriginalScaleRatio;
     return fitWidthContinuousPageItem(next, patch);
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'scaleRatio')) {
+    delete next._previewAutoScaleAdjusted;
+    delete next._previewOriginalScaleRatio;
     next.placementScaleRatio = normalizePlacementScaleRatio(
       patch.scaleRatio,
       maxPlacementScaleRatio(next)
@@ -712,20 +889,16 @@ function isContinuousPlacementItem(item){
 
 function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!item) return slotHeight;
-  const heightPages = itemHeightPages(item);
   const renderedHeightPages = itemRenderedHeightPages(item);
-  const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
-  const snappedNext = Number.isFinite(item.snappedNextStartYPages) ? Math.max(0, item.snappedNextStartYPages) : null;
-  const savedSpan = startPages !== null && snappedNext !== null && snappedNext > startPages
-    ? snappedNext - startPages
-    : 0;
   if (isContinuousPlacementItem(item)) {
-    return Math.max(heightPages, renderedHeightPages, savedSpan);
+    // Continuous page-as-is flow follows the current rendered height. A span
+    // saved at a previous scale must not survive scale-down as blank space.
+    return renderedHeightPages;
   }
   if (renderedHeightPages > slotHeight + PLACEMENT_EPSILON_PAGES) {
-    return Math.max(heightPages, renderedHeightPages);
+    return renderedHeightPages;
   }
-  return Math.max(heightPages, renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight));
+  return Math.max(renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight));
 }
 
 function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
@@ -736,7 +909,7 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
   let index = 0;
 
   while (index < items.length) {
-    const first = items[index];
+    const first = autoScaleItemNearPreviousSlotBoundary(items[index], cursorPages, slotHeight);
     const firstContinuous = isContinuousPlacementItem(first);
     const firstLong = !firstContinuous
       && itemRenderedHeightPages(first) > slotHeight + PLACEMENT_EPSILON_PAGES;
@@ -746,7 +919,7 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
       index += 1;
     } else {
       while (index < items.length && rowItems.length < columnCount) {
-        const candidate = items[index];
+        const candidate = autoScaleItemNearPreviousSlotBoundary(items[index], cursorPages, slotHeight);
         const candidateContinuous = isContinuousPlacementItem(candidate);
         const candidateLong = !candidateContinuous
           && itemRenderedHeightPages(candidate) > slotHeight + PLACEMENT_EPSILON_PAGES;
@@ -774,7 +947,7 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
     const snappedNextStartYPages = rowContinuous
       ? flowEndPages
       : rowLong
-        ? Math.max(flowEndPages, snapUpPages(flowEndPages, BOARD_PAGE_HEIGHT_PAGES))
+        ? Math.max(flowEndPages, snapUpPages(flowEndPages, slotHeight))
         : Math.max(flowEndPages, rowStartPages + snapUpPages(rowFlowSpanPages, slotHeight));
     const boardRowHeightPages = Math.max(0, snappedNextStartYPages - rowStartPages);
     const rowColumnCount = rowContinuous || rowLong ? BOARD_COLUMN_MIN : columnCount;
@@ -6264,16 +6437,26 @@ function BoardStage({
     return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
   }, [items, pageH, columnCount]);
 
+  const previewEstimate = useMemo(
+    () => deriveBoardPreviewEstimate(layout.items, activeId, DEFAULT_SLOT_HEIGHT_PAGES),
+    [layout.items, activeId]
+  );
   const [currentPage, setCurrentPage] = useState(1);
-  const visibleCurrentPage = Math.min(currentPage, layout.totalPages);
+  const visibleCurrentPage = Math.min(
+    currentPage,
+    Math.max(1, previewEstimate.classinPageCount)
+  );
 
   useLayoutEffect(() => {
     if (restoredScrollRef.current || !scrollRef.current) return;
     restoredScrollRef.current = true;
     syncLock.current = Date.now();
     scrollRef.current.scrollTop = Math.max(0, boardScrollTopRef.current);
-    setCurrentPage(Math.min(layout.totalPages, Math.floor(scrollRef.current.scrollTop / pageH) + 1));
-  }, [layout.totalPages, pageH]);
+    setCurrentPage(Math.min(
+      Math.max(1, previewEstimate.classinPageCount),
+      classinBoardPageNumberAtOffset(scrollRef.current.scrollTop / pageH)
+    ));
+  }, [previewEstimate.classinPageCount, pageH]);
 
   useEffect(() => () => {
     onSaveScrollTop?.(boardScrollTopRef.current);
@@ -6340,7 +6523,10 @@ function BoardStage({
   const syncBoardScrollState = () => {
     const c = scrollRef.current;
     if (!c) return;
-    const nextPage = Math.min(layout.totalPages, Math.floor(c.scrollTop / pageH) + 1);
+    const nextPage = Math.min(
+      Math.max(1, previewEstimate.classinPageCount),
+      classinBoardPageNumberAtOffset(c.scrollTop / pageH)
+    );
     setCurrentPage(prev => prev === nextPage ? prev : nextPage);
     if (positionDragRef.current) return;
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
@@ -6757,13 +6943,41 @@ function BoardStage({
       }))
     : [];
 
-  // page-boundary divider lines (between page N and N+1)
+  const activeMaxTopOffsetPages = activePlacement
+    ? Math.max(
+        0,
+        activePlacement.snappedNext
+          - activePlacement.startPages
+          - activePlacement.renderedHeightPages
+      )
+    : 0;
+  const activeRenderedTopPages = activePlacement
+    ? activePlacement.startPages
+      + normalizePlacementYRatio(activePlacement.yRatio) * activeMaxTopOffsetPages
+    : 0;
+  const activeRenderedBottomPages = activePlacement
+    ? activeRenderedTopPages + activePlacement.renderedHeightPages
+    : 0;
+  const activeTrailingGapPages = activePlacement
+    ? Math.max(0, activePlacement.snappedNext - activeRenderedBottomPages)
+    : 0;
+  const activeGuideWidth = contentW > 0
+    ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
+    : 0;
+  const activeGuideLeft = activePlacement && activeGuideWidth > 0
+    ? normalizePlacementXRatio(activePlacement.xRatio)
+      * Math.max(0, contentW - activeGuideWidth)
+    : 0;
+
+  // True ClassIn boundaries: one output page is exactly 1.2 internal height units.
   const dividers = [];
-  for (let i = 1; i < Math.min(layout.totalPages, 200); i++){
+  for (let i = 1; i < Math.min(previewEstimate.classinPageCount, 200); i++){
+    const offsetPages = i * DEFAULT_SLOT_HEIGHT_PAGES;
     dividers.push({
-      top: i * pageH,
-      previewPage: i + 1,
-      classinPage: classinBoardPageNumberAtOffset(i),
+      top: offsetPages * pageH,
+      classinPage: i + 1,
+      offsetPages,
+      major: (i + 1) % 5 === 0,
     });
   }
 
@@ -6785,6 +6999,65 @@ function BoardStage({
         </div>
 
         <div className="stage-wrap">
+          <div
+            className="stage-estimate-bar"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            aria-label={`ClassIn 1.2 기준 예상 ${previewEstimate.classinPageCount}페이지. 사용률 ${Math.round(previewEstimate.utilizationRatio * 100)}퍼센트. 전체 여백 ${previewEstimate.blankHeightPages.toFixed(1)}p.`}
+          >
+            <span className="stage-estimate-primary">
+              예상 ClassIn {previewEstimate.classinPageCount}페이지
+            </span>
+            <div className="stage-estimate-track">
+              <span
+                className="stage-estimate-metric"
+                title={`예약 끝 ${previewEstimate.reservedEndPages.toFixed(2)}p · 편집기 화면 높이 기준 약 ${previewEstimate.displayPageCount}개`}
+              >
+                미리보기 <strong>약 {previewEstimate.displayPageCount}화면</strong>
+              </span>
+              <span className="stage-estimate-metric">
+                사용률 <strong>{Math.round(previewEstimate.utilizationRatio * 100)}%</strong>
+              </span>
+              <span
+                className="stage-estimate-metric"
+                title={`예약 ${previewEstimate.reservedEndPages.toFixed(2)}p · 실제 사용 ${previewEstimate.usedHeightPages.toFixed(2)}p`}
+              >
+                전체 여백 <strong>{previewEstimate.blankHeightPages.toFixed(1)}p</strong>
+              </span>
+              {previewEstimate.active && (
+                <>
+                  <span
+                    className="stage-estimate-metric is-selected"
+                    title={`시작 ${previewEstimate.active.startPages.toFixed(2)}p · 표시 끝 ${previewEstimate.active.renderedBottomPages.toFixed(2)}p`}
+                  >
+                    선택 {String(activeIndex + 1).padStart(2, '0')}
+                    <strong>C{previewEstimate.active.classinStartPage}–C{previewEstimate.active.classinEndPage}</strong>
+                  </span>
+                  <span
+                    className="stage-estimate-metric is-next"
+                    title={`다음 시작 ${previewEstimate.active.nextStartPages.toFixed(2)}p`}
+                  >
+                    다음 <strong>C{previewEstimate.active.classinNextPage}</strong>
+                  </span>
+                  <span
+                    className="stage-estimate-metric"
+                    title={previewEstimate.active.autoScaleAdjusted
+                      ? `경계 자동 맞춤 −${(previewEstimate.active.autoScaleReductionRatio * 100).toFixed(1)}%`
+                      : '현재 문항 표시 배율'}
+                  >
+                    {previewEstimate.active.autoScaleAdjusted ? '자동 맞춤' : '배율'}
+                    <strong>{Math.round(previewEstimate.active.scaleRatio * 100)}%</strong>
+                  </span>
+                </>
+              )}
+            </div>
+            <div className="stage-estimate-legend" aria-hidden="true">
+              <span className="stage-estimate-key page">1.2 경계</span>
+              <span className="stage-estimate-key next">다음 시작</span>
+            </div>
+          </div>
+
           <div className="stage-board" style={{ background: boardColor }}>
 
             <div className="stage-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -6795,12 +7068,46 @@ function BoardStage({
               >
                 {/* page boundary dividers — scroll with content */}
                 {dividers.map(divider => (
-                  <div key={divider.previewPage} className="page-divider" style={{ top: divider.top }}>
+                  <div
+                    key={divider.classinPage}
+                    className={`page-divider is-classin-grid ${divider.major ? 'is-major' : ''}`}
+                    style={{ top: divider.top }}
+                    aria-hidden="true"
+                  >
                     <span className="label">
-                      — {divider.previewPage} 페이지 <span className="classin-page">(클래스인 1.2 기준 {divider.classinPage}p)</span> —
+                      ClassIn {divider.classinPage}p
+                      <span className="classin-page"> · 누적 {divider.offsetPages.toFixed(1)}p</span>
                     </span>
                   </div>
                 ))}
+
+                {activePlacement && activeTrailingGapPages > 0.05 && (
+                  <div
+                    className="active-slot-gap"
+                    style={{
+                      top: activeRenderedBottomPages * pageH,
+                      height: activeTrailingGapPages * pageH,
+                      ...(activeGuideWidth > 0
+                        ? { left: activeGuideLeft, width: activeGuideWidth }
+                        : null),
+                    }}
+                    aria-hidden="true"
+                  >
+                    <span className="label">여백 {activeTrailingGapPages.toFixed(1)}p</span>
+                  </div>
+                )}
+
+                {activePlacement && previewEstimate.active && (
+                  <div
+                    className="active-next-boundary"
+                    style={{ top: activePlacement.snappedNext * pageH }}
+                    aria-hidden="true"
+                  >
+                    <span className="label">
+                      다음 C{previewEstimate.active.classinNextPage} · {activePlacement.snappedNext.toFixed(1)}p
+                    </span>
+                  </div>
+                )}
 
                 {columnGuides.map(guide => (
                   <div
@@ -6816,6 +7123,12 @@ function BoardStage({
                 {layout.items.map((it, i) => {
                   const p = layout.positions[i];
                   if (!p) return null;
+                  const tileRenderedBottomPages = p.startPages + p.renderedHeightPages;
+                  const tileClassinStartPage = classinBoardPageNumberAtOffset(p.startPages);
+                  const tileClassinEndPage = classinPageNumberForRenderedEnd(
+                    tileRenderedBottomPages,
+                    DEFAULT_SLOT_HEIGHT_PAGES
+                  );
                   const tileWidth = contentW > 0
                     ? isContinuousPlacementItem(it)
                       ? Math.max(120, contentW / PLACEMENT_FIT_WIDTH_SCALE_RATIO)
@@ -6878,8 +7191,13 @@ function BoardStage({
                             {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
                           </span>
                         )}
-                        {p.spans > 1 && (
-                          <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
+                        {tileClassinEndPage > tileClassinStartPage && (
+                          <span
+                            className="span-mark"
+                            title={`ClassIn ${tileClassinStartPage}–${tileClassinEndPage}페이지`}
+                          >
+                            C{tileClassinStartPage}–C{tileClassinEndPage}
+                          </span>
                         )}
                         {p.columnCount > 1 && (
                           <span className="column-mark">칸 {p.columnIndex + 1}</span>
@@ -6909,7 +7227,11 @@ function BoardStage({
                 >
                   <span className="plus">＋</span>
                   자료 추가
-                  <small>{layout.totalPages > 50 ? `${layout.totalPages}p` : 'auto pages'}</small>
+                  <small>
+                    {previewEstimate.classinPageCount > 0
+                      ? `예상 C${previewEstimate.classinPageCount}`
+                      : '자동 계산'}
+                  </small>
                 </div>
               </div>
             </div>
@@ -6917,8 +7239,8 @@ function BoardStage({
             <div className="board-pageind">
               <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
               <span className="sep">/</span>
-              <span className="total">{String(layout.totalPages).padStart(2,'0')}</span>
-              <span style={{marginLeft:6, opacity:.6}}>p</span>
+              <span className="total">{String(Math.max(1, previewEstimate.classinPageCount)).padStart(2,'0')}</span>
+              <span style={{marginLeft:6, opacity:.72}}>ClassIn</span>
             </div>
 
             <div className="vignette" />
@@ -6932,6 +7254,11 @@ function BoardStage({
               <span className="pip" />
               {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
             </span>
+            {previewEstimate.autoScaleAdjustedCount > 0 && !previewEstimate.active?.autoScaleAdjusted && (
+              <span className="chip" title="경계에 조금 넘친 문항만 최대 6% 범위에서 자동으로 맞췄습니다">
+                자동 맞춤 {previewEstimate.autoScaleAdjustedCount}개
+              </span>
+            )}
             {activePlacement && (
               <span className="chip">
                 행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
@@ -6957,10 +7284,10 @@ function BoardStage({
           </div>
           <span
             className="stage-status-summary"
-            aria-label={`${processedCount}/${items.length} 처리됨 · ${layout.totalPages}페이지`}
-            title={`${processedCount}/${items.length} 처리됨 · ${layout.totalPages}p`}
+            aria-label={`${processedCount}/${items.length} 처리됨 · ClassIn ${previewEstimate.classinPageCount}페이지`}
+            title={`${processedCount}/${items.length} 처리됨 · 예약 끝 ${previewEstimate.reservedEndPages.toFixed(2)}p`}
           >
-            {processedCount}/{items.length} · {layout.totalPages}p
+            {processedCount}/{items.length} · C{previewEstimate.classinPageCount}
           </span>
         </div>
       </div>
@@ -7225,6 +7552,7 @@ function SidePanel({
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [compareX, setCompareX] = useState(50);
   const [keyDraft, setKeyDraft] = useState('');
   const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
@@ -7536,6 +7864,7 @@ function SidePanel({
   };
   const focusManualCrop = () => {
     setAdvancedSettingsOpen(true);
+    setPreviewExpanded(true);
     setPreviewMode('raw');
     window.requestAnimationFrame(() => {
       cropControlRef.current?.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -7645,34 +7974,53 @@ function SidePanel({
                   </div>
                 </div>
 
-                <div className="item-preview" ref={wrapRef}>
-                  <div className="ptab">
-                    <button className={previewMode==='raw' ? 'on' : ''} onClick={() => setPreviewMode('raw')}>원본</button>
-                    <button className={previewMode==='chalk' ? 'on' : ''} onClick={() => setPreviewMode('chalk')}>칠판용</button>
-                    <button className={previewMode==='compare' ? 'on' : ''} onClick={() => setPreviewMode('compare')}>비교</button>
-                  </div>
+                <div className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`} ref={wrapRef}>
+                  <button
+                    type="button"
+                    className="item-preview-toggle"
+                    aria-expanded={previewExpanded}
+                    aria-controls="item-image-preview-content"
+                    onClick={() => setPreviewExpanded(open => !open)}
+                  >
+                    <span className="item-preview-toggle-copy">
+                      <strong>이미지 미리보기</strong>
+                      <small>{previewMode === 'raw' ? '원본' : previewMode === 'chalk' ? '칠판용' : '비교'}</small>
+                    </span>
+                    <span className="item-preview-toggle-icon" aria-hidden="true">
+                      {previewExpanded ? Icon.chevronUp : Icon.chevronDown}
+                    </span>
+                  </button>
 
-                  {previewMode === 'compare' ? (
-                    <div className="canvas-mini" style={{ background: 'white' }}>
-                      <div className="inner"><TileImage item={item} forceMode="raw" /></div>
-                      <div style={{
-                        position: 'absolute', inset: 0,
-                        clipPath: `inset(0 0 0 ${compareX}%)`,
-                        background: boardColor,
-                      }}>
-                        <div className="inner"><TileImage item={item} forceMode="chalk" /></div>
+                  {previewExpanded && (
+                    <div className="item-preview-content" id="item-image-preview-content">
+                      <div className="ptab">
+                        <button className={previewMode==='raw' ? 'on' : ''} onClick={() => setPreviewMode('raw')}>원본</button>
+                        <button className={previewMode==='chalk' ? 'on' : ''} onClick={() => setPreviewMode('chalk')}>칠판용</button>
+                        <button className={previewMode==='compare' ? 'on' : ''} onClick={() => setPreviewMode('compare')}>비교</button>
                       </div>
-                      <div className="compare-handle"
-                           style={{ left: `${compareX}%` }}
-                           onMouseDown={() => { dragging.current = true; }}/>
-                    </div>
-                  ) : (
-                    <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
-                         style={previewMode==='chalk' ? { background: boardColor } : null}>
-                      <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
+
+                      {previewMode === 'compare' ? (
+                        <div className="canvas-mini" style={{ background: 'white' }}>
+                          <div className="inner"><TileImage item={item} forceMode="raw" /></div>
+                          <div style={{
+                            position: 'absolute', inset: 0,
+                            clipPath: `inset(0 0 0 ${compareX}%)`,
+                            background: boardColor,
+                          }}>
+                            <div className="inner"><TileImage item={item} forceMode="chalk" /></div>
+                          </div>
+                          <div className="compare-handle"
+                               style={{ left: `${compareX}%` }}
+                               onMouseDown={() => { dragging.current = true; }}/>
+                        </div>
+                      ) : (
+                        <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
+                             style={previewMode==='chalk' ? { background: boardColor } : null}>
+                          <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
+                        </div>
+                      )}
                     </div>
                   )}
-
                 </div>
 
                 <div className="panel-section-hd">
@@ -10174,10 +10522,7 @@ function mapProblemToItem(problem, idx){
   const problemPlacementMode = problem.placementMode || problem.placement_mode || null;
   const problemUsesContinuousFlow = (problemInputIntent && normalizeInputIntent(problemInputIntent) === 'page-as-is')
     || problemPlacementMode === 'continuous-page-as-is';
-  const initialScale = normalizePlacementScaleRatio(
-    problem.placementScaleRatio ?? problem.placement_scale_ratio,
-    problemUsesContinuousFlow ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX
-  );
+  const initialScale = initialPlacementScaleRatio(problem, problemUsesContinuousFlow);
   const actualHeightPages = firstPositiveFiniteNumber(
     problem.actualHeightPages,
     problem.actual_height_pages,

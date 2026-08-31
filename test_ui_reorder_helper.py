@@ -430,14 +430,14 @@ class TestUiReorderHelper(unittest.TestCase):
               { id: 'p13', heightFrac: 1.1, placementScaleRatio: 1.4 },
               { id: 'p14', heightFrac: 0.8, placementScaleRatio: 1.0 },
             ]);
-            if (reflowed[0].snappedNextStartYPages !== 2) {
-              throw new Error(`expected scaled long image to ceil to page 2, got ${reflowed[0].snappedNextStartYPages}`);
+            if (reflowed[0].snappedNextStartYPages !== 2.4) {
+              throw new Error(`expected scaled long image to reserve two 1.2p slots, got ${reflowed[0].snappedNextStartYPages}`);
             }
             if (reflowed[0].renderedBottomYPages !== 1.54) {
               throw new Error(`expected rendered bottom 1.54 pages, got ${reflowed[0].renderedBottomYPages}`);
             }
-            if (reflowed[1].startYPages !== 2) {
-              throw new Error(`expected following item to start at page 2, got ${reflowed[1].startYPages}`);
+            if (reflowed[1].startYPages !== 2.4) {
+              throw new Error(`expected following item to start at the next 1.2p boundary, got ${reflowed[1].startYPages}`);
             }
             if (sandbox.placementSlotHeightPages(reflowed[0]) < 1.54) {
               throw new Error('slot height should include scaled rendered height');
@@ -475,11 +475,11 @@ class TestUiReorderHelper(unittest.TestCase):
             if (reflowed[1].boardColumnCount !== 1 || reflowed[1].placementXRatio !== 0) {
               throw new Error(`long item should reserve a full row, got ${reflowed[1].boardColumnCount}/${reflowed[1].placementXRatio}`);
             }
-            if (reflowed[0].snappedNextStartYPages !== 1.2 || reflowed[1].snappedNextStartYPages !== 3) {
-              throw new Error(`long row should ceil to page 3, got ${reflowed[0].snappedNextStartYPages}/${reflowed[1].snappedNextStartYPages}`);
+            if (reflowed[0].snappedNextStartYPages !== 1.2 || reflowed[1].snappedNextStartYPages !== 3.6) {
+              throw new Error(`long row should ceil to the absolute 1.2p grid, got ${reflowed[0].snappedNextStartYPages}/${reflowed[1].snappedNextStartYPages}`);
             }
-            if (reflowed[2].startYPages !== 3) {
-              throw new Error(`next row should start at page 3, got ${reflowed[2].startYPages}`);
+            if (reflowed[2].startYPages !== 3.6) {
+              throw new Error(`next row should start at 3.6p, got ${reflowed[2].startYPages}`);
             }
             const magnetReflowed = sandbox.reflowItemsForBoardOrder([
               { id: 'p4', heightFrac: 0.5, placementScaleRatio: 1.0, placementXEdited: true, placementXRatio: 0.5, placementMagnetColumnIndex: 1 },
@@ -510,7 +510,7 @@ class TestUiReorderHelper(unittest.TestCase):
               { id: 'long', heightFrac: 'bad', actual_height_pages: '2.05' },
               { id: 'next', heightFrac: 0.8 },
             ]);
-            if (aliased[0].heightFrac !== 2.05 || aliased[0].snappedNextStartYPages !== 3) {
+            if (aliased[0].heightFrac !== 2.05 || aliased[0].snappedNextStartYPages !== 2.4) {
               throw new Error(`valid snake-case height was not preserved: ${JSON.stringify(aliased[0])}`);
             }
             if (aliased[1].startYPages < aliased[0].renderedBottomYPages) {
@@ -521,11 +521,332 @@ class TestUiReorderHelper(unittest.TestCase):
               { id: 'edge', heightFrac: 1.2005 },
               { id: 'after', heightFrac: 0.8 },
             ]);
-            if (boundary[0].snappedNextStartYPages !== 2 || boundary[1].startYPages !== 2) {
-              throw new Error(`page ceil failed at the slot boundary: ${JSON.stringify(boundary)}`);
+            if (boundary[0].snappedNextStartYPages !== 1.2 || boundary[1].startYPages !== 1.2) {
+              throw new Error(`near-boundary scale-down failed at the slot boundary: ${JSON.stringify(boundary)}`);
             }
             if (boundary[1].startYPages < boundary[0].renderedBottomYPages) {
               throw new Error('boundary item was rounded down into an overlap');
+            }
+            """
+        )
+
+    def test_board_reflow_snaps_long_problem_to_absolute_12_page_grid(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'short-before', heightFrac: 0.8, placementScaleRatio: 1 },
+              { id: 'long', heightFrac: 1.43, placementScaleRatio: 1 },
+              { id: 'short-after', heightFrac: 0.8, placementScaleRatio: 1 },
+            ]);
+            const starts = reflowed.map(item => item.startYPages);
+            if (JSON.stringify(starts) !== JSON.stringify([0, 1.2, 3.6])) {
+              throw new Error(`expected absolute 1.2p stair-step [0,1.2,3.6], got ${JSON.stringify(starts)}`);
+            }
+            if (reflowed[1].renderedBottomYPages !== 2.63) {
+              throw new Error(`long problem bottom should remain 2.63p, got ${reflowed[1].renderedBottomYPages}`);
+            }
+            """
+        )
+
+    def test_board_reflow_auto_scales_small_boundary_overshoot(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'short-before', heightFrac: 0.8, placementScaleRatio: 1 },
+              { id: 'near-boundary', heightFrac: 1.26, placementScaleRatio: 1 },
+              { id: 'short-after', heightFrac: 0.8, placementScaleRatio: 1 },
+            ]);
+            const adjusted = reflowed[1];
+            const expectedScale = 1.2 / 1.26;
+            if (Math.abs(adjusted.placementScaleRatio - expectedScale) > 1e-9) {
+              throw new Error(`auto scale should fit 1.2p, got ${adjusted.placementScaleRatio}`);
+            }
+            if (adjusted.placement_scale_ratio !== adjusted.placementScaleRatio) {
+              throw new Error(`scale aliases diverged: ${JSON.stringify(adjusted)}`);
+            }
+            if (adjusted.renderedBottomYPages !== 2.4 || adjusted.snappedNextStartYPages !== 2.4) {
+              throw new Error(`auto-scaled geometry should end at 2.4p: ${JSON.stringify(adjusted)}`);
+            }
+            if (reflowed[2].startYPages !== 2.4) {
+              throw new Error(`following item should reuse the fitted boundary, got ${reflowed[2].startYPages}`);
+            }
+            """
+        )
+
+    def test_board_reflow_auto_scale_uses_six_percent_reduction_cutoff(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const withinCutoff = sandbox.reflowItemsForBoardOrder([
+              { id: 'within-cutoff', heightFrac: 6.21, placementScaleRatio: 1 },
+            ])[0];
+            if (Math.abs(withinCutoff.placementScaleRatio - (6 / 6.21)) > 1e-9) {
+              throw new Error(`6.21p should scale down to 6.0p: ${JSON.stringify(withinCutoff)}`);
+            }
+            if (withinCutoff.snappedNextStartYPages !== 6 || withinCutoff.renderedBottomYPages !== 6) {
+              throw new Error(`3.4% scale reduction should fit the previous boundary: ${JSON.stringify(withinCutoff)}`);
+            }
+
+            const outsideCutoff = sandbox.reflowItemsForBoardOrder([
+              { id: 'outside-cutoff', heightFrac: 6.407, placementScaleRatio: 1 },
+            ])[0];
+            if (outsideCutoff.placementScaleRatio !== 1 || outsideCutoff.snappedNextStartYPages !== 7.2) {
+              throw new Error(`6.35% reduction should keep its scale and next slot: ${JSON.stringify(outsideCutoff)}`);
+            }
+
+            const alreadyAligned = sandbox.reflowItemsForBoardOrder([
+              { id: 'already-aligned', heightFrac: 24, placementScaleRatio: 1 },
+            ])[0];
+            if (alreadyAligned.placementScaleRatio !== 1 || alreadyAligned.snappedNextStartYPages !== 24) {
+              throw new Error(`an exact long boundary must not lose one full slot: ${JSON.stringify(alreadyAligned)}`);
+            }
+            """
+        )
+
+    def test_board_reflow_auto_scale_preserves_continuous_and_user_reduced_scale(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const continuous = sandbox.reflowItemsForBoardOrder([
+              { id: 'continuous', heightFrac: 1.26, placementScaleRatio: 1, inputIntent: 'page-as-is' },
+            ])[0];
+            if (continuous.placementScaleRatio !== 1 || continuous.snappedNextStartYPages !== 1.26) {
+              throw new Error(`continuous flow semantics changed: ${JSON.stringify(continuous)}`);
+            }
+
+            const userReduced = sandbox.reflowItemsForBoardOrder([
+              { id: 'user-reduced', heightFrac: 1.26, placementScaleRatio: 0.95 },
+            ])[0];
+            if (userReduced.placementScaleRatio !== 0.95) {
+              throw new Error(`existing reduced scale changed: ${JSON.stringify(userReduced)}`);
+            }
+            if (userReduced.renderedBottomYPages !== 1.197 || userReduced.snappedNextStartYPages !== 1.2) {
+              throw new Error(`existing reduced geometry is inconsistent: ${JSON.stringify(userReduced)}`);
+            }
+            """
+        )
+
+    def test_board_preview_estimate_reports_classin_usage_and_selected_boundaries(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n'
+                + 'globalThis.deriveBoardPreviewEstimate = deriveBoardPreviewEstimate;\n'
+                + 'globalThis.applyPlacementPatchToItem = applyPlacementPatchToItem;\n',
+              sandbox
+            );
+
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              { id: 'row-a', heightFrac: 0.8, placementScaleRatio: 1 },
+              { id: 'row-b', heightFrac: 0.6, placementScaleRatio: 1 },
+              { id: 'near-boundary', heightFrac: 1.26, placementScaleRatio: 1 },
+              { id: 'row-c', heightFrac: 0.7, placementScaleRatio: 1 },
+            ], 1.2, 2);
+            const estimate = sandbox.deriveBoardPreviewEstimate(reflowed, 'near-boundary', 1.2);
+            if (estimate.classinPageCount !== 2 || estimate.displayPageCount !== 3) {
+              throw new Error(`page estimates should distinguish 1.2p ClassIn pages from 1.0 preview screens: ${JSON.stringify(estimate)}`);
+            }
+            if (Math.abs(estimate.reservedEndPages - 2.4) > 1e-9) {
+              throw new Error(`reserved end should be 2.4p: ${JSON.stringify(estimate)}`);
+            }
+            if (Math.abs(estimate.usedHeightPages - 2) > 1e-9 || Math.abs(estimate.blankHeightPages - 0.4) > 1e-9) {
+              throw new Error(`multi-column rows should count vertical use once: ${JSON.stringify(estimate)}`);
+            }
+            if (estimate.autoScaleAdjustedCount !== 1 || !estimate.active?.autoScaleAdjusted) {
+              throw new Error(`confirmed reflow adjustment should be identified: ${JSON.stringify(estimate)}`);
+            }
+            if (
+              estimate.active.classinStartPage !== 2
+              || estimate.active.classinEndPage !== 2
+              || estimate.active.classinNextPage !== 3
+            ) {
+              throw new Error(`selected ClassIn boundaries are wrong: ${JSON.stringify(estimate.active)}`);
+            }
+            if (
+              Math.abs(estimate.active.startPages - 1.2) > 1e-9
+              || Math.abs(estimate.active.renderedBottomPages - 2.4) > 1e-9
+              || Math.abs(estimate.active.nextStartPages - 2.4) > 1e-9
+            ) {
+              throw new Error(`selected raw p values are wrong: ${JSON.stringify(estimate.active)}`);
+            }
+
+            const manuallyReduced = sandbox.reflowItemsForBoardOrder([
+              { id: 'manual', heightFrac: 1.26, placementScaleRatio: 0.95 },
+            ], 1.2, 1);
+            const manualEstimate = sandbox.deriveBoardPreviewEstimate(manuallyReduced, 'manual', 1.2);
+            if (manualEstimate.autoScaleAdjustedCount !== 0 || manualEstimate.active.autoScaleAdjusted) {
+              throw new Error(`manual scale must remain neutral: ${JSON.stringify(manualEstimate)}`);
+            }
+
+            const explicitlyEdited = sandbox.applyPlacementPatchToItem(reflowed[2], { scaleRatio: 0.9 });
+            const editedEstimate = sandbox.deriveBoardPreviewEstimate([explicitlyEdited], 'near-boundary', 1.2);
+            if (editedEstimate.active.autoScaleAdjusted || editedEstimate.autoScaleAdjustedCount !== 0) {
+              throw new Error(`explicit scale edit should clear the automatic marker: ${JSON.stringify(editedEstimate)}`);
+            }
+            """
+        )
+
+    def test_continuous_reflow_discards_span_saved_at_larger_scale(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n'
+                + 'globalThis.placementSlotHeightPages = placementSlotHeightPages;\n',
+              sandbox
+            );
+
+            const stale = {
+              id: 'page-1',
+              heightFrac: 0.8,
+              placementScaleRatio: 1,
+              inputIntent: 'page-as-is',
+              startYPages: 0,
+              snappedNextStartYPages: 2.4,
+            };
+            if (sandbox.placementSlotHeightPages(stale) !== 0.8) {
+              throw new Error(`continuous slot should use current rendered height, got ${sandbox.placementSlotHeightPages(stale)}`);
+            }
+            const reflowed = sandbox.reflowItemsForBoardOrder([
+              stale,
+              {
+                id: 'page-2',
+                heightFrac: 0.5,
+                placementScaleRatio: 0.6,
+                placementMode: 'continuous-page-as-is',
+                startYPages: 2.4,
+                snappedNextStartYPages: 3.6,
+              },
+            ]);
+            if (reflowed[0].snappedNextStartYPages !== 0.8 || reflowed[1].startYPages !== 0.8) {
+              throw new Error(`stale continuous span survived reflow: ${JSON.stringify(reflowed)}`);
+            }
+            if (reflowed[1].snappedNextStartYPages !== 1.1) {
+              throw new Error(`scale-down should keep proportional continuous flow, got ${reflowed[1].snappedNextStartYPages}`);
+            }
+            """
+        )
+
+    def test_legacy_noncontinuous_high_scale_survives_load_until_explicit_edit(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.initialPlacementScaleRatio = initialPlacementScaleRatio;\n'
+                + 'globalThis.maxPlacementScaleRatio = maxPlacementScaleRatio;\n'
+                + 'globalThis.applyPlacementPatchToItem = applyPlacementPatchToItem;\n'
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+              sandbox
+            );
+
+            const loadedScale = sandbox.initialPlacementScaleRatio({ placementScaleRatio: 2.4 }, false);
+            if (loadedScale !== 2.4) {
+              throw new Error(`legacy regular scale should survive load, got ${loadedScale}`);
+            }
+            const legacy = { id: 'legacy', heightFrac: 0.8, placementScaleRatio: loadedScale };
+            if (sandbox.maxPlacementScaleRatio(legacy) !== 2.4) {
+              throw new Error(`legacy scale should remain the temporary compatibility ceiling, got ${sandbox.maxPlacementScaleRatio(legacy)}`);
+            }
+            const reflowed = sandbox.reflowItemsForBoardOrder([legacy, { id: 'next', heightFrac: 0.8 }]);
+            if (reflowed[1].startYPages !== 2.4) {
+              throw new Error(`legacy rendered height should drive reflow, got ${JSON.stringify(reflowed)}`);
+            }
+            const nearBoundaryLegacy = sandbox.reflowItemsForBoardOrder([
+              { id: 'legacy-near-boundary', heightFrac: 1.1, placementScaleRatio: 2.2 },
+              { id: 'legacy-next', heightFrac: 0.8 },
+            ]);
+            if (
+              nearBoundaryLegacy[0].placementScaleRatio !== 2.2
+              || nearBoundaryLegacy[0].renderedBottomYPages !== 2.42
+              || nearBoundaryLegacy[1].startYPages !== 3.6
+            ) {
+              throw new Error(`legacy scale above 1.6 must bypass near-boundary auto scale: ${JSON.stringify(nearBoundaryLegacy)}`);
+            }
+            const explicitlyReduced = sandbox.applyPlacementPatchToItem(legacy, { scaleRatio: 1.4 });
+            if (explicitlyReduced.placementScaleRatio !== 1.4) {
+              throw new Error(`explicit edit should adopt the current regular limit, got ${explicitlyReduced.placementScaleRatio}`);
+            }
+            if (sandbox.initialPlacementScaleRatio({ placementScaleRatio: 9 }, false) !== 3) {
+              throw new Error('legacy compatibility must still respect the global 3x safety limit');
             }
             """
         )

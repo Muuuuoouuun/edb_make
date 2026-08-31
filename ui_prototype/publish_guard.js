@@ -8,7 +8,11 @@
   const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
   const DEFAULT_HEIGHT_PAGES = 0.8;
   const DEFAULT_SCALE_RATIO = 1.0;
+  const PLACEMENT_EPSILON_PAGES = 1e-9;
+  const PLACEMENT_SCALE_MIN = 0.6;
   const PLACEMENT_SCALE_MAX = 1.6;
+  const PLACEMENT_FIT_WIDTH_SCALE_MAX = 3.0;
+  const AUTO_SCALE_MAX_REDUCTION_RATIO = 0.06;
   const MIN_HEIGHT_PAGES = 0.12;
   const OVERLAP_TOLERANCE_PAGES = 0.01;
   const SOURCE_BBOX_OVERLAP_RATIO = 0.65;
@@ -35,7 +39,7 @@
   function snapUpPages(value, slotHeightPages = DEFAULT_SLOT_HEIGHT_PAGES) {
     const slot = finiteNumber(slotHeightPages, DEFAULT_SLOT_HEIGHT_PAGES);
     if (slot <= 0 || !Number.isFinite(value) || value <= 0) return 0;
-    return Math.ceil((value - 0.001) / slot) * slot;
+    return Math.ceil((value - PLACEMENT_EPSILON_PAGES) / slot) * slot;
   }
 
   function problemIdFor(item, index) {
@@ -120,6 +124,39 @@
     return new Set(raw.map(item => String(item || "").trim()).filter(Boolean));
   }
 
+  function usesContinuousPageFlow(item) {
+    const inputIntent = String(item?.inputIntent ?? item?.input_intent ?? "")
+      .trim()
+      .toLowerCase()
+      .replaceAll("_", "-");
+    if (inputIntent) return inputIntent === "page-as-is";
+    const placementMode = String(item?.placementMode ?? item?.placement_mode ?? "")
+      .trim()
+      .toLowerCase()
+      .replaceAll("_", "-");
+    return placementMode === "continuous" || placementMode === "continuous-page-as-is";
+  }
+
+  function scaleNearPreviousBoundary(startYPages, heightPages, scaleRatio, slotHeightPages) {
+    if (scaleRatio < DEFAULT_SCALE_RATIO || slotHeightPages <= 0) return scaleRatio;
+    const renderedBottomYPages = startYPages + heightPages * scaleRatio;
+    const previousBoundaryYPages = Math.floor(
+      (renderedBottomYPages + PLACEMENT_EPSILON_PAGES) / slotHeightPages
+    ) * slotHeightPages;
+    if (renderedBottomYPages - previousBoundaryYPages <= PLACEMENT_EPSILON_PAGES) {
+      return scaleRatio;
+    }
+    const targetScale = (previousBoundaryYPages - startYPages) / heightPages;
+    const scaleReductionRatio = scaleRatio > 0
+      ? (scaleRatio - targetScale) / scaleRatio
+      : Infinity;
+    return targetScale >= PLACEMENT_SCALE_MIN
+      && targetScale < scaleRatio
+      && scaleReductionRatio <= AUTO_SCALE_MAX_REDUCTION_RATIO + PLACEMENT_EPSILON_PAGES
+      ? targetScale
+      : scaleRatio;
+  }
+
   function simulatedBoardPlacements(items, options = {}) {
     const slotHeightPages = finiteNumber(options.slotHeightPages, DEFAULT_SLOT_HEIGHT_PAGES);
     const problemIds = normalizeIdFilter(options.sessionProblemIds);
@@ -135,33 +172,37 @@
         MIN_HEIGHT_PAGES,
         firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
       );
-      const startYPages = snapUpPages(cursorPages, slotHeightPages);
-      const requestedScale = Math.max(
+      const continuous = usesContinuousPageFlow(item);
+      const startYPages = rounded(continuous
+        ? Math.max(0, cursorPages)
+        : snapUpPages(cursorPages, slotHeightPages));
+      const persistedScale = numberOrNull(item.placementScaleRatio ?? item.placement_scale_ratio);
+      const preserveLegacyScale = !continuous
+        && persistedScale !== null
+        && persistedScale > PLACEMENT_SCALE_MAX;
+      // Only persisted placement fields opt into the legacy ceiling. Generic
+      // scaleRatio input remains subject to the current 1.6 regular-item limit.
+      const normalizedScale = Math.max(
         0,
         Math.min(
-          PLACEMENT_SCALE_MAX,
+          continuous || preserveLegacyScale ? PLACEMENT_FIT_WIDTH_SCALE_MAX : PLACEMENT_SCALE_MAX,
           firstNumber(item, ["placementScaleRatio", "placement_scale_ratio", "scaleRatio"], DEFAULT_SCALE_RATIO)
         )
       );
+      const requestedScale = continuous || preserveLegacyScale
+        ? normalizedScale
+        : scaleNearPreviousBoundary(startYPages, heightPages, normalizedScale, slotHeightPages);
       const renderedHeightPages = heightPages * requestedScale;
-      const savedStartYPages = numberOrNull(item.startYPages ?? item.start_y_pages);
-      const savedSnappedNextYPages = numberOrNull(item.snappedNextStartYPages ?? item.snapped_next_start_y_pages);
-      const savedSpanPages = savedStartYPages !== null
-        && savedSnappedNextYPages !== null
-        && savedSnappedNextYPages > savedStartYPages
-        ? savedSnappedNextYPages - savedStartYPages
-        : 0;
-      const snappedNextStartYPages = snapUpPages(
-        startYPages + Math.max(renderedHeightPages, savedSpanPages),
-        slotHeightPages
-      );
+      const snappedNextStartYPages = rounded(continuous
+        ? startYPages + renderedHeightPages
+        : snapUpPages(startYPages + renderedHeightPages, slotHeightPages));
       const slotSpanPages = Math.max(renderedHeightPages, snappedNextStartYPages - startYPages);
       const verticalRoomPages = Math.max(0, slotSpanPages - renderedHeightPages);
       const yRatio = verticalRoomPages > 0.001
         ? clamp01(firstNumber(item, ["placementYRatio", "placement_y_ratio", "yRatio"], 0))
         : 0;
-      const renderedTopYPages = startYPages + yRatio * verticalRoomPages;
-      const renderedBottomYPages = renderedTopYPages + renderedHeightPages;
+      const renderedTopYPages = rounded(startYPages + yRatio * verticalRoomPages);
+      const renderedBottomYPages = rounded(renderedTopYPages + renderedHeightPages);
 
       placements.push({
         problemId,
