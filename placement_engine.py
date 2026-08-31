@@ -32,6 +32,18 @@ def _metadata_float(metadata: dict[str, object], *keys: str, default: float = 1.
     return default
 
 
+def _metadata_bool(metadata: dict[str, object], *keys: str) -> bool:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and value == 1:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
 def _is_continuous_problem(problem: ProblemLayoutInput, template: LayoutTemplate) -> bool:
     metadata = problem.metadata or {}
     input_intent = (
@@ -46,8 +58,13 @@ def _is_continuous_problem(problem: ProblemLayoutInput, template: LayoutTemplate
     return mode in CONTINUOUS_PLACEMENT_MODES
 
 
-def _rendered_flow_height_pages(problem: ProblemLayoutInput, actual_height_pages: float, *, continuous: bool) -> float:
-    if not continuous:
+def _rendered_flow_height_pages(
+    problem: ProblemLayoutInput,
+    actual_height_pages: float,
+    *,
+    reserve_scaled_height: bool,
+) -> float:
+    if not reserve_scaled_height:
         return actual_height_pages
     scale_ratio = max(
         0.0,
@@ -79,10 +96,15 @@ def place_problem(
     nominal_slot_height_pages = template.base_slot_height_pages
     actual_height_pages = max(problem.actual_content_height_pages, 0.0)
     continuous = _is_continuous_problem(problem, template)
+    reserve_scaled_height = continuous or _metadata_bool(
+        problem.metadata or {},
+        "reserve_scaled_height",
+        "reserveScaledHeight",
+    )
     flow_height_pages = _rendered_flow_height_pages(
         problem,
         actual_height_pages,
-        continuous=continuous,
+        reserve_scaled_height=reserve_scaled_height,
     )
     overflow_allowed = resolve_overflow_allowed(problem, template)
 
@@ -91,7 +113,7 @@ def place_problem(
         round(start_y_pages + flow_height_pages, 6)
         if continuous
         else snap_up_to_slot(
-            actual_bottom_y_pages,
+            start_y_pages + flow_height_pages,
             nominal_slot_height_pages,
         )
     )

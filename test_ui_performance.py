@@ -70,6 +70,54 @@ class TestUiPerformance(unittest.TestCase):
         self.assertNotIn("will-change", base_tile_css)
         self.assertIn("will-change: transform", positioning_css)
 
+    def test_stage_tile_contain_image_is_top_aligned_without_changing_its_box(self) -> None:
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        base_image_css = board.split(".tile-img{", 1)[1].split("}", 1)[0]
+        stage_image_css = board.split(".stage-tile .tile-img{", 1)[1].split("}", 1)[0]
+
+        self.assertIn("width: 100%; height: 100%", base_image_css)
+        self.assertIn("object-fit: contain", base_image_css)
+        self.assertIn("object-position: center top", stage_image_css)
+
+    def test_board_estimate_bar_reserves_space_without_covering_the_board(self) -> None:
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        stage_css = board.split("/* Stage (big board) */", 1)[1]
+        stage_wrap_css = stage_css.split(".stage-wrap{", 1)[1].split("}", 1)[0]
+        stage_board_css = stage_css.split(".stage-board{", 1)[1].split("}", 1)[0]
+        estimate_css = stage_css.split(".stage-estimate-bar{", 1)[1].split("}", 1)[0]
+
+        self.assertIn("display: flex", stage_wrap_css)
+        self.assertIn("flex-direction: column", stage_wrap_css)
+        self.assertIn("gap: 10px", stage_wrap_css)
+        self.assertIn("max-width: var(--stage-preview-max-width)", stage_board_css)
+        self.assertIn("max-width: var(--stage-preview-max-width)", estimate_css)
+        self.assertIn(".stage-wrap:has(.stage-estimate-bar)", board)
+
+    def test_board_estimate_contract_wraps_and_keeps_controls_touch_sized(self) -> None:
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        estimate_track_css = board.split(".stage-estimate-track,", 1)[1].split("}", 1)[0]
+        estimate_action_css = board.split(".stage-estimate-action{", 1)[1].split("}", 1)[0]
+
+        self.assertIn("flex-wrap: wrap", estimate_track_css)
+        self.assertIn("min-width: 44px", estimate_action_css)
+        self.assertIn("min-height: 44px", estimate_action_css)
+        self.assertIn("@media (max-width: 1100px)", board)
+        self.assertIn(".stage-estimate-track", board)
+
+    def test_board_grid_and_active_slot_guides_are_visible_but_noninteractive(self) -> None:
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        grid_css = board.split(".page-divider.is-classin-grid{", 1)[1].split("}", 1)[0]
+        slot_gap_css = board.split(".active-slot-gap{", 1)[1].split("}", 1)[0]
+        next_boundary_css = board.split(".active-next-boundary{", 1)[1].split("}", 1)[0]
+        active_tile_css = board.split(".stage-tile.active{", 1)[1].split("}", 1)[0]
+
+        self.assertIn("rgba(244,237,224,.28)", grid_css)
+        self.assertIn("pointer-events: none", slot_gap_css)
+        self.assertIn("rgba(158,201,240,.055)", slot_gap_css)
+        self.assertIn("pointer-events: none", next_boundary_css)
+        self.assertIn("outline: 2px solid", active_tile_css)
+        self.assertIn(".stage-tile.paper.active", board)
+
     def test_recognition_preview_scrolls_all_pages_but_lazily_loads_later_images(self) -> None:
         stage = self.source.split("function RecognitionPageReviewStage", 1)[1]
         stage = stage.split("function TileImage", 1)[0]

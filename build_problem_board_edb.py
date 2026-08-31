@@ -77,6 +77,10 @@ MAX_HEIGHT_PAGES = 4.8
 PLACEMENT_SCALE_MIN = 0.6
 PLACEMENT_SCALE_MAX = 1.6
 PLACEMENT_FIT_WIDTH_SCALE_MAX = 3.0
+PRESERVE_LEGACY_PLACEMENT_SCALE_KEYS = (
+    "preserve_legacy_placement_scale",
+    "preserveLegacyPlacementScale",
+)
 MIN_PROBLEM_AREA_RATIO = 0.12
 DOCUMENT_BAND_TOP_PADDING_PX = 44.0
 DOCUMENT_BAND_BOTTOM_PADDING_PX = 20.0
@@ -276,6 +280,27 @@ def _clamp_placement_scale_ratio(value: float | None, max_ratio: float = PLACEME
     return max(PLACEMENT_SCALE_MIN, min(resolved_max, float(value)))
 
 
+def _mapping_preserves_legacy_placement_scale(value: Mapping[str, Any] | None) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    nested_metadata = value.get("metadata")
+    sources = (value, nested_metadata if isinstance(nested_metadata, Mapping) else {})
+    for source in sources:
+        for key in PRESERVE_LEGACY_PLACEMENT_SCALE_KEYS:
+            marker = source.get(key)
+            if isinstance(marker, bool):
+                return marker
+            if isinstance(marker, (int, float)) and marker == 1:
+                return True
+            if isinstance(marker, str) and marker.strip().lower() in {"1", "true", "yes", "on"}:
+                return True
+    return False
+
+
+def _entry_preserves_legacy_placement_scale(entry: "ProblemEntry") -> bool:
+    return bool(entry.preserve_legacy_placement_scale) and not _entry_uses_continuous_page_flow(entry)
+
+
 def _problem_origin_x_px(entry: "ProblemEntry", rendered_width_px: float) -> float:
     ratio = _clamp_placement_x_ratio(entry.placement_x_ratio)
     if ratio is None:
@@ -302,7 +327,11 @@ def _problem_scale_ratio(
     *,
     ignore_height_limit: bool = False,
 ) -> float:
-    allowed_max = PLACEMENT_FIT_WIDTH_SCALE_MAX if ignore_height_limit else PLACEMENT_SCALE_MAX
+    allowed_max = (
+        PLACEMENT_FIT_WIDTH_SCALE_MAX
+        if ignore_height_limit or _entry_preserves_legacy_placement_scale(entry)
+        else PLACEMENT_SCALE_MAX
+    )
     requested = _clamp_placement_scale_ratio(entry.placement_scale_ratio, allowed_max)
     if requested is None:
         return 1.0
@@ -317,7 +346,7 @@ def _problem_scale_ratio(
     max_height_scale = slot_height_px / max(rendered_height_px, 1.0)
     max_scale = max(
         PLACEMENT_SCALE_MIN,
-        min(PLACEMENT_SCALE_MAX, max_width_scale, max_height_scale),
+        min(allowed_max, max_width_scale, max_height_scale),
     )
     return max(PLACEMENT_SCALE_MIN, min(max_scale, requested))
 
@@ -371,7 +400,12 @@ def _default_placement_scale_for_problem(problem: ProblemUnit) -> float | None:
     )
     if raw_scale is not None:
         try:
-            max_ratio = PLACEMENT_FIT_WIDTH_SCALE_MAX if _is_page_as_is_problem(problem) else PLACEMENT_SCALE_MAX
+            max_ratio = (
+                PLACEMENT_FIT_WIDTH_SCALE_MAX
+                if _is_page_as_is_problem(problem)
+                or _mapping_preserves_legacy_placement_scale(problem.metadata)
+                else PLACEMENT_SCALE_MAX
+            )
             return _clamp_placement_scale_ratio(float(raw_scale), max_ratio)
         except (TypeError, ValueError):
             return None
@@ -1809,6 +1843,7 @@ class ProblemEntry:
     placement_x_ratio: float | None = None
     placement_y_ratio: float | None = None
     placement_scale_ratio: float | None = None
+    preserve_legacy_placement_scale: bool = False
     processing_step: str = PROCESSING_STEP_RAW
     input_intent: str | None = None
     force_full_page_bounds: bool = False
@@ -1861,6 +1896,7 @@ class _ProblemEntryDraft:
     input_intent: str | None
     force_full_page_bounds: bool
     asset_task: _ProblemAssetTask | None
+    preserve_legacy_placement_scale: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
     source_segments: list[dict[str, Any]] = field(default_factory=list)
 
@@ -6226,6 +6262,7 @@ def build_problem_entries(
                     risk_flags=_collect_problem_risk_flags(problem),
                     processing_step=_default_processing_step_for_problem(problem),
                     placement_scale_ratio=_default_placement_scale_for_problem(problem),
+                    preserve_legacy_placement_scale=_mapping_preserves_legacy_placement_scale(problem.metadata),
                     input_intent=problem_input_intent or None,
                     force_full_page_bounds=bool(problem.metadata.get("force_full_page_bounds")),
                     preserve_media_regions=(
@@ -6320,6 +6357,7 @@ def build_problem_entries(
                 reading_heavy=draft.reading_heavy,
                 risk_flags=draft.risk_flags,
                 placement_scale_ratio=draft.placement_scale_ratio,
+                preserve_legacy_placement_scale=draft.preserve_legacy_placement_scale,
                 processing_step=draft.processing_step,
                 input_intent=draft.input_intent,
                 force_full_page_bounds=draft.force_full_page_bounds,
@@ -9163,6 +9201,8 @@ def build_ui_session(
                 "placementXRatio": float(placement.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(placement.get("placement_y_ratio") or 0.0),
                 "placementScaleRatio": float(placement.get("placement_scale_ratio") or 1.0),
+                "preserveLegacyPlacementScale": bool(placement.get("preserve_legacy_placement_scale")),
+                "preserve_legacy_placement_scale": bool(placement.get("preserve_legacy_placement_scale")),
                 "step": processing_step,
                 "processingStep": processing_step,
                 "inputIntent": problem_input_intent,
@@ -9772,8 +9812,13 @@ def placement_inputs(
                 "processing_step": _normalize_processing_step(entry.processing_step),
                 "placement_scale_ratio": _clamp_placement_scale_ratio(
                     entry.placement_scale_ratio,
-                    PLACEMENT_FIT_WIDTH_SCALE_MAX if _entry_uses_continuous_page_flow(entry) else PLACEMENT_SCALE_MAX,
+                    PLACEMENT_FIT_WIDTH_SCALE_MAX
+                    if _entry_uses_continuous_page_flow(entry)
+                    or _entry_preserves_legacy_placement_scale(entry)
+                    else PLACEMENT_SCALE_MAX,
                 ) or 1.0,
+                "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
+                "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry),
                 "input_intent": entry.input_intent,
                 "force_full_page_bounds": entry.force_full_page_bounds,
             },
@@ -9898,6 +9943,33 @@ def _validate_record_page_count_hints(
         raise ValueError(
             f"EDB image records use a different page scale than the {expected}-page header: {preview}"
         )
+
+
+def _validate_sequential_record_placements(
+    placements: Sequence[Mapping[str, object]],
+    *,
+    tolerance_pages: float = CLASSIN_PREFLIGHT_PLACEMENT_OVERLAP_TOLERANCE_PAGES,
+) -> None:
+    """Reject a rendered part whose sequential records overlap vertically."""
+
+    tolerance = max(0.0, float(tolerance_pages))
+    overlaps: list[str] = []
+    for current, next_placement in zip(placements, placements[1:]):
+        try:
+            current_bottom = float(current["record_bottom_y_pages"])
+            next_top = float(next_placement["record_top_y_pages"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        overlap_pages = current_bottom - next_top
+        if overlap_pages <= tolerance:
+            continue
+        current_id = str(current.get("problem_id") or current.get("problemId") or "unknown")
+        next_id = str(next_placement.get("problem_id") or next_placement.get("problemId") or "unknown")
+        overlaps.append(f"{current_id}->{next_id} ({overlap_pages:.6f} pages)")
+
+    if overlaps:
+        preview = ", ".join(overlaps[:3])
+        raise ValueError(f"EDB sequential image records overlap after rendering: {preview}")
 
 
 def _first_placement_over_page_limit(placements: list[dict[str, object]], max_pages: int) -> int | None:
@@ -10484,6 +10556,7 @@ def build_image_only_records(
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
                 "placement_scale_ratio": float(scale_ratio),
+                "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
             }
         )
 
@@ -10662,6 +10735,7 @@ def build_mixed_records(
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
                 "placement_scale_ratio": float(scale_ratio),
+                "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
                 "blocks": block_summaries,
             }
         )
@@ -10760,13 +10834,19 @@ def write_classin_limited_edb_files(
                 dark_board=dark_board,
                 board_theme=board_theme,
                 crop_format=crop_format,
-                reserve_image_layout_height=False,
+                # A ClassIn part must reserve the same display height used by
+                # its final image record.  In particular, V1 records render at
+                # the legacy 540px display width while ProblemEntry estimates
+                # may have been computed for the narrower one-third zone.
+                reserve_image_layout_height=True,
                 expand_board_capacity=False,
             )
         _validate_record_page_count_hints(
             part_placements,
             expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
         )
+        if not render_template.metadata.get("preserve_source_layout"):
+            _validate_sequential_record_placements(part_placements)
         return {
             "entries": list(chunk_entries),
             "records": part_records,
@@ -10931,6 +11011,7 @@ def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object
                 "placementXRatio": float(item.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(item.get("placement_y_ratio") or 0.0),
                 "placementScaleRatio": float(item.get("placement_scale_ratio") or 1.0),
+                "preserveLegacyPlacementScale": bool(item.get("preserve_legacy_placement_scale")),
             }
             for item in placements
         ]
