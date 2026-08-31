@@ -652,6 +652,46 @@ class TestUiReorderHelper(unittest.TestCase):
           """
         )
 
+    def test_classin_preview_page_number_uses_12_page_basis(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const FIXED_LEFT_ZONE_RATIO =');
+            const end = source.indexOf('const INITIAL_ITEMS =');
+            if (start < 0 || end < 0) throw new Error('placement helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            sandbox.normalizeInputIntent = value => value;
+            vm.runInNewContext(
+              source.slice(start, end) + '\n'
+                + 'globalThis.classinBoardPageNumberAtOffset = classinBoardPageNumberAtOffset;\n',
+              sandbox
+            );
+
+            const cases = [
+              [0, 1],
+              [1, 1],
+              [2, 2],
+              [6, 6],
+              [7, 6],
+              [7.2, 7],
+              ['2.4', 3],
+              [Infinity, 1],
+              [-Infinity, 1],
+              [NaN, 1],
+              ['invalid', 1],
+            ];
+            for (const [offset, expected] of cases) {
+              const actual = sandbox.classinBoardPageNumberAtOffset(offset);
+              if (actual !== expected) {
+                throw new Error(`offset ${offset} should be ClassIn page ${expected}, got ${actual}`);
+              }
+            }
+            """
+        )
+
     def test_fit_width_page_as_is_preserves_korean_english_step_state(self) -> None:
         run_node(
             r"""

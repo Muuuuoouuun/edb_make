@@ -282,8 +282,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("placementScope", side_panel)
         self.assertIn("--range-progress", side_panel)
         self.assertIn("너비 맞춤 이어붙임", side_panel)
-        fit_width_flow = source.split("if (wantsFitWidth) {", 1)[1]
-        fit_width_flow = fit_width_flow.split("} else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio'))", 1)[0]
+        fit_width_flow = source.split("if (patch.fitWidth) {", 1)[1]
+        fit_width_flow = fit_width_flow.split("if (Object.prototype.hasOwnProperty.call(patch, 'scaleRatio'))", 1)[0]
         fit_width_helper = source.split("function fitWidthContinuousPageItem", 1)[1]
         fit_width_helper = fit_width_helper.split("function isContinuousPlacementItem", 1)[0]
         self.assertIn("return fitWidthContinuousPageItem(next, patch);", fit_width_flow)
@@ -319,13 +319,68 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("supplementalItem:", item_mapper)
         self.assertIn("const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);", side_panel)
         self.assertIn("placementPreset === 'passage-only'", side_panel)
-        self.assertIn("selectedPassageFragments.forEach(target =>", preset)
+        self.assertIn("setPlacements?.(selectedPassageFragments.map(target => ({", preset)
         self.assertIn("scaleRatio: maxPlacementScaleRatio(target)", preset)
         self.assertIn("fitWidth: true", preset)
         self.assertIn("setBoardColumns?.(1)", preset)
         self.assertIn("value === 'passage-only' && passageFragmentCount === 0", side_panel)
         self.assertIn("['passage-only', '지문 전체 너비']", side_panel)
         self.assertIn("이미 추출된 지문 본문만 1열 최대 읽기 폭으로 맞춥니다", side_panel)
+
+    def test_placement_apply_persists_preview_adjustments(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        save_flow = source.split("const savePlacement = async () => {", 1)[1]
+        save_flow = save_flow.split("const reorder = (fromId, toId", 1)[0]
+
+        self.assertIn("setPlacement, setPlacements, savePlacement, mutateSession, mutating", side_panel)
+        self.assertIn("const saved = await savePlacement?.();", side_panel)
+        self.assertIn("onClick={() => { void commitPlacement(); }}", side_panel)
+        self.assertIn("disabled={!item || mutating}", side_panel)
+        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", save_flow)
+        self.assertIn("placementPersistenceSignature(candidate) === placementPersistenceSignature(session)", save_flow)
+        self.assertIn("postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns)", save_flow)
+        self.assertIn("if (result.conflictBase) snapshotBefore = result.conflictBase;", save_flow)
+        self.assertIn("setSession(restored);", save_flow)
+        self.assertIn("setActiveId(currentId => (", save_flow)
+        self.assertIn("appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT)", save_flow)
+        self.assertIn("savePlacement={savePlacement}", source)
+        self.assertIn("placementScaleRatio: initialScale,", source)
+
+    def test_placement_updates_are_batched_and_conflict_safe(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        batch_flow = source.split("const setPlacements = (updates) => {", 1)[1]
+        batch_flow = batch_flow.split("const savePlacement = async () => {", 1)[0]
+        retry_flow = source.split("async function postRestoreBoardLayoutWithConflictRetry", 1)[1]
+        retry_flow = retry_flow.split("async function postClassinReviewResult", 1)[0]
+
+        self.assertIn("const patchById = new Map", batch_flow)
+        self.assertIn("return applyPlacementPatchToItem(x, patch);", batch_flow)
+        self.assertIn("setPlacements={setPlacements}", source)
+        self.assertIn("if (setPlacements) setPlacements(updates);", side_panel)
+        self.assertIn("selectedPassageFragments.map(target => ({", side_panel)
+        preset_flow = side_panel.split("const applyPlacementPreset", 1)[1].split("const commitPlacement", 1)[0]
+        self.assertNotIn("setPlacementApplied(true)", preset_flow)
+
+        self.assertIn("assertPlacementSaveSession(await postRestore(candidate))", retry_flow)
+        self.assertIn("error?.code !== 'session_conflict'", retry_flow)
+        self.assertIn("captureSessionRevision(conflictPayload);", retry_flow)
+        self.assertIn("rebaseSessionBoardLayout(latestSession, candidate, boardColumns)", retry_flow)
+        self.assertIn("conflictBase: cloneSession(latestSession)", retry_flow)
+        self.assertIn("invalid_placement_save_response", source)
+
+    def test_board_dividers_show_classin_12_page_number(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn("function classinBoardPageNumberAtOffset(offsetPages)", source)
+        self.assertIn("classinPage: classinBoardPageNumberAtOffset(i)", board_stage)
+        self.assertIn("(클래스인 1.2 기준 {divider.classinPage}p)", board_stage)
+        self.assertIn(".page-divider .label .classin-page", board)
 
     def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

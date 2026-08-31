@@ -324,6 +324,12 @@ const EMPTY_MANUAL_CROP = Object.freeze({
   bottomRatio: 0,
 });
 
+function classinBoardPageNumberAtOffset(offsetPages){
+  const numericOffset = Number(offsetPages);
+  const offset = Number.isFinite(numericOffset) ? Math.max(0, numericOffset) : 0;
+  return Math.floor((offset + PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES) + 1;
+}
+
 function normalizePlacementXRatio(value){
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_X_RATIO;
@@ -633,6 +639,38 @@ function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio
   const heightPages = itemHeightPages(item);
   const scale = normalizePlacementScaleRatio(scaleRatio, maxPlacementScaleRatio(item));
   return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
+}
+
+function applyPlacementPatchToItem(item, patch){
+  if (!item || !patch) return item;
+  const next = { ...item };
+  if (Object.prototype.hasOwnProperty.call(patch, 'xRatio')) {
+    next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
+    next.placementXEdited = patch.xEdited === false ? false : true;
+    if (Object.prototype.hasOwnProperty.call(patch, 'magnetColumnIndex')) {
+      next.placementMagnetColumnIndex = patch.magnetColumnIndex;
+    }
+  }
+  if (patch.fitWidth) {
+    return fitWidthContinuousPageItem(next, patch);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'scaleRatio')) {
+    next.placementScaleRatio = normalizePlacementScaleRatio(
+      patch.scaleRatio,
+      maxPlacementScaleRatio(next)
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'yRatio')) {
+    next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
+      ? normalizePlacementYRatio(patch.yRatio)
+      : DEFAULT_PLACEMENT_Y_RATIO;
+  } else if (
+    Object.prototype.hasOwnProperty.call(patch, 'scaleRatio')
+    && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001
+  ) {
+    next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
+  }
+  return next;
 }
 
 function fitWidthContinuousPageItem(item, options = {}){
@@ -6722,7 +6760,11 @@ function BoardStage({
   // page-boundary divider lines (between page N and N+1)
   const dividers = [];
   for (let i = 1; i < Math.min(layout.totalPages, 200); i++){
-    dividers.push(i * pageH);
+    dividers.push({
+      top: i * pageH,
+      previewPage: i + 1,
+      classinPage: classinBoardPageNumberAtOffset(i),
+    });
   }
 
   return (
@@ -6752,9 +6794,11 @@ function BoardStage({
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
                 {/* page boundary dividers — scroll with content */}
-                {dividers.map((top, i) => (
-                  <div key={i} className="page-divider" style={{ top }}>
-                    <span className="label">— {i + 2} 페이지 —</span>
+                {dividers.map(divider => (
+                  <div key={divider.previewPage} className="page-divider" style={{ top: divider.top }}>
+                    <span className="label">
+                      — {divider.previewPage} 페이지 <span className="classin-page">(클래스인 1.2 기준 {divider.classinPage}p)</span> —
+                    </span>
                   </div>
                 ))}
 
@@ -7161,7 +7205,7 @@ function PublishResultPanel({
 function SidePanel({
   item, items, activeIndex,
   setStep, applyToAll, bulk, setBulk,
-  setPlacement, mutateSession, mutating,
+  setPlacement, setPlacements, savePlacement, mutateSession, mutating,
   boardColumns, setBoardColumns,
   boardColor, setBoardColor,
   accent, setAccent,
@@ -7408,10 +7452,12 @@ function SidePanel({
   }, [item?.id, selectedPassageGroupId]);
 
   const updatePlacementTargets = (patchForTarget) => {
-    placementTargets.forEach(target => {
+    const updates = placementTargets.map(target => {
       const patch = typeof patchForTarget === 'function' ? patchForTarget(target) : patchForTarget;
-      if (patch && target?.id) setPlacement?.(target.id, patch);
-    });
+      return patch && target?.id ? { id: target.id, patch } : null;
+    }).filter(Boolean);
+    if (setPlacements) setPlacements(updates);
+    else updates.forEach(update => setPlacement?.(update.id, update.patch));
     setPlacementApplied(false);
   };
   const updatePlacement = (patch) => {
@@ -7459,18 +7505,23 @@ function SidePanel({
     if (preset === 'side-by-side') setBoardColumns?.(2);
     if (preset === 'auto' || preset === 'vertical' || preset === 'passage-only') setBoardColumns?.(1);
     if (preset === 'passage-only' && selectedPassageFragments.length) {
-      selectedPassageFragments.forEach(target => {
-        setPlacement?.(target.id, {
+      setPlacements?.(selectedPassageFragments.map(target => ({
+        id: target.id,
+        patch: {
           xRatio: DEFAULT_PLACEMENT_X_RATIO,
           xEdited: false,
           yRatio: DEFAULT_PLACEMENT_Y_RATIO,
           scaleRatio: maxPlacementScaleRatio(target),
           fitWidth: true,
-        });
-      });
+        },
+      })));
       setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
-      setPlacementApplied(true);
     }
+  };
+  const commitPlacement = async () => {
+    if (!item || mutating) return;
+    const saved = await savePlacement?.();
+    if (saved !== false) setPlacementApplied(true);
   };
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
@@ -8044,9 +8095,9 @@ function SidePanel({
             <button
               className="btn primary"
               type="button"
-              disabled={!item}
-              onClick={() => setPlacementApplied(true)}
-            >{Icon.check} {placementApplied ? '적용됨' : placementScope === 'group' ? '묶음 적용' : '배치 적용'}</button>
+              disabled={!item || mutating}
+              onClick={() => { void commitPlacement(); }}
+            >{Icon.check} {mutating ? '저장 중…' : placementApplied ? '적용됨' : placementScope === 'group' ? '묶음 적용' : '배치 적용'}</button>
           </div>
         </>
       )}
@@ -10180,7 +10231,7 @@ function mapProblemToItem(problem, idx){
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
-    placementScaleRatio: initialScale < 0.95 ? DEFAULT_PLACEMENT_SCALE_RATIO : initialScale,
+    placementScaleRatio: initialScale,
     boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
     boardColumnIndex: Number.isFinite(Number(problem.boardColumnIndex ?? problem.board_column_index))
       ? Math.max(0, Math.round(Number(problem.boardColumnIndex ?? problem.board_column_index)))
@@ -10193,6 +10244,33 @@ function mapProblemToItem(problem, idx){
       : null,
     manualCrop,
   };
+}
+
+function placementPersistenceSignature(rawSession){
+  if (!rawSession || !Array.isArray(rawSession.problems)) return '';
+  const stableNumber = value => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Number(numeric.toFixed(6)) : null;
+  };
+  return JSON.stringify(rawSession.problems.map((problem, index) => {
+    const item = mapProblemToItem(problem, index);
+    return [
+      String(item.id || ''),
+      item.inputIntent || '',
+      item.placementMode || '',
+      Boolean(item.forceFullPageBounds),
+      stableNumber(item.placementXRatio),
+      Boolean(item.placementXEdited),
+      stableNumber(item.placementYRatio),
+      stableNumber(item.placementScaleRatio),
+      item.boardColumnCount,
+      item.boardColumnIndex,
+      item.placementMagnetColumnIndex,
+      stableNumber(item.boardRowHeightPages),
+      stableNumber(item.startYPages),
+      stableNumber(item.snappedNextStartYPages),
+    ];
+  }));
 }
 
 let latestServerSessionRevision = null;
@@ -12898,6 +12976,46 @@ async function postRestore(snapshot){
   return json.session;
 }
 
+function assertPlacementSaveSession(value){
+  if (value && Array.isArray(value.problems) && value.problems.length > 0) return value;
+  const error = new Error('배치 저장 응답에 유효한 세션이 없습니다.');
+  error.code = 'invalid_placement_save_response';
+  throw error;
+}
+
+async function postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns){
+  try {
+    return {
+      session: assertPlacementSaveSession(await postRestore(candidate)),
+      conflictBase: null,
+    };
+  } catch (error) {
+    const latestSession = error?.latestSession;
+    if (
+      error?.code !== 'session_conflict'
+      || !error?.hasLatestSessionState
+      || !latestSession
+      || !Array.isArray(latestSession.problems)
+      || latestSession.problems.length === 0
+    ) {
+      throw error;
+    }
+    const conflictPayload = {
+      session: latestSession,
+      sessionRevision: error.sessionRevision,
+      sessionEpoch: error.sessionEpoch,
+    };
+    if (sessionResponseRevisionIsStale(conflictPayload)) throw error;
+    captureSessionRevision(conflictPayload);
+    const rebased = rebaseSessionBoardLayout(latestSession, candidate, boardColumns);
+    if (!rebased) throw error;
+    return {
+      session: assertPlacementSaveSession(await postRestore(rebased)),
+      conflictBase: cloneSession(latestSession),
+    };
+  }
+}
+
 async function postClassinReviewResult(payload){
   const resp = await fetch('/api/session/classin-review', {
     method: 'POST',
@@ -14645,37 +14763,85 @@ function App(){
     if (options.silent) return;
     showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요`);
   };
-  const setPlacement = (id, patch) => {
-    const wantsFitWidth = !!patch?.fitWidth;
-    const scaleChanged = wantsFitWidth || Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio');
+  const setPlacements = (updates) => {
+    const validUpdates = Array.isArray(updates)
+      ? updates.filter(update => update?.id != null && update?.patch)
+      : [];
+    if (!validUpdates.length) return;
+    const patchById = new Map(validUpdates.map(update => [String(update.id), update.patch]));
+    const scaleChanged = validUpdates.some(update => (
+      update.patch.fitWidth
+      || Object.prototype.hasOwnProperty.call(update.patch, 'scaleRatio')
+    ));
     setItems(it => {
+      let changed = false;
       const nextItems = it.map(x => {
-        if (x.id !== id) return x;
-        const next = { ...x };
-        if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
-          next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
-          next.placementXEdited = patch.xEdited === false ? false : true;
-          if (Object.prototype.hasOwnProperty.call(patch || {}, 'magnetColumnIndex')) {
-            next.placementMagnetColumnIndex = patch.magnetColumnIndex;
-          }
-        }
-        if (wantsFitWidth) {
-          return fitWidthContinuousPageItem(next, patch);
-        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
-          next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
-        }
-        if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
-          next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
-            ? normalizePlacementYRatio(patch.yRatio)
-            : DEFAULT_PLACEMENT_Y_RATIO;
-        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
-          next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
-        }
-        return next;
+        const patch = patchById.get(String(x.id));
+        if (!patch) return x;
+        changed = true;
+        return applyPlacementPatchToItem(x, patch);
       });
-      return scaleChanged ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns) : nextItems;
+      if (!changed) return it;
+      return scaleChanged
+        ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns)
+        : nextItems;
     });
     setPublished(false);
+  };
+  const setPlacement = (id, patch) => setPlacements([{ id, patch }]);
+  const savePlacement = async () => {
+    if (!items.length) return false;
+    if (!session) {
+      showToast('배치를 미리보기에 적용했어요');
+      return true;
+    }
+    if (mutatingRef.current) {
+      showToast('이전 변경을 적용하는 중입니다');
+      return false;
+    }
+    let snapshotBefore = cloneSession(session);
+    const nextItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const candidate = materializeSessionForItems(session, nextItems, fileName, boardColumns);
+    if (!candidate) {
+      showToast('저장할 배치 정보를 만들지 못했습니다');
+      return false;
+    }
+    if (placementPersistenceSignature(candidate) === placementPersistenceSignature(session)) {
+      showToast('배치 위치와 크기가 이미 저장되어 있어요');
+      return true;
+    }
+    mutatingRef.current = true;
+    setMutating(true);
+    setLoading({ label: '배치 저장 중…', startedAt: Date.now() });
+    try {
+      const result = await postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns);
+      const restored = result.session;
+      if (result.conflictBase) snapshotBefore = result.conflictBase;
+      const persistedItems = reflowItemsForBoardOrder(
+        (restored?.problems || []).map((problem, index) => mapProblemToItem(problem, index)),
+        DEFAULT_SLOT_HEIGHT_PAGES,
+        boardColumns
+      );
+      setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
+      setItems(persistedItems);
+      setActiveId(currentId => (
+        persistedItems.some(item => item.id === currentId)
+          ? currentId
+          : persistedItems[0]?.id || null
+      ));
+      setSession(restored);
+      setPublished(false);
+      refreshSessionHistory();
+      showToast('배치 위치와 크기를 저장했어요');
+      return true;
+    } catch (error) {
+      showSimpleErrorToast(error, '배치 저장 실패 · 조정값은 화면에 유지했어요');
+      return false;
+    } finally {
+      mutatingRef.current = false;
+      setMutating(false);
+      setLoading(null);
+    }
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
     if (mutatingRef.current) {
@@ -15569,6 +15735,8 @@ function App(){
           bulk={bulk}
           setBulk={setBulk}
           setPlacement={setPlacement}
+          setPlacements={setPlacements}
+          savePlacement={savePlacement}
           mutateSession={mutateSession}
           mutating={mutating}
           boardColumns={boardColumns}
