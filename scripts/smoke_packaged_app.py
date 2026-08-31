@@ -75,7 +75,13 @@ def _validate_update_metadata(payload: dict[str, Any], *, expected_app_id: str =
     for field in ("currentVersion", "platform", "arch", "channelStatus"):
         if not isinstance(payload.get(field), str) or not payload[field].strip():
             raise RuntimeError(f"update metadata is missing non-empty {field}")
-    for field in ("configured", "updateAvailable"):
+    for field in (
+        "configured",
+        "updateAvailable",
+        "automaticUpdateEnabled",
+        "automaticUpdateSupported",
+        "automaticUpdateReady",
+    ):
         if not isinstance(payload.get(field), bool):
             raise RuntimeError(f"update metadata {field} must be boolean")
 

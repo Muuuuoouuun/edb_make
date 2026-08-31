@@ -7546,7 +7546,7 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, onCheckUpdate, onOpenUpdate,
+  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
 }){
@@ -7558,6 +7558,8 @@ function SidePanel({
   const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [showOpenAiKey, setShowOpenAiKey] = useState(false);
+  const [updatePinDraft, setUpdatePinDraft] = useState('');
+  const [showUpdatePin, setShowUpdatePin] = useState(false);
   const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
   const [cropPresetsOpen, setCropPresetsOpen] = useState(false);
@@ -7696,6 +7698,9 @@ function SidePanel({
   const updateArchitectureBlocked = isUpdateArchitectureMismatch(updateInfo);
   const updateArchitectureSteps = updateArchitectureRecoverySteps(updateInfo);
   const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || '';
+  const updateAutomaticEnabled = Boolean(updateInfo?.automaticUpdateEnabled);
+  const updateAutomaticReady = Boolean(updateInfo?.automaticUpdateReady);
+  const updateActionBusy = updateBusy || updateInstallBusy;
   const updateStatusLabel = updateBusy
     ? '확인 중'
     : updateArchitectureBlocked
@@ -8767,21 +8772,81 @@ function SidePanel({
                 style={{flex: 1, justifyContent: 'center'}}
                 type="button"
                 onClick={() => onCheckUpdate?.()}
-                disabled={updateBusy}
+                disabled={updateActionBusy}
               >
                 {updateBusy ? '확인 중...' : '업데이트 확인'}
               </button>
               <button
-                className="btn primary"
+                className="btn"
                 style={{flex: 1, justifyContent: 'center'}}
                 type="button"
                 onClick={() => onOpenUpdate?.()}
-                disabled={updateBusy || !updateDownloadUrl}
+                disabled={updateActionBusy || !updateDownloadUrl}
                 title={updateArchitectureBlocked
                   ? '현재 아키텍처용 설치 파일을 선택해 주세요'
                   : updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
               >
                 {Icon.download} 다운로드 열기
+              </button>
+            </div>
+            <div className="update-install-card">
+              <div className="lbl">
+                PIN 자동 업데이트
+                <small>
+                  {updateAutomaticEnabled
+                    ? '배포 파일을 검증한 뒤 앱을 종료하고 현재 설치 위치에 덮어씁니다.'
+                    : '관리자가 업데이트 PIN을 설정한 배포본에서 사용할 수 있습니다.'}
+                </small>
+              </div>
+              <div className="key-input-row update-pin-row">
+                <input
+                  type={showUpdatePin ? 'text' : 'password'}
+                  className="key-input"
+                  aria-label="업데이트 PIN"
+                  placeholder="업데이트 PIN (숫자 4~12자리)"
+                  value={updatePinDraft}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={12}
+                  autoComplete="one-time-code"
+                  disabled={updateActionBusy || !updateAutomaticEnabled}
+                  onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+                    event.preventDefault();
+                    Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
+                      if (installed) setUpdatePinDraft('');
+                    });
+                  }}
+                />
+                <button
+                  className="btn icon"
+                  type="button"
+                  onClick={() => setShowUpdatePin(visible => !visible)}
+                  disabled={updateActionBusy || !updateAutomaticEnabled}
+                  title={showUpdatePin ? 'PIN 숨기기' : 'PIN 보기'}
+                >
+                  {showUpdatePin ? '숨' : '보기'}
+                </button>
+              </div>
+              <button
+                className="btn primary update-install-button"
+                type="button"
+                disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4}
+                title={!updateAutomaticEnabled
+                  ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
+                  : !updateInfo?.updateAvailable
+                    ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
+                    : !updateAutomaticReady
+                      ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
+                      : 'PIN 확인 후 새 버전을 덮어씁니다'}
+                onClick={() => {
+                  Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
+                    if (installed) setUpdatePinDraft('');
+                  });
+                }}
+              >
+                {updateInstallBusy ? '검증·설치 준비 중...' : '업데이트 버전'}
               </button>
             </div>
 
@@ -13167,6 +13232,15 @@ async function fetchAppUpdateStatus(){
   return json;
 }
 
+async function postAppUpdateInstall(pin){
+  const resp = await fetch('/api/app/update/install', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  });
+  return expectOkJson(resp, '자동 업데이트 시작 실패');
+}
+
 function isUpdateArchitectureMismatch(info){
   const channelStatus = String(info?.channelStatus || '').trim();
   const code = String(info?.code || '').trim();
@@ -13428,6 +13502,7 @@ function App(){
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
@@ -13749,6 +13824,58 @@ function App(){
       showSimpleErrorToast(e, '다운로드 페이지 열기 실패');
     }
   }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
+
+  const installUpdateVersion = useCallback(async (pin) => {
+    if (updateBusy || updateInstallBusy) {
+      showToast('다른 업데이트 작업이 끝난 뒤 다시 눌러 주세요');
+      return false;
+    }
+    const normalizedPin = String(pin || '').trim();
+    if (!/^\d{4,12}$/.test(normalizedPin)) {
+      showToast('업데이트 PIN은 숫자 4~12자리로 입력해 주세요');
+      return false;
+    }
+    const info = updateInfo || await checkForUpdates({ silent: true });
+    if (!info?.updateAvailable) {
+      showToast(info?.channelStatus === 'up_to_date' ? '현재 최신 버전입니다' : '설치할 새 버전이 없습니다');
+      return false;
+    }
+    if (!info?.automaticUpdateEnabled) {
+      showToast('이 배포본에는 업데이트 PIN이 설정되어 있지 않습니다');
+      return false;
+    }
+    if (!info?.automaticUpdateReady) {
+      showToast('자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다');
+      return false;
+    }
+    setUpdateInstallBusy(true);
+    try {
+      const result = await postAppUpdateInstall(normalizedPin);
+      const targetVersion = result?.targetVersion || info?.latest?.version || '새 버전';
+      showToast(`${targetVersion} 업데이트 준비 완료 · 앱을 종료한 뒤 자동으로 다시 엽니다`);
+      return true;
+    } catch (error) {
+      if (error?.code === 'invalid_update_pin') {
+        showToast('업데이트 PIN이 올바르지 않습니다');
+        return false;
+      }
+      if (error?.code === 'update_pin_rate_limited') {
+        showToast(error?.message || 'PIN 입력이 잠시 잠겼습니다. 잠시 후 다시 시도해 주세요');
+        return false;
+      }
+      showSimpleErrorToast(error, '자동 업데이트 시작 실패');
+      return false;
+    } finally {
+      setUpdateInstallBusy(false);
+    }
+  }, [
+    updateInfo,
+    updateBusy,
+    updateInstallBusy,
+    checkForUpdates,
+    showSimpleErrorToast,
+    showToast,
+  ]);
 
   const refreshSessionHistory = useCallback(async () => {
     const requestId = sessionHistoryRequestRef.current + 1;
@@ -16115,8 +16242,10 @@ function App(){
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
           updateInfo={updateInfo}
           updateBusy={updateBusy}
+          updateInstallBusy={updateInstallBusy}
           onCheckUpdate={checkForUpdates}
           onOpenUpdate={openUpdatePage}
+          onInstallUpdate={installUpdateVersion}
           view={view}
           pendingFile={selectedPendingFile}
           pendingFileKey={selectedPendingFileKey}

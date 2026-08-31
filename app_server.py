@@ -8,6 +8,7 @@ import concurrent.futures
 import errno
 import gzip
 import hashlib
+import hmac
 import importlib
 import ipaddress
 import json
@@ -348,12 +349,19 @@ APP_UPDATE_CONFIG_ALIAS_GROUPS = (
     ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
     ("downloadUrl", ("downloadUrl", "download_url")),
     ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
+    ("updatePinHash", ("updatePinHash", "update_pin_hash")),
 )
 APP_UPDATE_CONFIG_ERROR_KEY = "_configError"
 # Frontend uploads files as base64 inside JSON, so a 1 MB limit rejects many
 # normal PDFs/photos before parsing or AI recognition can start.
 MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
 MAX_UPDATE_FEED_BYTES = 262_144
+MAX_UPDATE_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
+UPDATE_PIN_MIN_LENGTH = 4
+UPDATE_PIN_MAX_LENGTH = 12
+UPDATE_PIN_PBKDF2_ITERATIONS = 210_000
+UPDATE_PIN_FAILURE_LIMIT = 5
+UPDATE_PIN_COOLDOWN_SECONDS = 60.0
 DEFAULT_RECOGNITION_MAX_DIMENSION = 4096
 UPDATE_STATUS_CACHE_TTL_SECONDS = 60.0
 RUNTIME_DIAGNOSTICS_CACHE_TTL_SECONDS = 45.0
@@ -372,6 +380,11 @@ CONTENT_TARGETS = {"all", "questions", "shared-passages"}
 OUTER_EDB_PREFIX_LEN = 11
 _update_status_cache_lock = threading.Lock()
 _update_status_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+_update_pin_attempt_lock = threading.Lock()
+_update_pin_failures = 0
+_update_pin_blocked_until = 0.0
+_update_install_lock = threading.Lock()
+_update_install_started = False
 _runtime_diagnostics_cache_lock = threading.Lock()
 _runtime_diagnostics_cache: tuple[float, dict[str, Any]] | None = None
 
@@ -431,6 +444,21 @@ class RequestPayloadTooLarge(Exception):
         self.content_length = content_length
         self.limit = limit
         super().__init__(f"request body is {content_length} bytes; limit is {limit} bytes")
+
+
+class AppUpdateError(RuntimeError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status: HTTPStatus = HTTPStatus.CONFLICT,
+        recovery_steps: list[str] | None = None,
+    ) -> None:
+        self.code = code
+        self.status = status
+        self.recovery_steps = list(recovery_steps or [])
+        super().__init__(message)
 
 
 class ArtifactCleanupBusy(RuntimeError):
@@ -829,6 +857,109 @@ def _normalize_app_update_config_payload(payload: dict[str, Any]) -> tuple[dict[
     return normalized, ""
 
 
+def _parse_update_pin_verifier(value: Any) -> tuple[int, bytes, bytes] | None:
+    text = str(value or "").strip()
+    parts = text.split("$")
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+        return None
+    try:
+        iterations = int(parts[1])
+        salt = bytes.fromhex(parts[2])
+        expected = bytes.fromhex(parts[3])
+    except (TypeError, ValueError):
+        return None
+    if iterations < 100_000 or iterations > 2_000_000:
+        return None
+    if not 16 <= len(salt) <= 64 or len(expected) != 32:
+        return None
+    return iterations, salt, expected
+
+
+def build_update_pin_verifier(
+    pin: str,
+    *,
+    salt: bytes | None = None,
+    iterations: int = UPDATE_PIN_PBKDF2_ITERATIONS,
+) -> str:
+    normalized_pin = str(pin or "").strip()
+    if not normalized_pin.isascii() or not normalized_pin.isdigit():
+        raise ValueError("update PIN must contain ASCII digits only")
+    if not UPDATE_PIN_MIN_LENGTH <= len(normalized_pin) <= UPDATE_PIN_MAX_LENGTH:
+        raise ValueError(
+            f"update PIN must contain {UPDATE_PIN_MIN_LENGTH}-{UPDATE_PIN_MAX_LENGTH} digits"
+        )
+    if not 100_000 <= int(iterations) <= 2_000_000:
+        raise ValueError("update PIN PBKDF2 iterations are outside the allowed range")
+    actual_salt = bytes(salt) if salt is not None else os.urandom(16)
+    if not 16 <= len(actual_salt) <= 64:
+        raise ValueError("update PIN salt must contain 16-64 bytes")
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        normalized_pin.encode("ascii"),
+        actual_salt,
+        int(iterations),
+    )
+    return f"pbkdf2_sha256${int(iterations)}${actual_salt.hex()}${digest.hex()}"
+
+
+def verify_update_pin(pin: Any, verifier: Any) -> bool:
+    parsed = _parse_update_pin_verifier(verifier)
+    normalized_pin = str(pin or "").strip()
+    if parsed is None:
+        return False
+    if not normalized_pin.isascii() or not normalized_pin.isdigit():
+        return False
+    if not UPDATE_PIN_MIN_LENGTH <= len(normalized_pin) <= UPDATE_PIN_MAX_LENGTH:
+        return False
+    iterations, salt, expected = parsed
+    actual = hashlib.pbkdf2_hmac(
+        "sha256",
+        normalized_pin.encode("ascii"),
+        salt,
+        iterations,
+    )
+    return hmac.compare_digest(actual, expected)
+
+
+def clear_update_pin_attempts() -> None:
+    global _update_pin_failures, _update_pin_blocked_until
+    with _update_pin_attempt_lock:
+        _update_pin_failures = 0
+        _update_pin_blocked_until = 0.0
+
+
+def clear_update_install_state() -> None:
+    global _update_install_started
+    with _update_install_lock:
+        _update_install_started = False
+
+
+def _authorize_update_pin(pin: Any, verifier: Any) -> None:
+    global _update_pin_failures, _update_pin_blocked_until
+    now = time.monotonic()
+    with _update_pin_attempt_lock:
+        if _update_pin_blocked_until > now:
+            retry_after = max(1, math.ceil(_update_pin_blocked_until - now))
+            raise AppUpdateError(
+                "update_pin_rate_limited",
+                f"PIN 입력이 잠시 잠겼습니다. {retry_after}초 후 다시 시도해 주세요.",
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+            )
+        if verify_update_pin(pin, verifier):
+            _update_pin_failures = 0
+            _update_pin_blocked_until = 0.0
+            return
+        _update_pin_failures += 1
+        if _update_pin_failures >= UPDATE_PIN_FAILURE_LIMIT:
+            _update_pin_failures = 0
+            _update_pin_blocked_until = now + UPDATE_PIN_COOLDOWN_SECONDS
+        raise AppUpdateError(
+            "invalid_update_pin",
+            "업데이트 PIN이 올바르지 않습니다.",
+            status=HTTPStatus.FORBIDDEN,
+        )
+
+
 def load_app_update_config() -> dict[str, Any]:
     config: dict[str, Any] = {
         "appId": "ClassInEDBMVP",
@@ -837,6 +968,7 @@ def load_app_update_config() -> dict[str, Any]:
         "updateFeedUrl": "",
         "downloadUrl": "",
         "releaseNotesUrl": "",
+        "updatePinHash": "",
         "bugReportUrl": DEFAULT_BUG_REPORT_URL,
     }
     seen: set[Path] = set()
@@ -858,6 +990,7 @@ def load_app_update_config() -> dict[str, Any]:
         "updateFeedUrl": "EDB_UPDATE_FEED_URL",
         "downloadUrl": "EDB_DOWNLOAD_URL",
         "releaseNotesUrl": "EDB_RELEASE_NOTES_URL",
+        "updatePinHash": "EDB_UPDATE_PIN_HASH",
         "bugReportUrl": "EDB_BUG_REPORT_URL",
     }
     for key, env_name in env_map.items():
@@ -1235,6 +1368,9 @@ def build_app_update_status() -> dict[str, Any]:
     platform_key = str(config.get("platform") or _app_platform_key())
     current_version = str(config.get("version") or "0.0.0")
     config_error = str(config.get(APP_UPDATE_CONFIG_ERROR_KEY) or "").strip()
+    update_pin_verifier = str(config.get("updatePinHash") or config.get("update_pin_hash") or "").strip()
+    if update_pin_verifier and _parse_update_pin_verifier(update_pin_verifier) is None:
+        config_error = "app_update_config.json updatePinHash is not a valid PBKDF2 verifier"
     feed_url = _normalize_update_url(config.get("updateFeedUrl") or config.get("update_feed_url"))
     fallback_download_url = _normalize_update_url(config.get("downloadUrl") or config.get("download_url"))
     fallback_notes_url = _normalize_update_url(config.get("releaseNotesUrl") or config.get("release_notes_url"))
@@ -1251,6 +1387,7 @@ def build_app_update_status() -> dict[str, Any]:
         fallback_download_url,
         fallback_notes_url,
         config_error,
+        update_pin_verifier,
     )
     cached = _cached_update_status(cache_key)
     if cached is not None:
@@ -1269,6 +1406,11 @@ def build_app_update_status() -> dict[str, Any]:
         "downloadUrl": fallback_download_url,
         "releaseNotesUrl": fallback_notes_url,
         "latest": None,
+        "automaticUpdateEnabled": bool(update_pin_verifier),
+        "automaticUpdateSupported": bool(
+            is_frozen_app() and platform_key in UPDATE_PLATFORM_ARTIFACT_TYPES
+        ),
+        "automaticUpdateReady": False,
     }
     if not feed_url:
         if config_error:
@@ -1394,6 +1536,13 @@ def build_app_update_status() -> dict[str, Any]:
         return _remember_update_status(cache_key, status)
     status["updateAvailable"] = comparison > 0
     status["channelStatus"] = "update_available" if comparison > 0 else "up_to_date"
+    status["automaticUpdateReady"] = bool(
+        status["updateAvailable"]
+        and status["automaticUpdateEnabled"]
+        and status["automaticUpdateSupported"]
+        and status.get("sha256")
+        and status.get("sizeBytes")
+    )
     return _remember_update_status(cache_key, status)
 
 
@@ -1407,6 +1556,378 @@ def _allowed_update_urls() -> set[str]:
         latest.get("releaseNotesUrl") if isinstance(latest, dict) else None,
     }
     return {str(url).strip() for url in candidates if str(url or "").strip()}
+
+
+def _update_artifact_details(status: dict[str, Any]) -> tuple[str, str, str, int, str]:
+    latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
+    download_url = _first_nonempty(status.get("downloadUrl"), latest.get("downloadUrl"))
+    file_name = _first_nonempty(latest.get("fileName"), _update_download_url_file_name(latest))
+    artifact_type = _first_nonempty(latest.get("artifactType")).lower()
+    expected_sha256 = _normalize_update_sha256(
+        _first_nonempty(status.get("sha256"), latest.get("sha256"))
+    )
+    expected_size = _normalize_positive_int(status.get("sizeBytes") or latest.get("sizeBytes"))
+    if not download_url or _normalize_update_url(download_url) != download_url:
+        raise AppUpdateError("update_download_unavailable", "안전한 업데이트 파일 URL이 없습니다.")
+    if not file_name or file_name != Path(file_name).name or file_name in {".", ".."}:
+        raise AppUpdateError("invalid_update_file_name", "업데이트 파일 이름이 올바르지 않습니다.")
+    if not artifact_type:
+        artifact_type = {
+            ".dmg": "dmg",
+            ".zip": "zip",
+            ".exe": "setup-exe",
+        }.get(Path(file_name).suffix.lower(), "")
+    platform_key = str(status.get("platform") or "").strip().lower()
+    metadata_error = _update_artifact_metadata_error(
+        {
+            "downloadUrl": download_url,
+            "fileName": file_name,
+            "artifactType": artifact_type,
+        },
+        platform_key,
+    )
+    if metadata_error:
+        raise AppUpdateError("invalid_update_artifact", metadata_error)
+    if not expected_sha256 or expected_size is None:
+        raise AppUpdateError(
+            "update_integrity_metadata_required",
+            "자동 업데이트에는 파일 크기와 SHA-256 검증 정보가 필요합니다.",
+            recovery_steps=["관리자에게 업데이트 피드의 sizeBytes와 sha256 등록을 요청해 주세요."],
+        )
+    if expected_size > MAX_UPDATE_ARTIFACT_BYTES:
+        raise AppUpdateError("update_artifact_too_large", "업데이트 파일이 허용 크기를 초과합니다.")
+    return download_url, file_name, artifact_type, expected_size, expected_sha256
+
+
+def _download_update_artifact(
+    status: dict[str, Any],
+    *,
+    runtime_dir: Path | None = None,
+) -> Path:
+    download_url, file_name, _artifact_type, expected_size, expected_sha256 = _update_artifact_details(status)
+    update_root = (runtime_dir or RUNTIME_DIR) / "updates"
+    update_root.mkdir(parents=True, exist_ok=True)
+    download_dir = Path(tempfile.mkdtemp(prefix="pending-", dir=update_root))
+    partial_path = download_dir / f"{file_name}.part"
+    final_path = download_dir / file_name
+    request = Request(
+        download_url,
+        headers={
+            "Accept": "application/octet-stream",
+            "User-Agent": f"ClassInEDBMVP/{status.get('currentVersion', '0')}",
+        },
+    )
+    try:
+        digest = hashlib.sha256()
+        total = 0
+        with urlopen(request, timeout=30.0) as response, partial_path.open("wb") as output:
+            response_url = str(getattr(response, "geturl", lambda: download_url)() or download_url)
+            if not _normalize_update_url(response_url):
+                raise AppUpdateError("unsafe_update_redirect", "업데이트 다운로드가 안전하지 않은 주소로 이동했습니다.")
+            raw_length = str(response.headers.get("Content-Length") or "").strip()
+            if raw_length:
+                try:
+                    content_length = int(raw_length)
+                except ValueError as exc:
+                    raise AppUpdateError(
+                        "invalid_update_content_length",
+                        "업데이트 서버가 올바르지 않은 파일 크기를 보냈습니다.",
+                    ) from exc
+                if content_length != expected_size:
+                    raise AppUpdateError(
+                        "update_size_mismatch",
+                        "업데이트 파일 크기가 배포 정보와 일치하지 않습니다.",
+                    )
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > expected_size or total > MAX_UPDATE_ARTIFACT_BYTES:
+                    raise AppUpdateError(
+                        "update_size_mismatch",
+                        "업데이트 파일 크기가 배포 정보보다 큽니다.",
+                    )
+                digest.update(chunk)
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        if total != expected_size:
+            raise AppUpdateError(
+                "update_size_mismatch",
+                "업데이트 파일 크기가 배포 정보와 일치하지 않습니다.",
+            )
+        if not hmac.compare_digest(digest.hexdigest(), expected_sha256):
+            raise AppUpdateError(
+                "update_checksum_mismatch",
+                "업데이트 파일 무결성 검증에 실패했습니다.",
+                recovery_steps=["파일을 실행하지 않았습니다. 관리자에게 업데이트 피드를 확인해 달라고 요청해 주세요."],
+            )
+        os.replace(partial_path, final_path)
+        return final_path
+    except AppUpdateError:
+        shutil.rmtree(download_dir, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(download_dir, ignore_errors=True)
+        raise AppUpdateError(
+            "update_download_failed",
+            f"업데이트 파일을 받지 못했습니다: {exc}",
+            status=HTTPStatus.BAD_GATEWAY,
+            recovery_steps=["인터넷 연결을 확인한 뒤 다시 시도해 주세요."],
+        ) from exc
+
+
+def _current_macos_bundle_path(executable: Path | None = None) -> Path | None:
+    candidate = Path(executable or sys.executable).absolute()
+    for path in (candidate, *candidate.parents):
+        if path.suffix.lower() == ".app":
+            return path
+    return None
+
+
+MACOS_UPDATE_HELPER = r'''#!/bin/zsh
+set -u
+parent_pid="$1"
+artifact="$2"
+artifact_type="$3"
+target_app="$4"
+log_file="$5"
+exec >>"$log_file" 2>&1
+echo "[$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)] updater waiting for process $parent_pid"
+while /bin/kill -0 "$parent_pid" 2>/dev/null; do /bin/sleep 0.25; done
+
+bundle_name="${target_app:t}"
+target_parent="${target_app:h}"
+work_dir="${artifact:h}/apply-$$"
+mount_dir="$work_dir/mount"
+extract_dir="$work_dir/extract"
+staged_app="$target_parent/.${bundle_name}.updating.$$"
+backup_app="$target_parent/.${bundle_name}.backup.$$"
+mounted=0
+cleanup() {
+  if [[ "$mounted" == "1" ]]; then /usr/bin/hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true; fi
+  /bin/rm -rf "$work_dir" "$staged_app"
+}
+trap cleanup EXIT
+/bin/mkdir -p "$work_dir"
+
+source_app=""
+if [[ "$artifact_type" == "dmg" ]]; then
+  /bin/mkdir -p "$mount_dir"
+  /usr/bin/hdiutil attach "$artifact" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+  mounted=1
+  source_app="$mount_dir/$bundle_name"
+elif [[ "$artifact_type" == "zip" ]]; then
+  /bin/mkdir -p "$extract_dir"
+  /usr/bin/ditto -x -k "$artifact" "$extract_dir"
+  source_app="$extract_dir/$bundle_name"
+else
+  echo "unsupported macOS update artifact: $artifact_type"
+  exit 21
+fi
+
+if [[ ! -d "$source_app" ]]; then
+  echo "update archive does not contain $bundle_name"
+  exit 22
+fi
+/usr/bin/ditto "$source_app" "$staged_app"
+if command -v codesign >/dev/null 2>&1; then
+  /usr/bin/codesign --verify --deep --strict "$staged_app"
+fi
+if [[ ! -d "$target_app" ]]; then
+  echo "installed app disappeared before replacement: $target_app"
+  exit 23
+fi
+/bin/mv "$target_app" "$backup_app"
+if /bin/mv "$staged_app" "$target_app"; then
+  /bin/rm -rf "$backup_app" "$artifact"
+  /usr/bin/open "$target_app"
+  echo "update installed and app relaunched"
+else
+  /bin/mv "$backup_app" "$target_app" || true
+  echo "update replacement failed; previous app restored"
+  exit 24
+fi
+'''
+
+
+WINDOWS_UPDATE_HELPER = r'''param(
+  [Parameter(Mandatory=$true)][int]$ParentPid,
+  [Parameter(Mandatory=$true)][string]$Installer,
+  [Parameter(Mandatory=$true)][string]$AppExecutable,
+  [Parameter(Mandatory=$true)][string]$InstallDir,
+  [Parameter(Mandatory=$true)][string]$LogFile
+)
+$ErrorActionPreference = 'Stop'
+try { Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue } catch {}
+$arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $LogFile + '"'))
+$process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
+if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+  throw "installer exited with code $($process.ExitCode)"
+}
+if (Test-Path -LiteralPath $AppExecutable -PathType Leaf) {
+  Start-Process -FilePath $AppExecutable
+}
+Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
+'''
+
+
+def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict[str, Any]:
+    target_app = _current_macos_bundle_path()
+    if target_app is None or not is_frozen_app():
+        raise AppUpdateError(
+            "update_requires_packaged_app",
+            "자동 업데이트는 설치된 macOS 앱에서만 사용할 수 있습니다.",
+        )
+    if "AppTranslocation" in str(target_app):
+        raise AppUpdateError(
+            "update_translocated_app",
+            "격리 실행 중인 앱은 자동으로 교체할 수 없습니다.",
+            recovery_steps=["앱을 응용 프로그램 폴더로 옮겨 다시 실행해 주세요."],
+        )
+    if not target_app.exists() or not os.access(target_app.parent, os.W_OK):
+        raise AppUpdateError(
+            "update_target_not_writable",
+            "현재 앱 설치 위치에 업데이트를 덮어쓸 권한이 없습니다.",
+            recovery_steps=["쓰기 가능한 응용 프로그램 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
+        )
+    helper_path = artifact_path.parent / "apply-macos-update.zsh"
+    log_path = artifact_path.parent / "update-install.log"
+    helper_path.write_text(MACOS_UPDATE_HELPER, encoding="utf-8")
+    helper_path.chmod(0o700)
+    log_stream = log_path.open("ab")
+    try:
+        subprocess.Popen(
+            [
+                "/bin/zsh",
+                str(helper_path),
+                str(os.getpid()),
+                str(artifact_path),
+                artifact_type,
+                str(target_app),
+                str(log_path),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+    finally:
+        log_stream.close()
+    return {"platform": "macos", "targetName": target_app.name, "restartScheduled": True}
+
+
+def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> dict[str, Any]:
+    if artifact_type != "setup-exe":
+        raise AppUpdateError("unsupported_update_artifact", "Windows 자동 업데이트는 Setup.exe만 지원합니다.")
+    if not is_frozen_app():
+        raise AppUpdateError(
+            "update_requires_packaged_app",
+            "자동 업데이트는 설치된 Windows 앱에서만 사용할 수 있습니다.",
+        )
+    executable = Path(sys.executable).absolute()
+    if not executable.is_file() or not os.access(executable.parent, os.W_OK):
+        raise AppUpdateError(
+            "update_target_not_writable",
+            "현재 앱 설치 위치에 업데이트를 덮어쓸 권한이 없습니다.",
+            recovery_steps=["쓰기 가능한 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
+        )
+    helper_path = artifact_path.parent / "apply-windows-update.ps1"
+    log_path = artifact_path.parent / "update-install.log"
+    helper_path.write_text(WINDOWS_UPDATE_HELPER, encoding="utf-8-sig")
+    creation_flags = 0
+    creation_flags |= int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    creation_flags |= int(getattr(subprocess, "DETACHED_PROCESS", 0))
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(helper_path),
+            "-ParentPid",
+            str(os.getpid()),
+            "-Installer",
+            str(artifact_path),
+            "-AppExecutable",
+            str(executable),
+            "-InstallDir",
+            str(executable.parent),
+            "-LogFile",
+            str(log_path),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags,
+        close_fds=True,
+    )
+    return {"platform": "windows", "targetName": executable.name, "restartScheduled": True}
+
+
+def _launch_update_helper(artifact_path: Path, status: dict[str, Any], artifact_type: str) -> dict[str, Any]:
+    platform_key = str(status.get("platform") or "").strip().lower()
+    try:
+        if platform_key == "macos":
+            return _launch_macos_update_helper(artifact_path, artifact_type)
+        if platform_key == "windows":
+            return _launch_windows_update_helper(artifact_path, artifact_type)
+    except AppUpdateError:
+        raise
+    except Exception as exc:
+        raise AppUpdateError(
+            "update_installer_launch_failed",
+            f"업데이트 설치 도우미를 시작하지 못했습니다: {exc}",
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        ) from exc
+    raise AppUpdateError("unsupported_update_platform", "이 운영체제의 자동 업데이트는 아직 지원하지 않습니다.")
+
+
+def prepare_app_update(pin: Any) -> dict[str, Any]:
+    status = build_app_update_status()
+    if not status.get("updateAvailable"):
+        raise AppUpdateError("update_not_available", "설치할 새 버전이 없습니다.")
+    config = load_app_update_config()
+    verifier = str(config.get("updatePinHash") or config.get("update_pin_hash") or "").strip()
+    if not verifier:
+        raise AppUpdateError(
+            "update_pin_not_configured",
+            "이 배포본에는 업데이트 PIN이 설정되어 있지 않습니다.",
+            recovery_steps=["배포 설정에 updatePinHash를 등록한 설치본을 사용해 주세요."],
+        )
+    if _parse_update_pin_verifier(verifier) is None:
+        raise AppUpdateError("invalid_update_pin_config", "업데이트 PIN 설정이 올바르지 않습니다.")
+    _authorize_update_pin(pin, verifier)
+    _download_url, file_name, artifact_type, _expected_size, _expected_sha256 = _update_artifact_details(status)
+    artifact_path = _download_update_artifact(status)
+    helper = _launch_update_helper(artifact_path, status, artifact_type)
+    latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
+    return {
+        "ok": True,
+        "accepted": True,
+        "currentVersion": status.get("currentVersion"),
+        "targetVersion": latest.get("version"),
+        "fileName": file_name,
+        **helper,
+    }
+
+
+def begin_app_update(pin: Any) -> dict[str, Any]:
+    global _update_install_started
+    if not _update_install_lock.acquire(blocking=False):
+        raise AppUpdateError("update_install_busy", "다른 업데이트 요청을 처리하고 있습니다.")
+    try:
+        if _update_install_started:
+            raise AppUpdateError("update_install_started", "업데이트가 이미 시작되었습니다.")
+        result = prepare_app_update(pin)
+        _update_install_started = True
+        return result
+    finally:
+        _update_install_lock.release()
 
 
 def ensure_runtime_dirs() -> None:
@@ -8303,6 +8824,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/bug-report":
             self._handle_bug_report()
             return
+        if parsed.path == "/api/app/update/install":
+            self._handle_app_update_install()
+            return
         if parsed.path == "/api/runtime/artifacts/cleanup":
             self._handle_runtime_artifact_cleanup()
             return
@@ -9699,6 +10223,51 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"failed to open URL: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "url": url, "opened": bool(opened)})
+
+
+    def _handle_app_update_install(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_json(
+                {"ok": False, "error": "cross-origin request rejected", "code": "cross_origin_rejected"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json(
+                {"ok": False, "error": f"invalid JSON: {exc}", "code": "invalid_json"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if not isinstance(payload, dict):
+            self._send_json(
+                {"ok": False, "error": "JSON object is required", "code": "invalid_update_request"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        try:
+            result = begin_app_update(payload.get("pin"))
+        except AppUpdateError as exc:
+            response = {"ok": False, "error": str(exc), "code": exc.code}
+            if exc.recovery_steps:
+                response["recoverySteps"] = exc.recovery_steps
+            self._send_json(response, status=exc.status)
+            return
+        self._send_json(result, status=HTTPStatus.ACCEPTED)
+
+        def shutdown_after_response() -> None:
+            time.sleep(0.35)
+            server = getattr(self, "server", None)
+            shutdown = getattr(server, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+
+        threading.Thread(
+            target=shutdown_after_response,
+            name="app-update-shutdown",
+            daemon=True,
+        ).start()
 
     def _handle_shutdown(self) -> None:
         if not _request_is_same_origin(self.headers):

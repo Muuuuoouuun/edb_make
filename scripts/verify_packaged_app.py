@@ -218,6 +218,24 @@ def _config_alias_conflict_error(label: str, config: dict, *field_names: str) ->
     return f"packaged app_update_config.json {label} aliases conflict: {details}"
 
 
+def _packaged_update_pin_verifier_error(value: object) -> str:
+    verifier = str(value or "").strip()
+    if not verifier:
+        return ""
+    parts = verifier.split("$")
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+        return "packaged app_update_config.json updatePinHash is not a valid PBKDF2 verifier"
+    try:
+        iterations = int(parts[1])
+        salt = bytes.fromhex(parts[2])
+        digest = bytes.fromhex(parts[3])
+    except ValueError:
+        return "packaged app_update_config.json updatePinHash is not a valid PBKDF2 verifier"
+    if not 100_000 <= iterations <= 2_000_000 or not 16 <= len(salt) <= 64 or len(digest) != 32:
+        return "packaged app_update_config.json updatePinHash is not a valid PBKDF2 verifier"
+    return ""
+
+
 def _relative_label(root: Path, path: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
@@ -525,6 +543,7 @@ def collect_package_errors(
                     ("updateFeedUrl", ("updateFeedUrl", "update_feed_url")),
                     ("downloadUrl", ("downloadUrl", "download_url")),
                     ("releaseNotesUrl", ("releaseNotesUrl", "release_notes_url")),
+                    ("updatePinHash", ("updatePinHash", "update_pin_hash")),
                 )
                 for label, field_names in alias_pairs:
                     if alias_error := _config_alias_conflict_error(label, update_config, *field_names):
@@ -537,6 +556,9 @@ def collect_package_errors(
                     errors.append("packaged app_update_config.json is missing version")
                 else:
                     packaged_version = version
+                update_pin_verifier = _config_text_value(update_config, "updatePinHash", "update_pin_hash")
+                if pin_error := _packaged_update_pin_verifier_error(update_pin_verifier):
+                    errors.append(pin_error)
                 if expected_app_id and app_id != expected_app_id:
                     errors.append(
                         "packaged app_update_config.json appId mismatch: "

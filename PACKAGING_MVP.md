@@ -217,11 +217,33 @@ xcrun notarytool store-credentials "classin-edb-notary" \
 The unsigned/ad-hoc DMG is fine for internal development, but a downloaded public macOS app needs Developer ID signing, notarization, and stapling to open cleanly on other Macs.
 
 ## In-App Updates
-The app uses a semi-automatic update flow:
+The app supports both PIN-gated automatic replacement and a manual download fallback:
 1. The installed app keeps user settings and API keys under the user's app runtime folder.
 2. `칠판 설정` shows the current app version and an `업데이트 확인` button.
-3. If the configured update feed reports a newer version, the app opens the configured download page in the browser.
-4. The user installs the new `.dmg` or `Setup.exe` over the previous app. Existing API keys and session data stay in the runtime folder.
+3. If the configured update feed reports a newer version, an administrator can enter the numeric update PIN and press `업데이트 버전`.
+4. The app downloads the platform installer, verifies the exact `sizeBytes` and `sha256`, exits, replaces the existing installation, and relaunches. Existing API keys and session data stay in the runtime folder.
+5. `다운로드 열기` remains available when a manual install is needed.
+
+Automatic replacement is available only in a packaged macOS or Windows app. macOS accepts the packaged `.dmg` or `.zip`; Windows accepts the Inno Setup `.exe`. The macOS helper verifies the downloaded app bundle's code signature before replacing the current bundle. The old macOS bundle is moved to a temporary backup and restored if the replacement move fails. Five incorrect PIN attempts pause PIN checks for 60 seconds.
+
+### Configure the update PIN
+
+Do not store the plaintext PIN in `app_update_config.json`. Generate a PBKDF2 verifier interactively:
+
+```zsh
+python3 scripts/generate_update_pin_hash.py
+```
+
+Put the printed value in the release environment as `EDB_PACKAGE_UPDATE_PIN_HASH`, or in the canonical config as `updatePinHash`. The packaging scripts inherit this environment variable and embed only the verifier. CI may instead receive the plaintext secret as `EDB_PACKAGE_UPDATE_PIN`; `scripts/build_app_update_config.py` converts it to a deterministic verifier and never writes the plaintext value:
+
+```zsh
+EDB_PACKAGE_UPDATE_PIN=4826 ./package_macos_app.sh --clean --dmg --zip \
+  --version 0.2.0 \
+  --update-feed-url "https://example.com/classin-edb/update.json"
+```
+
+Use your own 4–12 digit PIN; `4826` above is only a command example. For an unpackaged local runtime test, set `EDB_UPDATE_PIN_HASH` to the generated verifier. If no verifier is configured, the UI explains that PIN automatic updates are unavailable and keeps the manual download action.
+The installer GitHub Actions workflow reads the protected repository secret `EDB_UPDATE_PIN` and fails a production release when it is missing. Configure that secret before dispatching a production installer build; the workflow passes it only to the build-scoped metadata generator.
 
 Update feed and download URLs must use HTTPS. Plain HTTP is accepted only for loopback development URLs such as `http://127.0.0.1:9999/update.json`.
 
@@ -236,6 +258,7 @@ Documents\ClassInEDBMVP\app_update_config.json
 ~/Documents/ClassInEDBMVP/app_update_config.json
 ```
 Local overrides may use equivalent snake_case keys such as `download_url`; the runtime normalizes them to the canonical camelCase metadata keys before checking updates. If both alias forms are present with different values, update status becomes `invalid_config` instead of guessing between old and new release metadata.
+`update_pin_hash` is accepted as the snake_case alias of `updatePinHash`; conflicting values fail closed and the verifier is never returned by the update-status API.
 
 Prefer the packaging scripts for release builds because they generate build-scoped update metadata and run the post-build package verifier. If you run `pyinstaller ClassInEDBMVP.spec` directly, the spec resolves assets relative to the spec file location and writes generated update metadata inside PyInstaller's work path; set the same metadata through environment variables such as `EDB_PACKAGE_APP_ID`, `EDB_PACKAGE_APP_VERSION`, `EDB_PACKAGE_UPDATE_FEED_URL`, and `EDB_PACKAGE_DOWNLOAD_URL`, then run `scripts/verify_packaged_app.py` on the built app folder.
 Packaging scripts and direct `ClassInEDBMVP.spec` builds share the same metadata generator. Equivalent project `app_update_config.json` aliases are normalized into canonical camelCase keys before embedding metadata, and conflicting alias values fail the build instead of carrying old release URLs forward.
@@ -303,6 +326,7 @@ If a feed includes `appId` or `appName`, the installed app rejects it unless tho
 Packaged builds must include `appId`, `appName`, and `version` in `app_update_config.json`; `scripts/verify_packaged_app.py` fails the artifact if those required update identifiers are missing or mismatched, if multiple packaged `app_update_config.json` files disagree, if camelCase/snake_case update metadata aliases conflict, if packaged update/download/release-note URLs do not use HTTPS or loopback HTTP, or if wrapper-supplied expected URLs are not actually embedded in the package.
 The feed builder fails if `appId`, `appName`, `channel`, or release `version` is empty, so generated release metadata cannot silently lose its identity.
 `manifestSha256` and artifact `sha256` values must be 64-character lowercase SHA-256 hex strings when present, and `sizeBytes` must be a positive integer.
+Both artifact `sha256` and `sizeBytes` are mandatory for the PIN-gated automatic install action even though older/manual feeds may omit them.
 If `--manifest-sha256` is supplied while generating a manifest, the builder verifies it against the generated `manifest.json` and fails on mismatch.
 The feed builder also rejects known platform artifact mismatches, such as a `.exe` local file or download URL passed as a macOS DMG, a download URL without the expected artifact file extension, a download URL file name that disagrees with the supplied local artifact file, or the same local file reused for multiple platforms.
 

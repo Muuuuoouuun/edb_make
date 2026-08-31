@@ -2705,6 +2705,36 @@
     border-color: var(--accent);
     background: var(--accent-soft);
   }
+  .update-install-card{
+    display: grid;
+    gap: 8px;
+    margin-top: 2px;
+    padding: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+    border-radius: 10px;
+    background: linear-gradient(145deg, var(--surface), var(--accent-soft));
+  }
+  .update-install-card .lbl{
+    display: grid;
+    gap: 3px;
+    font-size: 12.5px;
+    font-weight: 650;
+  }
+  .update-install-card .lbl small{
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 450;
+    line-height: 1.45;
+  }
+  .update-pin-row .key-input:disabled{
+    opacity: .62;
+    cursor: not-allowed;
+  }
+  .update-install-button{
+    width: 100%;
+    min-height: 34px;
+    justify-content: center;
+  }
   .bug-report-card{
     border: 1px solid var(--line);
     border-radius: 10px;
@@ -7195,6 +7225,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-e121728b35be9875338d79d826a5807b3cc78ea4c769d8fee3c15a2a36da978d"></script>
+<script src="app.bundle.js?v=frontend-bundle-a547bc00f3d4574cbbfcabb6666cafaec6a10eff7c671580edea82d961e28f0a"></script>
 </body>
 </html>

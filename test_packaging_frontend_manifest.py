@@ -444,6 +444,24 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("downloadUrl must be an absolute URL" in error for error in errors))
         self.assertTrue(any("releaseNotesUrl must use https or loopback http" in error for error in errors))
 
+    def test_packaged_app_layout_rejects_invalid_update_pin_verifier(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            package_root = Path(raw_tmp) / "ClassInEDBMVP"
+            resource_root = self._write_packaged_runtime(package_root)
+            (resource_root / "app_update_config.json").write_text(
+                json.dumps({
+                    "appId": "ClassInEDBMVP",
+                    "appName": "ClassInEDBMVP",
+                    "version": "test",
+                    "updatePinHash": "sha256:not-a-pbkdf2-verifier",
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = collect_package_errors(package_root)
+
+        self.assertTrue(any("updatePinHash is not a valid PBKDF2 verifier" in error for error in errors))
+
     def test_packaged_app_layout_allows_loopback_update_metadata_url(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
@@ -507,7 +525,11 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                 '"downloadUrl":"https://example.test/ClassInEDBMVP-macOS.zip",'
                 '"download_url":"https://example.test/other.zip",'
                 '"releaseNotesUrl":"https://example.test/releases/test",'
-                '"release_notes_url":"https://example.test/releases/other"'
+                '"release_notes_url":"https://example.test/releases/other",'
+                '"updatePinHash":"pbkdf2_sha256$210000$30313233343536373839616263646566$'
+                '3f3a91d162a83c703d6002b2ffbe00ed6cdab2e02d43f6547651c98e9a30be48",'
+                '"update_pin_hash":"pbkdf2_sha256$210000$30313233343536373839616263646567$'
+                'fd7116736daed4be627d84dcd834b8932c958321d9c54742ac2aebdf8b65e1bd"'
                 "}\n",
                 encoding="utf-8",
             )
@@ -519,6 +541,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertTrue(any("updateFeedUrl aliases conflict" in error for error in errors))
         self.assertTrue(any("downloadUrl aliases conflict" in error for error in errors))
         self.assertTrue(any("releaseNotesUrl aliases conflict" in error for error in errors))
+        self.assertTrue(any("updatePinHash aliases conflict" in error for error in errors))
 
     def test_packaged_app_layout_rejects_conflicting_duplicate_update_configs(self) -> None:
         with TemporaryDirectory() as raw_tmp:
@@ -929,6 +952,9 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             "channelStatus": "up_to_date",
             "configured": True,
             "updateAvailable": False,
+            "automaticUpdateEnabled": True,
+            "automaticUpdateSupported": True,
+            "automaticUpdateReady": False,
         }
         _validate_update_metadata(update)
         _validate_update_metadata(
