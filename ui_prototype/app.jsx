@@ -299,6 +299,10 @@ const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_FIT_WIDTH_SCALE_RATIO = 3.0;
 const AUTO_SCALE_MAX_REDUCTION_RATIO = 0.06;
+const BOARD_PREVIEW_ZOOM_MIN = 0.12;
+const BOARD_PREVIEW_ZOOM_MAX = 1.4;
+const BOARD_PREVIEW_ZOOM_STEP = 0.1;
+const BOARD_PREVIEW_FIT_FILL_RATIO = 0.9;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
 const ADJACENT_RETRY_PADDING_RATIO = 0.16;
@@ -330,6 +334,41 @@ function classinBoardPageNumberAtOffset(offsetPages){
   const numericOffset = Number(offsetPages);
   const offset = Number.isFinite(numericOffset) ? Math.max(0, numericOffset) : 0;
   return Math.floor((offset + PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES) + 1;
+}
+
+function normalizeBoardPreviewZoom(value){
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(BOARD_PREVIEW_ZOOM_MIN, Math.min(BOARD_PREVIEW_ZOOM_MAX, numeric));
+}
+
+function boardPreviewBasePageHeight(
+  viewportHeight,
+  paddingTop = 0,
+  paddingBottom = 0,
+  slotHeight = DEFAULT_SLOT_HEIGHT_PAGES
+){
+  const resolvedSlotHeight = Number.isFinite(Number(slotHeight)) && Number(slotHeight) > 0
+    ? Number(slotHeight)
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  const usableHeight = Math.max(
+    120,
+    (Number(viewportHeight) || 0) - (Number(paddingTop) || 0) - (Number(paddingBottom) || 0)
+  );
+  return usableHeight / resolvedSlotHeight;
+}
+
+function boardPreviewZoomForRenderedHeight(
+  renderedHeightPages,
+  slotHeight = DEFAULT_SLOT_HEIGHT_PAGES
+){
+  const heightPages = Math.max(0.12, Number(renderedHeightPages) || 0.12);
+  const resolvedSlotHeight = Number.isFinite(Number(slotHeight)) && Number(slotHeight) > 0
+    ? Number(slotHeight)
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  return normalizeBoardPreviewZoom(
+    (resolvedSlotHeight * BOARD_PREVIEW_FIT_FILL_RATIO) / heightPages
+  );
 }
 
 function normalizePlacementXRatio(value){
@@ -6391,14 +6430,20 @@ function BoardStage({
   });
   const scrollSyncFrameRef = useRef(null);
   const restoredScrollRef = useRef(false);
+  const previewFocusRequestRef = useRef(null);
   const boardScrollTopRef = useRef(Number(savedScrollTop) || 0);
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
   const [dragMagnet, setDragMagnet] = useState(null);
-  const [pageH, setPageH] = useState(400);
+  const [basePageH, setBasePageH] = useState(400 / DEFAULT_SLOT_HEIGHT_PAGES);
+  const [previewZoom, setPreviewZoom] = useState(1);
   const [contentW, setContentW] = useState(0);
+  const pageH = Math.max(24, basePageH * previewZoom);
   const columnCount = normalizeBoardColumns(boardColumns);
-  const boardOrderSignature = items.map(item => String(item.id)).join('|');
+  const boardOrderSignature = useMemo(
+    () => items.map(item => String(item.id)).join('|'),
+    [items]
+  );
 
   const captureBoardTileRects = () => {
     const nextRects = new Map();
@@ -6410,11 +6455,23 @@ function BoardStage({
     previousTileRects.current = nextRects;
   };
 
-  // measure page (viewport) height
+  // One ClassIn page is 1.2 layout units. Base the preview unit on the usable
+  // board viewport so a normal ClassIn page is not taller than the board.
+  // Preview zoom is display-only and never reaches export data.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setPageH(el.clientHeight || 400);
+    const measure = () => {
+      const style = window.getComputedStyle(el);
+      const nextBasePageH = boardPreviewBasePageHeight(
+        el.clientHeight || 400,
+        Number.parseFloat(style.paddingTop) || 0,
+        Number.parseFloat(style.paddingBottom) || 0
+      );
+      setBasePageH(previous => (
+        Math.abs(previous - nextBasePageH) < 0.25 ? previous : nextBasePageH
+      ));
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -6424,7 +6481,10 @@ function BoardStage({
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    const measure = () => setContentW(el.clientWidth || 0);
+    const measure = () => {
+      const nextWidth = el.clientWidth || 0;
+      setContentW(previous => Math.abs(previous - nextWidth) < 0.25 ? previous : nextWidth);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -6615,14 +6675,39 @@ function BoardStage({
     setActive(id);
   };
 
-  const fitActiveTileInView = () => {
+  const focusActiveTileAtPreviewZoom = (value) => {
     const container = scrollRef.current;
     const idx = items.findIndex(x => x.id === activeId);
     if (!container || idx < 0) return;
-    const target = Math.max(0, layout.positions[idx].top - 8);
+    const nextZoom = normalizeBoardPreviewZoom(value);
     syncLock.current = Date.now();
-    smoothScrollTo(container, target);
+    if (Math.abs(nextZoom - previewZoom) < 0.001) {
+      smoothScrollTo(container, Math.max(0, layout.positions[idx].top - 8));
+      return;
+    }
+    previewFocusRequestRef.current = String(activeId);
+    setPreviewZoom(nextZoom);
   };
+
+  const fitActiveTileInView = () => {
+    const idx = items.findIndex(x => x.id === activeId);
+    const placement = layout.positions[idx];
+    if (!placement) return;
+    focusActiveTileAtPreviewZoom(
+      boardPreviewZoomForRenderedHeight(placement.renderedHeightPages)
+    );
+  };
+
+  useLayoutEffect(() => {
+    const requestedId = previewFocusRequestRef.current;
+    if (!requestedId || !scrollRef.current) return;
+    const idx = items.findIndex(item => String(item.id) === requestedId);
+    const placement = layout.positions[idx];
+    if (!placement) return;
+    previewFocusRequestRef.current = null;
+    syncLock.current = Date.now();
+    smoothScrollTo(scrollRef.current, Math.max(0, placement.top - 8), 0);
+  }, [pageH, boardOrderSignature]);
 
   const setCurrentBoardDropTarget = (target) => {
     boardDropTargetRef.current = target;
@@ -7021,6 +7106,9 @@ function BoardStage({
   const activeRemovableGapPages = activePlacement
     ? Math.max(0, activePlacement.snappedNext - activeRowRenderedBottomPages)
     : 0;
+  const activeFitsPreview = !activePlacement
+    || activePlacement.renderedHeightPages * previewZoom
+      <= DEFAULT_SLOT_HEIGHT_PAGES * BOARD_PREVIEW_FIT_FILL_RATIO + PLACEMENT_EPSILON_PAGES;
   const activeGuideWidth = contentW > 0
     ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
     : 0;
@@ -7048,14 +7136,39 @@ function BoardStage({
           <span className="name">실시간 칠판 미리보기</span>
           <span className="pill"><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
           <div className="spacer" />
-          <button
-            className="btn ghost stage-fit-btn"
-            type="button"
-            title="화면 맞춤"
-            data-tooltip="현재 칠판을 화면 안에 맞춰 보기"
-            disabled={!items.length}
-            onClick={fitActiveTileInView}
-          >화면 맞춤</button>
+          <div className="stage-preview-controls" role="group" aria-label="미리보기 배율">
+            <button
+              className="btn icon ghost"
+              type="button"
+              title="미리보기 축소"
+              aria-label="미리보기 축소"
+              disabled={!items.length || previewZoom <= BOARD_PREVIEW_ZOOM_MIN + 0.001}
+              onClick={() => focusActiveTileAtPreviewZoom(previewZoom - BOARD_PREVIEW_ZOOM_STEP)}
+            >{Icon.zoomOut}</button>
+            <button
+              className="btn ghost stage-preview-zoom-value"
+              type="button"
+              title="미리보기 배율만 100%로 복원"
+              disabled={!items.length}
+              onClick={() => focusActiveTileAtPreviewZoom(1)}
+            >보기 {Math.round(previewZoom * 100)}%</button>
+            <button
+              className="btn icon ghost"
+              type="button"
+              title="미리보기 확대"
+              aria-label="미리보기 확대"
+              disabled={!items.length || previewZoom >= BOARD_PREVIEW_ZOOM_MAX - 0.001}
+              onClick={() => focusActiveTileAtPreviewZoom(previewZoom + BOARD_PREVIEW_ZOOM_STEP)}
+            >{Icon.zoomIn}</button>
+            <button
+              className="btn ghost stage-fit-btn"
+              type="button"
+              title="선택 문항 전체 보기"
+              data-tooltip="선택 문항의 위·아래가 한 화면에 보이도록 미리보기만 맞춥니다"
+              disabled={!activePlacement}
+              onClick={fitActiveTileInView}
+            >선택 전체</button>
+          </div>
         </div>
 
         <div className="stage-wrap">
@@ -7081,6 +7194,14 @@ function BoardStage({
               </span>
               <span className={`stage-estimate-metric ${normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? 'is-compact' : ''}`}>
                 간격 <strong>{normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : '1.2 맞춤'}</strong>
+              </span>
+              <span
+                className={`stage-estimate-metric ${activeFitsPreview ? 'is-preview-fit' : 'is-scroll-needed'}`}
+                title={activeFitsPreview
+                  ? '선택 문항의 위·아래가 현재 미리보기 안에 표시됩니다'
+                  : '선택 문항의 아래쪽을 보려면 스크롤하거나 선택 전체를 누르세요'}
+              >
+                보기 <strong>{Math.round(previewZoom * 100)}%{activeFitsPreview ? ' · 전체' : ' · 스크롤 필요'}</strong>
               </span>
               <span
                 className="stage-estimate-metric"

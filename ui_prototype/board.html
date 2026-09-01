@@ -491,6 +491,24 @@
     min-width: 74px;
     justify-content: center;
   }
+  .stage-preview-controls{
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+  }
+  .stage-preview-controls .btn{
+    min-height: 30px;
+  }
+  .stage-preview-controls .btn.icon{
+    width: 30px;
+    padding: 5px;
+  }
+  .stage-preview-zoom-value{
+    min-width: 72px;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }
 
   .stage-wrap{
     --stage-preview-max-width: min(100%, calc((100vh - 56px - 46px - 44px - 64px) * 16 / 9));
@@ -595,6 +613,14 @@
   .stage-estimate-metric.is-compact{
     border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
     background: color-mix(in srgb, var(--ok) 11%, var(--surface));
+  }
+  .stage-estimate-metric.is-preview-fit{
+    border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+    background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+  }
+  .stage-estimate-metric.is-scroll-needed{
+    border-color: color-mix(in srgb, var(--warn) 58%, var(--line));
+    background: color-mix(in srgb, var(--warn) 10%, var(--surface));
   }
   .stage-estimate-legend{
     flex: 0 1 auto;
@@ -7243,6 +7269,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-4b89ea4aa7b2a236f2f7bb75d6378f6f1ce223c2818289629cd38a7e46bbb69a"></script>
+<script src="app.bundle.js?v=frontend-bundle-2ce70ca45dd9be8712d9431de5d39d3f9256b3855db45ec6c209c8e7afb2f795"></script>
 </body>
 </html>

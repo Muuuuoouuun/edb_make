@@ -233,6 +233,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("파일 추가", rail)
         self.assertIn("hasSessionItems ? 'is-compact'", rail)
         self.assertIn("stage-fit-btn", board_stage)
+        self.assertIn("stage-preview-controls", board_stage)
+        self.assertIn("보기 {Math.round(previewZoom * 100)}%", board_stage)
+        self.assertIn("선택 전체", board_stage)
+        self.assertIn("boardPreviewZoomForRenderedHeight", board_stage)
+        self.assertIn("activeFitsPreview", board_stage)
+        self.assertIn("스크롤 필요", board_stage)
+        self.assertIn(".stage-preview-controls", html)
         self.assertNotIn("title=\"자동 정렬\"", board_stage)
         self.assertIn("한 줄 ${columnCount}개", board_stage)
         self.assertIn("연속 이어붙임", board_stage)
@@ -245,6 +252,39 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".drop-zone.is-compact", html)
         self.assertIn(".topbar-more-menu", html)
 
+    def test_board_preview_zoom_uses_usable_classin_page_height(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        start = source.index("const FIXED_LEFT_ZONE_RATIO")
+        end = source.index("function normalizePlacementXRatio")
+        self.assertGreaterEqual(start, 0)
+        self.assertGreater(end, start)
+        helper_block = source[start:end]
+
+        run_node(
+            """
+            const vm = require('vm');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(process.env.HELPER_BLOCK + `
+              globalThis.previewResult = {
+                base: boardPreviewBasePageHeight(362, 26, 70),
+                fit: boardPreviewZoomForRenderedHeight(2.72),
+                min: normalizeBoardPreviewZoom(0.01),
+                max: normalizeBoardPreviewZoom(9),
+              };
+            `, sandbox);
+            const result = sandbox.previewResult;
+            if (Math.abs(result.base - (266 / 1.2)) > 0.001) {
+              throw new Error(`usable ClassIn height mismatch: ${JSON.stringify(result)}`);
+            }
+            if (Math.abs(result.fit - (1.08 / 2.72)) > 0.001) {
+              throw new Error(`selected fit zoom mismatch: ${JSON.stringify(result)}`);
+            }
+            if (result.min !== 0.12 || result.max !== 1.4) {
+              throw new Error(`preview zoom clamp mismatch: ${JSON.stringify(result)}`);
+            }
+            """.replace("process.env.HELPER_BLOCK", repr(helper_block))
+        )
     def test_compact_controls_expose_hover_tooltips(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
