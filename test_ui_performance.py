@@ -20,6 +20,20 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("scrollSyncFrameRef.current = window.requestAnimationFrame", board_stage)
         self.assertIn("window.cancelAnimationFrame(scrollSyncFrameRef.current)", board_stage)
 
+    def test_initial_session_fetch_is_not_restarted_by_column_changes(self) -> None:
+        app = self.source.split("function App(){", 1)[1]
+        apply_session = app.split("const applySession = useCallback", 1)[1]
+        apply_session = apply_session.split("// Replace state from a mutation response", 1)[0]
+        initial_fetch = app.split("// initial session fetch", 1)[1]
+        initial_fetch = initial_fetch.split("// load user settings", 1)[0]
+
+        self.assertIn("const boardColumnsRef = useRef(boardColumns)", app)
+        self.assertIn("boardColumnsRef.current = boardColumns", app)
+        self.assertIn("boardColumnsRef.current", apply_session)
+        self.assertIn("}, []);", apply_session)
+        self.assertIn("}, [applySession]);", initial_fetch)
+        self.assertNotIn("}, [boardColumns]);", apply_session)
+
     def test_elapsed_time_updates_do_not_run_twice_per_second(self) -> None:
         loading = self.source.split("function LoadingOverlay", 1)[1]
         loading = loading.split("function RecognitionPageReviewStage", 1)[0]

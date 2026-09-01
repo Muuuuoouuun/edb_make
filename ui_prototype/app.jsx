@@ -6495,15 +6495,21 @@ function BoardStage({
     return () => ro.disconnect();
   }, []);
 
-  // Compute board positions with row height shared by neighboring columns.
-  const layout = useMemo(() => {
-    const EPS = 0.001;
-    const layoutItems = reflowItemsForBoardOrder(
+  // Reflow is independent of display-only preview zoom. Keep it stable while
+  // zooming so large science/physics sets do not recompute every placement.
+  const layoutItems = useMemo(
+    () => reflowItemsForBoardOrder(
       items,
       DEFAULT_SLOT_HEIGHT_PAGES,
       columnCount,
       layoutGapMode
-    );
+    ),
+    [items, columnCount, layoutGapMode]
+  );
+
+  // Compute pixel positions with row height shared by neighboring columns.
+  const layout = useMemo(() => {
+    const EPS = 0.001;
     const positions = layoutItems.map((it) => {
       const startPages = Math.max(0, it.startYPages || 0);
       const heightPages = itemHeightPages(it);
@@ -6545,7 +6551,7 @@ function BoardStage({
     const totalH = endTop + endH;
     const totalPages = Math.max(1, Math.ceil(totalH / pageH));
     return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
-  }, [items, pageH, columnCount, layoutGapMode]);
+  }, [layoutItems, pageH, columnCount]);
 
   const previewEstimate = useMemo(
     () => deriveBoardPreviewEstimate(layout.items, activeId, DEFAULT_SLOT_HEIGHT_PAGES),
@@ -13857,6 +13863,8 @@ function App(){
   const [historyStack, setHistoryStack] = useState([]);
   const historyStackRef = useRef([]);
   const boardColumns = normalizeBoardColumns(t.boardColumns);
+  const boardColumnsRef = useRef(boardColumns);
+  boardColumnsRef.current = boardColumns;
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
   const moveFeedbackTimerRef = useRef(null);
@@ -14295,7 +14303,7 @@ function App(){
     const mapped = reflowItemsForBoardOrder(
       rawSession.problems.map((p, idx) => mapProblemToItem(p, idx)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumns,
+      boardColumnsRef.current,
       restoredGapMode
     );
     setItems(mapped);
@@ -14311,7 +14319,7 @@ function App(){
       initialViewConsumedRef.current = true;
     }
     return true;
-  }, [boardColumns]);
+  }, []);
 
   // Replace state from a mutation response: similar to applySession but
   // tries to preserve the user's current item ordering when the mutation
@@ -15986,7 +15994,11 @@ function App(){
       );
       return;
     }
-    const placementOverlapIssues = findBoardPlacementOverlaps(items, { sessionProblemIds: sessionIds })
+    const placementOverlapIssues = findBoardPlacementOverlaps(itemsForPublish, {
+      sessionProblemIds: sessionIds,
+      layoutGapMode,
+      resolvedPlacements: true,
+    })
       .filter(issue => issue.type === 'board_placement_overlap');
     if (placementOverlapIssues.length > 0) {
       const firstIssue = placementOverlapIssues[0];

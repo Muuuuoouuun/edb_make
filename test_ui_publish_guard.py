@@ -64,6 +64,9 @@ class TestUiPublishGuard(unittest.TestCase):
         on_publish = on_publish.split("  return (", 1)[0]
 
         self.assertIn("findBoardPlacementOverlaps", on_publish)
+        self.assertIn("findBoardPlacementOverlaps(itemsForPublish", on_publish)
+        self.assertIn("layoutGapMode,", on_publish)
+        self.assertIn("resolvedPlacements: true", on_publish)
         self.assertIn("board_placement_overlap", on_publish)
         self.assertIn("문항 배치가 겹칠 수 있어", on_publish)
         self.assertIn("setView('board')", on_publish)
@@ -161,7 +164,7 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
-        self.assertIn("publish_guard.js?v=preflight-passage-envelope-20260803", html)
+        self.assertIn("publish_guard.js?v=preflight-layout-gap-20260901", html)
 
 
 if __name__ == "__main__":
