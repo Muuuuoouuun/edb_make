@@ -614,6 +614,10 @@
     border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
     background: color-mix(in srgb, var(--ok) 11%, var(--surface));
   }
+  .stage-estimate-metric.is-auto-fit{
+    border-color: color-mix(in srgb, var(--ok) 62%, var(--line));
+    background: color-mix(in srgb, var(--ok) 13%, var(--surface));
+  }
   .stage-estimate-metric.is-preview-fit{
     border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
     background: color-mix(in srgb, var(--ok) 8%, var(--surface));
@@ -2641,6 +2645,25 @@
   .layout-gap-mode-control .seg-mini{
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+  .layout-gap-note{
+    display: grid;
+    gap: 3px;
+    margin: -2px 0 4px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--ok) 38%, var(--line));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--ok) 7%, var(--surface));
+    color: var(--muted);
+    font-size: 10.5px;
+    line-height: 1.45;
+  }
+  .layout-gap-note strong{
+    color: var(--ink-2);
+    font-size: 11px;
+  }
+  .layout-gap-note .warn{
+    color: color-mix(in srgb, var(--warn) 78%, var(--ink));
   }
   .layout-gap-reset-control .btn{
     min-width: 68px;
@@ -7269,6 +7292,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-2ce70ca45dd9be8712d9431de5d39d3f9256b3855db45ec6c209c8e7afb2f795"></script>
+<script src="app.bundle.js?v=frontend-bundle-9d0a4287c967b19ab617482d06d2934577e97a9f195fe1f850fb3a89e059ed13"></script>
 </body>
 </html>

@@ -620,6 +620,8 @@ function resetItemPlacement(item){
     placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
     placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
     placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
+    placementAutoFitDisabled: false,
+    placement_auto_fit_disabled: false,
     placementXEdited: false,
   };
 }
@@ -698,8 +700,8 @@ function scaleNearPreviousSlotBoundary(item, startPages, slotHeight = DEFAULT_SL
   if (
     !item
     || itemUsesContinuousPageFlow(item)
-    || currentScale < DEFAULT_PLACEMENT_SCALE_RATIO
-    || currentScale > PLACEMENT_SCALE_MAX
+    || Boolean(item.placementAutoFitDisabled || item.placement_auto_fit_disabled)
+    || Math.abs(currentScale - DEFAULT_PLACEMENT_SCALE_RATIO) > PLACEMENT_EPSILON_PAGES
     || !Number.isFinite(slotHeight)
     || slotHeight <= 0
   ) {
@@ -885,6 +887,8 @@ function applyPlacementPatchToItem(item, patch){
   if (Object.prototype.hasOwnProperty.call(patch, 'scaleRatio')) {
     delete next._previewAutoScaleAdjusted;
     delete next._previewOriginalScaleRatio;
+    next.placementAutoFitDisabled = true;
+    next.placement_auto_fit_disabled = true;
     next.placementScaleRatio = normalizePlacementScaleRatio(
       patch.scaleRatio,
       maxPlacementScaleRatio(next)
@@ -7225,13 +7229,15 @@ function BoardStage({
                     다음 <strong>C{previewEstimate.active.classinNextPage}</strong>
                   </span>
                   <span
-                    className="stage-estimate-metric"
+                    className={`stage-estimate-metric ${previewEstimate.active.autoScaleAdjusted ? 'is-auto-fit' : ''}`}
                     title={previewEstimate.active.autoScaleAdjusted
-                      ? `경계 자동 맞춤 −${(previewEstimate.active.autoScaleReductionRatio * 100).toFixed(1)}%`
+                      ? `경계 공백 방지 자동 축소 −${(previewEstimate.active.autoScaleReductionRatio * 100).toFixed(1)}% · 최종 배율 ${Math.round(previewEstimate.active.scaleRatio * 100)}%`
                       : '현재 문항 표시 배율'}
                   >
-                    {previewEstimate.active.autoScaleAdjusted ? '자동 맞춤' : '배율'}
-                    <strong>{Math.round(previewEstimate.active.scaleRatio * 100)}%</strong>
+                    {previewEstimate.active.autoScaleAdjusted ? '공백 방지' : '배율'}
+                    <strong>{previewEstimate.active.autoScaleAdjusted
+                      ? `−${(previewEstimate.active.autoScaleReductionRatio * 100).toFixed(1)}%`
+                      : `${Math.round(previewEstimate.active.scaleRatio * 100)}%`}</strong>
                   </span>
                 </>
               )}
@@ -7448,7 +7454,7 @@ function BoardStage({
             </span>
             {previewEstimate.autoScaleAdjustedCount > 0 && !previewEstimate.active?.autoScaleAdjusted && (
               <span className="chip" title="경계에 조금 넘친 문항만 최대 6% 범위에서 자동으로 맞췄습니다">
-                자동 맞춤 {previewEstimate.autoScaleAdjustedCount}개
+                공백 방지 {previewEstimate.autoScaleAdjustedCount}개
               </span>
             )}
             {activePlacement && (
@@ -8674,10 +8680,17 @@ function SidePanel({
             <div className="panel-section-hd">레이아웃 <span className="line" /></div>
 
             <div className="row-control">
-              <div className="lbl">한 줄 자료 수<small>너비 맞춤 아님 · 한 줄 배치 개수</small></div>
+              <div className="lbl">한 줄 자료 수<small>실제 EDB 제작은 현재 1열만 검증됨</small></div>
               <div className="seg-mini">
                 {[1,2,3].map(n => (
-                  <button key={n} className={boardColumns===n ? 'on' : ''} onClick={() => setBoardColumns(n)}>{n}개</button>
+                  <button
+                    key={n}
+                    className={boardColumns===n ? 'on' : ''}
+                    type="button"
+                    title={n === 1 ? '검증된 1열 배치' : '다열 Export 검증 후 제공할 예정입니다'}
+                    disabled={n !== 1}
+                    onClick={() => setBoardColumns(n)}
+                  >{n}개</button>
                 ))}
               </div>
             </div>
@@ -8696,6 +8709,12 @@ function SidePanel({
                   onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
                 >빈틈 없이</button>
               </div>
+            </div>
+
+            <div className="layout-gap-note" role="note">
+              <strong>경계 공백 방지</strong>
+              <span>각 1.2 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 사용자가 조절한 배율은 유지합니다.</span>
+              <span className="warn">‘빈틈 없이’는 문항이 ClassIn 화면 경계를 걸칠 수 있으니 저장 전에 미리보기를 확인하세요.</span>
             </div>
 
             <div className="row-control layout-gap-reset-control">
@@ -10254,6 +10273,10 @@ function applyItemStateToProblem(problem, item){
   next.placement_y_ratio = next.placementYRatio;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
   next.placement_scale_ratio = next.placementScaleRatio;
+  next.placementAutoFitDisabled = Boolean(
+    item.placementAutoFitDisabled || item.placement_auto_fit_disabled
+  );
+  next.placement_auto_fit_disabled = next.placementAutoFitDisabled;
   const placementGapAfterPages = normalizePlacementGapAfterPages(
     item.placementGapAfterPages ?? item.placement_gap_after_pages
   );
@@ -10430,6 +10453,7 @@ function rebaseSessionBoardLayout(
         placementXEdited: localItem.placementXEdited,
         placementYRatio: localItem.placementYRatio,
         placementScaleRatio: localItem.placementScaleRatio,
+        placementAutoFitDisabled: localItem.placementAutoFitDisabled,
         placementGapAfterPages: localItem.placementGapAfterPages,
         boardColumnCount: localItem.boardColumnCount,
         boardColumnIndex: localItem.boardColumnIndex,
@@ -10916,6 +10940,9 @@ function mapProblemToItem(problem, idx){
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
     placementScaleRatio: initialScale,
+    placementAutoFitDisabled: Boolean(
+      problem.placementAutoFitDisabled || problem.placement_auto_fit_disabled
+    ),
     placementGapAfterPages: normalizePlacementGapAfterPages(
       problem.placementGapAfterPages ?? problem.placement_gap_after_pages
     ),
@@ -10953,6 +10980,7 @@ function placementPersistenceSignature(rawSession){
       Boolean(item.placementXEdited),
       stableNumber(item.placementYRatio),
       stableNumber(item.placementScaleRatio),
+      Boolean(item.placementAutoFitDisabled),
       stableNumber(item.placementGapAfterPages),
       item.boardColumnCount,
       item.boardColumnIndex,
@@ -15908,6 +15936,10 @@ function App(){
     }
     if (operationRecovery?.conflict) {
       showToast('오류 안내에서 최신 상태를 먼저 불러오거나 현재 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    if (normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN) {
+      showToast('2·3열은 실제 EDB 배치 검증 전입니다. 설정에서 1열로 바꾼 뒤 제작해 주세요');
       return;
     }
     clearOperationRecovery();

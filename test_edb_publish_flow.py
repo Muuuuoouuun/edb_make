@@ -6401,6 +6401,105 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertEqual(0.6, placements[0].actual_bottom_y_pages)
         self.assertEqual([0.6, 1.1], [placement.snapped_next_start_y_pages for placement in placements])
 
+    def test_layout_engine_honors_science_boundary_downscale_in_grid_mode(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+        )
+        fitted_scale = ONE_PROBLEM_SLOT_HEIGHT_PAGES / 1.26
+        problems = [
+            ProblemLayoutInput(
+                problem_id="physics-slight-overflow",
+                subject=Subject.SCIENCE,
+                actual_content_height_pages=1.26,
+                reading_heavy=True,
+                metadata={"placement_scale_ratio": fitted_scale},
+            ),
+            ProblemLayoutInput(
+                problem_id="physics-next",
+                subject=Subject.SCIENCE,
+                actual_content_height_pages=0.8,
+                reading_heavy=True,
+            ),
+        ]
+
+        placements = place_problems(problems, template=template)
+
+        self.assertEqual(0.0, placements[0].start_y_pages)
+        self.assertAlmostEqual(1.2, placements[0].actual_bottom_y_pages)
+        self.assertAlmostEqual(1.2, placements[0].snapped_next_start_y_pages)
+        self.assertAlmostEqual(1.2, placements[1].start_y_pages)
+        self.assertEqual(0.0, placements[0].overflow_amount_pages)
+
+        unchanged = place_problems(
+            [
+                ProblemLayoutInput(
+                    problem_id="physics-not-adjusted",
+                    subject=Subject.SCIENCE,
+                    actual_content_height_pages=1.26,
+                    reading_heavy=True,
+                )
+            ],
+            template=template,
+        )[0]
+        self.assertEqual(2.4, unchanged.snapped_next_start_y_pages)
+
+    def test_layout_engine_honors_multi_page_boundary_downscale(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+        )
+        placements = place_problems(
+            [
+                ProblemLayoutInput(
+                    problem_id="science-long-boundary",
+                    subject=Subject.SCIENCE,
+                    actual_content_height_pages=6.21,
+                    reading_heavy=True,
+                    metadata={"placement_scale_ratio": 6.0 / 6.21},
+                ),
+                ProblemLayoutInput(
+                    problem_id="science-after-long",
+                    subject=Subject.SCIENCE,
+                    actual_content_height_pages=0.7,
+                    reading_heavy=True,
+                ),
+            ],
+            template=template,
+        )
+
+        self.assertAlmostEqual(6.0, placements[0].actual_bottom_y_pages)
+        self.assertAlmostEqual(6.0, placements[0].snapped_next_start_y_pages)
+        self.assertAlmostEqual(6.0, placements[1].start_y_pages)
+
+    def test_layout_engine_reserves_explicitly_scaled_up_height(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+        )
+        placements = place_problems(
+            [
+                ProblemLayoutInput(
+                    problem_id="science-scaled-up",
+                    subject=Subject.SCIENCE,
+                    actual_content_height_pages=1.0,
+                    reading_heavy=True,
+                    metadata={"placement_scale_ratio": 1.4},
+                ),
+                ProblemLayoutInput(
+                    problem_id="science-after-scaled-up",
+                    subject=Subject.SCIENCE,
+                    actual_content_height_pages=0.7,
+                    reading_heavy=True,
+                ),
+            ],
+            template=template,
+        )
+
+        self.assertAlmostEqual(1.4, placements[0].actual_bottom_y_pages)
+        self.assertAlmostEqual(2.4, placements[0].snapped_next_start_y_pages)
+        self.assertAlmostEqual(2.4, placements[1].start_y_pages)
+
     def test_layout_engine_per_item_zero_gap_pulls_following_problem_up(self):
         template = LayoutTemplate(
             name="academy-default",

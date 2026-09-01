@@ -122,20 +122,35 @@ def place_problem(
         "gapAfterPages",
     )
     compact = _uses_compact_layout(template) or placement_gap_after_pages is not None
-    reserve_scaled_height = continuous or compact or _metadata_bool(
+    placement_scale_ratio = max(
+        0.0,
+        _metadata_float(
+            problem.metadata or {},
+            "placement_scale_ratio",
+            "placementScaleRatio",
+            "scaleRatio",
+            default=1.0,
+        ),
+    )
+    scaled_height_adjusted = abs(placement_scale_ratio - 1.0) > EPSILON
+    scaled_height_reduction = placement_scale_ratio < 1.0 - EPSILON
+    reserve_scaled_height = continuous or compact or scaled_height_adjusted or _metadata_bool(
         problem.metadata or {},
         "reserve_scaled_height",
         "reserveScaledHeight",
     )
+    allow_scaled_height_reduction = compact or scaled_height_reduction
     flow_height_pages = _rendered_flow_height_pages(
         problem,
         actual_height_pages,
         reserve_scaled_height=reserve_scaled_height,
-        allow_scaled_height_reduction=compact,
+        allow_scaled_height_reduction=allow_scaled_height_reduction,
     )
     overflow_allowed = resolve_overflow_allowed(problem, template)
 
-    rendered_bottom_height_pages = flow_height_pages if compact else actual_height_pages
+    rendered_bottom_height_pages = flow_height_pages if (
+        compact or scaled_height_adjusted
+    ) else actual_height_pages
     actual_bottom_y_pages = round(start_y_pages + rendered_bottom_height_pages, 6)
     if continuous:
         snapped_next_start_y_pages = round(start_y_pages + flow_height_pages, 6)

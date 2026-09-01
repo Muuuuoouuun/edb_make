@@ -708,7 +708,8 @@ class TestUiReorderHelper(unittest.TestCase):
             sandbox.normalizeInputIntent = value => value;
             vm.runInNewContext(
               source.slice(start, end) + '\n'
-                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n',
+                + 'globalThis.reflowItemsForBoardOrder = reflowItemsForBoardOrder;\n'
+                + 'globalThis.applyPlacementPatchToItem = applyPlacementPatchToItem;\n',
               sandbox
             );
 
@@ -727,6 +728,22 @@ class TestUiReorderHelper(unittest.TestCase):
             }
             if (userReduced.renderedBottomYPages !== 1.197 || userReduced.snappedNextStartYPages !== 1.2) {
               throw new Error(`existing reduced geometry is inconsistent: ${JSON.stringify(userReduced)}`);
+            }
+
+            const userIncreased = sandbox.reflowItemsForBoardOrder([
+              { id: 'user-increased', heightFrac: 1.26, placementScaleRatio: 1.05 },
+            ])[0];
+            if (userIncreased.placementScaleRatio !== 1.05) {
+              throw new Error(`explicitly increased scale must not be auto-fitted: ${JSON.stringify(userIncreased)}`);
+            }
+
+            const resetToHundred = sandbox.applyPlacementPatchToItem(
+              { id: 'manual-hundred', heightFrac: 1.26, placementScaleRatio: 0.95 },
+              { scaleRatio: 1 }
+            );
+            const preservedHundred = sandbox.reflowItemsForBoardOrder([resetToHundred])[0];
+            if (preservedHundred.placementScaleRatio !== 1 || !preservedHundred.placementAutoFitDisabled) {
+              throw new Error(`explicit 100% scale must opt out of auto-fit: ${JSON.stringify(preservedHundred)}`);
             }
             """
         )
