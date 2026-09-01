@@ -16,6 +16,7 @@ import edb_builder
 from inspect_edb import parse_edb, parse_embedded_images
 from app_server import (
     _problems_to_entries,
+    _template_from_session,
     _session_publish_history,
     _session_publish_blocking_preflight,
     _session_publish_summary,
@@ -6357,6 +6358,91 @@ class TestEdbPublishFlow(unittest.TestCase):
 
         self.assertEqual([0.0, 1.2], [placement.start_y_pages for placement in placements])
         self.assertEqual([1.2, 2.4], [placement.snapped_next_start_y_pages for placement in placements])
+
+    def test_layout_engine_compact_mode_removes_slot_gap_without_overlap(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            metadata={"layout_gap_mode": "compact"},
+        )
+        problems = [
+            ProblemLayoutInput(
+                problem_id="compact-1",
+                actual_content_height_pages=0.55,
+                metadata={"placement_scale_ratio": 1.4},
+            ),
+            ProblemLayoutInput(problem_id="compact-2", actual_content_height_pages=0.8),
+        ]
+
+        placements = place_problems(problems, template=template)
+
+        self.assertEqual([0.0, 0.77], [placement.start_y_pages for placement in placements])
+        self.assertEqual([0.77, 1.57], [placement.snapped_next_start_y_pages for placement in placements])
+        self.assertGreaterEqual(placements[1].start_y_pages, placements[0].actual_bottom_y_pages)
+
+    def test_layout_engine_compact_mode_uses_downscaled_rendered_height(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+            metadata={"layout_gap_mode": "compact"},
+        )
+        problems = [
+            ProblemLayoutInput(
+                problem_id="compact-small-1",
+                actual_content_height_pages=0.8,
+                metadata={"placement_scale_ratio": 0.75},
+            ),
+            ProblemLayoutInput(problem_id="compact-small-2", actual_content_height_pages=0.5),
+        ]
+
+        placements = place_problems(problems, template=template)
+
+        self.assertEqual([0.0, 0.6], [placement.start_y_pages for placement in placements])
+        self.assertEqual(0.6, placements[0].actual_bottom_y_pages)
+        self.assertEqual([0.6, 1.1], [placement.snapped_next_start_y_pages for placement in placements])
+
+    def test_layout_engine_per_item_zero_gap_pulls_following_problem_up(self):
+        template = LayoutTemplate(
+            name="academy-default",
+            base_slot_height_pages=ONE_PROBLEM_SLOT_HEIGHT_PAGES,
+        )
+        problems = [
+            ProblemLayoutInput(
+                problem_id="manual-gap-1",
+                actual_content_height_pages=0.55,
+                metadata={"placement_gap_after_pages": 0},
+            ),
+            ProblemLayoutInput(problem_id="manual-gap-2", actual_content_height_pages=0.8),
+        ]
+
+        placements = place_problems(problems, template=template)
+
+        self.assertEqual([0.0, 0.55], [placement.start_y_pages for placement in placements])
+        self.assertEqual([0.55, 1.75], [placement.snapped_next_start_y_pages for placement in placements])
+
+    def test_session_layout_gap_mode_and_problem_override_reach_export_inputs(self):
+        template = _template_from_session({"layoutGapMode": "compact"})
+        self.assertEqual("compact", template.metadata["layout_gap_mode"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "problem.png"
+            Image.new("RGB", (400, 240), "white").save(image_path)
+            entries = _problems_to_entries(
+                [
+                    {
+                        "id": "gap-problem",
+                        "title": "Gap problem",
+                        "imagePath": image_path.resolve().as_uri(),
+                        "boardRenderPath": image_path.resolve().as_uri(),
+                        "placementGapAfterPages": 0,
+                    }
+                ],
+                template=template,
+            )
+
+        self.assertEqual(0.0, entries[0].placement_gap_after_pages)
+        layout_input = problem_board.placement_inputs(entries)[0]
+        self.assertEqual(0.0, layout_input.metadata["placement_gap_after_pages"])
 
     def test_v1_reconstruct_step_exports_transparent_high_res_png(self):
         with tempfile.TemporaryDirectory() as tmp:

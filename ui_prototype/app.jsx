@@ -290,6 +290,8 @@ const PLACEMENT_EPSILON_PAGES = 1e-9;
 const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
 const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
+const LAYOUT_GAP_MODE_GRID = 'classin-grid';
+const LAYOUT_GAP_MODE_COMPACT = 'compact';
 const DEFAULT_PLACEMENT_X_RATIO = 0;
 const DEFAULT_PLACEMENT_Y_RATIO = 0;
 const DEFAULT_PLACEMENT_SCALE_RATIO = 1;
@@ -348,6 +350,18 @@ function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
   return Number.isFinite(n)
     ? Math.max(PLACEMENT_SCALE_MIN, Math.min(resolvedMax, n))
     : Math.min(DEFAULT_PLACEMENT_SCALE_RATIO, resolvedMax);
+}
+
+function normalizeLayoutGapMode(value){
+  return String(value || '').trim().toLowerCase() === LAYOUT_GAP_MODE_COMPACT
+    ? LAYOUT_GAP_MODE_COMPACT
+    : LAYOUT_GAP_MODE_GRID;
+}
+
+function normalizePlacementGapAfterPages(value){
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : null;
 }
 
 function normalizeBoardColumns(value){
@@ -847,6 +861,10 @@ function applyPlacementPatchToItem(item, patch){
   ) {
     next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
   }
+  if (Object.prototype.hasOwnProperty.call(patch, 'gapAfterPages')) {
+    next.placementGapAfterPages = normalizePlacementGapAfterPages(patch.gapAfterPages);
+    next.placement_gap_after_pages = next.placementGapAfterPages;
+  }
   return next;
 }
 
@@ -901,9 +919,15 @@ function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   return Math.max(renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight));
 }
 
-function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
+function reflowItemsForBoardOrder(
+  items,
+  slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
+  boardColumns = BOARD_COLUMN_MIN,
+  layoutGapMode = LAYOUT_GAP_MODE_GRID
+){
   if (!Array.isArray(items)) return items;
   const columnCount = normalizeBoardColumns(boardColumns);
+  const normalizedGapMode = normalizeLayoutGapMode(layoutGapMode);
   let cursorPages = 0;
   const reflowed = [];
   let index = 0;
@@ -939,16 +963,30 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
       const slotSpanPages = itemSlotSpanPages(item, slotHeight);
       return { heightPages, renderedHeightPages, slotSpanPages };
     });
+    const rowRenderedSpanPages = Math.max(
+      0,
+      ...rowMetrics.map(metric => metric.renderedHeightPages)
+    );
     const rowFlowSpanPages = Math.max(
       0,
       ...rowMetrics.map(metric => Math.max(metric.renderedHeightPages, metric.slotSpanPages))
     );
     const flowEndPages = rowStartPages + rowFlowSpanPages;
-    const snappedNextStartYPages = rowContinuous
-      ? flowEndPages
-      : rowLong
-        ? Math.max(flowEndPages, snapUpPages(flowEndPages, slotHeight))
-        : Math.max(flowEndPages, rowStartPages + snapUpPages(rowFlowSpanPages, slotHeight));
+    const compactFlowEndPages = rowStartPages + rowRenderedSpanPages;
+    const rowGapOverridePages = rowItems
+      .map(item => normalizePlacementGapAfterPages(
+        item.placementGapAfterPages ?? item.placement_gap_after_pages
+      ))
+      .find(value => value !== null);
+    const usesCompactGap = normalizedGapMode === LAYOUT_GAP_MODE_COMPACT
+      || rowGapOverridePages !== undefined;
+    const snappedNextStartYPages = usesCompactGap
+      ? compactFlowEndPages + (rowGapOverridePages || 0)
+      : rowContinuous
+        ? flowEndPages
+        : rowLong
+          ? Math.max(flowEndPages, snapUpPages(flowEndPages, slotHeight))
+          : Math.max(flowEndPages, rowStartPages + snapUpPages(rowFlowSpanPages, slotHeight));
     const boardRowHeightPages = Math.max(0, snappedNextStartYPages - rowStartPages);
     const rowColumnCount = rowContinuous || rowLong ? BOARD_COLUMN_MIN : columnCount;
 
@@ -984,6 +1022,9 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
         placementXRatio: resolvedXRatio,
         placementXEdited: xEdited,
         placementMagnetColumnIndex: xEdited ? magnetColumnIndex : null,
+        placementGapAfterPages: normalizePlacementGapAfterPages(
+          item.placementGapAfterPages ?? item.placement_gap_after_pages
+        ),
       });
     });
 
@@ -6327,7 +6368,7 @@ function ItemsRail({
 
 // ─── CENTER: big scrollable board stage ──
 function BoardStage({
-  items, activeId, setActive, boardColor, boardColumns, fileName, addSample,
+  items, activeId, setActive, boardColor, boardColumns, layoutGapMode, fileName, addSample,
   setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
 }){
   const scrollRef = useRef(null);
@@ -6393,7 +6434,12 @@ function BoardStage({
   // Compute board positions with row height shared by neighboring columns.
   const layout = useMemo(() => {
     const EPS = 0.001;
-    const layoutItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, columnCount);
+    const layoutItems = reflowItemsForBoardOrder(
+      items,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      columnCount,
+      layoutGapMode
+    );
     const positions = layoutItems.map((it) => {
       const startPages = Math.max(0, it.startYPages || 0);
       const heightPages = itemHeightPages(it);
@@ -6435,7 +6481,7 @@ function BoardStage({
     const totalH = endTop + endH;
     const totalPages = Math.max(1, Math.ceil(totalH / pageH));
     return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
-  }, [items, pageH, columnCount]);
+  }, [items, pageH, columnCount, layoutGapMode]);
 
   const previewEstimate = useMemo(
     () => deriveBoardPreviewEstimate(layout.items, activeId, DEFAULT_SLOT_HEIGHT_PAGES),
@@ -6961,6 +7007,20 @@ function BoardStage({
   const activeTrailingGapPages = activePlacement
     ? Math.max(0, activePlacement.snappedNext - activeRenderedBottomPages)
     : 0;
+  const activeRowRenderedBottomPages = activePlacement
+    ? Math.max(
+        activePlacement.startPages,
+        ...layout.positions
+          .filter(placement => (
+            Math.abs(placement.startPages - activePlacement.startPages) < PLACEMENT_EPSILON_PAGES
+            && Math.abs(placement.snappedNext - activePlacement.snappedNext) < PLACEMENT_EPSILON_PAGES
+          ))
+          .map(placement => placement.startPages + placement.renderedHeightPages)
+      )
+    : 0;
+  const activeRemovableGapPages = activePlacement
+    ? Math.max(0, activePlacement.snappedNext - activeRowRenderedBottomPages)
+    : 0;
   const activeGuideWidth = contentW > 0
     ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
     : 0;
@@ -7019,6 +7079,9 @@ function BoardStage({
               <span className="stage-estimate-metric">
                 사용률 <strong>{Math.round(previewEstimate.utilizationRatio * 100)}%</strong>
               </span>
+              <span className={`stage-estimate-metric ${normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? 'is-compact' : ''}`}>
+                간격 <strong>{normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : '1.2 맞춤'}</strong>
+              </span>
               <span
                 className="stage-estimate-metric"
                 title={`예약 ${previewEstimate.reservedEndPages.toFixed(2)}p · 실제 사용 ${previewEstimate.usedHeightPages.toFixed(2)}p`}
@@ -7056,6 +7119,14 @@ function BoardStage({
               <span className="stage-estimate-key page">1.2 경계</span>
               <span className="stage-estimate-key next">다음 시작</span>
             </div>
+            {activeLayoutItem && activeRemovableGapPages > 0.05 && (
+              <button
+                className="btn stage-estimate-action"
+                type="button"
+                title={`선택 문항 뒤 ${activeRemovableGapPages.toFixed(2)}p 여백을 없애고 이후 문항을 당깁니다`}
+                onClick={() => setPlacement?.(activeLayoutItem.id, { gapAfterPages: 0 })}
+              >여백 {activeRemovableGapPages.toFixed(1)}p 삭제</button>
+            )}
           </div>
 
           <div className="stage-board" style={{ background: boardColor }}>
@@ -7533,7 +7604,7 @@ function SidePanel({
   item, items, activeIndex,
   setStep, applyToAll, bulk, setBulk,
   setPlacement, setPlacements, savePlacement, mutateSession, mutating,
-  boardColumns, setBoardColumns,
+  boardColumns, setBoardColumns, layoutGapMode, setLayoutGapMode, resetPlacementGaps,
   boardColor, setBoardColor,
   accent, setAccent,
   onConfirm,
@@ -7701,6 +7772,11 @@ function SidePanel({
   const updateAutomaticEnabled = Boolean(updateInfo?.automaticUpdateEnabled);
   const updateAutomaticReady = Boolean(updateInfo?.automaticUpdateReady);
   const updateActionBusy = updateBusy || updateInstallBusy;
+  useEffect(() => {
+    if (updateInfo?.updateAvailable) return;
+    setUpdatePinDraft('');
+    setShowUpdatePin(false);
+  }, [updateInfo?.updateAvailable]);
   const updateStatusLabel = updateBusy
     ? '확인 중'
     : updateArchitectureBlocked
@@ -7732,6 +7808,17 @@ function SidePanel({
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
+  const requestUpdateInstall = () => {
+    if (!updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+    const targetVersion = updateInfo?.latest?.version || '새 버전';
+    const confirmed = window.confirm(
+      `${targetVersion} 업데이트를 설치할까요?\n검증이 끝나면 앱이 종료되고 현재 설치 위치에 적용됩니다.`
+    );
+    if (!confirmed) return;
+    Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
+      if (installed) setUpdatePinDraft('');
+    });
+  };
   const hasBugReportContact = bugReportContact.trim().length > 0;
   const canSubmitBugReport = bugReportDescription.trim().length >= 5
     && !bugReportBusy
@@ -7778,6 +7865,11 @@ function SidePanel({
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
   const showItemConfirmBar = view !== 'review' && !!item && (bulk || item.step !== 'raw');
+  const manualGapCount = items.filter(target => (
+    normalizePlacementGapAfterPages(
+      target.placementGapAfterPages ?? target.placement_gap_after_pages
+    ) !== null
+  )).length;
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
@@ -8469,6 +8561,32 @@ function SidePanel({
               </div>
             </div>
 
+            <div className="row-control layout-gap-mode-control">
+              <div className="lbl">문항 사이 여백<small>전체 문항의 다음 시작 위치</small></div>
+              <div className="seg-mini" role="group" aria-label="문항 사이 여백 방식">
+                <button
+                  type="button"
+                  className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_GRID ? 'on' : ''}
+                  onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_GRID)}
+                >1.2 맞춤</button>
+                <button
+                  type="button"
+                  className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? 'on' : ''}
+                  onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
+                >빈틈 없이</button>
+              </div>
+            </div>
+
+            <div className="row-control layout-gap-reset-control">
+              <div className="lbl">개별 여백 삭제<small>{manualGapCount ? `${manualGapCount}곳 적용됨` : '미리보기 상단에서 선택 문항별 적용'}</small></div>
+              <button
+                className="btn compact"
+                type="button"
+                disabled={!manualGapCount}
+                onClick={() => resetPlacementGaps?.()}
+              >전체 해제</button>
+            </div>
+
             <div className="row-control">
               <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
               <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
@@ -8789,9 +8907,9 @@ function SidePanel({
                 {Icon.download} 다운로드 열기
               </button>
             </div>
-            <div className="update-install-card">
+            {updateInfo?.updateAvailable && <div className="update-install-card">
               <div className="lbl">
-                PIN 자동 업데이트
+                관리자 PIN 업데이트
                 <small>
                   {updateAutomaticEnabled
                     ? '배포 파일을 검증한 뒤 앱을 종료하고 현재 설치 위치에 덮어씁니다.'
@@ -8814,9 +8932,7 @@ function SidePanel({
                   onKeyDown={event => {
                     if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
                     event.preventDefault();
-                    Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
-                      if (installed) setUpdatePinDraft('');
-                    });
+                    requestUpdateInstall();
                   }}
                 />
                 <button
@@ -8840,15 +8956,11 @@ function SidePanel({
                     : !updateAutomaticReady
                       ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
                       : 'PIN 확인 후 새 버전을 덮어씁니다'}
-                onClick={() => {
-                  Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
-                    if (installed) setUpdatePinDraft('');
-                  });
-                }}
+                onClick={requestUpdateInstall}
               >
-                {updateInstallBusy ? '검증·설치 준비 중...' : '업데이트 버전'}
+                {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
               </button>
-            </div>
+            </div>}
 
             <div className="panel-section-hd" style={{marginTop:4}}>문제 신고 <span className="line" /></div>
 
@@ -10021,6 +10133,16 @@ function applyItemStateToProblem(problem, item){
   next.placement_y_ratio = next.placementYRatio;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
   next.placement_scale_ratio = next.placementScaleRatio;
+  const placementGapAfterPages = normalizePlacementGapAfterPages(
+    item.placementGapAfterPages ?? item.placement_gap_after_pages
+  );
+  if (placementGapAfterPages === null) {
+    delete next.placementGapAfterPages;
+    delete next.placement_gap_after_pages;
+  } else {
+    next.placementGapAfterPages = Number(placementGapAfterPages.toFixed(6));
+    next.placement_gap_after_pages = next.placementGapAfterPages;
+  }
   const renderedHeightPages = actualHeightPages * next.placementScaleRatio;
   next.actualHeightPages = actualHeightPages;
   next.actual_height_pages = actualHeightPages;
@@ -10107,24 +10229,43 @@ function markSessionProblemsConfirmed(rawSession, targetIds){
   return snapshot;
 }
 
-function materializeSessionForItems(rawSession, items, fileName, boardColumns = BOARD_COLUMN_MIN){
+function materializeSessionForItems(
+  rawSession,
+  items,
+  fileName,
+  boardColumns = BOARD_COLUMN_MIN,
+  layoutGapMode = normalizeLayoutGapMode(rawSession?.layoutGapMode ?? rawSession?.layout_gap_mode)
+){
   const snapshot = cloneSession(rawSession);
   if (!snapshot || !Array.isArray(snapshot.problems)) return null;
+  const normalizedGapMode = normalizeLayoutGapMode(layoutGapMode);
   const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
-  const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+  const reflowedItems = reflowItemsForBoardOrder(
+    items,
+    DEFAULT_SLOT_HEIGHT_PAGES,
+    boardColumns,
+    normalizedGapMode
+  );
   const orderedProblems = reflowedItems
     .filter(item => byId.has(item.id))
     .map(item => applyItemStateToProblem(byId.get(item.id), item));
-  const activeIds = new Set(orderedProblems.map(problem => problem.id));
-  snapshot.problems = orderedProblems;
-  applyProblemCounts(snapshot, orderedProblems);
+  const orderedIds = new Set(orderedProblems.map(problem => problem.id));
+  // A temporary UI filter must never become an implicit server-side delete.
+  // Explicit removal still goes through the exclude mutation before materializing.
+  const strandedProblems = snapshot.problems.filter(problem => !orderedIds.has(problem.id));
+  const mergedProblems = orderedProblems.concat(strandedProblems);
+  const activeIds = new Set(mergedProblems.map(problem => problem.id));
+  snapshot.problems = mergedProblems;
+  applyProblemCounts(snapshot, mergedProblems);
   snapshot.session_name = fileName || snapshot.session_name || '새 세션';
+  snapshot.layoutGapMode = normalizedGapMode;
+  snapshot.layout_gap_mode = normalizedGapMode;
   snapshot.edb_path = null;
   snapshot.edb_file_uri = null;
   snapshot.edbPath = null;
   snapshot.edbFileUri = null;
   if (Array.isArray(snapshot.pages)) {
-    const orderIndex = new Map(orderedProblems.map((problem, index) => [problem.id, index]));
+    const orderIndex = new Map(mergedProblems.map((problem, index) => [problem.id, index]));
     snapshot.pages = snapshot.pages.map(page => ({
       ...page,
       problemIds: (page.problemIds || page.problem_ids || [])
@@ -10135,7 +10276,12 @@ function materializeSessionForItems(rawSession, items, fileName, boardColumns = 
   return snapshot;
 }
 
-function rebaseSessionBoardLayout(latestSession, localDraft, boardColumns = BOARD_COLUMN_MIN){
+function rebaseSessionBoardLayout(
+  latestSession,
+  localDraft,
+  boardColumns = BOARD_COLUMN_MIN,
+  layoutGapMode = normalizeLayoutGapMode(localDraft?.layoutGapMode ?? localDraft?.layout_gap_mode)
+){
   const latest = cloneSession(latestSession);
   const draft = cloneSession(localDraft);
   if (!latest || !Array.isArray(latest.problems) || !draft || !Array.isArray(draft.problems)) return null;
@@ -10163,6 +10309,7 @@ function rebaseSessionBoardLayout(latestSession, localDraft, boardColumns = BOAR
         placementXEdited: localItem.placementXEdited,
         placementYRatio: localItem.placementYRatio,
         placementScaleRatio: localItem.placementScaleRatio,
+        placementGapAfterPages: localItem.placementGapAfterPages,
         boardColumnCount: localItem.boardColumnCount,
         boardColumnIndex: localItem.boardColumnIndex,
         placementMagnetColumnIndex: localItem.placementMagnetColumnIndex,
@@ -10175,6 +10322,8 @@ function rebaseSessionBoardLayout(latestSession, localDraft, boardColumns = BOAR
   latest.session_name = latest.session_name || '새 세션';
   latest.boardColumns = normalizeBoardColumns(boardColumns);
   latest.board_columns = latest.boardColumns;
+  latest.layoutGapMode = normalizeLayoutGapMode(layoutGapMode);
+  latest.layout_gap_mode = latest.layoutGapMode;
   latest.edb_path = null;
   latest.edb_file_uri = null;
   latest.edbPath = null;
@@ -10225,6 +10374,7 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   const incoming = cloneSession(incomingSession);
   if (!base) return incoming;
   if (!incoming) return base;
+  const layoutGapMode = normalizeLayoutGapMode(base.layoutGapMode ?? base.layout_gap_mode);
 
   const existingProblemIds = new Set((base.problems || []).map(problem => problem.id).filter(Boolean));
   const existingPageIds = new Set((base.pages || []).map(page => page.id).filter(Boolean));
@@ -10262,13 +10412,16 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   const reflowedProblems = reflowItemsForBoardOrder(
     mergedProblems.map((problem, idx) => mapProblemToItem(problem, idx)),
     DEFAULT_SLOT_HEIGHT_PAGES,
-    boardColumns
+    boardColumns,
+    layoutGapMode
   ).map(item => applyItemStateToProblem(mergedProblemsById.get(item.id) || {}, item));
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
   const merged = {
     ...base,
     session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    layoutGapMode,
+    layout_gap_mode: layoutGapMode,
     data_source: 'question_export',
     source_mode: 'batch',
     input_file_count: concatUnique(base.input_files || base.inputFiles || [], incoming.input_files || incoming.inputFiles || []).length,
@@ -10642,6 +10795,9 @@ function mapProblemToItem(problem, idx){
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
     placementScaleRatio: initialScale,
+    placementGapAfterPages: normalizePlacementGapAfterPages(
+      problem.placementGapAfterPages ?? problem.placement_gap_after_pages
+    ),
     boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
     boardColumnIndex: Number.isFinite(Number(problem.boardColumnIndex ?? problem.board_column_index))
       ? Math.max(0, Math.round(Number(problem.boardColumnIndex ?? problem.board_column_index)))
@@ -10659,10 +10815,13 @@ function mapProblemToItem(problem, idx){
 function placementPersistenceSignature(rawSession){
   if (!rawSession || !Array.isArray(rawSession.problems)) return '';
   const stableNumber = value => {
+    if (value === null || value === undefined || value === '') return null;
     const numeric = Number(value);
     return Number.isFinite(numeric) ? Number(numeric.toFixed(6)) : null;
   };
-  return JSON.stringify(rawSession.problems.map((problem, index) => {
+  return JSON.stringify({
+    layoutGapMode: normalizeLayoutGapMode(rawSession.layoutGapMode ?? rawSession.layout_gap_mode),
+    problems: rawSession.problems.map((problem, index) => {
     const item = mapProblemToItem(problem, index);
     return [
       String(item.id || ''),
@@ -10673,6 +10832,7 @@ function placementPersistenceSignature(rawSession){
       Boolean(item.placementXEdited),
       stableNumber(item.placementYRatio),
       stableNumber(item.placementScaleRatio),
+      stableNumber(item.placementGapAfterPages),
       item.boardColumnCount,
       item.boardColumnIndex,
       item.placementMagnetColumnIndex,
@@ -10680,7 +10840,8 @@ function placementPersistenceSignature(rawSession){
       stableNumber(item.startYPages),
       stableNumber(item.snappedNextStartYPages),
     ];
-  }));
+    }),
+  });
 }
 
 let latestServerSessionRevision = null;
@@ -13492,6 +13653,7 @@ function App(){
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
+  const [layoutGapMode, setLayoutGapModeState] = useState(LAYOUT_GAP_MODE_GRID);
   const [initialSessionLoaded, setInitialSessionLoaded] = useState(false);
   const [loading, setLoading] = useState(null); // {label, hint, startedAt} when busy
   const [backgroundJobs, setBackgroundJobs] = useState([]);
@@ -13951,6 +14113,7 @@ function App(){
     const mockItems = freshInitialItems();
     setRecognitionReview(null);
     setSession(null);
+    setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
     setItems(mockItems);
     setActiveId(mockItems[0]?.id || null);
     setUsingMock(true);
@@ -13964,6 +14127,7 @@ function App(){
   const hideMockItems = (message = '빈 세션으로 전환했어요') => {
     setRecognitionReview(null);
     setSession(null);
+    setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
     setItems([]);
     setActiveId(null);
     setUsingMock(false);
@@ -13978,14 +14142,17 @@ function App(){
     if (!rawSession || !Array.isArray(rawSession.problems) || rawSession.problems.length === 0) {
       return false;
     }
+    const restoredGapMode = normalizeLayoutGapMode(rawSession.layoutGapMode ?? rawSession.layout_gap_mode);
     const mapped = reflowItemsForBoardOrder(
       rawSession.problems.map((p, idx) => mapProblemToItem(p, idx)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumns
+      boardColumns,
+      restoredGapMode
     );
     setItems(mapped);
     setActiveId(mapped[0].id);
     setSession(rawSession);
+    setLayoutGapModeState(restoredGapMode);
     setUsingMock(false);
     setPublished(!!sessionPublishSummary(rawSession));
     if (rawSession.session_name) setFileName(rawSession.session_name);
@@ -14042,13 +14209,20 @@ function App(){
       }
     }
     const orderedProblems = orderedIds.map(id => nextProblemsById.get(id)).filter(Boolean);
+    const restoredGapMode = normalizeLayoutGapMode(
+      nextSession.layoutGapMode ?? nextSession.layout_gap_mode ?? layoutGapMode
+    );
+    nextSession.layoutGapMode = restoredGapMode;
+    nextSession.layout_gap_mode = restoredGapMode;
     const mapped = reflowItemsForBoardOrder(
       orderedProblems.map((p, idx) => mapProblemToItem(p, idx)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumns
+      boardColumns,
+      restoredGapMode
     );
     setItems(mapped);
     setSession(nextSession);
+    setLayoutGapModeState(restoredGapMode);
     setPublished(false);
     if (mapped.length === 0) {
       setActiveId(null);
@@ -14059,7 +14233,7 @@ function App(){
         .find(id => nextProblemsById.has(id));
       setActiveId(replacementActiveId || mapped[0]?.id || null);
     }
-  }, [items, activeId, boardColumns]);
+  }, [items, activeId, boardColumns, layoutGapMode]);
 
   // Run a server-side mutation (split / merge / crop / exclude). Captures the
   // current session into the undo history *before* the request goes out
@@ -14333,8 +14507,8 @@ function App(){
       showToast('다운로드할 세션이 없습니다');
       return;
     }
-    const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-    const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;
+    const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
+    const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns, layoutGapMode) || session;
     const requestedIdSet = Array.isArray(requestedProblemIds)
       ? new Set(requestedProblemIds.map(String))
       : null;
@@ -14361,7 +14535,7 @@ function App(){
     } finally {
       setExportingImages(false);
     }
-  }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
+  }, [session, items, fileName, boardColumns, layoutGapMode, showSimpleErrorToast]);
   const exportSelectedImages = useCallback((problemIds) => {
     void exportSessionImages(problemIds);
   }, [exportSessionImages]);
@@ -14377,8 +14551,8 @@ function App(){
     }
     setDownloadingItemId(item.id);
     try {
-      const itemsForDownload = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-      const sessionForDownload = materializeSessionForItems(session, itemsForDownload, fileName, boardColumns) || session;
+      const itemsForDownload = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
+      const sessionForDownload = materializeSessionForItems(session, itemsForDownload, fileName, boardColumns, layoutGapMode) || session;
       const result = await fetchProblemImageDownload(item.id, { session: sessionForDownload });
       triggerBlobDownload(result.blob, result.fileName);
       showToast('PNG 다운로드 시작');
@@ -14387,7 +14561,7 @@ function App(){
     } finally {
       setDownloadingItemId(null);
     }
-  }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
+  }, [session, items, fileName, boardColumns, layoutGapMode, showSimpleErrorToast]);
 
   const undoMutation = useCallback(async () => {
     const currentHistory = historyStackRef.current;
@@ -14674,6 +14848,7 @@ function App(){
       } else {
         if (!usingMock) {
           setSession(null);
+          setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
           setItems([]);
           setActiveId(null);
           setPublished(false);
@@ -15241,9 +15416,10 @@ function App(){
       : [];
     if (!validUpdates.length) return;
     const patchById = new Map(validUpdates.map(update => [String(update.id), update.patch]));
-    const scaleChanged = validUpdates.some(update => (
+    const layoutChanged = validUpdates.some(update => (
       update.patch.fitWidth
       || Object.prototype.hasOwnProperty.call(update.patch, 'scaleRatio')
+      || Object.prototype.hasOwnProperty.call(update.patch, 'gapAfterPages')
     ));
     setItems(it => {
       let changed = false;
@@ -15254,13 +15430,47 @@ function App(){
         return applyPlacementPatchToItem(x, patch);
       });
       if (!changed) return it;
-      return scaleChanged
-        ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns)
+      return layoutChanged
+        ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode)
         : nextItems;
     });
     setPublished(false);
   };
   const setPlacement = (id, patch) => setPlacements([{ id, patch }]);
+  const updateLayoutGapMode = (value) => {
+    const nextMode = normalizeLayoutGapMode(value);
+    if (nextMode === layoutGapMode) return;
+    if (
+      nextMode === LAYOUT_GAP_MODE_COMPACT
+      && !window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요? 미리보기에서 확인한 뒤 저장할 수 있습니다.')
+    ) return;
+    setLayoutGapModeState(nextMode);
+    setSession(previous => previous ? {
+      ...previous,
+      layoutGapMode: nextMode,
+      layout_gap_mode: nextMode,
+    } : previous);
+    setItems(previous => reflowItemsForBoardOrder(
+      previous,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      nextMode
+    ));
+    setPublished(false);
+    showToast(nextMode === LAYOUT_GAP_MODE_COMPACT
+      ? '전체 문항 사이 여백을 제거했어요'
+      : '1.2 맞춤 여백을 복원했어요');
+  };
+  const resetPlacementGaps = () => {
+    setItems(previous => reflowItemsForBoardOrder(
+      previous.map(item => applyPlacementPatchToItem(item, { gapAfterPages: null })),
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      layoutGapMode
+    ));
+    setPublished(false);
+    showToast('개별 여백 삭제 설정을 모두 해제했어요');
+  };
   const savePlacement = async () => {
     if (!items.length) return false;
     if (!session) {
@@ -15272,8 +15482,19 @@ function App(){
       return false;
     }
     let snapshotBefore = cloneSession(session);
-    const nextItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-    const candidate = materializeSessionForItems(session, nextItems, fileName, boardColumns);
+    const nextItems = reflowItemsForBoardOrder(
+      items,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      layoutGapMode
+    );
+    const candidate = materializeSessionForItems(
+      session,
+      nextItems,
+      fileName,
+      boardColumns,
+      layoutGapMode
+    );
     if (!candidate) {
       showToast('저장할 배치 정보를 만들지 못했습니다');
       return false;
@@ -15292,7 +15513,8 @@ function App(){
       const persistedItems = reflowItemsForBoardOrder(
         (restored?.problems || []).map((problem, index) => mapProblemToItem(problem, index)),
         DEFAULT_SLOT_HEIGHT_PAGES,
-        boardColumns
+        boardColumns,
+        normalizeLayoutGapMode(restored?.layoutGapMode ?? restored?.layout_gap_mode ?? layoutGapMode)
       );
       setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       setItems(persistedItems);
@@ -15339,7 +15561,12 @@ function App(){
       ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
       : null;
     const resetItems = reordered.map(item => sourceIdSet.has(String(item.id)) ? resetItemPlacement(item) : item);
-    const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const nextItems = reflowItemsForBoardOrder(
+      options?.resetPlacement ? resetItems : reordered,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      layoutGapMode
+    );
     const nextIndex = nextItems.findIndex(item => String(item.id) === String(fromId));
     moveSequenceRef.current += 1;
     setMoveFeedback({
@@ -15359,7 +15586,7 @@ function App(){
     setItems(nextItems);
     setActiveId(fromId);
     if (session) {
-      const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns) || session;
+      const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns, layoutGapMode) || session;
       if (snapshotBefore) {
         setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       }
@@ -15373,7 +15600,8 @@ function App(){
             const rollbackItems = reflowItemsForBoardOrder(
               (snapshotBefore.problems || []).map((problem, index) => mapProblemToItem(problem, index)),
               DEFAULT_SLOT_HEIGHT_PAGES,
-              boardColumns
+              boardColumns,
+              normalizeLayoutGapMode(snapshotBefore.layoutGapMode ?? snapshotBefore.layout_gap_mode)
             );
             setItems(rollbackItems);
             setSession(snapshotBefore);
@@ -15424,7 +15652,7 @@ function App(){
     const firstRemovedIndex = items.findIndex(item => problemIdSet.has(String(item.id)));
     const nextItems = reflowItemsForBoardOrder(items.filter(
       x => !problemIdSet.has(String(x.id))
-    ), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    ), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
     setItems(nextItems);
     if (problemIdSet.has(String(activeId))) {
       const fallbackIndex = Math.max(0, Math.min(firstRemovedIndex, nextItems.length - 1));
@@ -15566,8 +15794,8 @@ function App(){
     const currentIds = items.map(i => i.id);
     const order = currentIds.filter(id => sessionIds.has(id));
     const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
-    const itemsForPublish = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-    const sessionForPublish = materializeSessionForItems(session, itemsForPublish, fileName, boardColumns) || session;
+    const itemsForPublish = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
+    const sessionForPublish = materializeSessionForItems(session, itemsForPublish, fileName, boardColumns, layoutGapMode) || session;
     const publishReviewSummary = sessionReviewSummary(sessionForPublish);
     const passageSourceReuseIssues = findPassageGroupSourceReuse(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'passage_group_source_reuse');
@@ -15721,6 +15949,9 @@ function App(){
       }
       captureSessionRevision(json);
       setSession(json.session);
+      setLayoutGapModeState(normalizeLayoutGapMode(
+        json.session?.layoutGapMode ?? json.session?.layout_gap_mode ?? layoutGapMode
+      ));
       refreshSessionHistory();
       const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
       const normalizedPublishSummary = normalizePublishSummary(publishSummary, json.session);
@@ -15954,6 +16185,7 @@ function App(){
     setHistoryStack([]);
     if (latestSessionIsEmpty) {
       setSession(null);
+      setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
       setItems([]);
       setActiveId(null);
       setUsingMock(false);
@@ -15976,8 +16208,8 @@ function App(){
     const recovery = operationRecovery;
     const conflict = recovery?.conflict;
     if (!conflict?.latestSession) return;
-    const localDraft = conflict.localDraft || materializeSessionForItems(session, items, fileName, boardColumns) || session;
-    const rebased = rebaseSessionBoardLayout(conflict.latestSession, localDraft, boardColumns);
+    const localDraft = conflict.localDraft || materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
+    const rebased = rebaseSessionBoardLayout(conflict.latestSession, localDraft, boardColumns, layoutGapMode);
     if (!rebased) {
       showToast('합칠 수 있는 최신 상태 또는 현재 배치가 없습니다');
       return;
@@ -16187,6 +16419,7 @@ function App(){
             setActive={selectBoardItem}
             boardColor={t.boardColor}
             boardColumns={boardColumns}
+            layoutGapMode={layoutGapMode}
             fileName={fileName}
             addSample={addSample}
             setPlacement={setPlacement}
@@ -16213,6 +16446,9 @@ function App(){
           mutating={mutating}
           boardColumns={boardColumns}
           setBoardColumns={v => setTweak('boardColumns', v)}
+          layoutGapMode={layoutGapMode}
+          setLayoutGapMode={updateLayoutGapMode}
+          resetPlacementGaps={resetPlacementGaps}
           boardColor={t.boardColor}
           setBoardColor={v => setTweak('boardColor', v)}
           accent={t.accent}

@@ -50,6 +50,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
+; The application payload is immutable. Removing the old PyInstaller runtime
+; prevents renamed DLL/PYD files from surviving an in-place update.
+Type: filesandordirs; Name: "{app}\_internal"
 Type: filesandordirs; Name: "{app}\.app_runtime"
 Type: filesandordirs; Name: "{app}\uploads"
 Type: filesandordirs; Name: "{app}\outputs"

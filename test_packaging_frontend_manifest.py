@@ -1019,6 +1019,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("CloseApplications=yes", source)
         self.assertIn("RestartApplications=no", source)
         self.assertIn("[InstallDelete]", source)
+        self.assertIn(r'Type: filesandordirs; Name: "{app}\_internal"', source)
         for stale_path in (
             r"{app}\.app_runtime",
             r"{app}\ui_prototype\app.js",

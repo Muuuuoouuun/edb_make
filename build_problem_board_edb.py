@@ -1843,6 +1843,7 @@ class ProblemEntry:
     placement_x_ratio: float | None = None
     placement_y_ratio: float | None = None
     placement_scale_ratio: float | None = None
+    placement_gap_after_pages: float | None = None
     preserve_legacy_placement_scale: bool = False
     processing_step: str = PROCESSING_STEP_RAW
     input_intent: str | None = None
@@ -9817,6 +9818,7 @@ def placement_inputs(
                     or _entry_preserves_legacy_placement_scale(entry)
                     else PLACEMENT_SCALE_MAX,
                 ) or 1.0,
+                "placement_gap_after_pages": entry.placement_gap_after_pages,
                 "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
                 "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry),
                 "input_intent": entry.input_intent,
@@ -10467,6 +10469,12 @@ def build_image_only_records(
             y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
 
         if continuous_flow:
+            continuous_gap_px = (
+                0.0
+                if template.metadata.get("layout_gap_mode") == "compact"
+                or entry.placement_gap_after_pages is not None
+                else CONTINUOUS_RECORD_GAP_PX
+            )
             start_y_pages = continuous_cursor_pages if continuous_cursor_pages is not None else placement.start_y_pages
             actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
             rendered_height_pages = rendered_height_px / CANVAS_WIDTH
@@ -10474,7 +10482,7 @@ def build_image_only_records(
             snapped_next_start_y_pages = (
                 start_y_pages
                 + rendered_height_pages
-                + CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH
+                + continuous_gap_px / CANVAS_WIDTH
             )
             overflow_amount_pages = max(0.0, rendered_height_pages - template.base_slot_height_pages)
             slot_span_count = max(
@@ -10528,7 +10536,7 @@ def build_image_only_records(
                 "snapped_next_start_y_pages": round(snapped_next_start_y_pages, 6),
                 "record_top_y_pages": round(y_px / CANVAS_WIDTH, 6),
                 "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
-                "record_gap_px": CONTINUOUS_RECORD_GAP_PX if continuous_flow else 0.0,
+                "record_gap_px": continuous_gap_px if continuous_flow else 0.0,
                 "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),

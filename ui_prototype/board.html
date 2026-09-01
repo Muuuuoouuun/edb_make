@@ -592,6 +592,10 @@
     background: color-mix(in srgb, var(--chalk-blue) 14%, var(--surface));
     color: var(--ink);
   }
+  .stage-estimate-metric.is-compact{
+    border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
+    background: color-mix(in srgb, var(--ok) 11%, var(--surface));
+  }
   .stage-estimate-legend{
     flex: 0 1 auto;
     justify-content: flex-end;
@@ -620,6 +624,8 @@
     min-width: 44px;
     min-height: 44px;
     flex: 0 0 auto;
+    justify-content: center;
+    white-space: nowrap;
   }
 
   .stage-board{
@@ -2602,6 +2608,18 @@
   .row-control .seg-mini button.on{
     background: var(--surface); color: var(--ink);
     box-shadow: var(--shadow-1);
+  }
+  .layout-gap-mode-control{
+    align-items: start;
+  }
+  .layout-gap-mode-control .seg-mini{
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .layout-gap-reset-control .btn{
+    min-width: 68px;
+    justify-content: center;
+    padding-inline: 9px;
   }
   .runtime-details{
     flex: 0 0 auto;
@@ -7225,6 +7243,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-a547bc00f3d4574cbbfcabb6666cafaec6a10eff7c671580edea82d961e28f0a"></script>
+<script src="app.bundle.js?v=frontend-bundle-4b89ea4aa7b2a236f2f7bb75d6378f6f1ce223c2818289629cd38a7e46bbb69a"></script>
 </body>
 </html>

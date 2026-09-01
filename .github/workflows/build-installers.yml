@@ -475,14 +475,19 @@ jobs:
           if ($actualSha256 -ne $expectedNupkgSha256) {
             throw "Inno Setup package checksum mismatch: $actualSha256"
           }
-          choco install innosetup --version $innoVersion --source $packageDir --no-progress -y
+          # Runner images can contain Inno Setup without the Chocolatey shim.
+          # Reinstall the checksum-pinned package so ISCC resolution is deterministic.
+          choco install innosetup --version $innoVersion --source $packageDir --no-progress -y --force
           if ($LASTEXITCODE -ne 0) {
             throw "Pinned Inno Setup installation failed with exit code $LASTEXITCODE."
           }
-          $iscc = Get-Command ISCC.exe -ErrorAction Stop
-          $installedVersion = (Get-Item -LiteralPath $iscc.Source).VersionInfo.ProductVersion
-          if (-not $installedVersion.StartsWith($innoVersion, [System.StringComparison]::Ordinal)) {
-            throw "Unexpected Inno Setup compiler version: $installedVersion"
+          $isccPath = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $isccPath -PathType Leaf)) {
+            $isccPath = (Get-Command ISCC.exe -ErrorAction Stop).Source
+          }
+          $installedPackage = (choco list innosetup --exact --limit-output | Select-Object -First 1)
+          if ("$installedPackage".ToLowerInvariant() -ne "innosetup|$innoVersion") {
+            throw "Unexpected Inno Setup package version: '$installedPackage' (expected innosetup|$innoVersion)"
           }
 
       - name: Build Windows installer
@@ -501,24 +506,28 @@ jobs:
           if ($env:PRODUCTION_RELEASE -eq "true" -and -not $env:EDB_PACKAGE_UPDATE_PIN) {
             throw "Production release requires EDB_UPDATE_PIN."
           }
-          $packageArgs = @(
-            "-Clean",
-            "-Version", $env:RELEASE_VERSION,
-            "-UpdateFeedUrl", $env:UPDATE_FEED_URL,
-            "-DownloadUrl", $env:WINDOWS_DOWNLOAD_URL,
-            "-ReleaseNotesUrl", $env:RELEASE_NOTES_URL
-          )
+          # Named hashtable splatting prevents pwsh from binding the version
+          # token positionally as OutputDir on Windows runners.
+          $packageArgs = @{
+            Clean = $true
+            OutputDir = "dist"
+            Version = $env:RELEASE_VERSION
+          }
+          if ($env:UPDATE_FEED_URL) { $packageArgs.UpdateFeedUrl = $env:UPDATE_FEED_URL }
+          if ($env:WINDOWS_DOWNLOAD_URL) { $packageArgs.DownloadUrl = $env:WINDOWS_DOWNLOAD_URL }
+          if ($env:RELEASE_NOTES_URL) { $packageArgs.ReleaseNotesUrl = $env:RELEASE_NOTES_URL }
 
           $certificatePath = ""
           if ($env:WINDOWS_CERTIFICATE_PFX_BASE64) {
             $certificatePath = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
             [System.IO.File]::WriteAllBytes($certificatePath, [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
-            $packageArgs += @("-Sign", "-SignCertificatePath", $certificatePath)
+            $packageArgs.Sign = $true
+            $packageArgs.SignCertificatePath = $certificatePath
             if ($env:WINDOWS_CERTIFICATE_PASSWORD) {
-              $packageArgs += @("-SignCertificatePassword", $env:WINDOWS_CERTIFICATE_PASSWORD)
+              $packageArgs.SignCertificatePassword = $env:WINDOWS_CERTIFICATE_PASSWORD
             }
             if ($env:WINDOWS_SIGN_TIMESTAMP_URL) {
-              $packageArgs += @("-SignTimestampUrl", $env:WINDOWS_SIGN_TIMESTAMP_URL)
+              $packageArgs.SignTimestampUrl = $env:WINDOWS_SIGN_TIMESTAMP_URL
             }
           } elseif ($env:PRODUCTION_RELEASE -eq "true") {
             throw "Production release requires WINDOWS_CERTIFICATE_PFX_BASE64."

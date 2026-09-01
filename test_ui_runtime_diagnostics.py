@@ -354,7 +354,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("const saved = await savePlacement?.();", side_panel)
         self.assertIn("onClick={() => { void commitPlacement(); }}", side_panel)
         self.assertIn("disabled={!item || mutating}", side_panel)
-        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", save_flow)
+        self.assertIn("layoutGapMode", save_flow)
+        self.assertIn("materializeSessionForItems(", save_flow)
         self.assertIn("placementPersistenceSignature(candidate) === placementPersistenceSignature(session)", save_flow)
         self.assertIn("postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns)", save_flow)
         self.assertIn("if (result.conflictBase) snapshotBefore = result.conflictBase;", save_flow)
@@ -415,6 +416,40 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn('className="active-slot-gap"', board_stage)
         self.assertIn('className="active-next-boundary"', board_stage)
         self.assertIn('aria-hidden="true"', board_stage)
+        self.assertIn("activeRemovableGapPages", board_stage)
+        self.assertIn("{ gapAfterPages: 0 }", board_stage)
+        self.assertIn("여백 {activeRemovableGapPages.toFixed(1)}p 삭제", board_stage)
+
+    def test_board_settings_supports_compact_layout_and_gap_override_reset(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        materialize = source.split("function materializeSessionForItems", 1)[1]
+        materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
+
+        self.assertIn("문항 사이 여백", side_panel)
+        self.assertIn("1.2 맞춤", side_panel)
+        self.assertIn("빈틈 없이", side_panel)
+        self.assertIn("개별 여백 삭제", side_panel)
+        self.assertIn("resetPlacementGaps", side_panel)
+        self.assertIn("window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요?", source)
+        self.assertIn("snapshot.layoutGapMode = normalizedGapMode", materialize)
+        self.assertIn("snapshot.layout_gap_mode = normalizedGapMode", materialize)
+        self.assertIn("const strandedProblems = snapshot.problems.filter", materialize)
+        self.assertIn("const mergedProblems = orderedProblems.concat(strandedProblems)", materialize)
+        self.assertIn("placementGapAfterPages", source)
+        self.assertIn("layoutGapMode: normalizeLayoutGapMode", source)
+
+    def test_admin_pin_update_is_only_offered_for_a_new_version(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn('{updateInfo?.updateAvailable && <div className="update-install-card">', side_panel)
+        self.assertIn("관리자 PIN 업데이트", side_panel)
+        self.assertIn("관리자 PIN 확인 후 업데이트", side_panel)
+        self.assertIn("const requestUpdateInstall = () =>", side_panel)
+        self.assertIn("window.confirm(", side_panel)
 
     def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -544,11 +579,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         remove_flow = source.split("const removeItem = async (id, options = {}) =>", 1)[1]
         remove_flow = remove_flow.split("const addMockSample", 1)[0]
 
-        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", materialize)
+        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(", materialize)
+        self.assertIn("normalizedGapMode", materialize)
         self.assertIn("next.startYPages", apply_state)
         self.assertIn("next.snappedNextStartYPages", apply_state)
-        self.assertIn("const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", reorder_flow)
-        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", reorder_flow)
+        self.assertIn("options?.resetPlacement ? resetItems : reordered", reorder_flow)
+        self.assertIn("layoutGapMode", reorder_flow)
+        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns, layoutGapMode)", reorder_flow)
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
         self.assertIn("appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT)", reorder_flow)
@@ -670,7 +707,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("unsupported_architecture", source)
         self.assertIn("update_architecture_mismatch", source)
         self.assertIn("updateArchitectureNotice(info)", source)
-        self.assertIn("disabled={updateBusy || !updateDownloadUrl}", side_panel)
+        self.assertIn("disabled={updateActionBusy || !updateDownloadUrl}", side_panel)
         self.assertIn("if (updateBusy)", source)
         self.assertIn("fetch('/api/app/update')", source)
         self.assertIn("fetch('/api/system/open-url'", source)
@@ -679,7 +716,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")
         compact_bundle = re.sub(r"\s+", "", bundle)
 
-        self.assertIn("updateBusy||!updateDownloadUrl", compact_bundle)
+        self.assertIn("updateActionBusy||!updateDownloadUrl", compact_bundle)
         self.assertIn("invalid_feed", bundle)
         self.assertIn("피드 오류", bundle)
         self.assertIn("fetch('/api/app/update')", bundle)

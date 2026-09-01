@@ -2055,6 +2055,23 @@ def _coerce_placement_scale_ratio(value: Any) -> float | None:
     return max(0.6, min(3.0, ratio))
 
 
+def _coerce_placement_gap_after_pages(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("gapAfterPages", "placementGapAfterPages", "placement_gap_after_pages"):
+            if value.get(key) is not None:
+                value = value.get(key)
+                break
+        else:
+            return None
+    try:
+        gap_pages = _coerce_optional_float(value)
+    except (TypeError, ValueError):
+        return None
+    if gap_pages is None:
+        return None
+    return max(0.0, gap_pages)
+
+
 def _problem_preserves_legacy_placement_scale(problem: dict[str, Any]) -> bool:
     metadata = problem.get("metadata")
     sources = (problem, metadata if isinstance(metadata, dict) else {})
@@ -4404,6 +4421,7 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                 placement_x_ratio=_coerce_placement_x_ratio(problem),
                 placement_y_ratio=_coerce_placement_y_ratio(problem),
                 placement_scale_ratio=_coerce_placement_scale_ratio(problem),
+                placement_gap_after_pages=_coerce_placement_gap_after_pages(problem),
                 preserve_legacy_placement_scale=_problem_preserves_legacy_placement_scale(problem),
                 processing_step=_normalize_processing_step(
                     problem.get("processingStep")
@@ -4444,6 +4462,13 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
     template.base_slot_height_pages = ONE_PROBLEM_SLOT_HEIGHT_PAGES
     metadata = template_data.get("metadata") if isinstance(template_data.get("metadata"), dict) else {}
     template.metadata.update(metadata)
+    layout_gap_mode = str(
+        session.get("layoutGapMode")
+        or session.get("layout_gap_mode")
+        or template.metadata.get("layout_gap_mode")
+        or "classin-grid"
+    ).strip().lower()
+    template.metadata["layout_gap_mode"] = "compact" if layout_gap_mode == "compact" else "classin-grid"
     session_intent = (
         str(session.get("inputIntent") or session.get("input_intent") or "")
         .strip()
@@ -4813,6 +4838,7 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "placementXRatio": _coerce_placement_x_ratio(parent),
         "placementYRatio": _coerce_placement_y_ratio(parent),
         "placementScaleRatio": _coerce_placement_scale_ratio(parent),
+        "placementGapAfterPages": _coerce_placement_gap_after_pages(parent),
         "riskFlags": [],  # mutated entries lose the auto-detected risk
     }
     return skeleton
@@ -5087,6 +5113,7 @@ def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[s
         ("placementMode", "placement_mode"),
         ("forceFullPageBounds", "force_full_page_bounds"),
         ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"),
+        ("placementGapAfterPages", "placement_gap_after_pages"),
     ):
         _copy_session_metadata_aliases_overwrite(target, source, aliases)
 
@@ -9147,6 +9174,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             new_session,
             session,
             ("contentTarget", "content_target"),
+        )
+        _copy_session_metadata_aliases_overwrite(
+            new_session,
+            session,
+            ("layoutGapMode", "layout_gap_mode"),
         )
         new_session["crop_format"] = crop_format
         # publish only re-renders records; page-level review metadata

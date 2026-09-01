@@ -126,7 +126,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("async function postExportImages", source)
         self.assertIn("fetch('/api/session/export-images'", source)
         self.assertIn("const exportSessionImages = useCallback", source)
-        self.assertIn("const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;", source)
+        self.assertIn("const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns, layoutGapMode) || session;", source)
         self.assertIn("postExportImages({ mode: 'both', problemIds, session: sessionForExport })", source)
         self.assertIn("fetch('/api/session/problem-image'", source)
         self.assertIn("fetchProblemImageDownload(item.id, { session: sessionForDownload })", source)
