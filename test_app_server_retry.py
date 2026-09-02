@@ -1414,6 +1414,33 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual([app_server.HTTPStatus.FORBIDDEN], statuses)
         self.assertIn(b"not in the configured update metadata", handler.wfile.getvalue())
 
+    def test_open_url_opens_configured_update_download(self):
+        url = "https://example.test/ClassInEDBMVP-Setup.exe"
+        handler = object.__new__(app_server.AppRequestHandler)
+        payload = json.dumps({"url": url}).encode("utf-8")
+        handler.headers = {
+            "Host": "127.0.0.1:8765",
+            "Origin": "http://127.0.0.1:8765",
+            "Content-Length": str(len(payload)),
+        }
+        handler.rfile = io.BytesIO(payload)
+        handler.wfile = io.BytesIO()
+        statuses = []
+        handler.send_response = lambda status: statuses.append(status)
+        handler.send_header = lambda _name, _value: None
+        handler.end_headers = lambda: None
+
+        with patch.object(app_server, "_allowed_update_urls", return_value={url}), \
+                patch.object(app_server.webbrowser, "open", return_value=True) as browser_open:
+            handler._handle_open_url()
+
+        self.assertEqual([app_server.HTTPStatus.OK], statuses)
+        browser_open.assert_called_once_with(url)
+        response = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertTrue(response["ok"])
+        self.assertTrue(response["opened"])
+        self.assertEqual(url, response["url"])
+
     def test_json_body_rejects_oversized_content_length(self):
         handler = object.__new__(app_server.AppRequestHandler)
         handler.headers = {"Content-Length": str(app_server.MAX_JSON_BODY_BYTES + 1)}
