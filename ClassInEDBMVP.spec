@@ -64,7 +64,7 @@ def build_update_config() -> tuple[str, dict]:
 
 
 generated_update_config, generated_update_config_payload = build_update_config()
-bundle_version = str(generated_update_config_payload.get("version") or "0.1.0")
+bundle_version = str(generated_update_config_payload.get("version") or "0.2.2")
 bundle_identifier = os.environ.get("EDB_MACOS_BUNDLE_ID", "local.classin.edbmvp").strip() or "local.classin.edbmvp"
 
 

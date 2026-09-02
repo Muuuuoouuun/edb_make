@@ -28,6 +28,37 @@ from scripts.verify_release_licenses import (
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
+class TestReleaseVersionConsistency(unittest.TestCase):
+    def test_release_version_defaults_match_0_2_2(self) -> None:
+        version = json.loads(
+            (PROJECT_ROOT / "app_update_config.json").read_text(encoding="utf-8")
+        )["version"]
+
+        self.assertEqual("0.2.2", version)
+        expected_literal = f'"version": "{version}"'
+        self.assertIn(expected_literal, (PROJECT_ROOT / "app_server.py").read_text(encoding="utf-8"))
+        self.assertIn(
+            expected_literal,
+            (PROJECT_ROOT / "scripts" / "build_app_update_config.py").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            f'or "{version}")',
+            (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            f'or "{version}"))',
+            (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            f'#define AppVersion "{version}"',
+            (PROJECT_ROOT / "installer" / "windows" / "ClassInEDBMVP.iss").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            f'default: "{version}"',
+            (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8"),
+        )
+
+
 class TestReleaseInputValidation(unittest.TestCase):
     def test_internal_release_allows_no_download_urls(self) -> None:
         self.assertEqual(

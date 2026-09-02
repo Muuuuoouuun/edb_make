@@ -6,7 +6,7 @@ on:
       version:
         description: "Release version, for example 0.1.1"
         required: true
-        default: "0.1.0"
+        default: "0.2.2"
       production_release:
         description: "Require private-corpus quality, signing, and notarization gates"
         required: true

@@ -12,7 +12,7 @@ from typing import Any
 DEFAULT_CONFIG: dict[str, str] = {
     "appId": "ClassInEDBMVP",
     "appName": "ClassInEDBMVP",
-    "version": "0.1.0",
+    "version": "0.2.2",
     "updateFeedUrl": "",
     "downloadUrl": "",
     "releaseNotesUrl": "",
