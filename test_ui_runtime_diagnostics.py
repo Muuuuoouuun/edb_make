@@ -185,7 +185,12 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         preview_block = preview_block.split("<div className=\"panel-section-hd\">", 1)[0]
         detail_block = side_panel.split("detail-settings-toggle", 1)[1]
 
-        self.assertIn("const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)", side_panel)
+        # Collapsed on first use; afterwards the last open/closed choice is remembered.
+        self.assertIn(
+            "const [advancedSettingsOpen, setAdvancedSettingsOpen] = "
+            "useStoredPreference(ADVANCED_SETTINGS_OPEN_KEY, false, isStoredBoolean)",
+            side_panel,
+        )
         self.assertIn("setAdvancedSettingsOpen(true)", side_panel)
         self.assertIn("aria-expanded={advancedSettingsOpen}", side_panel)
         self.assertIn("상세 설정", side_panel)
@@ -225,7 +230,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertEqual(side_panel.count('role="tab"'), 3)
         self.assertIn("자료 <span", side_panel)
         self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
-        self.assertIn("칠판 동작, 색상, AI 인식 설정", side_panel)
+        self.assertIn("AI, 칠판 배경, 문서 변환, 앱 정보", side_panel)
         self.assertIn("지문 한 번만 배치", side_panel)
         self.assertIn("문항 함께 이동", side_panel)
         self.assertIn("공간 부족 시 다음 칠판", side_panel)
@@ -266,9 +271,17 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("칸 {p.columnIndex + 1}", board_stage)
         self.assertIn("한 줄 자료 수", layout_controls)
         self.assertIn("실제 EDB 제작은 현재 1열만 검증됨", layout_controls)
-        self.assertIn("disabled={n !== 1}", layout_controls)
+        # Multi-column export is not verified yet: show the fixed value instead of
+        # two permanently disabled buttons, and keep a way back if a stored
+        # session still carries 2 or 3 columns.
+        self.assertNotIn("[1,2,3].map", layout_controls)
+        self.assertIn("다열 Export 검증 후 제공할 예정입니다", layout_controls)
+        self.assertIn("setBoardColumns?.(BOARD_COLUMN_MIN)", layout_controls)
         self.assertIn("2·3열은 실제 EDB 배치 검증 전입니다", source)
-        self.assertIn("배치 칸 가이드에 자동 정렬", side_panel)
+        # The drag magnet is always on; it lives in the board stage code, not
+        # as a hard-coded "ON" badge dressed up as a setting.
+        self.assertIn("function resolveBoardDragMagnet", source)
+        self.assertNotIn("드래그 마그넷", side_panel)
         self.assertNotIn("열 수", side_panel)
         self.assertNotIn("열 가이드 자동 정렬", side_panel)
         self.assertIn(".drop-zone.is-compact", html)
@@ -490,6 +503,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         layout_controls = layout_controls.split("function SidePanel", 1)[0]
         item_tab = side_panel.split("{tab === 'item' && (", 1)[1]
         item_tab = item_tab.split("{tab === 'placement' && (", 1)[0]
+        placement_tab = side_panel.split("{tab === 'placement' && (", 1)[1]
+        placement_tab = placement_tab.split("{tab === 'board' && (", 1)[0]
         settings_tab = side_panel.split("{tab === 'board' && (", 1)[1]
         materialize = source.split("function materializeSessionForItems", 1)[1]
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
@@ -503,10 +518,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("ClassIn 화면 경계를 걸칠 수", layout_controls)
         self.assertIn("개별 여백 삭제", layout_controls)
         self.assertIn("resetPlacementGaps", layout_controls)
-        self.assertIn("view === 'board'", item_tab)
-        self.assertIn("<BoardLayoutControls", item_tab)
+        # Session-wide layout sits with placement, not on top of one problem's options.
+        self.assertIn("view === 'board'", placement_tab)
+        self.assertIn("<BoardLayoutControls", placement_tab)
+        self.assertIn("forcedOpen={placementScope === 'all'}", placement_tab)
+        self.assertNotIn("<BoardLayoutControls", item_tab)
         self.assertNotIn("<BoardLayoutControls", settings_tab)
-        self.assertIn("칠판 동작", settings_tab)
+        self.assertNotIn("칠판 동작", settings_tab)
         self.assertIn("window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요?", source)
         self.assertIn("snapshot.layoutGapMode = normalizedGapMode", materialize)
         self.assertIn("snapshot.layout_gap_mode = normalizedGapMode", materialize)

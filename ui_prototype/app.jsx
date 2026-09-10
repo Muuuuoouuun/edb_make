@@ -110,6 +110,19 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const BOARD_COLORS = ['#1d3a2c', '#101418', '#264653', '#3a2f24'];
 const ACCENTS = ['#2f6fed', '#6d3df0', '#1f7a4a', '#d97757'];
+const BOARD_COLOR_LABELS = {
+  '#1d3a2c': '초록 칠판',
+  '#101418': '검정 칠판',
+  '#264653': '청록 칠판',
+  '#3a2f24': '갈색 칠판',
+};
+
+function initialTweakValues(){
+  return {
+    ...TWEAK_DEFAULTS,
+    boardColor: readStoredPreference(BOARD_COLOR_KEY, TWEAK_DEFAULTS.boardColor, value => BOARD_COLORS.includes(value)),
+  };
+}
 
 const SAMPLE_NAMES = [
   '원과 접선의 성질', '근의 공식 유도', '삼각비 특수각 표', '이차함수 그래프', '닮음 도형 예제',
@@ -323,6 +336,40 @@ const REVIEW_ZOOM_MIN = 0.72;
 const REVIEW_ZOOM_MAX = 1.65;
 const REVIEW_ZOOM_STEP = 0.08;
 const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
+const RIGHT_PANEL_TAB_KEY = 'edb.rightPanel.tab';
+const ADVANCED_SETTINGS_OPEN_KEY = 'edb.rightPanel.advancedSettingsOpen';
+const BOARD_LAYOUT_OPEN_KEY = 'edb.rightPanel.boardLayoutOpen';
+const BOARD_COLOR_KEY = 'edb.boardColor';
+const RIGHT_PANEL_TABS = ['item', 'placement', 'board'];
+const RIGHT_PANEL_TAB_SHORTCUTS = { Digit1: 'item', Digit2: 'placement', Digit3: 'board' };
+const isStoredBoolean = value => typeof value === 'boolean';
+
+// UI-only preferences (last tab, open sections, board colour) are per-browser.
+// Storage can be missing or blocked, so every access falls back silently.
+function readStoredPreference(key, fallback, isValid = () => true){
+  try {
+    const raw = window.localStorage?.getItem(key);
+    if (raw == null) return fallback;
+    const value = JSON.parse(raw);
+    return isValid(value) ? value : fallback;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function writeStoredPreference(key, value){
+  try {
+    window.localStorage?.setItem(key, JSON.stringify(value));
+  } catch (_error) {
+    // Private windows and locked-down profiles refuse storage; the UI still works.
+  }
+}
+
+function useStoredPreference(key, fallback, isValid){
+  const [value, setValue] = useState(() => readStoredPreference(key, fallback, isValid));
+  useEffect(() => { writeStoredPreference(key, value); }, [key, value]);
+  return [value, setValue];
+}
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
   rightRatio: 0,
@@ -5153,11 +5200,14 @@ function ItemsRail({
   selectedItemIds, setSelectedItemIds,
   onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
   onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
+  inputIntent, setInputIntent,
 }){
   const dragId = useRef(null);
   const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const uploadIntentOption = INPUT_INTENT_OPTIONS.find(option => option.value === normalizeInputIntent(inputIntent))
+    || INPUT_INTENT_OPTIONS[0];
   const [materialFilter, setMaterialFilter] = useState('all');
   const [dragPreview, setDragPreview] = useState(null);
   const [pressedItemId, setPressedItemId] = useState(null);
@@ -5889,6 +5939,22 @@ function ItemsRail({
           </strong>
           <small>{hasSessionItems ? 'PNG 등록 / AI 인식' : '페이지 PNG로 바로 만들거나 문항을 AI 인식합니다'}</small>
         </button>
+
+        <label className="upload-intent" title={uploadIntentOption.description}>
+          <span>업로드 방식</span>
+          <select
+            value={uploadIntentOption.value}
+            onChange={e => setInputIntent?.(e.target.value)}
+            disabled={!setInputIntent}
+          >
+            {INPUT_INTENT_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        {!hasSessionItems && (
+          <p className="upload-intent-hint">{uploadIntentOption.description}</p>
+        )}
 
         {!!recentSessions?.length && (
           <div className={`session-history-card ${recentSessionsCollapsed ? 'is-collapsed' : ''}`}>
@@ -7774,58 +7840,94 @@ function BoardLayoutControls({
   setLayoutGapMode,
   manualGapCount,
   resetPlacementGaps,
+  open = true,
+  forcedOpen = false,
+  onToggle,
 }) {
+  const gapMode = normalizeLayoutGapMode(layoutGapMode);
+  const columns = normalizeBoardColumns(boardColumns);
+  const summary = [
+    `${columns}열`,
+    gapMode === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : '1.2 맞춤',
+    manualGapCount ? `개별 여백 ${manualGapCount}곳` : '',
+  ].filter(Boolean).join(' · ');
+  const headerCopy = (
+    <span className="board-layout-toggle-copy">
+      <strong>전체 레이아웃</strong>
+      <small>{summary}</small>
+    </span>
+  );
   return (
-    <section className="board-layout-controls" aria-label="칠판 레이아웃">
-      <div className="panel-section-hd">레이아웃 <span className="line" /></div>
-
-      <div className="row-control">
-        <div className="lbl">한 줄 자료 수<small>실제 EDB 제작은 현재 1열만 검증됨</small></div>
-        <div className="seg-mini">
-          {[1,2,3].map(n => (
-            <button
-              key={n}
-              className={boardColumns===n ? 'on' : ''}
-              type="button"
-              title={n === 1 ? '검증된 1열 배치' : '다열 Export 검증 후 제공할 예정입니다'}
-              disabled={n !== 1}
-              onClick={() => setBoardColumns(n)}
-            >{n}개</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="row-control layout-gap-mode-control">
-        <div className="lbl">문항 사이 여백<small>전체 문항의 다음 시작 위치</small></div>
-        <div className="seg-mini" role="group" aria-label="문항 사이 여백 방식">
-          <button
-            type="button"
-            className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_GRID ? 'on' : ''}
-            onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_GRID)}
-          >1.2 맞춤</button>
-          <button
-            type="button"
-            className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? 'on' : ''}
-            onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
-          >빈틈 없이</button>
-        </div>
-      </div>
-
-      <div className="layout-gap-note" role="note">
-        <strong>경계 공백 방지</strong>
-        <span>각 1.2 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 사용자가 조절한 배율은 유지합니다.</span>
-        <span className="warn">‘빈틈 없이’는 문항이 ClassIn 화면 경계를 걸칠 수 있으니 저장 전에 미리보기를 확인하세요.</span>
-      </div>
-
-      <div className="row-control layout-gap-reset-control">
-        <div className="lbl">개별 여백 삭제<small>{manualGapCount ? `${manualGapCount}곳 적용됨` : '미리보기 상단에서 선택 문항별 적용'}</small></div>
+    <section className={`board-layout-controls ${open ? 'is-open' : 'is-collapsed'}`} aria-label="칠판 레이아웃">
+      {forcedOpen ? (
+        <div className="board-layout-toggle is-static">{headerCopy}</div>
+      ) : (
         <button
-          className="btn compact"
           type="button"
-          disabled={!manualGapCount}
-          onClick={() => resetPlacementGaps?.()}
-        >전체 해제</button>
-      </div>
+          className="board-layout-toggle"
+          aria-expanded={open}
+          aria-controls="board-layout-controls-body"
+          onClick={() => onToggle?.()}
+        >
+          {headerCopy}
+          <i aria-hidden="true">{open ? '접기' : '펼치기'}</i>
+        </button>
+      )}
+
+      {open && (
+        <div className="board-layout-body" id="board-layout-controls-body">
+          <div className="row-control">
+            <div className="lbl">한 줄 자료 수<small>실제 EDB 제작은 현재 1열만 검증됨</small></div>
+            {columns === BOARD_COLUMN_MIN ? (
+              <span className="row-value" title="다열 Export 검증 후 제공할 예정입니다">1열</span>
+            ) : (
+              <button className="btn compact" type="button" onClick={() => setBoardColumns?.(BOARD_COLUMN_MIN)}>
+                1열로 되돌리기
+              </button>
+            )}
+          </div>
+
+          <div className="row-control layout-gap-mode-control">
+            <div className="lbl">문항 사이 여백<small>전체 문항의 다음 시작 위치</small></div>
+            <div className="seg-mini" role="group" aria-label="문항 사이 여백 방식">
+              <button
+                type="button"
+                className={gapMode === LAYOUT_GAP_MODE_GRID ? 'on' : ''}
+                aria-pressed={gapMode === LAYOUT_GAP_MODE_GRID}
+                onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_GRID)}
+              >1.2 맞춤</button>
+              <button
+                type="button"
+                className={gapMode === LAYOUT_GAP_MODE_COMPACT ? 'on' : ''}
+                aria-pressed={gapMode === LAYOUT_GAP_MODE_COMPACT}
+                onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
+              >빈틈 없이</button>
+            </div>
+          </div>
+
+          {gapMode === LAYOUT_GAP_MODE_COMPACT ? (
+            <div className="layout-gap-note" role="note">
+              <strong>빈틈 없이 사용 중</strong>
+              <span className="warn">‘빈틈 없이’는 문항이 ClassIn 화면 경계를 걸칠 수 있으니 저장 전에 미리보기를 확인하세요.</span>
+            </div>
+          ) : (
+            <p className="layout-gap-hint">
+              <strong>경계 공백 방지</strong>
+              각 1.2 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 사용자가 조절한 배율은 유지합니다.
+            </p>
+          )}
+
+          <div className="row-control layout-gap-reset-control">
+            <div className="lbl">개별 여백 삭제<small>{manualGapCount ? `${manualGapCount}곳 적용됨` : '미리보기 상단에서 선택 문항별 적용'}</small></div>
+            <button
+              className="btn compact"
+              type="button"
+              disabled={!manualGapCount}
+              onClick={() => resetPlacementGaps?.()}
+            >전체 해제</button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -7836,7 +7938,6 @@ function SidePanel({
   setPlacement, setPlacements, savePlacement, mutateSession, mutating,
   boardColumns, setBoardColumns, layoutGapMode, setLayoutGapMode, resetPlacementGaps,
   boardColor, setBoardColor,
-  accent, setAccent,
   onConfirm,
   userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
   onEnhanceImage, imageEnhanceBusy,
@@ -7851,7 +7952,7 @@ function SidePanel({
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
 }){
-  const [tab, setTab] = useState('item');
+  const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [compareX, setCompareX] = useState(50);
@@ -7860,7 +7961,9 @@ function SidePanel({
   const [updatePinDraft, setUpdatePinDraft] = useState('');
   const [showUpdatePin, setShowUpdatePin] = useState(false);
   const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);
-  const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
+  const [advancedSettingsOpen, setAdvancedSettingsOpen] = useStoredPreference(ADVANCED_SETTINGS_OPEN_KEY, false, isStoredBoolean);
+  const [boardLayoutOpen, setBoardLayoutOpen] = useStoredPreference(BOARD_LAYOUT_OPEN_KEY, false, isStoredBoolean);
+  const [keyEditorOpen, setKeyEditorOpen] = useState(false);
   const [cropPresetsOpen, setCropPresetsOpen] = useState(false);
   const [cropDraft, setCropDraft] = useState({ ...EMPTY_MANUAL_CROP });
   const [placementScope, setPlacementScope] = useState('item');
@@ -7883,7 +7986,6 @@ function SidePanel({
   const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
   const hangulStatusMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
   const hangulToolRows = hangulRuntimeToolRows(hangulDiagnostics);
-  const hangulDetailsOpen = !!hangulDiagnostics && hangulDiagnostics.status !== 'ready';
 
   useEffect(() => {
     const onMove = e => {
@@ -7901,9 +8003,32 @@ function SidePanel({
     };
   }, []);
 
+  // Picking another problem while the settings tab is open means the teacher
+  // wants that problem's options. Placement work keeps its tab. The first
+  // null -> id transition is the session loading, not a choice, so a
+  // remembered settings tab survives a reload.
+  const lastItemIdRef = useRef(item?.id ?? null);
   useEffect(() => {
-    if (hangulDiagnostics) setHangulDetailsExpanded(hangulDetailsOpen);
-  }, [hangulDiagnostics?.status]);
+    const nextId = item?.id ?? null;
+    const previousId = lastItemIdRef.current;
+    lastItemIdRef.current = nextId;
+    if (previousId != null && nextId != null && nextId !== previousId && tab === 'board') {
+      setTab('item');
+    }
+  }, [item?.id]);
+
+  useEffect(() => {
+    const onKeyDown = (evt) => {
+      if (!evt.altKey || evt.metaKey || evt.ctrlKey || evt.shiftKey) return;
+      if (isEditableKeyboardTarget(evt.target)) return;
+      const nextTab = RIGHT_PANEL_TAB_SHORTCUTS[evt.code];
+      if (!nextTab) return;
+      evt.preventDefault();
+      setTab(nextTab);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setTab]);
 
   useEffect(() => {
     setCropDraft(item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP });
@@ -8025,14 +8150,14 @@ function SidePanel({
                     ? '미지원'
                     : '확인 전';
   const updateStatusTone = updateArchitectureBlocked
-      ? 'var(--danger)'
+      ? 'danger'
       : updateInfo?.updateAvailable
-        ? 'var(--accent)'
+        ? 'accent'
         : updateStatus === 'up_to_date'
-          ? 'var(--ok)'
+          ? 'ok'
           : updateStatus === 'error' || updateStatus === 'invalid_feed'
-            ? 'var(--danger)'
-            : 'var(--muted)';
+            ? 'danger'
+            : 'neutral';
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
@@ -8215,8 +8340,9 @@ function SidePanel({
           className={tab==='item' ? 'on' : ''}
           onClick={() => setTab('item')}
           title="선택 자료"
-          data-tooltip="선택한 자료의 처리 방식과 세부 편집"
+          data-tooltip="선택한 자료의 처리 방식과 세부 편집 · ⌥1"
           role="tab"
+          aria-keyshortcuts="Alt+1"
           aria-selected={tab === 'item'}
         >
           자료 <span className="badge">{itemPosLabel}</span>
@@ -8225,8 +8351,9 @@ function SidePanel({
           className={tab==='placement' ? 'on' : ''}
           onClick={() => setTab('placement')}
           title="배치"
-          data-tooltip="자료 위치, 크기, 지문 묶음 배치"
+          data-tooltip="자료 위치, 크기, 지문 묶음 배치 · 전체 레이아웃 · ⌥2"
           role="tab"
+          aria-keyshortcuts="Alt+2"
           aria-selected={tab === 'placement'}
         >
           배치
@@ -8235,8 +8362,9 @@ function SidePanel({
           className={tab==='board' ? 'on' : ''}
           onClick={() => setTab('board')}
           title="설정"
-          data-tooltip="칠판 동작, 색상, AI 인식 설정"
+          data-tooltip="AI, 칠판 배경, 문서 변환, 앱 정보 · ⌥3"
           role="tab"
+          aria-keyshortcuts="Alt+3"
           aria-selected={tab === 'board'}
         >
           설정
@@ -8257,16 +8385,6 @@ function SidePanel({
       {tab === 'item' && (
         <>
           <div className="tab-body">
-            {view === 'board' && (
-              <BoardLayoutControls
-                boardColumns={boardColumns}
-                setBoardColumns={setBoardColumns}
-                layoutGapMode={layoutGapMode}
-                setLayoutGapMode={setLayoutGapMode}
-                manualGapCount={manualGapCount}
-                resetPlacementGaps={resetPlacementGaps}
-              />
-            )}
             {item ? (
               <>
                 <div className="item-meta">
@@ -8360,6 +8478,15 @@ function SidePanel({
 
                 <div className="panel-section-hd">
                   처리 방식 선택 <span className="line" />
+                  {!showItemConfirmBar && items.length > 1 && (
+                    <button
+                      type="button"
+                      className="section-hd-action"
+                      disabled={item.step === 'raw'}
+                      title={`${stepLabel(item.step)}을(를) 전체 ${items.length}개 자료에 적용`}
+                      onClick={() => applyToAll(item.step)}
+                    >전체 적용</button>
+                  )}
                 </div>
 
                 <div className="steps">
@@ -8655,6 +8782,20 @@ function SidePanel({
               </div>
             </section>
 
+            {view === 'board' && (
+              <BoardLayoutControls
+                boardColumns={boardColumns}
+                setBoardColumns={setBoardColumns}
+                layoutGapMode={layoutGapMode}
+                setLayoutGapMode={setLayoutGapMode}
+                manualGapCount={manualGapCount}
+                resetPlacementGaps={resetPlacementGaps}
+                open={boardLayoutOpen || placementScope === 'all'}
+                forcedOpen={placementScope === 'all'}
+                onToggle={() => setBoardLayoutOpen(open => !open)}
+              />
+            )}
+
             <section className="placement-section">
               <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
               <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
@@ -8788,73 +8929,125 @@ function SidePanel({
       {tab === 'board' && (
         <>
           <div className="tab-body">
-            <div className="panel-section-hd">칠판 동작 <span className="line" /></div>
+            <div className="panel-section-hd">AI <span className="line" /></div>
 
             <div className="row-control">
-              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+              <div className="lbl">
+                AI 전체 사용
+                <small>
+                  {userSettings?.hasGeminiApiKey
+                    ? 'OCR · 문항 보정 · 생성형 고화질'
+                    : 'API 키 없음 · 로컬 처리만 가능'}
+                </small>
+              </div>
+              <label className="check" style={{cursor: aiToggleBusy ? 'wait' : 'pointer', opacity: aiToggleBusy ? .6 : 1}}>
+                <input
+                  type="checkbox"
+                  checked={!!aiEnabled}
+                  disabled={!!aiToggleBusy}
+                  onChange={e => onToggleAi?.(e.target.checked)}
+                />
+                <span style={{fontSize: 12, color: 'var(--muted)'}}>
+                  {aiEnabled ? '켜짐' : '꺼짐'}
+                </span>
+              </label>
             </div>
 
-            <div className="row-control">
-              <div className="lbl">드래그 마그넷<small>배치 칸 가이드에 자동 정렬</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">주변 사진 높이<small>같은 행의 가장 큰 자료 기준</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>칠판 색상 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">칠판 배경<small>실제 교실 칠판과 맞추기</small></div>
-              <div className="swatches">
-                {BOARD_COLORS.map(c => (
-                  <div key={c}
-                       className={`sw ${boardColor === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setBoardColor(c)}
-                       title={c} />
-                ))}
+            <div className="row-control api-key-status">
+              <div className="lbl">
+                Gemini API 키
+                <small>
+                  {userSettings?.hasGeminiApiKey
+                    ? `${userSettings.geminiApiKeyPreview || '저장됨'} · ${userSettings?.geminiApiKeySource === 'env' ? '환경변수 사용 중' : '이 기기에 저장됨'}`
+                    : 'AI 인식과 고화질 보정에 필요합니다'}
+                </small>
+              </div>
+              <div className="row-actions">
+                <span className={`pos-tag status-tag ${userSettings?.hasGeminiApiKey ? 'tone-ok' : 'tone-danger'}`}>
+                  {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
+                </span>
+                {userSettings?.hasGeminiApiKey && !keyEditorOpen && (
+                  <button className="btn compact" type="button" onClick={() => setKeyEditorOpen(true)}>변경</button>
+                )}
               </div>
             </div>
-
-            <div className="row-control">
-              <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
-              <div className="swatches">
-                {ACCENTS.map(c => (
-                  <div key={c}
-                       className={`sw ${accent === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setAccent(c)}
-                       title={c} />
-                ))}
+            {(!userSettings?.hasGeminiApiKey || keyEditorOpen) && (
+              <div className="api-key-editor">
+                <small className="api-key-note">
+                  {userSettings?.geminiApiKeySource === 'env'
+                    ? '환경변수의 GEMINI_API_KEY 사용 중. 저장하면 그 값이 우선.'
+                    : 'GEMINI_API_KEY로 자동 적용. .app_runtime/user_settings.json에 저장.'}
+                </small>
+                <div className="key-input-row">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    className="key-input"
+                    placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
+                    value={keyDraft}
+                    onChange={e => setKeyDraft(e.target.value)}
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <button className="btn icon" type="button" onClick={() => setShowKey(s => !s)} title={showKey ? '숨기기' : '보기'}>
+                    {showKey ? '🙈' : '👁'}
+                  </button>
+                </div>
+                <div style={{display: 'flex', gap: 6}}>
+                  <button
+                    className="btn primary"
+                    style={{flex: 1, justifyContent: 'center'}}
+                    onClick={() => { onSaveGeminiKey?.(keyDraft.trim()); setKeyDraft(''); setKeyEditorOpen(false); }}
+                    disabled={!keyDraft.trim()}
+                  >
+                    키 저장
+                  </button>
+                  <button
+                    className="btn"
+                    style={{flex: 1, justifyContent: 'center'}}
+                    onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
+                    disabled={!userSettings?.hasStoredGeminiApiKey}
+                  >
+                    저장된 키 삭제
+                  </button>
+                </div>
+                {userSettings?.hasGeminiApiKey && (
+                  <button className="btn ghost compact" type="button" onClick={() => { setKeyEditorOpen(false); setKeyDraft(''); }}>취소</button>
+                )}
               </div>
-            </div>
+            )}
 
-            <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
-
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
-            </button>
             <button
-              className="btn primary"
+              className="btn primary settings-ai-action"
               style={{justifyContent:'space-between'}}
               onClick={onRecognizeSession}
               disabled={!canRecognizeSession}
               title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
             >
               <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
-            </button>
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
+              <span style={{fontFamily:'var(--font-mono)', fontSize:11, opacity:.82}}>AI</span>
             </button>
 
-            <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
+            <div className="panel-section-hd" style={{marginTop:4}}>칠판 <span className="line" /></div>
+            <div className="row-control">
+              <div className="lbl">칠판 배경<small>미리보기 칠판 색 · 이 기기에 저장</small></div>
+              <div className="swatches" role="radiogroup" aria-label="칠판 배경">
+                {BOARD_COLORS.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    role="radio"
+                    aria-checked={boardColor === c}
+                    aria-label={BOARD_COLOR_LABELS[c] || c}
+                    title={BOARD_COLOR_LABELS[c] || c}
+                    className={`sw ${boardColor === c ? 'on' : ''}`}
+                    style={{ background: c }}
+                    onClick={() => setBoardColor(c)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="panel-section-hd" style={{marginTop:4}}>문서 변환 <span className="line" /></div>
 
             <div className="row-control">
               <div className="lbl">
@@ -8862,12 +9055,7 @@ function SidePanel({
                 <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
               </div>
               <span
-                className="pos-tag"
-                style={{
-                  background: hangulStatusMeta.tone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
+                className={`pos-tag status-tag tone-${hangulStatusMeta.tone}`}
                 title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
               >
                 {hangulStatusMeta.label}
@@ -8910,105 +9098,6 @@ function SidePanel({
               </div>
             )}
 
-            <div className="intent-control">
-              {INPUT_INTENT_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  className={`intent-choice ${normalizeInputIntent(inputIntent) === option.value ? 'on' : ''}`}
-                  type="button"
-                  onClick={() => setInputIntent?.(option.value)}
-                  title={option.description}
-                >
-                  <span className="intent-choice-head">
-                    <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
-                    <strong>{option.label}</strong>
-                  </span>
-                  <small>{option.description}</small>
-                  {Array.isArray(option.pills) && option.pills.length > 0 && (
-                    <em className="intent-choice-pills">
-                      {option.pills.map(pill => <b key={pill}>{pill}</b>)}
-                    </em>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">
-                AI 전체 사용
-                <small>
-                  {userSettings?.hasGeminiApiKey
-                    ? 'OCR · 문항 보정 · 생성형 고화질'
-                    : 'API 키 없음 · 로컬 처리만 가능'}
-                </small>
-              </div>
-              <label className="check" style={{cursor: aiToggleBusy ? 'wait' : 'pointer', opacity: aiToggleBusy ? .6 : 1}}>
-                <input
-                  type="checkbox"
-                  checked={!!aiEnabled}
-                  disabled={!!aiToggleBusy}
-                  onChange={e => onToggleAi?.(e.target.checked)}
-                />
-                <span style={{fontSize: 12, color: 'var(--muted)'}}>
-                  {aiEnabled ? '켜짐' : '꺼짐'}
-                </span>
-              </label>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>Gemini API 키 <span className="line" /></div>
-
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasGeminiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
-                  </span>
-                  {userSettings?.hasGeminiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.geminiApiKeyPreview}
-                    </span>
-                  )}
-                </span>
-                <small>
-                  {userSettings?.geminiApiKeySource === 'env'
-                    ? '환경변수의 GEMINI_API_KEY 사용 중. 저장하면 그 값이 우선.'
-                    : 'GEMINI_API_KEY로 자동 적용. .app_runtime/user_settings.json에 저장.'}
-                </small>
-              </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
-                value={keyDraft}
-                onChange={e => setKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowKey(s => !s)} title={showKey ? '숨기기' : '보기'}>
-                {showKey ? '🙈' : '👁'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveGeminiKey?.(keyDraft.trim()); setKeyDraft(''); }}
-                disabled={!keyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
-                disabled={!userSettings?.hasStoredGeminiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
-
             <div className="panel-section-hd" style={{marginTop:4}}>앱 업데이트 <span className="line" /></div>
 
             <div className="row-control">
@@ -9016,14 +9105,7 @@ function SidePanel({
                 현재 버전
                 <small>{updateVersionLine}</small>
               </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: updateStatusTone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-              >
+              <span className={`pos-tag status-tag tone-${updateStatusTone}`}>
                 {updateStatusLabel}
               </span>
             </div>
@@ -11708,10 +11790,10 @@ function riskFlagLabel(flag){
 
 function hangulRuntimeStatusMeta(hangul){
   const status = String(hangul?.status || '').toLowerCase();
-  if (!hangul) return { label: '점검 중', tone: 'var(--muted)' };
-  if (status === 'ready') return { label: hangul.label || '준비됨', tone: 'var(--ok)' };
-  if (status === 'partial') return { label: hangul.label || '부분 준비', tone: '#aa6516' };
-  return { label: hangul.label || '확인 필요', tone: 'var(--danger)' };
+  if (!hangul) return { label: '점검 중', tone: 'neutral' };
+  if (status === 'ready') return { label: hangul.label || '준비됨', tone: 'ok' };
+  if (status === 'partial') return { label: hangul.label || '부분 준비', tone: 'warn' };
+  return { label: hangul.label || '확인 필요', tone: 'danger' };
 }
 
 function hangulRuntimeSummary(hangul){
@@ -14041,7 +14123,7 @@ async function saveUserSettings(settings){
 
 // ─── APP ──────────────────────────────────────────────────────────────────
 function App(){
-  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [t, setTweak] = useTweaks(useMemo(initialTweakValues, []));
   useEffect(() => {
     document.body.classList.toggle('dark', !!t.dark);
     document.documentElement.style.setProperty('--accent', t.accent);
@@ -16284,7 +16366,7 @@ function App(){
       return;
     }
     if (normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN) {
-      showToast('2·3열은 실제 EDB 배치 검증 전입니다. 설정에서 1열로 바꾼 뒤 제작해 주세요');
+      showToast('2·3열은 실제 EDB 배치 검증 전입니다. 배치 탭의 전체 레이아웃에서 1열로 되돌린 뒤 제작해 주세요');
       return;
     }
     clearOperationRecovery();
@@ -16859,6 +16941,8 @@ function App(){
           removeItem={removeItem}
           addSample={addSample}
           bulkApply={applyToAll}
+          inputIntent={inputIntent}
+          setInputIntent={setInputIntent}
           handleFiles={handleFiles}
           pendingFiles={pendingFiles}
           selectedPendingFileKey={selectedPendingFileKey}
@@ -16956,9 +17040,7 @@ function App(){
           setLayoutGapMode={updateLayoutGapMode}
           resetPlacementGaps={resetPlacementGaps}
           boardColor={t.boardColor}
-          setBoardColor={v => setTweak('boardColor', v)}
-          accent={t.accent}
-          setAccent={v => setTweak('accent', v)}
+          setBoardColor={v => { setTweak('boardColor', v); writeStoredPreference(BOARD_COLOR_KEY, v); }}
           onConfirm={onConfirm}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}

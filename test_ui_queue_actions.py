@@ -672,13 +672,23 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("manual-split-box", bundle)
         self.assertIn("스탬프", bundle)
 
-    def test_input_intent_choices_use_readable_single_column_layout(self) -> None:
+    def test_upload_method_is_chosen_beside_the_drop_zone(self) -> None:
+        # The method decides how the next upload is parsed, so it sits where
+        # files go in rather than two screens down the settings tab.
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = board_document()
-        intent_control = html.split(".intent-control{", 1)[1].split("}", 1)[0]
-        intent_title = html.split(".intent-choice-head strong{", 1)[1].split("}", 1)[0]
+        rail = source.split("function ItemsRail({", 1)[1].split("\nfunction ", 1)[0]
+        side_panel = source.split("function SidePanel({", 1)[1].split("\nfunction ", 1)[0]
+        select_css = html.split(".upload-intent select{", 1)[1].split("}", 1)[0]
 
-        self.assertIn("grid-template-columns: 1fr", intent_control)
-        self.assertIn("word-break: keep-all", intent_title)
+        self.assertIn('<label className="upload-intent"', rail)
+        self.assertIn("<span>업로드 방식</span>", rail)
+        self.assertIn("INPUT_INTENT_OPTIONS.map(option =>", rail)
+        self.assertIn("onChange={e => setInputIntent?.(e.target.value)}", rail)
+        self.assertLess(rail.index("className={`drop-zone"), rail.index('className="upload-intent"'))
+        self.assertNotIn("INPUT_INTENT_OPTIONS", side_panel)
+        self.assertIn("min-width: 0", select_css)
+        self.assertNotIn(".intent-choice", html)
 
     def test_undo_restores_server_snapshot_order_directly(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
