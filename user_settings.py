@@ -68,7 +68,7 @@ def save_user_settings(runtime_dir: Path, settings: dict[str, Any]) -> Path:
 
 def apply_to_env(settings: dict[str, Any], *, overwrite: bool = False) -> dict[str, str]:
     """Promote relevant settings to ``os.environ`` so downstream pipeline code
-    that reads env vars (Gemini OCR/page repair, OpenAI image reconstruction)
+    that reads env vars (Gemini OCR, page repair, image reconstruction)
     picks them up.
 
     By default an externally-set env var wins so users who exported

@@ -11335,10 +11335,12 @@ const AI_FALLBACK_ON = {
   saveDebug: false,
 };
 const AI_MODEL_LABELS = {
+  'gemini-3.8-flash': 'Gemini 3.8 Flash (최신)',
+  'gemini-3.6-flash': 'Gemini 3.6 Flash',
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
   'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
   'gemini-3-pro-preview': 'Gemini 3 Pro',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
-  'gemini-3.6-flash': 'Gemini 3.6 Flash',
 };
 const DEFAULT_INPUT_INTENT = 'multi-problem';
 const DEFAULT_CONTENT_TARGET = 'all';

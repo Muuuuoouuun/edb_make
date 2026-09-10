@@ -37,6 +37,16 @@ MODEL_TOKEN_PRICING_USD_PER_MILLION: dict[str, dict[str, Decimal]] = {
         "cached_input": Decimal("0.15"),
         "output": Decimal("7.50"),
     },
+    "gemini-3.7-flash": {
+        "input": Decimal("1.50"),
+        "cached_input": Decimal("0.15"),
+        "output": Decimal("7.50"),
+    },
+    "gemini-3.8-flash": {
+        "input": Decimal("1.50"),
+        "cached_input": Decimal("0.15"),
+        "output": Decimal("7.50"),
+    },
     "gemini-3.1-pro-preview": {
         "input": Decimal("2.00"),
         "cached_input": Decimal("0.20"),
