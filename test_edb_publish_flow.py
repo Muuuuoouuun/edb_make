@@ -1693,7 +1693,7 @@ class TestEdbPublishFlow(unittest.TestCase):
                     crop_format=CROP_FORMAT_V1,
                 )
 
-            self.assertEqual([20, 20, 2], [len(part["problemIds"]) for part in parts])
+            self.assertEqual([14, 14, 14], [len(part["problemIds"]) for part in parts])
             self.assertEqual(["height-gap_part01.edb", "height-gap_part02.edb", "height-gap_part03.edb"], [
                 Path(part["edbPath"]).name for part in parts
             ])
@@ -1710,6 +1710,58 @@ class TestEdbPublishFlow(unittest.TestCase):
                     )
                 validation = validate_edb_file(part["edbPath"], expected_min_records=part["recordCount"])
                 self.assertLessEqual(validation["pageCountHint"], 50)
+
+    def test_balanced_classin_ranges_keep_order_and_minimize_uneven_tail(self):
+        ranges = problem_board.balanced_classin_part_ranges([2.4] * 42)
+
+        self.assertEqual(
+            [(0, 14, 33.6), (14, 28, 33.6), (28, 42, 33.6)],
+            [(start, end, round(pages, 1)) for start, end, pages in ranges],
+        )
+
+    def test_classin_publish_plan_uses_final_image_record_geometry_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = LayoutTemplate(name="academy-default", board_page_count=84)
+            entries = [
+                self._make_problem_entry(root, f"p{index:02d}", Box(0, 0, 400, 972))
+                for index in range(42)
+            ]
+            for entry in entries:
+                entry.actual_height_pages = problem_board.estimate_height_pages((400, 972), template)
+
+            def fake_record_image(placement, entry, **_kwargs):
+                return problem_board._ImageOnlyRecordImage(
+                    crop_path=entry.crop_path,
+                    board_render_path=entry.board_render_path,
+                    image_bytes=b"",
+                    secondary_bytes=b"",
+                    width_px=400,
+                    height_px=972,
+                    scale_ratio=None,
+                )
+
+            with (
+                mock.patch.object(problem_board, "_build_image_only_record_image", side_effect=fake_record_image),
+                mock.patch.object(problem_board, "write_edb") as writer,
+            ):
+                parts = problem_board.plan_classin_limited_edb_parts(
+                    entries,
+                    template,
+                    root,
+                    record_mode="image-only",
+                    text_confidence_threshold=0.78,
+                    dark_board=True,
+                    board_theme=problem_board.DEFAULT_BOARD_THEME,
+                    crop_format=CROP_FORMAT_V1,
+                )
+
+            writer.assert_not_called()
+            self.assertEqual([14, 14, 14], [part["problemCount"] for part in parts])
+            self.assertEqual([33.6, 33.6, 33.6], [round(part["estimatedFlowEndPages"], 1) for part in parts])
+            self.assertEqual(list(entries[index].problem_id for index in range(42)), [
+                problem_id for part in parts for problem_id in part["problemIds"]
+            ])
 
     def test_problem_export_records_stage_timing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6711,6 +6763,30 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertGreater(cleaned.width, 650)
         self.assertGreater(cleaned.height, 900)
         self.assertEqual(cleaned.getpixel((8, cleaned.height - 8)), (255, 255, 255))
+
+    def test_bottom_blue_watermark_trim_ignores_vertical_cyan_column_divider(self):
+        image = Image.new("RGB", (820, 913), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((80, 760), "D. final statement", fill="black")
+        draw.text((80, 850), "1 2 3 4 5", fill="black")
+        draw.rectangle((815, 0, 819, 912), fill=(70, 190, 230))
+
+        cleaned = _trim_source_page_chrome(
+            image,
+            preserve_horizontal_bounds=True,
+        )
+        with mock.patch.object(problem_board, "np", None):
+            cleaned_without_numpy = _trim_source_page_chrome(
+                image,
+                preserve_horizontal_bounds=True,
+            )
+
+        for candidate in (cleaned, cleaned_without_numpy):
+            self.assertEqual(image.size, candidate.size)
+            self.assertEqual(
+                image.crop((60, 740, 360, 890)).tobytes(),
+                candidate.crop((60, 740, 360, 890)).tobytes(),
+            )
 
     def test_trusted_pdf_marker_crop_trims_column_divider_and_footer_badge(self):
         with tempfile.TemporaryDirectory() as tmp:

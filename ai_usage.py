@@ -47,11 +47,6 @@ MODEL_TOKEN_PRICING_USD_PER_MILLION: dict[str, dict[str, Decimal]] = {
         "cached_input": Decimal("0.125"),
         "output": Decimal("10.00"),
     },
-    "gpt-image-2": {
-        "input": Decimal("8.00"),
-        "cached_input": Decimal("2.00"),
-        "output": Decimal("30.00"),
-    },
 }
 
 # USD for one generated image. Only actively supported sizes are listed.

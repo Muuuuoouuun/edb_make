@@ -5794,7 +5794,7 @@ function ItemsRail({
       </div>
 
       {hasSessionItems && (
-        <>
+        <div className="rail-control-stack">
           <div className="material-filter" role="group" aria-label="자료 모아보기">
             {materialFilterOptions.map(([value, label, count]) => (
               <button
@@ -5820,22 +5820,20 @@ function ItemsRail({
               </button>
             ))}
           </div>
-          <div style={{ padding: '0 10px 8px' }}>
-            <button
-              className="btn"
-              type="button"
-              style={{ width: '100%', justifyContent: 'center' }}
-              title={canReextractSharedPassages
-                ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
-                : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
-              onClick={onReextractSharedPassages}
-              disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
-            >
-              {Icon.refresh}
-              <span>{reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '현재 원본에서 공통 지문 다시 추출'}</span>
-            </button>
-          </div>
-        </>
+          <button
+            className="btn rail-reextract-action"
+            type="button"
+            aria-label="현재 원본에서 공통 지문 다시 추출"
+            title={canReextractSharedPassages
+              ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
+              : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
+            onClick={onReextractSharedPassages}
+            disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
+          >
+            {Icon.refresh}
+            <span>{reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '공통 지문 재추출'}</span>
+          </button>
+        </div>
       )}
 
       <div
@@ -5857,8 +5855,10 @@ function ItemsRail({
           applyRailAutoScroll(e.clientX, e.clientY);
         }}
       >
-        <div
+        <button
+          type="button"
           className={`drop-zone ${hasSessionItems ? 'is-compact' : ''} ${dropZoneActive ? 'is-active' : ''}`}
+          aria-label="파일 추가"
           onClick={addSample}
           onDragEnter={e => {
             if (!e.dataTransfer?.types?.includes('Files')) return;
@@ -5884,34 +5884,39 @@ function ItemsRail({
           }}
         >
           {Icon.upload}
-          <strong style={hasSessionItems ? null : {marginTop:6}}>
+          <strong>
             {hasSessionItems ? '파일 추가' : '이미지·PDF·HWP 대기열에 추가'}
           </strong>
           <small>{hasSessionItems ? 'PNG 등록 / AI 인식' : '페이지 PNG로 바로 만들거나 문항을 AI 인식합니다'}</small>
-        </div>
+        </button>
 
         {!!recentSessions?.length && (
           <div className={`session-history-card ${recentSessionsCollapsed ? 'is-collapsed' : ''}`}>
-            <div className="source-queue-head session-history-head">
+            <button
+              className="session-history-toggle"
+              type="button"
+              title={recentSessionsCollapsed ? '최근 작업 펼치기' : '최근 작업 접기'}
+              aria-expanded={!recentSessionsCollapsed}
+              aria-controls="recent-session-history-list"
+              onClick={toggleRecentSessionsCollapsed}
+            >
               <strong>최근 작업</strong>
-              <span>{recentSessions.length}개</span>
-              <div className="spacer" />
-              <button
-                className="icon-btn"
-                type="button"
-                title={recentSessionsCollapsed ? '최근 작업 펼치기' : '최근 작업 접기'}
-                data-tooltip={recentSessionsCollapsed ? '최근 작업 목록 펼치기' : '최근 작업 목록 접기'}
-                aria-expanded={!recentSessionsCollapsed}
-                aria-controls="recent-session-history-list"
-                onClick={toggleRecentSessionsCollapsed}
-              >
+              <span className="session-history-count">{recentSessions.length}개</span>
+              <span className="spacer" />
+              <span className="session-history-chevron" aria-hidden="true">
                 {recentSessionsCollapsed ? Icon.arrowDown : Icon.arrowUp}
-              </button>
-            </div>
+              </span>
+            </button>
             {!recentSessionsCollapsed && (
               <div className="session-history-list" id="recent-session-history-list">
                 {recentSessions.slice(0, 5).map(entry => {
                   const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
+                  const hasPublishActions = Boolean(publish && (
+                    publish.canDownload
+                    || publish.canOpenEdbFile
+                    || publish.canOpenOutputDir
+                    || publish.canOpenClassinHandoff
+                  ));
                   return (
                     <div className="session-history-row" key={entry.id}>
                       <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
@@ -5924,45 +5929,39 @@ function ItemsRail({
                         </div>
                       </div>
                       <div className="session-history-actions">
-                        {publish && (
-                          <>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canDownload || publishDownloadBusy}
-                              onClick={() => onDownloadPublish?.(publish)}
-                              title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : '최근 제작본 다운로드'}
-                            >
-                              {Icon.download}
-                            </button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canOpenEdbFile}
-                              onClick={() => openPublishedEdb(publish)}
-                              title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
-                            >
-                              {Icon.board}
-                            </button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canOpenOutputDir}
-                              onClick={() => openOutputFolder(publish.outputDir)}
-                              title={publish.outputDirExists === false ? '최근 작업 출력 폴더가 없습니다' : '최근 작업 출력 폴더 열기'}
-                            >
-                              {Icon.folder}
-                            </button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canOpenClassinHandoff}
-                              onClick={() => openClassinHandoff(publish)}
-                              title={publish.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
-                            >
-                              {Icon.check}
-                            </button>
-                          </>
+                        {hasPublishActions && (
+                          <details className="session-history-more">
+                            <summary className="icon-btn" title="최근 제작 파일 작업" aria-label="최근 제작 파일 작업">
+                              {Icon.more}
+                            </summary>
+                            <div className="session-history-menu" role="group" aria-label="최근 제작 파일 작업">
+                              {publish.canDownload && (
+                                <button
+                                  className="btn"
+                                  type="button"
+                                  disabled={publishDownloadBusy}
+                                  onClick={() => onDownloadPublish?.(publish)}
+                                >
+                                  {Icon.download}<span>최근 제작본 다운로드</span>
+                                </button>
+                              )}
+                              {publish.canOpenEdbFile && (
+                                <button className="btn" type="button" onClick={() => openPublishedEdb(publish)}>
+                                  {Icon.board}<span>EDB 파일 열기</span>
+                                </button>
+                              )}
+                              {publish.canOpenOutputDir && (
+                                <button className="btn" type="button" onClick={() => openOutputFolder(publish.outputDir)}>
+                                  {Icon.folder}<span>출력 폴더 열기</span>
+                                </button>
+                              )}
+                              {publish.canOpenClassinHandoff && (
+                                <button className="btn" type="button" onClick={() => openClassinHandoff(publish)}>
+                                  {Icon.check}<span>ClassIn 검수 열기</span>
+                                </button>
+                              )}
+                            </div>
+                          </details>
                         )}
                         <button
                           className="btn"
@@ -6165,9 +6164,12 @@ function ItemsRail({
             ) : (
               <>
                 <span className="problem-order-icon" aria-hidden="true">{Icon.grip}</span>
-                <span><kbd>Shift</kbd> 범위 · <kbd>{PRIMARY_MODIFIER_LABEL}</kbd> 개별 선택</span>
-                <span aria-hidden="true">·</span>
-                <span>드래그 또는 <kbd>{ALTERNATE_MODIFIER_LABEL}</kbd> + <kbd>↑</kbd><kbd>↓</kbd> 이동</span>
+                <span
+                  className="problem-order-copy"
+                  title={`Shift 범위 선택 · ${PRIMARY_MODIFIER_NAME} 개별 선택 · 드래그 또는 ${ALTERNATE_MODIFIER_NAME}+↑↓ 이동`}
+                >
+                  {PRIMARY_MODIFIER_LABEL}/Shift 선택 <span aria-hidden="true">·</span> 끌어 이동
+                </span>
               </>
             )}
             {reorderBusy && <strong role="status">순서 저장 중…</strong>}
@@ -6413,6 +6415,7 @@ function ItemsRail({
 function BoardStage({
   items, activeId, setActive, boardColor, boardColumns, layoutGapMode, fileName, addSample,
   setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
+  publishPlan, publishPlanBusy,
 }){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
@@ -7206,6 +7209,20 @@ function BoardStage({
                 간격 <strong>{normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : '1.2 맞춤'}</strong>
               </span>
               <span
+                className={`stage-estimate-metric is-edb-plan ${publishPlan?.actual ? 'is-actual' : ''}`}
+                title={publishPlan?.projectedParts?.length
+                  ? publishPlan.projectedParts.map(part => (
+                    `${part.partIndex}부: ${part.problemCount}개 · ${Number(part.estimatedFlowEndPages || 0).toFixed(1)}/50p`
+                  )).join(' / ')
+                  : '최종 이미지 레코드 높이로 EDB 분할 수를 계산합니다'}
+              >
+                EDB <strong>{publishPlanBusy
+                  ? '계산 중'
+                  : publishPlan?.projectedPartCount
+                    ? `${publishPlan.actual ? '실제' : '예상'} ${publishPlan.projectedPartCount}개`
+                    : '예상 —'}</strong>
+              </span>
+              <span
                 className={`stage-estimate-metric ${activeFitsPreview ? 'is-preview-fit' : 'is-scroll-needed'}`}
                 title={activeFitsPreview
                   ? '선택 문항의 위·아래가 현재 미리보기 안에 표시됩니다'
@@ -7615,6 +7632,23 @@ function PublishResultPanel({
           <div className="publish-result-file" title={summary.edbPath || summary.edbFileName}>
             {summary.edbSplit ? `${summary.edbFileName} + ${summary.edbPartCount - 1} parts` : summary.edbFileName}
           </div>
+          {summary.edbParts.length > 0 && (
+            <div className="publish-result-parts" aria-label="EDB 파일별 제작 결과">
+              {summary.edbParts.map(part => (
+                <div
+                  className="publish-result-part"
+                  key={`${part.partIndex}-${part.edbPath || part.edbFileName}`}
+                  title={part.edbPath || part.edbFileName}
+                >
+                  <strong>{part.partIndex}/{summary.edbPartCount}</strong>
+                  <span>{part.edbFileName}</span>
+                  <small>
+                    {part.recordCount || part.placementCount}개 자료 · 실제 사용 {part.flowEndPages.toFixed(1)}/{part.pageCountHint || 50}p
+                  </small>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="publish-result-metrics">
             <span>{summary.recordCountActual || summary.recordCount} records</span>
             {summary.edbSplit && <span>{summary.edbPartCount} EDB files</span>}
@@ -7733,6 +7767,69 @@ function PublishResultPanel({
 }
 
 // ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
+function BoardLayoutControls({
+  boardColumns,
+  setBoardColumns,
+  layoutGapMode,
+  setLayoutGapMode,
+  manualGapCount,
+  resetPlacementGaps,
+}) {
+  return (
+    <section className="board-layout-controls" aria-label="칠판 레이아웃">
+      <div className="panel-section-hd">레이아웃 <span className="line" /></div>
+
+      <div className="row-control">
+        <div className="lbl">한 줄 자료 수<small>실제 EDB 제작은 현재 1열만 검증됨</small></div>
+        <div className="seg-mini">
+          {[1,2,3].map(n => (
+            <button
+              key={n}
+              className={boardColumns===n ? 'on' : ''}
+              type="button"
+              title={n === 1 ? '검증된 1열 배치' : '다열 Export 검증 후 제공할 예정입니다'}
+              disabled={n !== 1}
+              onClick={() => setBoardColumns(n)}
+            >{n}개</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="row-control layout-gap-mode-control">
+        <div className="lbl">문항 사이 여백<small>전체 문항의 다음 시작 위치</small></div>
+        <div className="seg-mini" role="group" aria-label="문항 사이 여백 방식">
+          <button
+            type="button"
+            className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_GRID ? 'on' : ''}
+            onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_GRID)}
+          >1.2 맞춤</button>
+          <button
+            type="button"
+            className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? 'on' : ''}
+            onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
+          >빈틈 없이</button>
+        </div>
+      </div>
+
+      <div className="layout-gap-note" role="note">
+        <strong>경계 공백 방지</strong>
+        <span>각 1.2 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 사용자가 조절한 배율은 유지합니다.</span>
+        <span className="warn">‘빈틈 없이’는 문항이 ClassIn 화면 경계를 걸칠 수 있으니 저장 전에 미리보기를 확인하세요.</span>
+      </div>
+
+      <div className="row-control layout-gap-reset-control">
+        <div className="lbl">개별 여백 삭제<small>{manualGapCount ? `${manualGapCount}곳 적용됨` : '미리보기 상단에서 선택 문항별 적용'}</small></div>
+        <button
+          className="btn compact"
+          type="button"
+          disabled={!manualGapCount}
+          onClick={() => resetPlacementGaps?.()}
+        >전체 해제</button>
+      </div>
+    </section>
+  );
+}
+
 function SidePanel({
   item, items, activeIndex,
   setStep, applyToAll, bulk, setBulk,
@@ -7742,7 +7839,7 @@ function SidePanel({
   accent, setAccent,
   onConfirm,
   userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
-  onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
+  onEnhanceImage, imageEnhanceBusy,
   aiEnabled, onToggleAi, aiToggleBusy,
   inputIntent, setInputIntent,
   onRecognizeSession, canRecognizeSession,
@@ -7759,9 +7856,7 @@ function SidePanel({
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [compareX, setCompareX] = useState(50);
   const [keyDraft, setKeyDraft] = useState('');
-  const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [showOpenAiKey, setShowOpenAiKey] = useState(false);
   const [updatePinDraft, setUpdatePinDraft] = useState('');
   const [showUpdatePin, setShowUpdatePin] = useState(false);
   const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);
@@ -8140,7 +8235,7 @@ function SidePanel({
           className={tab==='board' ? 'on' : ''}
           onClick={() => setTab('board')}
           title="설정"
-          data-tooltip="레이아웃, 색상, AI 인식 설정"
+          data-tooltip="칠판 동작, 색상, AI 인식 설정"
           role="tab"
           aria-selected={tab === 'board'}
         >
@@ -8162,6 +8257,16 @@ function SidePanel({
       {tab === 'item' && (
         <>
           <div className="tab-body">
+            {view === 'board' && (
+              <BoardLayoutControls
+                boardColumns={boardColumns}
+                setBoardColumns={setBoardColumns}
+                layoutGapMode={layoutGapMode}
+                setLayoutGapMode={setLayoutGapMode}
+                manualGapCount={manualGapCount}
+                resetPlacementGaps={resetPlacementGaps}
+              />
+            )}
             {item ? (
               <>
                 <div className="item-meta">
@@ -8683,55 +8788,7 @@ function SidePanel({
       {tab === 'board' && (
         <>
           <div className="tab-body">
-            <div className="panel-section-hd">레이아웃 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">한 줄 자료 수<small>실제 EDB 제작은 현재 1열만 검증됨</small></div>
-              <div className="seg-mini">
-                {[1,2,3].map(n => (
-                  <button
-                    key={n}
-                    className={boardColumns===n ? 'on' : ''}
-                    type="button"
-                    title={n === 1 ? '검증된 1열 배치' : '다열 Export 검증 후 제공할 예정입니다'}
-                    disabled={n !== 1}
-                    onClick={() => setBoardColumns(n)}
-                  >{n}개</button>
-                ))}
-              </div>
-            </div>
-
-            <div className="row-control layout-gap-mode-control">
-              <div className="lbl">문항 사이 여백<small>전체 문항의 다음 시작 위치</small></div>
-              <div className="seg-mini" role="group" aria-label="문항 사이 여백 방식">
-                <button
-                  type="button"
-                  className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_GRID ? 'on' : ''}
-                  onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_GRID)}
-                >1.2 맞춤</button>
-                <button
-                  type="button"
-                  className={normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? 'on' : ''}
-                  onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
-                >빈틈 없이</button>
-              </div>
-            </div>
-
-            <div className="layout-gap-note" role="note">
-              <strong>경계 공백 방지</strong>
-              <span>각 1.2 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 사용자가 조절한 배율은 유지합니다.</span>
-              <span className="warn">‘빈틈 없이’는 문항이 ClassIn 화면 경계를 걸칠 수 있으니 저장 전에 미리보기를 확인하세요.</span>
-            </div>
-
-            <div className="row-control layout-gap-reset-control">
-              <div className="lbl">개별 여백 삭제<small>{manualGapCount ? `${manualGapCount}곳 적용됨` : '미리보기 상단에서 선택 문항별 적용'}</small></div>
-              <button
-                className="btn compact"
-                type="button"
-                disabled={!manualGapCount}
-                onClick={() => resetPlacementGaps?.()}
-              >전체 해제</button>
-            </div>
+            <div className="panel-section-hd">칠판 동작 <span className="line" /></div>
 
             <div className="row-control">
               <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
@@ -8947,56 +9004,6 @@ function SidePanel({
                 style={{flex: 1, justifyContent: 'center'}}
                 onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
                 disabled={!userSettings?.hasStoredGeminiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>OpenAI API 키 <span className="line" /></div>
-
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
-                  </span>
-                  {userSettings?.hasOpenAiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.openAiApiKeyPreview}
-                    </span>
-                  )}
-                </span>
-                <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
-              </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showOpenAiKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
-                value={openAiKeyDraft}
-                onChange={e => setOpenAiKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowOpenAiKey(s => !s)} title={showOpenAiKey ? '숨기기' : '보기'}>
-                {showOpenAiKey ? '숨' : '보기'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
-                disabled={!openAiKeyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
-                disabled={!userSettings?.hasStoredOpenAiApiKey}
               >
                 저장된 키 삭제
               </button>
@@ -9422,6 +9429,33 @@ function OperationRecoveryBanner({
   canExport,
 }){
   const error = recovery?.error || null;
+  const localServerUnavailable = error?.code === 'local_server_unavailable';
+  const [serverConnectionState, setServerConnectionState] = useState(
+    localServerUnavailable ? 'checking' : 'idle'
+  );
+  const [serverCheckBusy, setServerCheckBusy] = useState(false);
+
+  useEffect(() => {
+    if (!localServerUnavailable) {
+      setServerConnectionState('idle');
+      return undefined;
+    }
+    let cancelled = false;
+    let pollTimer = null;
+    const poll = async () => {
+      const connected = await probeLocalServerHealth(1400);
+      if (cancelled) return;
+      setServerConnectionState(connected ? 'online' : 'offline');
+      if (!connected) pollTimer = window.setTimeout(poll, 3500);
+    };
+    setServerConnectionState('checking');
+    void poll();
+    return () => {
+      cancelled = true;
+      if (pollTimer) window.clearTimeout(pollTimer);
+    };
+  }, [localServerUnavailable]);
+
   if (!error) return null;
   const summary = operationRecoverySummary(error);
   const kind = recovery?.kind || 'publish';
@@ -9433,6 +9467,12 @@ function OperationRecoveryBanner({
   const latestSessionIsEmpty = hasConflict && !recovery.conflict.latestSession;
   const conflictNeedsResolution = hasConflict && !isReset;
   const retryDisallowed = error.retryable === false && !hasConflict;
+  const serverConnected = localServerUnavailable && serverConnectionState === 'online';
+  const serverChecking = localServerUnavailable
+    && (serverConnectionState === 'checking' || serverCheckBusy);
+  const displayedSummary = serverConnected
+    ? '로컬 앱 서버와 다시 연결됐습니다. 원본 파일과 대기열은 그대로 유지됩니다.'
+    : summary;
   const anyBusy = retryBusy || restoreBusy || exportBusy || resetBusy || downloadBusy;
   const recoverySteps = Array.isArray(error.recoverySteps)
     ? error.recoverySteps
@@ -9440,7 +9480,9 @@ function OperationRecoveryBanner({
       .filter((step, index, steps) => step && steps.indexOf(step) === index && step !== summary)
       .slice(0, 3)
     : [];
-  const title = isDownload
+  const title = localServerUnavailable
+    ? (serverConnected ? 'ClassIn EDB 연결이 복구되었습니다' : 'ClassIn EDB 앱을 다시 실행해 주세요')
+    : isDownload
     ? 'EDB 제작은 완료됐습니다'
     : isQueue
       ? '원본 파일과 대기열은 그대로 있습니다'
@@ -9463,6 +9505,10 @@ function OperationRecoveryBanner({
         ? (canExport
           ? '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도하거나 PNG로 먼저 저장할 수 있습니다.'
           : '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도해 주세요.')
+        : localServerUnavailable
+          ? (serverConnected
+            ? '연결이 돌아왔습니다. 이 화면을 새로고침하지 말고 아래 버튼으로 중단된 작업을 다시 시작하세요.'
+            : 'Finder 또는 다운로드한 폴더에서 ClassIn EDB 앱을 다시 실행하세요. 이 화면은 닫지 않아도 되며, 연결이 돌아오면 자동으로 알려드립니다.')
         : isQueue
           ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 쪼개기를 이용할 수 있습니다.'
           : isReset
@@ -9485,57 +9531,97 @@ function OperationRecoveryBanner({
         : isRestore
           ? (restoreBusy ? '여는 중…' : recovery?.retryLabel || '최근 작업 다시 열기')
           : (retryBusy ? '제작 중…' : 'EDB 다시 제작');
+  const checkServerNow = async () => {
+    if (!localServerUnavailable || serverCheckBusy) return;
+    setServerCheckBusy(true);
+    setServerConnectionState('checking');
+    const connected = await probeLocalServerHealth(1800);
+    setServerConnectionState(connected ? 'online' : 'offline');
+    setServerCheckBusy(false);
+  };
   return (
     <section className="operation-recovery-banner" role="region" aria-labelledby="operation-recovery-title" aria-describedby="operation-recovery-summary">
       <div className="operation-recovery-copy" role="alert" aria-live="assertive" aria-atomic="true">
         <strong id="operation-recovery-title">{title}</strong>
-        <span id="operation-recovery-summary">{summary}</span>
-        <small>{guidance} 해결되지 않으면 <b>설정 → 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</small>
-        {recoverySteps.length > 0 && (
+        <span id="operation-recovery-summary">{displayedSummary}</span>
+        <small>
+          {guidance}
+          {!localServerUnavailable && <> 해결되지 않으면 <b>설정 → 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</>}
+        </small>
+        {localServerUnavailable && (
+          <div className={`operation-recovery-server-status ${serverConnectionState}`} role="status" aria-live="polite" aria-atomic="true">
+            <span className="operation-recovery-server-dot" aria-hidden="true" />
+            <div>
+              <strong>
+                {serverConnected
+                  ? '앱 연결됨 · 작업을 다시 시작할 수 있습니다'
+                  : serverChecking
+                    ? '앱 연결을 확인하고 있습니다'
+                    : '앱이 꺼져 있거나 아직 시작되지 않았습니다'}
+              </strong>
+              <small>
+                {serverConnected
+                  ? `아래 ‘${retryLabel}’ 버튼을 눌러 중단된 지점부터 계속하세요.`
+                  : 'ClassIn EDB 앱을 다시 실행한 뒤 잠시 기다리세요. 원본과 대기열은 현재 화면에 그대로 있습니다.'}
+              </small>
+            </div>
+          </div>
+        )}
+        {recoverySteps.length > 0 && !serverConnected && (
           <ol className="operation-recovery-steps" aria-label="권장 해결 순서">
             {recoverySteps.map(step => <li key={step}>{step}</li>)}
           </ol>
         )}
         {error.code && <code>오류 코드 · {error.code}</code>}
       </div>
-      <div className="operation-recovery-actions" role="group" aria-label="오류 복구 작업">
-        <button className="btn primary" type="button" onClick={onRetry} disabled={anyBusy || retryDisallowed || conflictNeedsResolution || (isReset && resetBlocked)}>
-          {isDownload ? Icon.download : Icon.refresh} {retryLabel}
-        </button>
-        {recovery?.conflict && (
-          <>
-            <button className="btn" type="button" onClick={onLoadLatest} disabled={anyBusy}>{Icon.refresh} {latestSessionIsEmpty ? '빈 최신 상태 불러오기' : '최신 상태 불러오기'}</button>
-            {!latestSessionIsEmpty && !isReset && !isRestore && <button className="btn" type="button" onClick={onRebase} disabled={anyBusy}>{Icon.undo} 내 배치 안전하게 합치기</button>}
-          </>
-        )}
-        {!isQueue && !isReset && !isDownload && !isRestore && <button className="btn" type="button" onClick={onRestore} disabled={!canRestore || anyBusy || conflictNeedsResolution}>
-          {Icon.folder} {restoreBusy ? '여는 중…' : '최근 저장본 열기'}
-        </button>}
-        {isQueue && recovery?.alternativeLabel && (
-          <button className="btn" type="button" onClick={onExport} disabled={anyBusy || conflictNeedsResolution}>{Icon.pagePng} {recovery.alternativeLabel}</button>
-        )}
-        {!isReset && !isQueue && !isRestore && (!isDownload || canExport) && <button className="btn" type="button" onClick={onExport} disabled={!canExport || anyBusy || conflictNeedsResolution}>
-          {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
-        </button>}
-        {!isDownload && !isReset && <button
-          className="btn"
-          type="button"
-          onClick={onReset}
-          disabled={anyBusy || resetBlocked}
-          title={resetBlocked
-            ? '진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다'
-            : hasConflict
-              ? '서버의 최신 버전을 기준으로 현재 작업을 초기화합니다'
-              : '확인 후 현재 작업을 비우고 원본 PDF부터 다시 시작합니다'}
-        >
-          {Icon.reset} 초기화 후 다시 시작
-        </button>}
-        <button className="btn" type="button" onClick={onReport} disabled={anyBusy}>
-          {Icon.bug} 버그 리포트 열기
-        </button>
-        <button className="btn" type="button" onClick={onCopy} disabled={anyBusy}>
-          {Icon.copy} 오류 내용 복사
-        </button>
+      <div className="operation-recovery-actionbar">
+        <div className="operation-recovery-actions operation-recovery-actions-main" role="group" aria-label="오류 복구 작업">
+          {localServerUnavailable && !serverConnected ? (
+            <button className="btn primary" type="button" onClick={() => void checkServerNow()} disabled={anyBusy || serverCheckBusy}>
+              {Icon.refresh} {serverChecking ? '연결 확인 중…' : '앱 재실행 후 연결 확인'}
+            </button>
+          ) : (
+            <button className="btn primary" type="button" onClick={onRetry} disabled={anyBusy || retryDisallowed || conflictNeedsResolution || (isReset && resetBlocked)}>
+              {isDownload ? Icon.download : serverConnected ? Icon.check : Icon.refresh} {serverConnected ? `연결됨 · ${retryLabel}` : retryLabel}
+            </button>
+          )}
+          {recovery?.conflict && (
+            <>
+              <button className="btn" type="button" onClick={onLoadLatest} disabled={anyBusy}>{Icon.refresh} {latestSessionIsEmpty ? '빈 최신 상태 불러오기' : '최신 상태 불러오기'}</button>
+              {!latestSessionIsEmpty && !isReset && !isRestore && <button className="btn" type="button" onClick={onRebase} disabled={anyBusy}>{Icon.undo} 내 배치 안전하게 합치기</button>}
+            </>
+          )}
+          {!localServerUnavailable && !isQueue && !isReset && !isDownload && !isRestore && <button className="btn" type="button" onClick={onRestore} disabled={!canRestore || anyBusy || conflictNeedsResolution}>
+            {Icon.folder} {restoreBusy ? '여는 중…' : '최근 저장본 열기'}
+          </button>}
+          {(!localServerUnavailable || serverConnected) && isQueue && recovery?.alternativeLabel && (
+            <button className="btn" type="button" onClick={onExport} disabled={anyBusy || conflictNeedsResolution}>{Icon.pagePng} {recovery.alternativeLabel}</button>
+          )}
+          {!localServerUnavailable && !isReset && !isQueue && !isRestore && (!isDownload || canExport) && <button className="btn" type="button" onClick={onExport} disabled={!canExport || anyBusy || conflictNeedsResolution}>
+            {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
+          </button>}
+          {!localServerUnavailable && !isDownload && !isReset && <button
+            className="btn"
+            type="button"
+            onClick={onReset}
+            disabled={anyBusy || resetBlocked}
+            title={resetBlocked
+              ? '진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다'
+              : hasConflict
+                ? '서버의 최신 버전을 기준으로 현재 작업을 초기화합니다'
+                : '확인 후 현재 작업을 비우고 원본 PDF부터 다시 시작합니다'}
+          >
+            {Icon.reset} 초기화 후 다시 시작
+          </button>}
+        </div>
+        <div className="operation-recovery-actions operation-recovery-actions-support" role="group" aria-label="오류 지원 작업">
+          <button className="btn" type="button" onClick={onReport} disabled={anyBusy} title={localServerUnavailable ? '연결 복구 후 리포트를 전송할 수 있습니다' : undefined}>
+            {Icon.bug} 버그 리포트 열기
+          </button>
+          <button className="btn" type="button" onClick={onCopy} disabled={anyBusy}>
+            {Icon.copy} 오류 내용 복사
+          </button>
+        </div>
       </div>
       <button
         className="operation-recovery-dismiss"
@@ -10424,6 +10510,73 @@ function materializeSessionForItems(
     }));
   }
   return snapshot;
+}
+
+function prepareSessionPublishRequest(
+  session,
+  items,
+  fileName,
+  boardColumns,
+  layoutGapMode
+){
+  if (!session || !Array.isArray(session.problems)) return null;
+  const sessionIds = new Set(session.problems.map(problem => problem.id));
+  const currentIds = items.map(item => item.id);
+  const order = currentIds.filter(id => sessionIds.has(id));
+  const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
+  const itemsForPublish = reflowItemsForBoardOrder(
+    items,
+    DEFAULT_SLOT_HEIGHT_PAGES,
+    boardColumns,
+    layoutGapMode
+  );
+  const sessionForPublish = materializeSessionForItems(
+    session,
+    itemsForPublish,
+    fileName,
+    boardColumns,
+    layoutGapMode
+  ) || session;
+  const placements = Object.fromEntries(
+    itemsForPublish
+      .filter(item => sessionIds.has(item.id))
+      .map(item => [item.id, {
+        xRatio: normalizePlacementXRatio(item.placementXRatio),
+        yRatio: verticalPlacementRoomPages(item) > 0.001
+          ? normalizePlacementYRatio(item.placementYRatio)
+          : DEFAULT_PLACEMENT_Y_RATIO,
+        scaleRatio: normalizePlacementScaleRatio(
+          item.placementScaleRatio,
+          maxPlacementScaleRatio(item)
+        ),
+      }])
+  );
+  return {
+    sessionIds,
+    currentIds,
+    order,
+    excluded,
+    itemsForPublish,
+    sessionForPublish,
+    placements,
+  };
+}
+
+function publishPlanRequestSignature(publishRequest){
+  if (!publishRequest) return '';
+  const sessionForPublish = publishRequest.sessionForPublish;
+  return JSON.stringify({
+    order: publishRequest.order,
+    excluded: publishRequest.excluded,
+    placement: placementPersistenceSignature(sessionForPublish),
+    problems: (sessionForPublish?.problems || []).map(problem => [
+      String(problem.id || ''),
+      problem.imagePath || problem.image_path || '',
+      problem.boardRenderPath || problem.board_render_path || '',
+      problem.processingStep || problem.processing_step || problem.step || '',
+      problem.bbox || null,
+    ]),
+  });
 }
 
 function rebaseSessionBoardLayout(
@@ -12485,6 +12638,10 @@ function normalizeEdbParts(raw, fallback = {}){
         edb_file_exists: exists === undefined ? true : exists !== false,
         recordCount: Math.max(0, Number(part.recordCount ?? part.record_count ?? 0) || 0),
         record_count: Math.max(0, Number(part.recordCount ?? part.record_count ?? 0) || 0),
+        placementCount: Math.max(0, Number(part.placementCount ?? part.placement_count ?? 0) || 0),
+        placement_count: Math.max(0, Number(part.placementCount ?? part.placement_count ?? 0) || 0),
+        flowEndPages: Math.max(0, Number(part.flowEndPages ?? part.flow_end_pages ?? 0) || 0),
+        flow_end_pages: Math.max(0, Number(part.flowEndPages ?? part.flow_end_pages ?? 0) || 0),
         pageCountHint: Math.max(0, Number(part.pageCountHint ?? part.page_count_hint ?? 0) || 0),
         page_count_hint: Math.max(0, Number(part.pageCountHint ?? part.page_count_hint ?? 0) || 0),
       };
@@ -12507,6 +12664,10 @@ function normalizeEdbParts(raw, fallback = {}){
       edb_file_exists: fallbackExists === undefined ? true : fallbackExists !== false,
       recordCount: Math.max(0, Number(fallback.recordCount || 0) || 0),
       record_count: Math.max(0, Number(fallback.recordCount || 0) || 0),
+      placementCount: Math.max(0, Number(fallback.placementCount || 0) || 0),
+      placement_count: Math.max(0, Number(fallback.placementCount || 0) || 0),
+      flowEndPages: Math.max(0, Number(fallback.flowEndPages || 0) || 0),
+      flow_end_pages: Math.max(0, Number(fallback.flowEndPages || 0) || 0),
       pageCountHint: Math.max(0, Number(fallback.pageCountHint || 0) || 0),
       page_count_hint: Math.max(0, Number(fallback.pageCountHint || 0) || 0),
     });
@@ -13332,6 +13493,52 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
   return json.session;
 }
 
+async function postPublishPlan(publishRequest, options = {}){
+  const resp = await fetch('/api/session/publish-plan', {
+    method: 'POST',
+    signal: options.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(withExpectedSessionRevision({
+      order: publishRequest.order,
+      excluded: publishRequest.excluded,
+      placements: publishRequest.placements,
+      session: publishRequest.sessionForPublish,
+    })),
+  });
+  const json = await readJsonResponse(resp, 'EDB 분할 계산 실패');
+  if (!resp.ok || !json.ok) {
+    throw operationErrorFromResponse(
+      json,
+      resp,
+      'session_publish_plan',
+      `EDB 분할 계산 실패 (${resp.status})`
+    );
+  }
+  captureSessionRevision(json);
+  const rawParts = Array.isArray(json.projectedParts)
+    ? json.projectedParts
+    : Array.isArray(json.projected_parts)
+      ? json.projected_parts
+      : [];
+  const parts = rawParts.map((part, index) => ({
+    ...part,
+    partIndex: Math.max(1, Number(part.partIndex ?? part.part_index ?? index + 1) || index + 1),
+    problemCount: Math.max(0, Number(part.problemCount ?? part.problem_count ?? 0) || 0),
+    estimatedFlowEndPages: Math.max(
+      0,
+      Number(part.estimatedFlowEndPages ?? part.estimated_flow_end_pages ?? 0) || 0
+    ),
+  }));
+  return {
+    ...json,
+    projectedPartCount: Math.max(
+      parts.length,
+      Number(json.projectedPartCount ?? json.projected_part_count ?? 0) || 0
+    ),
+    projectedParts: parts,
+  };
+}
+
 async function postReextractSharedPassages(options = {}){
   const sourcePaths = sessionReusableSourcePaths(options.session);
   if (!sourcePaths.length) {
@@ -13431,6 +13638,7 @@ const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
   artifact_cleanup_busy: '다른 작업이 제작 파일을 사용 중이라 초기화를 마치지 못했습니다.',
   recognition_failed: 'PDF 또는 이미지에서 문제를 인식하는 중 문제가 발생했습니다.',
   recognition_connection_failed: '인식 중 앱과의 연결이 끊겼습니다.',
+  local_server_unavailable: '로컬 앱 서버가 종료되어 요청을 처리할 수 없습니다.',
   registration_failed: 'PDF 또는 이미지 페이지를 등록하는 중 문제가 발생했습니다.',
   registration_connection_failed: '자료 등록 중 앱과의 연결이 끊겼습니다.',
   reset_failed: '작업 목록과 최근 저장 상태를 초기화하는 중 문제가 발생했습니다.',
@@ -13475,6 +13683,46 @@ function isNetworkRequestError(error){
   return /failed to fetch|networkerror|load failed|network/i.test(raw);
 }
 
+async function probeLocalServerHealth(timeoutMs = 1200){
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch('/api/health', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    return Boolean(response.ok && payload?.ok);
+  } catch (_healthError) {
+    return false;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function classifyNetworkRequestError(error, fallbackCode){
+  if (!isNetworkRequestError(error)) return error;
+  const serverAvailable = await probeLocalServerHealth(1200);
+  const classified = new Error(serverAvailable
+    ? '로컬 앱 서버 연결은 복구됐지만 요청이 중간에 끊겼습니다.'
+    : '로컬 앱 서버가 종료되었거나 응답하지 않습니다. ClassIn EDB 실행 파일을 다시 열어 주세요.');
+  classified.code = serverAvailable ? fallbackCode : 'local_server_unavailable';
+  classified.retryable = true;
+  classified.recoverySteps = serverAvailable
+    ? [
+      '잠시 기다린 뒤 같은 파일로 다시 시도해 주세요.',
+      '반복되면 버그 리포트에 오류 시각을 함께 보내 주세요.',
+    ]
+    : [
+      'ClassIn EDB 실행 파일을 다시 열어 로컬 서버를 시작해 주세요.',
+      '이 화면으로 돌아와 대기열을 유지한 채 다시 시도해 주세요.',
+      '반복되면 진단 정보 포함을 켠 채 버그 리포트를 보내 주세요.',
+    ];
+  classified.originalError = String(error?.message || error || '').trim();
+  return classified;
+}
+
 function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   const raw = String(error?.message || error || '').trim();
   if (isNetworkRequestError(error)) {
@@ -13486,7 +13734,7 @@ function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   if (/413|too large|payload|용량|크기/i.test(raw)) {
     return `${fallbackMessage} · 파일이 너무 큽니다`;
   }
-  if (/api key|apikey|gemini|openai|unauthorized|인증|키/i.test(raw)) {
+  if (/api key|apikey|gemini|unauthorized|인증|키/i.test(raw)) {
     return `${fallbackMessage} · API 키 확인 필요`;
   }
   if (/hwp|hwpx|한글|libreoffice|rhwp|pdf 변환|converter/i.test(raw)) {
@@ -13841,6 +14089,8 @@ function App(){
   const [bugReportDraft, setBugReportDraft] = useState('');
   const [resetBusy, setResetBusy] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
+  const [publishPlan, setPublishPlan] = useState(null);
+  const [publishPlanBusy, setPublishPlanBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
@@ -13856,6 +14106,7 @@ function App(){
   const resetInFlightRef = useRef(false);
   const restoreInFlightRef = useRef(false);
   const publishInFlightRef = useRef(false);
+  const publishPlanRequestRef = useRef(0);
   const downloadInFlightRef = useRef(false);
   const bugReportSequenceRef = useRef(0);
   // Undo history: each entry is a prior session snapshot. Pushed before
@@ -13922,6 +14173,20 @@ function App(){
     () => sessionReusableSourcePaths(session),
     [session]
   );
+  const publishRequestDraft = useMemo(
+    () => prepareSessionPublishRequest(
+      session,
+      items,
+      fileName,
+      boardColumns,
+      layoutGapMode
+    ),
+    [session, items, fileName, boardColumns, layoutGapMode]
+  );
+  const publishPlanSignature = useMemo(
+    () => publishPlanRequestSignature(publishRequestDraft),
+    [publishRequestDraft]
+  );
   const processed = items.filter(i => i.step !== 'raw').length;
   const progress = items.length ? processed / items.length : 0;
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
@@ -13935,6 +14200,64 @@ function App(){
   const operationRecoveryDismissed = operationRecoveryState.dismissed;
   const lastOperationError = operationRecovery?.error || null;
   const hasPendingSessionConflict = Boolean(operationRecovery?.conflict);
+
+  useEffect(() => {
+    const actualSummary = published ? sessionPublishSummary(session) : null;
+    if (actualSummary?.edbParts?.length) {
+      setPublishPlan({
+        projectedPartCount: actualSummary.edbPartCount,
+        projectedParts: actualSummary.edbParts.map(part => ({
+          partIndex: part.partIndex,
+          problemCount: part.recordCount,
+          estimatedFlowEndPages: part.flowEndPages,
+        })),
+        actual: true,
+      });
+      setPublishPlanBusy(false);
+      return undefined;
+    }
+    if (
+      !initialSessionLoaded
+      || usingMock
+      || !publishRequestDraft
+      || !publishRequestDraft.order.length
+      || normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN
+    ) {
+      publishPlanRequestRef.current += 1;
+      setPublishPlan(null);
+      setPublishPlanBusy(false);
+      return undefined;
+    }
+
+    const requestId = ++publishPlanRequestRef.current;
+    const controller = new AbortController();
+    setPublishPlanBusy(true);
+    const timer = window.setTimeout(() => {
+      void postPublishPlan(publishRequestDraft, { signal: controller.signal })
+        .then(plan => {
+          if (requestId !== publishPlanRequestRef.current) return;
+          setPublishPlan(plan);
+        })
+        .catch(error => {
+          if (controller.signal.aborted || requestId !== publishPlanRequestRef.current) return;
+          setPublishPlan(null);
+          console.info('[board] EDB split preview unavailable:', error.message);
+        })
+        .finally(() => {
+          if (requestId === publishPlanRequestRef.current) setPublishPlanBusy(false);
+        });
+    }, 650);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    publishPlanSignature,
+    published,
+    initialSessionLoaded,
+    usingMock,
+    boardColumns,
+  ]);
 
   const showToast = useCallback((msg) => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
@@ -13969,16 +14292,37 @@ function App(){
   }, []);
 
   const activateOperationRecovery = useCallback((error, fallbackMessage, detail = {}, recovery = {}) => {
-    const diagnostic = showSimpleErrorToast(error, fallbackMessage, detail);
+    const networkUnavailable = isNetworkRequestError(error)
+      && Number(detail.status ?? error?.status ?? 0) === 0
+      && String(detail.code || error?.code || '') !== 'local_server_unavailable';
+    const recoveryError = networkUnavailable
+      ? Object.assign(new Error('로컬 앱 서버가 종료되었거나 응답하지 않습니다. ClassIn EDB 앱을 다시 실행해 주세요.'), {
+          ...error,
+          code: 'local_server_unavailable',
+          operation: detail.operation || error?.operation || 'ui_action',
+          status: 0,
+          retryable: true,
+          recoverySteps: [
+            'ClassIn EDB 앱을 다시 실행해 로컬 서버를 시작해 주세요.',
+            '이 화면을 닫지 말고 연결 복구 안내를 기다려 주세요.',
+            '연결됨 표시가 나오면 중단된 작업을 다시 시도해 주세요.',
+          ],
+          originalError: String(error?.message || error || '').trim(),
+        })
+      : error;
+    const recoveryDetail = networkUnavailable
+      ? { ...detail, code: 'local_server_unavailable', status: 0, retryable: true }
+      : detail;
+    const diagnostic = showSimpleErrorToast(recoveryError, fallbackMessage, recoveryDetail);
     const isSessionStateConflict = (
-      error?.code === 'session_conflict' || error?.code === 'session_missing'
-    ) && error?.hasLatestSessionState;
+      recoveryError?.code === 'session_conflict' || recoveryError?.code === 'session_missing'
+    ) && recoveryError?.hasLatestSessionState;
     const conflict = isSessionStateConflict
       ? {
-          latestSession: error.latestSession,
+          latestSession: recoveryError.latestSession,
           hasLatestSessionState: true,
-          sessionRevision: error.sessionRevision,
-          sessionEpoch: error.sessionEpoch,
+          sessionRevision: recoveryError.sessionRevision,
+          sessionEpoch: recoveryError.sessionEpoch,
           localDraft: recovery.localDraft || null,
         }
       : recovery.conflict || null;
@@ -14830,15 +15174,6 @@ function App(){
     }
   }, [showSimpleErrorToast, showToast]);
 
-  const onSaveOpenAiKey = useCallback(async (key) => {
-    try {
-      const s = await saveUserSettings({ openAiApiKey: key || '' });
-      setUserSettings(s);
-      showToast(key ? 'OpenAI 키 저장됨' : 'OpenAI 키 삭제됨');
-    } catch (e) {
-      showSimpleErrorToast(e, '저장 실패');
-    }
-  }, [showSimpleErrorToast, showToast]);
 
   const onToggleAi = useCallback(async (enabled) => {
     setAiToggleBusy(true);
@@ -15226,14 +15561,15 @@ function App(){
           });
           return;
         }
+        const failure = await classifyNetworkRequestError(e, 'recognition_connection_failed');
         settleBackgroundJob(job.id, {
           status: 'failed',
           label: isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패',
-          hint: e.message,
+          hint: failure.message,
         }, 5000);
-        activateOperationRecovery(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패', {
+        activateOperationRecovery(failure, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패', {
           operation: isPassageOnly ? 'queue_passage_recognition' : 'queue_recognition',
-          code: e?.code || (isNetworkRequestError(e) ? 'recognition_connection_failed' : 'recognition_failed'),
+          code: failure?.code || 'recognition_failed',
         }, {
           kind: 'recognition',
           retryMode: mode,
@@ -15318,9 +15654,10 @@ function App(){
       const intentLabel = isPassageOnly ? '공통 지문 추출' : isRecognition ? '문항 AI 인식' : isManualSplit ? '수동 쪼개기 준비' : '페이지 PNG 등록';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
     } catch (e) {
-      activateOperationRecovery(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패', {
+      const failure = await classifyNetworkRequestError(e, 'registration_connection_failed');
+      activateOperationRecovery(failure, isManualSplit ? '수동 쪼개기 실패' : '등록 실패', {
         operation: isManualSplit ? 'queue_manual_split' : 'queue_registration',
-        code: e?.code || (isNetworkRequestError(e) ? 'registration_connection_failed' : 'registration_failed'),
+        code: failure?.code || 'registration_failed',
       }, {
         kind: 'registration',
         retryMode: mode,
@@ -15951,12 +16288,25 @@ function App(){
       return;
     }
     clearOperationRecovery();
-    const sessionIds = new Set(session.problems.map(p => p.id));
-    const currentIds = items.map(i => i.id);
-    const order = currentIds.filter(id => sessionIds.has(id));
-    const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
-    const itemsForPublish = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
-    const sessionForPublish = materializeSessionForItems(session, itemsForPublish, fileName, boardColumns, layoutGapMode) || session;
+    const publishRequest = publishRequestDraft || prepareSessionPublishRequest(
+      session,
+      items,
+      fileName,
+      boardColumns,
+      layoutGapMode
+    );
+    if (!publishRequest) {
+      showToast('현재 배치로 제작 요청을 준비하지 못했습니다.');
+      return;
+    }
+    const {
+      sessionIds,
+      order,
+      excluded,
+      itemsForPublish,
+      sessionForPublish,
+      placements,
+    } = publishRequest;
     const publishReviewSummary = sessionReviewSummary(sessionForPublish);
     const passageSourceReuseIssues = findPassageGroupSourceReuse(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'passage_group_source_reuse');
@@ -16018,17 +16368,6 @@ function App(){
         return;
       }
     }
-    const placements = Object.fromEntries(
-      itemsForPublish
-        .filter(item => sessionIds.has(item.id))
-        .map(item => [item.id, {
-          xRatio: normalizePlacementXRatio(item.placementXRatio),
-          yRatio: verticalPlacementRoomPages(item) > 0.001
-            ? normalizePlacementYRatio(item.placementYRatio)
-            : DEFAULT_PLACEMENT_Y_RATIO,
-          scaleRatio: normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item)),
-        }])
-    );
     publishInFlightRef.current = true;
     setPublishBusy(true);
     setLoading({
@@ -16594,6 +16933,8 @@ function App(){
             setSelectedIds={setSelectedProblemIds}
             savedScrollTop={boardScrollTop}
             onSaveScrollTop={setBoardScrollTop}
+            publishPlan={publishPlan}
+            publishPlanBusy={publishPlanBusy}
           />
         )}
             <SidePanel
@@ -16623,7 +16964,6 @@ function App(){
           runtimeDiagnostics={runtimeDiagnostics}
           lastOperationError={lastOperationError}
           onSaveGeminiKey={onSaveGeminiKey}
-          onSaveOpenAiKey={onSaveOpenAiKey}
           onEnhanceImage={enhanceImageSession}
           imageEnhanceBusy={hasRunningImageEnhance}
           aiEnabled={aiEnabled}

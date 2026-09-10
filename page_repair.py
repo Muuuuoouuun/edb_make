@@ -38,7 +38,7 @@ _PROBLEM_UNIT_TRIGGER_REASONS = {
     "problem_per_block",
 }
 
-_SUPPORTED_PROVIDER_ALIASES = {"gemini", "google", "claude", "anthropic", "openai"}
+_SUPPORTED_PROVIDER_ALIASES = {"gemini", "google"}
 
 
 @dataclass(slots=True)

@@ -8,6 +8,21 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+def board_document() -> str:
+    """board.html plus the stylesheet it links.
+
+    The editor theme used to be an inline <style> block; it now lives in
+    ui_prototype/board.css. These assertions cover both halves of the document.
+    """
+
+    ui_root = PROJECT_ROOT / "ui_prototype"
+    return (
+        (ui_root / "board.html").read_text(encoding="utf-8")
+        + "\n"
+        + (ui_root / "board.css").read_text(encoding="utf-8")
+    )
+
+
 
 def run_node(script: str) -> None:
     subprocess.run(["node", "-e", script], cwd=PROJECT_ROOT, check=True)
@@ -96,8 +111,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             """.replace("process.env.PLATFORM_BLOCK", repr(platform_block))
         )
 
-        self.assertIn("<kbd>{PRIMARY_MODIFIER_LABEL}</kbd> 개별 선택", source)
-        self.assertIn("<kbd>{ALTERNATE_MODIFIER_LABEL}</kbd> +", source)
+        self.assertIn('className="problem-order-copy"', source)
+        self.assertIn("{PRIMARY_MODIFIER_LABEL}/Shift 선택", source)
+        self.assertIn("${ALTERNATE_MODIFIER_NAME}+↑↓ 이동", source)
         self.assertNotIn("<kbd>Ctrl/Cmd</kbd>", source)
 
     def test_session_revision_never_regresses_from_late_preview_response(self) -> None:
@@ -185,7 +201,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_side_panel_image_preview_is_collapsed_by_default_and_accessible(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
@@ -201,7 +217,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_side_panel_exposes_three_tabs_and_group_placement_rules(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
@@ -209,7 +225,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertEqual(side_panel.count('role="tab"'), 3)
         self.assertIn("자료 <span", side_panel)
         self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
-        self.assertIn("레이아웃, 색상, AI 인식 설정", side_panel)
+        self.assertIn("칠판 동작, 색상, AI 인식 설정", side_panel)
         self.assertIn("지문 한 번만 배치", side_panel)
         self.assertIn("문항 함께 이동", side_panel)
         self.assertIn("공간 부족 시 다음 칠판", side_panel)
@@ -217,13 +233,15 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_main_controls_are_compact_by_default(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         topbar = source.split("function TopBar", 1)[1]
         topbar = topbar.split("function ReviewStage", 1)[0]
         rail = source.split("function ItemsRail", 1)[1]
         rail = rail.split("function BoardStage", 1)[0]
         board_stage = source.split("function BoardStage", 1)[1]
         board_stage = board_stage.split("function downloadPublishSummary", 1)[0]
+        layout_controls = source.split("function BoardLayoutControls", 1)[1]
+        layout_controls = layout_controls.split("function SidePanel", 1)[0]
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function BugReportDialog", 1)[0]
 
@@ -246,9 +264,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("한 줄 ${columnCount}개", board_stage)
         self.assertIn("연속 이어붙임", board_stage)
         self.assertIn("칸 {p.columnIndex + 1}", board_stage)
-        self.assertIn("한 줄 자료 수", side_panel)
-        self.assertIn("실제 EDB 제작은 현재 1열만 검증됨", side_panel)
-        self.assertIn("disabled={n !== 1}", side_panel)
+        self.assertIn("한 줄 자료 수", layout_controls)
+        self.assertIn("실제 EDB 제작은 현재 1열만 검증됨", layout_controls)
+        self.assertIn("disabled={n !== 1}", layout_controls)
         self.assertIn("2·3열은 실제 EDB 배치 검증 전입니다", source)
         self.assertIn("배치 칸 가이드에 자동 정렬", side_panel)
         self.assertNotIn("열 수", side_panel)
@@ -291,7 +309,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         )
     def test_compact_controls_expose_hover_tooltips(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         topbar = source.split("function TopBar", 1)[1]
         topbar = topbar.split("function ReviewStage", 1)[0]
         side_panel = source.split("function SidePanel", 1)[1]
@@ -313,7 +331,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_review_zoom_only_scales_problem_canvas(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("function ItemsRail", 1)[0]
 
@@ -329,7 +347,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_placement_tab_exposes_scoped_dynamic_scale_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
         publish_panel = source.split("function PublishResultPanel", 1)[1]
@@ -435,7 +453,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_board_dividers_and_page_indicator_use_true_classin_12_grid(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board = board_document()
         board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
 
         self.assertIn("function classinBoardPageNumberAtOffset(offsetPages)", source)
@@ -468,18 +486,27 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        layout_controls = source.split("function BoardLayoutControls", 1)[1]
+        layout_controls = layout_controls.split("function SidePanel", 1)[0]
+        item_tab = side_panel.split("{tab === 'item' && (", 1)[1]
+        item_tab = item_tab.split("{tab === 'placement' && (", 1)[0]
+        settings_tab = side_panel.split("{tab === 'board' && (", 1)[1]
         materialize = source.split("function materializeSessionForItems", 1)[1]
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
 
-        self.assertIn("문항 사이 여백", side_panel)
-        self.assertIn("1.2 맞춤", side_panel)
-        self.assertIn("빈틈 없이", side_panel)
-        self.assertIn("경계 공백 방지", side_panel)
-        self.assertIn("최대 6% 이내", side_panel)
-        self.assertIn("사용자가 조절한 배율은 유지", side_panel)
-        self.assertIn("ClassIn 화면 경계를 걸칠 수", side_panel)
-        self.assertIn("개별 여백 삭제", side_panel)
-        self.assertIn("resetPlacementGaps", side_panel)
+        self.assertIn("문항 사이 여백", layout_controls)
+        self.assertIn("1.2 맞춤", layout_controls)
+        self.assertIn("빈틈 없이", layout_controls)
+        self.assertIn("경계 공백 방지", layout_controls)
+        self.assertIn("최대 6% 이내", layout_controls)
+        self.assertIn("사용자가 조절한 배율은 유지", layout_controls)
+        self.assertIn("ClassIn 화면 경계를 걸칠 수", layout_controls)
+        self.assertIn("개별 여백 삭제", layout_controls)
+        self.assertIn("resetPlacementGaps", layout_controls)
+        self.assertIn("view === 'board'", item_tab)
+        self.assertIn("<BoardLayoutControls", item_tab)
+        self.assertNotIn("<BoardLayoutControls", settings_tab)
+        self.assertIn("칠판 동작", settings_tab)
         self.assertIn("window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요?", source)
         self.assertIn("snapshot.layoutGapMode = normalizedGapMode", materialize)
         self.assertIn("snapshot.layout_gap_mode = normalizedGapMode", materialize)
@@ -502,7 +529,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board = board_document()
         items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
@@ -537,7 +564,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_left_sidebar_supports_modifier_multiselect_group_move_and_bulk_delete(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board = board_document()
         items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
         reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
         remove_flow = source.split("const removeItem = async (id, options = {}) =>", 1)[1]
@@ -707,7 +734,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_reorder_has_keyboard_accessibility_and_failed_save_rollback(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board = board_document()
         items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
         reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
 
@@ -930,7 +957,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_review_summary_surfaces_passage_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board_html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
         passage_id_helper = source.split("function passageGroupIdFor(problem)", 1)[1]
@@ -966,7 +993,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_board_uses_prebuilt_bundle_without_browser_babel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board_html = board_document()
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", board_html)
         self.assertNotIn("app.js?v=", board_html)

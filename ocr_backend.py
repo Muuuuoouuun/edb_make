@@ -1146,7 +1146,7 @@ def ocr_cache_fingerprint(
     normalized = raw_backend_name.lower()
     if normalized.startswith("gemini-") and model is None:
         model = raw_backend_name
-    if normalized in {"google", "claude", "anthropic"} or normalized.startswith("gemini-"):
+    if normalized == "google" or normalized.startswith("gemini-"):
         normalized = "gemini"
     payload: dict[str, Any] = {
         "schema": OCR_CACHE_SCHEMA_VERSION,
@@ -1207,7 +1207,7 @@ def preferred_ocr_backend_name(name: str = "auto") -> str:
         return "paddleocr"
     if normalized == "tesseract":
         return "tesseract"
-    if normalized in {"gemini", "google", "claude", "anthropic"} or normalized.startswith("gemini-"):
+    if normalized in {"gemini", "google"} or normalized.startswith("gemini-"):
         return "gemini"
     if os.environ.get("GEMINI_API_KEY", "").strip():
         return "gemini"
@@ -1244,9 +1244,7 @@ def build_ocr_backend(name: str = "auto", *, refresh_capabilities: bool = False)
         return PaddleOCRBackend()
     if normalized == "tesseract":
         return TesseractOCRBackend()
-    if normalized in {"gemini", "google", "claude", "anthropic"}:
-        # 'claude'/'anthropic' kept as aliases for transitional configs; both
-        # resolve to the Gemini backend now.
+    if normalized in {"gemini", "google"}:
         return GeminiOCRBackend()
     if normalized.startswith("gemini-"):
         return GeminiOCRBackend(model=raw_name)

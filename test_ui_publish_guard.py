@@ -20,7 +20,15 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("setPublishBusy(true);", on_publish)
         self.assertIn("publishInFlightRef.current = false;", on_publish)
         self.assertIn("setPublishBusy(false);", on_publish)
-        self.assertLess(on_publish.index("const placements ="), on_publish.index("publishInFlightRef.current = true;"))
+        # The publish payload is assembled before the in-flight flag is set, so an
+        # early bail-out cannot leave the guard stuck on. The payload moved from an
+        # inline `placements` map to prepareSessionPublishRequest(); the order rule
+        # is the same.
+        self.assertIn("prepareSessionPublishRequest(", on_publish)
+        self.assertLess(
+            on_publish.index("const publishRequest ="),
+            on_publish.index("publishInFlightRef.current = true;"),
+        )
         self.assertIn(
             "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
@@ -145,7 +153,7 @@ class TestUiPublishGuard(unittest.TestCase):
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
         review_usage = source.split("<ReviewStage", 1)[1]
         review_usage = review_usage.split("/>", 1)[0]
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.css").read_text(encoding="utf-8")
 
         self.assertIn("hasPageChromeArtifactFlag", source)
         self.assertIn("selectedPageChromeProblemIds", review_stage)

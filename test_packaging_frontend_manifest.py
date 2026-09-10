@@ -89,6 +89,36 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _fixture_board_html(project_root: Path, bundle_digest: str) -> str:
+        """board.html markup with both cache busts the verifier expects."""
+
+        css_path = project_root / "ui_prototype" / "board.css"
+        css_path.parent.mkdir(parents=True, exist_ok=True)
+        if not css_path.exists():
+            css_path.write_bytes(b"placeholder")
+        css_digest = hashlib.sha256(css_path.read_bytes()).hexdigest()
+        return (
+            "<!doctype html>"
+            f'<link rel="stylesheet" href="board.css?v=board-css-{css_digest}" />'
+            f'<script src="app.bundle.js?v=frontend-bundle-{bundle_digest}"></script>\n'
+        )
+
+    @staticmethod
+    def _write_missing_required_ui_files(ui_parent: Path) -> None:
+        """Materialize any REQUIRED_UI_FILES entry the fixture does not write itself.
+
+        Keeps these fixtures from needing an edit every time a new static asset
+        (fonts, stylesheets) joins the packaged frontend.
+        """
+
+        for rel_path in REQUIRED_UI_FILES:
+            target = ui_parent / rel_path
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"placeholder")
+
     def _write_frontend_project(self, project_root: Path) -> None:
         ui_root = project_root / "ui_prototype"
         vendor_root = ui_root / "vendor"
@@ -113,6 +143,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         (ui_root / "publish_guard.js").write_text("// guard\n", encoding="utf-8")
         (vendor_root / "react.production.min.js").write_text("// react\n", encoding="utf-8")
         (vendor_root / "react-dom.production.min.js").write_text("// react-dom\n", encoding="utf-8")
+        self._write_missing_required_ui_files(project_root)
         digest = frontend_bundle_source_digest(project_root)
         self.assertIsNotNone(digest)
         (ui_root / "app.bundle.js").write_text(
@@ -124,7 +155,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             encoding="utf-8",
         )
         (ui_root / "board.html").write_text(
-            f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{digest}"></script>\n',
+            self._fixture_board_html(project_root, digest),
             encoding="utf-8",
         )
         manifest_text = "\n".join((*REQUIRED_UI_FILES, *REQUIRED_RUNTIME_SOURCE_FILES)) + "\n"
@@ -151,7 +182,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         (ui_root / "favicon.png").write_bytes(b"png")
         digest = "0" * 64
         (ui_root / "board.html").write_text(
-            f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{digest}"></script>\n',
+            self._fixture_board_html(resource_root, digest),
             encoding="utf-8",
         )
         (ui_root / "reorder.js").write_text("// reorder\n", encoding="utf-8")
@@ -168,6 +199,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         )
         (vendor_root / "react.production.min.js").write_text("// react\n", encoding="utf-8")
         (vendor_root / "react-dom.production.min.js").write_text("// react-dom\n", encoding="utf-8")
+        self._write_missing_required_ui_files(resource_root)
         if resource_rel == "_internal":
             (package_root / f"{package_root.name}.exe").write_bytes(b"launcher")
             (resource_root / "python312.dll").write_bytes(b"python runtime")
@@ -215,6 +247,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             "ui_prototype/app.jsx",
             "ui_prototype/app.bundle.js",
             "ui_prototype/board.html",
+            "ui_prototype/board.css",
             "scripts/build_frontend_bundle.mjs",
             "scripts/vendor/babel.min.js",
         )
@@ -281,7 +314,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             self.assertEqual([], collect_errors(project_root))
 
             (project_root / "ui_prototype" / "board.html").write_text(
-                f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{"1" * 64}"></script>\n',
+                self._fixture_board_html(project_root, "1" * 64),
                 encoding="utf-8",
             )
             errors = collect_errors(project_root)
@@ -590,7 +623,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             package_root = Path(raw_tmp) / "ClassInEDBMVP"
             resource_root = self._write_packaged_runtime(package_root)
             (resource_root / "ui_prototype" / "board.html").write_text(
-                f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{"1" * 64}"></script>\n',
+                self._fixture_board_html(resource_root, "1" * 64),
                 encoding="utf-8",
             )
 
@@ -762,7 +795,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             packaged_bundle = resource_root / "ui_prototype" / "app.bundle.js"
             digest = frontend_bundle_source_digest(project_root)
             (resource_root / "ui_prototype" / "board.html").write_text(
-                f'<!doctype html><script src="app.bundle.js?v=frontend-bundle-{digest}"></script>\n',
+                self._fixture_board_html(resource_root, digest),
                 encoding="utf-8",
             )
             packaged_bundle.write_bytes(source_bundle.read_bytes())

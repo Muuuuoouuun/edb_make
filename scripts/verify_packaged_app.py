@@ -725,6 +725,20 @@ def collect_package_errors(
             errors.append("packaged board.html app.bundle.js cache bust must use the bundle source digest")
         elif packaged_bundle_digest and board_digest != packaged_bundle_digest:
             errors.append("packaged board.html app.bundle.js cache bust does not match packaged app.bundle.js")
+        style_path = resource_root / "ui_prototype" / "board.css"
+        style_hrefs = [
+            href
+            for href in re.findall(r"<link[^>]*href=\"([^\"]+)\"", board_html)
+            if href.startswith("board.css")
+        ]
+        if len(style_hrefs) != 1:
+            errors.append("packaged board.html must load exactly one cache-busted board.css")
+        elif (match := re.fullmatch(r"board\.css\?v=board-css-([0-9a-f]{64})", style_hrefs[0])) is None:
+            errors.append("packaged board.html board.css cache bust must use the stylesheet digest")
+        elif style_path.is_file():
+            packaged_style_digest = hashlib.sha256(style_path.read_bytes()).hexdigest()
+            if match.group(1) != packaged_style_digest:
+                errors.append("packaged board.html board.css cache bust does not match packaged board.css")
         for token in FORBIDDEN_BOARD_TOKENS:
             if token in board_html:
                 errors.append(f"packaged board.html still references legacy runtime token: {token}")

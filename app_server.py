@@ -6,6 +6,7 @@ import base64
 import binascii
 import concurrent.futures
 import errno
+import faulthandler
 import gzip
 import hashlib
 import hmac
@@ -18,6 +19,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -235,6 +237,18 @@ def build_records(*args: Any, **kwargs: Any) -> Any:
 
 def split_problem_entries_for_classin_page_limit(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "split_problem_entries_for_classin_page_limit", *args, **kwargs)
+
+
+def plan_classin_limited_edb_parts(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "plan_classin_limited_edb_parts", *args, **kwargs)
+
+
+def _classin_rendered_flow_metrics(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "_classin_rendered_flow_metrics", *args, **kwargs)
+
+
+def balanced_classin_part_ranges(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "balanced_classin_part_ranges", *args, **kwargs)
 
 
 def _validate_record_page_count_hints(*args: Any, **kwargs: Any) -> Any:
@@ -1964,6 +1978,13 @@ def configure_app_logging(log_file: str | Path | None = None) -> None:
     print(f"\n[{datetime.now().isoformat(timespec='seconds')}] {APP_NAME} starting")
 
 
+def enable_fatal_error_logging() -> None:
+    try:
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+    except (AttributeError, OSError, RuntimeError, ValueError) as exc:
+        print(f"[app-server] faulthandler unavailable: {exc}", file=sys.stderr, flush=True)
+
+
 def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> bool:
     url = f"http://{host}:{port}/api/health"
     try:
@@ -2669,7 +2690,12 @@ def _write_classin_limited_edb_files_local(
             "page_count_hint": CLASSIN_MAX_BOARD_PAGE_COUNT,
         }
 
-    def render_chunk(chunk_entries: list[Any], *, allow_existing: bool = False) -> None:
+    def render_chunk(
+        chunk_entries: list[Any],
+        *,
+        allow_existing: bool = False,
+        from_recursive_split: bool = False,
+    ) -> None:
         rendered_chunk = build_rendered_chunk(chunk_entries, allow_existing=allow_existing)
         part_placements = list(rendered_chunk["placements"])
         flow_end_pages = float(rendered_chunk["flow_end_pages"])
@@ -2677,8 +2703,8 @@ def _write_classin_limited_edb_files_local(
             split_index = _first_placement_over_page_limit(part_placements, CLASSIN_MAX_BOARD_PAGE_COUNT)
             if split_index is None or split_index <= 0:
                 split_index = 1
-            render_chunk(chunk_entries[:split_index])
-            render_chunk(chunk_entries[split_index:])
+            render_chunk(chunk_entries[:split_index], from_recursive_split=True)
+            render_chunk(chunk_entries[split_index:], from_recursive_split=True)
             return
         if flow_end_pages > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
             problem_id = str(getattr(chunk_entries[0], "problem_id", "unknown") or "unknown")
@@ -2687,6 +2713,7 @@ def _write_classin_limited_edb_files_local(
                 f"after rendering ({flow_end_pages:.3f} pages); split the source before publishing"
             )
 
+        rendered_chunk["from_recursive_split"] = from_recursive_split
         rendered_chunks.append(rendered_chunk)
 
     for chunk_entries in chunks:
@@ -2694,17 +2721,62 @@ def _write_classin_limited_edb_files_local(
 
     compacted_chunks: list[dict[str, Any]] = []
     for rendered_chunk in rendered_chunks:
-        if compacted_chunks:
+        can_compact_with_previous = bool(
+            compacted_chunks
+            and (
+                compacted_chunks[-1].get("from_recursive_split")
+                or rendered_chunk.get("from_recursive_split")
+            )
+        )
+        if can_compact_with_previous:
             candidate_entries = [
                 *list(compacted_chunks[-1]["entries"]),
                 *list(rendered_chunk["entries"]),
             ]
             candidate = build_rendered_chunk(candidate_entries)
             if float(candidate["flow_end_pages"]) <= CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+                candidate["from_recursive_split"] = bool(
+                    compacted_chunks[-1].get("from_recursive_split")
+                    or rendered_chunk.get("from_recursive_split")
+                )
                 compacted_chunks[-1] = candidate
                 continue
         compacted_chunks.append(rendered_chunk)
     rendered_chunks = compacted_chunks
+
+    if len(rendered_chunks) >= 3 and not template.metadata.get("preserve_source_layout"):
+        flattened_entries = [
+            entry
+            for rendered_chunk in rendered_chunks
+            for entry in list(rendered_chunk["entries"])
+        ]
+        flattened_placements = [
+            placement
+            for rendered_chunk in rendered_chunks
+            for placement in list(rendered_chunk["placements"])
+        ]
+        rendered_advances, rendered_tails = _classin_rendered_flow_metrics(
+            flattened_entries,
+            flattened_placements,
+        )
+        if rendered_advances:
+            try:
+                balanced_ranges = balanced_classin_part_ranges(
+                    rendered_advances,
+                    tail_weights=rendered_tails,
+                    part_count=len(rendered_chunks),
+                )
+                balanced_chunks = [
+                    build_rendered_chunk(flattened_entries[start:end])
+                    for start, end, _estimated_pages in balanced_ranges
+                ]
+                if all(
+                    float(chunk["flow_end_pages"]) <= CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6
+                    for chunk in balanced_chunks
+                ):
+                    rendered_chunks = balanced_chunks
+            except ValueError:
+                pass
 
     part_count = len(rendered_chunks)
     parts: list[dict[str, Any]] = []
@@ -3490,6 +3562,75 @@ def _session_publish_preflight_blocked_payload(
         "blockingProblemIds": blocking_problem_ids,
         "blocking_problem_ids": blocking_problem_ids,
     }
+
+
+def _ordered_session_publish_sequence(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply publish order/exclusions/placements without mutating the session."""
+
+    raw_problem_values = session.get("problems")
+    if not isinstance(raw_problem_values, list):
+        raw_problem_values = []
+    raw_id_issues = _session_problem_id_issues(raw_problem_values)
+    if raw_id_issues:
+        return [], raw_id_issues
+
+    raw_problems = [problem for problem in raw_problem_values if isinstance(problem, dict)]
+    order = list(payload.get("order") or [])
+    excluded = set(payload.get("excluded") or [])
+    placement_payload = payload.get("placements")
+    if not isinstance(placement_payload, dict):
+        placement_payload = {}
+
+    by_id = {
+        str(problem.get("id") or problem.get("problem_id") or "").strip(): problem
+        for problem in raw_problems
+    }
+    sequence: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_problem_id in order:
+        problem_id = str(raw_problem_id or "").strip()
+        if problem_id in by_id and problem_id not in excluded and problem_id not in seen:
+            sequence.append(by_id[problem_id])
+            seen.add(problem_id)
+    for problem_id, problem in by_id.items():
+        if problem_id in excluded or problem_id in seen:
+            continue
+        sequence.append(problem)
+        seen.add(problem_id)
+
+    sequence_with_placements: list[dict[str, Any]] = []
+    for problem in sequence:
+        problem_copy = dict(problem)
+        problem_id = str(problem_copy.get("id") or "")
+        preserve_legacy_scale = (
+            _problem_preserves_legacy_placement_scale(problem_copy)
+            or _problem_has_persisted_legacy_placement_scale(problem_copy)
+        )
+        x_ratio = _coerce_placement_x_ratio(placement_payload.get(problem_id))
+        if x_ratio is None:
+            x_ratio = _coerce_placement_x_ratio(problem_copy)
+        if x_ratio is not None:
+            problem_copy["placementXRatio"] = x_ratio
+        y_ratio = _coerce_placement_y_ratio(placement_payload.get(problem_id))
+        if y_ratio is None:
+            y_ratio = _coerce_placement_y_ratio(problem_copy)
+        if y_ratio is not None:
+            problem_copy["placementYRatio"] = y_ratio
+        scale_ratio = _coerce_placement_scale_ratio(placement_payload.get(problem_id))
+        if scale_ratio is None:
+            scale_ratio = _coerce_placement_scale_ratio(problem_copy)
+        if scale_ratio is not None:
+            problem_copy["placementScaleRatio"] = scale_ratio
+        if preserve_legacy_scale:
+            # Provenance comes only from the persisted problem, never from a
+            # new request patch that happens to use an oversized scale.
+            problem_copy["preserveLegacyPlacementScale"] = True
+            problem_copy["preserve_legacy_placement_scale"] = True
+        sequence_with_placements.append(problem_copy)
+    return sequence_with_placements, []
 
 
 def _session_publish_summary(
@@ -7380,8 +7521,8 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         or payload.get("image_provider")
         or DEFAULT_IMAGE_RECONSTRUCTION_PROVIDER
     )
-    env_key = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
-    provider_label = "Gemini" if provider == "gemini" else "OpenAI"
+    env_key = "GEMINI_API_KEY"
+    provider_label = "Gemini"
     api_key = os.environ.get(env_key, "").strip()
 
     problem_ids = _enhance_target_problem_ids(session, payload)
@@ -8295,6 +8436,9 @@ class AppHTTPServer(ThreadingHTTPServer):
         super().__init__(server_address, RequestHandlerClass)
         _recover_interrupted_session_reset()
         self._state_lock = threading.RLock()
+        self._shutdown_reason_lock = threading.Lock()
+        self._shutdown_reason: str | None = None
+        self._started_at = time.time()
         # Artifact-producing handlers write files before committing session
         # metadata. Serialize the entire handler so a stale CAS loser cannot
         # overwrite the winner's files before its commit is rejected.
@@ -8312,6 +8456,31 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._session_revision = 1 if latest_session is not None else 0
         self.allowed_files: set[str] = collect_session_file_paths(latest_session) if latest_session else set()
         self.allowed_files |= collect_session_history_file_paths(history)
+
+    def note_shutdown_reason(self, reason: str) -> str:
+        normalized = str(reason or "unknown").strip() or "unknown"
+        with self._shutdown_reason_lock:
+            if self._shutdown_reason is None:
+                self._shutdown_reason = normalized
+            return self._shutdown_reason
+
+    def shutdown_reason(self) -> str | None:
+        with self._shutdown_reason_lock:
+            return self._shutdown_reason
+
+    def request_shutdown(self, reason: str) -> None:
+        recorded = self.note_shutdown_reason(reason)
+        print(f"[app-server] shutdown requested: {recorded}", file=sys.stderr, flush=True)
+        self.shutdown()
+
+    def health_payload(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "app": APP_NAME,
+            "pid": os.getpid(),
+            "sessionEpoch": self.session_epoch(),
+            "uptimeSeconds": max(0, int(time.time() - self._started_at)),
+        }
 
     def session_snapshot(self) -> dict[str, Any] | None:
         with self._state_lock:
@@ -8785,7 +8954,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self._send_json({"ok": True, "app": APP_NAME})
+            health_builder = getattr(self.app_server, "health_payload", None)
+            payload = health_builder() if callable(health_builder) else {"ok": True, "app": APP_NAME}
+            self._send_json(payload)
             return
         if parsed.path == "/generated_session.js":
             self._send_text(read_generated_session_js(), content_type="application/javascript; charset=utf-8")
@@ -8857,6 +9028,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/runtime/artifacts/cleanup":
             self._handle_runtime_artifact_cleanup()
             return
+        if parsed.path == "/api/session/publish-plan":
+            self._run_artifact_read(self._handle_session_publish_plan)
+            return
         if parsed.path == "/api/session/publish":
             self._run_artifact_job(self._handle_session_publish)
             return
@@ -8908,6 +9082,145 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
+    def _handle_session_publish_plan(self) -> None:
+        session, current_revision = self._current_session_state()
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not self._validate_expected_session_revision(payload, current_revision):
+            return
+
+        payload_session = payload.get("session")
+        if isinstance(payload_session, dict) and isinstance(payload_session.get("problems"), list):
+            session = _denormalize_session_paths(payload_session)
+
+        raw_problem_values = session.get("problems")
+        if not isinstance(raw_problem_values, list):
+            raw_problem_values = []
+        sequence, raw_id_issues = _ordered_session_publish_sequence(session, payload)
+        if raw_id_issues:
+            raw_id_preflight = {
+                "status": "blocked",
+                "passed": False,
+                "checkedProblemCount": len(raw_problem_values),
+                "checked_problem_count": len(raw_problem_values),
+                "issueCount": len(raw_id_issues),
+                "issue_count": len(raw_id_issues),
+                "issues": [{**issue, "blocking": True} for issue in raw_id_issues],
+                "gate": "session_publish",
+                "gateLabel": "EDB publish",
+                "gate_label": "EDB publish",
+            }
+            self._send_json(
+                _session_publish_preflight_blocked_payload(raw_id_preflight, []),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        if not sequence:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "publish_empty_selection",
+                    "operation": "session_publish_plan",
+                    "retryable": False,
+                    "error": "제외 후 제작할 문항이 남아 있지 않습니다.",
+                    "recoverySteps": ["제작할 문항을 하나 이상 포함한 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        blocking_preflight, duplicate_groups = _session_publish_blocking_preflight(sequence, session=session)
+        if not blocking_preflight.get("passed"):
+            self._send_json(
+                _session_publish_preflight_blocked_payload(blocking_preflight, duplicate_groups),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        template = _template_from_session(session)
+        try:
+            entries = _problems_to_entries(sequence, template=template)
+            template.board_page_count = max(50, len(entries) * 2)
+            crop_format = _normalize_crop_format(session.get("crop_format"))
+            projected_parts = plan_classin_limited_edb_parts(
+                entries,
+                template,
+                Path(session.get("output_dir") or RUNTIME_DIR / "publish_output").resolve(),
+                record_mode="image-only",
+                text_confidence_threshold=0.78,
+                dark_board=True,
+                board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
+                crop_format=crop_format,
+            )
+        except FileNotFoundError as exc:
+            self._send_json(_publish_stage_failure_payload("build", exc), status=HTTPStatus.CONFLICT)
+            return
+        except (KeyError, ValueError) as exc:
+            self._send_json(
+                _publish_failure_payload(
+                    code="publish_plan_invalid",
+                    message="현재 작업의 EDB 분할 수를 계산하지 못했습니다",
+                    exc=exc,
+                    retryable=False,
+                    recovery_steps=[
+                        "원본 또는 자료 배치를 확인한 뒤 다시 시도해 주세요.",
+                        "반복되면 오류 정보를 복사해 신고해 주세요.",
+                    ],
+                ),
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 — preview failures remain non-mutating.
+            _log_operation_exception("session_publish_plan.build", exc)
+            self._send_json(
+                _publish_stage_failure_payload("build", exc),
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        response: dict[str, Any] = {
+            "ok": True,
+            "operation": "session_publish_plan",
+            "canStartPublish": True,
+            "can_start_publish": True,
+            "projectedPartCount": len(projected_parts),
+            "projected_part_count": len(projected_parts),
+            "projectedParts": projected_parts,
+            "projected_parts": projected_parts,
+            "projectedSplit": len(projected_parts) > 1,
+            "projected_split": len(projected_parts) > 1,
+            "totalEstimatedFlowEndPages": sum(
+                float(part.get("estimatedFlowEndPages") or 0.0)
+                for part in projected_parts
+            ),
+            "total_estimated_flow_end_pages": sum(
+                float(part.get("estimatedFlowEndPages") or 0.0)
+                for part in projected_parts
+            ),
+            "pageCountLimit": CLASSIN_MAX_BOARD_PAGE_COUNT,
+            "page_count_limit": CLASSIN_MAX_BOARD_PAGE_COUNT,
+            "blockingPreflight": blocking_preflight,
+            "blocking_preflight": blocking_preflight,
+            # The handoff/ClassIn preflight can only be authoritative after
+            # actual EDB files and their immutable publish generation exist.
+            "finalClassinPreflightStatus": "pending",
+            "final_classin_preflight_status": "pending",
+        }
+        if current_revision is not None:
+            response["sessionRevision"] = current_revision
+        epoch_getter = getattr(getattr(self, "server", None), "session_epoch", None)
+        if callable(epoch_getter):
+            epoch = str(epoch_getter() or "").strip()
+            if epoch:
+                response["sessionEpoch"] = epoch
+        self._send_json(response)
+
     def _handle_session_publish(self) -> None:
         session, current_revision = self._current_session_state()
         if session is None:
@@ -8926,17 +9239,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if isinstance(payload_session, dict) and isinstance(payload_session.get("problems"), list):
             session = _denormalize_session_paths(payload_session)
 
-        order = list(payload.get("order") or [])
-        excluded = set(payload.get("excluded") or [])
-        placement_payload = payload.get("placements")
-        if not isinstance(placement_payload, dict):
-            placement_payload = {}
-
         raw_problem_values = session.get("problems")
         if not isinstance(raw_problem_values, list):
             raw_problem_values = []
-        raw_id_issues = _session_problem_id_issues(raw_problem_values)
-        raw_problems = [problem for problem in raw_problem_values if isinstance(problem, dict)]
+        sequence, raw_id_issues = _ordered_session_publish_sequence(session, payload)
         if raw_id_issues:
             raw_id_preflight = {
                 "status": "blocked",
@@ -8956,22 +9262,6 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
 
-        by_id = {
-            str(p.get("id") or p.get("problem_id") or "").strip(): p
-            for p in raw_problems
-        }
-        sequence: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for pid in order:
-            if pid in by_id and pid not in excluded and pid not in seen:
-                sequence.append(by_id[pid])
-                seen.add(pid)
-        for pid, problem in by_id.items():
-            if pid in excluded or pid in seen:
-                continue
-            sequence.append(problem)
-            seen.add(pid)
-
         if not sequence:
             self._send_json(
                 {
@@ -8985,38 +9275,6 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status=HTTPStatus.BAD_REQUEST,
             )
             return
-
-        sequence_with_placements: list[dict[str, Any]] = []
-        for problem in sequence:
-            problem_copy = dict(problem)
-            problem_id = str(problem_copy.get("id") or "")
-            preserve_legacy_scale = (
-                _problem_preserves_legacy_placement_scale(problem_copy)
-                or _problem_has_persisted_legacy_placement_scale(problem_copy)
-            )
-            x_ratio = _coerce_placement_x_ratio(placement_payload.get(problem_id))
-            if x_ratio is None:
-                x_ratio = _coerce_placement_x_ratio(problem_copy)
-            if x_ratio is not None:
-                problem_copy["placementXRatio"] = x_ratio
-            y_ratio = _coerce_placement_y_ratio(placement_payload.get(problem_id))
-            if y_ratio is None:
-                y_ratio = _coerce_placement_y_ratio(problem_copy)
-            if y_ratio is not None:
-                problem_copy["placementYRatio"] = y_ratio
-            scale_ratio = _coerce_placement_scale_ratio(placement_payload.get(problem_id))
-            if scale_ratio is None:
-                scale_ratio = _coerce_placement_scale_ratio(problem_copy)
-            if scale_ratio is not None:
-                problem_copy["placementScaleRatio"] = scale_ratio
-            if preserve_legacy_scale:
-                # Provenance comes from the persisted session value, never from
-                # this request's placement patch. New explicit edits therefore
-                # remain subject to the regular 1.6 editor/export ceiling.
-                problem_copy["preserveLegacyPlacementScale"] = True
-                problem_copy["preserve_legacy_placement_scale"] = True
-            sequence_with_placements.append(problem_copy)
-        sequence = sequence_with_placements
 
         publish_preflight, duplicate_groups = _session_publish_blocking_preflight(sequence, session=session)
         if not publish_preflight.get("passed"):
@@ -10291,6 +10549,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         def shutdown_after_response() -> None:
             time.sleep(0.35)
             server = getattr(self, "server", None)
+            request_shutdown = getattr(server, "request_shutdown", None)
+            if callable(request_shutdown):
+                request_shutdown("app_update_install")
+                return
             shutdown = getattr(server, "shutdown", None)
             if callable(shutdown):
                 shutdown()
@@ -10306,7 +10568,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
             return
         self._send_json({"ok": True})
-        threading.Thread(target=self.app_server.shutdown, name="app-shutdown", daemon=True).start()
+        request_shutdown = getattr(self.app_server, "request_shutdown", None)
+        shutdown = request_shutdown if callable(request_shutdown) else self.app_server.shutdown
+        args = ("api_system_shutdown",) if callable(request_shutdown) else ()
+        threading.Thread(target=shutdown, args=args, name="app-shutdown", daemon=True).start()
 
     def _handle_user_settings_get(self) -> None:
         self._send_json(
@@ -10321,15 +10586,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         has_gemini_key = "geminiApiKey" in payload or "gemini_api_key" in payload
         raw_key = payload.get("geminiApiKey") if "geminiApiKey" in payload else payload.get("gemini_api_key")
-        has_openai_key = "openAiApiKey" in payload or "openai_api_key" in payload
-        raw_openai_key = payload.get("openAiApiKey") if "openAiApiKey" in payload else payload.get("openai_api_key")
         has_ai_enabled = "aiEnabled" in payload or "ai_enabled" in payload
         raw_ai_enabled = payload.get("aiEnabled") if "aiEnabled" in payload else payload.get("ai_enabled")
         try:
             summary = update_api_keys(
                 RUNTIME_DIR,
                 gemini_api_key=(raw_key if isinstance(raw_key, str) else "") if has_gemini_key else None,
-                openai_api_key=(raw_openai_key if isinstance(raw_openai_key, str) else "") if has_openai_key else None,
                 ai_enabled=_coerce_bool(raw_ai_enabled) if has_ai_enabled else None,
             )
         except OSError as exc:
@@ -10957,12 +11219,37 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)
+    previous_signal_handlers: dict[int, Any] = {}
+
+    def handle_termination_signal(signum, _frame) -> None:
+        signal_name = signal.Signals(signum).name
+        server.note_shutdown_reason(f"signal:{signal_name}")
+        print(f"[app-server] received {signal_name}", file=sys.stderr, flush=True)
+        raise SystemExit(128 + signum)
+
+    if threading.current_thread() is threading.main_thread():
+        for signal_name in ("SIGTERM", "SIGHUP"):
+            signum = getattr(signal, signal_name, None)
+            if signum is None:
+                continue
+            previous = signal.getsignal(signum)
+            # nohup intentionally ignores SIGHUP so a closed Terminal cannot
+            # take down the detached local server.
+            if signal_name == "SIGHUP" and previous == signal.SIG_IGN:
+                continue
+            previous_signal_handlers[signum] = previous
+            signal.signal(signum, handle_termination_signal)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        server.note_shutdown_reason("keyboard_interrupt")
         print("\nShutting down server...")
     finally:
+        reason = server.shutdown_reason() or "serve_forever_returned"
+        print(f"[app-server] stopped: reason={reason}", file=sys.stderr, flush=True)
         server.server_close()
+        for signum, previous in previous_signal_handlers.items():
+            signal.signal(signum, previous)
 
 
 def main() -> int:
@@ -10976,6 +11263,7 @@ def main() -> int:
     ensure_runtime_dirs()
     if args.log_file or is_frozen_app():
         configure_app_logging(args.log_file or None)
+    enable_fatal_error_logging()
     open_browser = is_frozen_app() if args.open_browser is None else bool(args.open_browser)
     run_server(host=args.host, port=args.port, open_browser=open_browser)
     return 0
