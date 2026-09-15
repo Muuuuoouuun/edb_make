@@ -432,6 +432,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             with patch.object(app_server, "RESOURCE_DIR", tmpdir), \
                     patch.object(app_server, "BASE_DIR", tmpdir), \
                     patch.object(app_server.sys, "platform", "darwin"), \
+                    patch.object(app_server.platform, "machine", return_value="arm64"), \
                     patch.dict(os.environ, {
                         "EDB_APP_VERSION": "",
                         "EDB_UPDATE_FEED_URL": "",
