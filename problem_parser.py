@@ -1,7 +1,7 @@
 """Parser-only entry point for the web trial.
 
 Runs the same recognition path as the desktop problem export but stops
-after problem crops: no board cutouts, placement, EDB, or UI session.
+after problem crops: no placement, EDB, or UI session, and board cutouts only on request.
 Nothing here imports a web framework.
 """
 
@@ -11,6 +11,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import fitz
 from PIL import Image
@@ -19,6 +20,37 @@ from structured_schema import Box
 
 MIN_TEXT_CHARS_PER_PAGE = 20
 PDF_RENDER_DPI = 200
+
+# Pillow only warns between this value and twice it, and raises DecompressionBombError
+# above twice it, so this setting is a 40M-pixel hard ceiling with a 20M-pixel warning
+# threshold. 2×A3 at 200 DPI is about 15.5M pixels, which stays below the warning threshold;
+# anything that warns is already larger than this trial renders. Assigning the attribute is
+# process-global, so every importer of problem_parser inherits the limit -- which is what the
+# trial server wants, and why it lives next to the render settings rather than in a caller.
+Image.MAX_IMAGE_PIXELS = 20_000_000
+
+# inspect_pdf runs after the Turnstile check but before the parse slot and the quota charge,
+# so everything it spends is free to a caller and endlessly repeatable. Its per-page work is
+# therefore ordered cheapest-first, and a page that trips either gate below is reported with
+# a sentinel count that exceeds any configured word/drawing limit, so check_pdf_info rejects
+# it as page_too_complex without the page ever being interpreted.
+#
+# Measured locally on a one-page PDF whose content stream is "100 100 1 1 re S" repeated two
+# million times (34 MB decompressed, 83 KB once flate-compressed -- an 83 KB upload):
+#     xref_stream_raw()   (compressed length)        0.0 ms
+#     xref_stream()       (decompressed length)     21.8 ms
+#     page.get_text("text")                        340.5 ms
+#     page.get_drawings()                       10_329.7 ms
+#
+# The raw gate is free but cannot see a flate bomb, so it cannot replace the decompressed
+# gate; its job is to bound how much the decompressed gate is ever willing to inflate. Deflate
+# tops out near 1030:1 (measured), so capping the compressed stream at 500 KB caps one page's
+# transient inflation at roughly 500 MB. A synthetic page at the configured 4500-word /
+# 2500-drawing limits measures about 131 KB compressed and 152 KB decompressed (2026-09-16),
+# so these thresholds leave about 4x and 13x headroom over anything the trial accepts.
+MAX_CONTENT_STREAM_RAW_BYTES_PER_PAGE = 500_000
+MAX_CONTENT_STREAM_BYTES_PER_PAGE = 2_000_000
+PATHOLOGICAL_COUNT_SENTINEL = 1_000_000_000
 
 
 class PdfUnreadableError(ValueError):
@@ -31,6 +63,22 @@ class PdfInfo:
     scanned_pages: int
     pages_without_text: int
     max_page_area_pt: float
+    max_words_per_page: int = 0
+    max_drawings_per_page: int = 0
+
+
+def _content_stream_is_pathological(doc: fitz.Document, page: fitz.Page) -> bool:
+    """True when a page's content stream is too big to be worth interpreting at all.
+
+    Both checks run before get_text() or get_drawings() ever touch the page, cheapest first:
+    the compressed length is free, and the decompressed length costs a single inflate that the
+    raw gate has already bounded.
+    """
+    xrefs = page.get_contents()
+    raw_bytes = sum(len(doc.xref_stream_raw(xref)) for xref in xrefs)
+    if raw_bytes > MAX_CONTENT_STREAM_RAW_BYTES_PER_PAGE:
+        return True
+    return sum(len(doc.xref_stream(xref)) for xref in xrefs) > MAX_CONTENT_STREAM_BYTES_PER_PAGE
 
 
 def inspect_pdf(source: Path, *, max_pages: int) -> PdfInfo:
@@ -50,17 +98,31 @@ def inspect_pdf(source: Path, *, max_pages: int) -> PdfInfo:
         scanned_pages = min(page_count, max_pages)
         pages_without_text = 0
         max_page_area_pt = 0.0
+        max_words_per_page = 0
+        max_drawings_per_page = 0
         for index in range(scanned_pages):
             page = doc[index]
+            # page.rect is metadata, not content, so page size stays measurable for every page.
+            max_page_area_pt = max(max_page_area_pt, float(page.rect.width * page.rect.height))
+            if _content_stream_is_pathological(doc, page):
+                # Skipped pages are deliberately left out of pages_without_text: check_pdf_info
+                # raises no_text_layer before page_too_complex, so counting a page we refused to
+                # read as textless would report the wrong reason for refusing it.
+                max_words_per_page = max(max_words_per_page, PATHOLOGICAL_COUNT_SENTINEL)
+                max_drawings_per_page = max(max_drawings_per_page, PATHOLOGICAL_COUNT_SENTINEL)
+                continue
             text = page.get_text("text")
             if len("".join(text.split())) < MIN_TEXT_CHARS_PER_PAGE:
                 pages_without_text += 1
-            max_page_area_pt = max(max_page_area_pt, float(page.rect.width * page.rect.height))
+            max_words_per_page = max(max_words_per_page, len(text.split()))
+            max_drawings_per_page = max(max_drawings_per_page, len(page.get_drawings()))
     return PdfInfo(
         page_count=page_count,
         scanned_pages=scanned_pages,
         pages_without_text=pages_without_text,
         max_page_area_pt=max_page_area_pt,
+        max_words_per_page=max_words_per_page,
+        max_drawings_per_page=max_drawings_per_page,
     )
 
 
@@ -87,6 +149,8 @@ class ParsedProblem:
     regions: list[ParsedRegion]
     risk_flags: list[str]
     image: Image.Image
+    # Chalk-on-transparent cutout (RGBA) when parse_problems(render_board_assets=True); else None.
+    board_image: Image.Image | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +160,16 @@ class ParseResult:
     source_page_count: int
     parser_version: str
     timing_ms: dict[str, int]
+    # One ``ai_fallback`` metadata dict per page (see page_repair.py's
+    # _attach_ai_fallback_summary / PageModel.metadata["ai_fallback"]), in
+    # the same order as ``pages``. Always populated -- for the trial's
+    # default ai_fallback_config=None every entry is just {"status":
+    # "disabled", "attempted": False, "applied": False, ...} -- so a caller
+    # (the bench oracle) can tell whether AI page repair actually changed a
+    # page instead of merely being available. Nothing in the trial response
+    # path reads this field; it exists to make repair outcomes inspectable
+    # without re-deriving them from PageModel objects the trial never keeps.
+    page_repair: tuple[dict[str, Any], ...] = ()
 
 
 def parser_version() -> str:
@@ -109,6 +183,11 @@ def _elapsed_ms(started_at: float) -> int:
 def _load_detached_rgb(path: Path) -> Image.Image:
     with Image.open(path) as image:
         return image.convert("RGB")
+
+
+def _load_detached_rgba(path: Path) -> Image.Image:
+    with Image.open(path) as image:
+        return image.convert("RGBA")
 
 
 def _problem_regions(entry) -> list[ParsedRegion]:
@@ -157,11 +236,25 @@ def parse_problems(
     work_dir: Path,
     max_pages: int | None = None,
     subject: str = "unknown",
+    ocr_mode: str = "none",
+    ai_fallback_config: dict[str, Any] | None = None,
+    render_board_assets: bool = False,
 ) -> ParseResult:
-    """Recognize problems in a text-layer PDF without OCR, AI, or board rendering.
+    """Recognize problems in a text-layer PDF.
+
+    The trial calls this with the defaults: no OCR, no AI, no board rendering.
+    The bench oracle passes ``ocr_mode="auto"`` and a forced AI repair config
+    so both sides share every downstream step and coordinate frame -- see
+    ``ParseResult.page_repair`` for how the oracle tells whether that config
+    actually changed anything.
 
     With ``max_pages`` only the leading pages are parsed. Returned images are
     fully loaded copies, so ``work_dir`` may be deleted as soon as this returns.
+
+    With ``render_board_assets`` the desktop's chalk cutouts are rendered too and
+    returned as ``ParsedProblem.board_image`` (RGBA); the trial's board preview
+    is composited from them. Off by default: it costs about +60% of the asset
+    stage and +0.1-0.35 GB RSS.
     """
     # Deferred so requests rejected by inspect_pdf never load OpenCV and the pipeline.
     from build_problem_board_edb import build_pages, build_problem_entries, resolve_subject
@@ -176,15 +269,17 @@ def parse_problems(
     prepared_pages, page_models = build_pages(
         parse_source,
         subject=resolve_subject(subject),
-        ocr_mode="none",
-        ai_fallback_config=None,
+        ocr_mode=ocr_mode,
+        ai_fallback_config=ai_fallback_config,
         pdf_dpi=PDF_RENDER_DPI,
         detect_perspective=False,
         deskew=True,
         crop_margins=True,
         max_dimension=None,
+        timings=timing_ms,
     )
     timing_ms["recognize"] = _elapsed_ms(recognize_started_at)
+    page_repair = tuple(dict(page.metadata.get("ai_fallback") or {}) for page in page_models)
 
     crops_started_at = time.perf_counter()
     entries = build_problem_entries(
@@ -192,8 +287,10 @@ def parse_problems(
         page_models,
         work_dir,
         LayoutTemplate(name="academy-default"),
-        render_board_assets=False,
+        render_board_assets=render_board_assets,
+        timings=timing_ms,
     )
+    load_started_at = time.perf_counter()
     problems = [
         ParsedProblem(
             problem_id=entry.problem_id,
@@ -202,9 +299,11 @@ def parse_problems(
             regions=_problem_regions(entry),
             risk_flags=list(entry.risk_flags),
             image=_load_detached_rgb(entry.crop_path),
+            board_image=_load_detached_rgba(entry.board_render_path) if render_board_assets else None,
         )
         for entry in entries
     ]
+    timing_ms["load"] = _elapsed_ms(load_started_at)
     timing_ms["crops"] = _elapsed_ms(crops_started_at)
 
     pages = [
@@ -224,4 +323,5 @@ def parse_problems(
         source_page_count=source_page_count,
         parser_version=parser_version(),
         timing_ms=timing_ms,
+        page_repair=page_repair,
     )

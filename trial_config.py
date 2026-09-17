@@ -8,7 +8,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from trial_input import A3_AREA_PT, InputLimits
+from trial_demo import DemoConfig
+
+from trial_input import (
+    A3_AREA_PT,
+    DEFAULT_MAX_DRAWINGS_PER_PAGE,
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_WORDS_PER_PAGE,
+    InputLimits,
+)
 
 DEFAULT_INQUIRY_URL = "https://classin.co.kr/contact"
 
@@ -38,9 +46,26 @@ def _positive_float(env: Mapping[str, str], name: str, default: float) -> float:
     return value
 
 
+_FLAG_TRUE = frozenset({"1", "true", "yes", "on"})
+_FLAG_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+def _flag(env: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = _text(env, name)
+    if raw is None:
+        return default
+    lowered = raw.lower()
+    if lowered in _FLAG_TRUE:
+        return True
+    if lowered in _FLAG_FALSE:
+        return False
+    raise ValueError(f"{name} must be one of 1/0, true/false, yes/no, on/off")
+
+
 @dataclass(frozen=True)
 class TrialConfig:
     production: bool = False
+    demo: DemoConfig = field(default_factory=DemoConfig)
     inquiry_url: str = DEFAULT_INQUIRY_URL
     turnstile_site_key: str | None = None
     turnstile_secret: str | None = None
@@ -52,15 +77,21 @@ class TrialConfig:
     limits: InputLimits = field(
         default_factory=lambda: InputLimits(
             max_bytes=4_000_000,
-            max_pages=3,
+            max_pages=DEFAULT_MAX_PAGES,
             max_source_pages=100,
             max_page_area_pt=2 * A3_AREA_PT,
         )
     )
     daily_limit: int = 3
     global_daily_limit: int = 500
-    parse_concurrency: int = 2
+    # Four-page science PDFs can peak above 1.3 GiB when two overlap.
+    # Start with one parse per 2 GiB instance; cloud instances can still scale out.
+    parse_concurrency: int = 1
     parse_wait_seconds: float = 20.0
+    # Chalk-cutout previews next to the raw crops: +4-6 s and +0.1-0.35 GB per parse on
+    # Vercel (spec 2026-09-16 §2-2). Off turns the cutouts, the response field and the
+    # page toggle off together.
+    board_previews: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "TrialConfig":
@@ -72,6 +103,7 @@ class TrialConfig:
         )
         return cls(
             production=(env.get("VERCEL_ENV") or "").strip() == "production",
+            demo=DemoConfig.from_env(env),
             inquiry_url=inquiry_url,
             turnstile_site_key=_text(env, "TRIAL_TURNSTILE_SITE_KEY"),
             turnstile_secret=_text(env, "TRIAL_TURNSTILE_SECRET"),
@@ -82,14 +114,19 @@ class TrialConfig:
             expected_hostnames=hostnames,
             limits=InputLimits(
                 max_bytes=_positive_int(env, "TRIAL_MAX_BYTES", 4_000_000),
-                max_pages=_positive_int(env, "TRIAL_MAX_PAGES", 3),
+                max_pages=_positive_int(env, "TRIAL_MAX_PAGES", DEFAULT_MAX_PAGES),
                 max_source_pages=_positive_int(env, "TRIAL_MAX_SOURCE_PAGES", 100),
                 max_page_area_pt=2 * A3_AREA_PT,
+                max_words_per_page=_positive_int(env, "TRIAL_MAX_WORDS_PER_PAGE", DEFAULT_MAX_WORDS_PER_PAGE),
+                max_drawings_per_page=_positive_int(
+                    env, "TRIAL_MAX_DRAWINGS_PER_PAGE", DEFAULT_MAX_DRAWINGS_PER_PAGE
+                ),
             ),
             daily_limit=_positive_int(env, "TRIAL_DAILY_LIMIT", 3),
             global_daily_limit=_positive_int(env, "TRIAL_GLOBAL_DAILY_LIMIT", 500),
-            parse_concurrency=_positive_int(env, "TRIAL_PARSE_CONCURRENCY", 2),
+            parse_concurrency=_positive_int(env, "TRIAL_PARSE_CONCURRENCY", 1),
             parse_wait_seconds=_positive_float(env, "TRIAL_PARSE_WAIT_SECONDS", 20.0),
+            board_previews=_flag(env, "TRIAL_BOARD_PREVIEWS", True),
         )
 
     def missing_production_settings(self) -> list[str]:

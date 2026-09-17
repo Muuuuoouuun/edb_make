@@ -2,6 +2,7 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -17,6 +18,7 @@ from problem_parser import ParsedPage, ParsedProblem, ParsedRegion, ParseResult,
 from structured_schema import Box
 from trial_config import TrialConfig
 from trial_quota import MemoryQuotaStore, QuotaUnavailable, hash_ip
+import trial_server
 from trial_server import create_app
 from trial_turnstile import TurnstileOutcome, TurnstileUnavailable
 
@@ -41,15 +43,35 @@ def _result(problem_count: int = 2) -> ParseResult:
     return ParseResult(pages=[page], problems=problems, source_page_count=16, parser_version="abc1234", timing_ms={"total": 5})
 
 
+def _result_with_boards(problem_count: int = 2) -> ParseResult:
+    result = _result(problem_count)
+    result.problems[:] = [
+        replace(problem, board_image=Image.new("RGBA", problem.image.size, (248, 249, 246, 128)))
+        for problem in result.problems
+    ]
+    return result
+
+
 class FakeParser:
-    def __init__(self, result=None, error=None, gate=None):
+    def __init__(self, result=None, error=None, gate=None, delay=0.0):
         self.result = result or _result()
         self.error = error
         self.gate = gate
+        self.delay = delay
         self.calls = []
 
-    def __call__(self, source: Path, *, work_dir: Path, max_pages: int):
-        self.calls.append({"source": source, "work_dir": work_dir, "max_pages": max_pages, "bytes": source.read_bytes()})
+    def __call__(self, source: Path, *, work_dir: Path, max_pages: int, render_board_assets: bool = False):
+        self.calls.append(
+            {
+                "source": source,
+                "work_dir": work_dir,
+                "max_pages": max_pages,
+                "render_board_assets": render_board_assets,
+                "bytes": source.read_bytes(),
+            }
+        )
+        if self.delay:
+            time.sleep(self.delay)
         if self.gate is not None:
             self.gate.wait(timeout=5)
         if self.error is not None:
@@ -152,8 +174,9 @@ class TestConfigAndHealth(TrialApiCase):
                 "inquiry_url": "https://classin.co.kr/contact",
                 "turnstile_site_key": "site",
                 "max_bytes": 4_000_000,
-                "max_pages": 3,
+                "max_pages": 4,
                 "daily_limit": 3,
+                "board_previews": True,
             },
             response.json(),
         )
@@ -178,13 +201,16 @@ class TestParseSuccess(TrialApiCase):
         self.assertEqual("no-store", response.headers["cache-control"])
         self.assertEqual(2, body["remaining_today"])
         self.assertEqual(16, body["source_page_count"])
-        self.assertEqual(3, body["processed_page_limit"])
+        self.assertEqual(4, body["processed_page_limit"])
         self.assertEqual([1, 2], [problem["number"] for problem in body["problems"]])
         self.assertTrue(body["problems"][0]["needs_review"])
         self.assertEqual(1, self.used())
-        self.assertEqual(3, self.parser.calls[0]["max_pages"])
+        self.assertEqual(4, self.parser.calls[0]["max_pages"])
+        self.assertTrue(self.parser.calls[0]["render_board_assets"])
+        self.assertFalse(body["board_previews"])
+        self.assertEqual([None, None], [problem["board"] for problem in body["problems"]])
         self.assertEqual(PDF_BODY, self.parser.calls[0]["bytes"])
-        self.assertEqual([3], self.inspector.calls)
+        self.assertEqual([4], self.inspector.calls)
         self.assertEqual([("tok", "203.0.113.7")], self.verifier.calls)
         event = self.store.events[-1]
         self.assertEqual(
@@ -194,6 +220,25 @@ class TestParseSuccess(TrialApiCase):
         self.assertEqual(hash_ip("203.0.113.7", salt="salt", day=TODAY), event["ip_hash"])
         self.assertIsNone(event["reject_code"])
         self.assertEqual(len(PDF_BODY), event["bytes"])
+        self.assertEqual((0, 0), (event["timing"]["preview_step"], event["timing"]["board"]))
+
+    def test_board_previews_are_returned_and_counted_in_the_event(self):
+        client = self.make_client(parser=FakeParser(result=_result_with_boards()))
+        body = self.post_pdf(client).json()
+        self.assertTrue(body["board_previews"])
+        for problem in body["problems"]:
+            self.assertTrue(problem["board"].startswith("data:image/"))
+        self.assertEqual(1, self.store.events[-1]["timing"]["board"])
+        self.assertEqual(0, self.store.events[-1]["timing"]["preview_step"])
+
+    def test_board_previews_can_be_switched_off(self):
+        config = TrialConfig(ip_salt="salt", cron_secret="cron-secret", board_previews=False)
+        client = self.make_client(config=config, parser=FakeParser(result=_result_with_boards()))
+        self.assertFalse(client.get("/api/config").json()["board_previews"])
+        body = self.post_pdf(client).json()
+        self.assertFalse(self.parser.calls[0]["render_board_assets"])
+        # A parser that still returned cutouts would be a bug elsewhere; the response follows the parser.
+        self.assertTrue(body["board_previews"])
 
     def test_work_directory_is_removed_after_request(self):
         client = self.make_client()
@@ -212,6 +257,32 @@ class TestParseSuccess(TrialApiCase):
     def test_event_store_failure_does_not_break_response(self):
         client = self.make_client(store=FlakyEventStore())
         self.assertEqual(200, self.post_pdf(client).status_code)
+
+    def test_response_and_event_carry_timing_and_instance(self):
+        client = self.make_client(parser=FakeParser(delay=0.03))
+        with mock.patch.object(trial_server, "INSTANCE_STARTED_AT", time.time() - 60):
+            response = self.post_pdf(client)
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual({"total": 5}, payload["timing_ms"])
+        self.assertRegex(payload["instance_id"], r"^[0-9a-f]{8}$")
+        self.assertGreaterEqual(payload["instance_age_s"], 60)
+        event = self.store.events[-1]
+        self.assertEqual(payload["instance_id"], event["instance_id"])
+        self.assertEqual(5, event["timing"]["total"])
+        self.assertIsInstance(event["timing"]["encode"], int)
+        self.assertIsInstance(event["timing"]["parse_total"], int)
+        self.assertGreaterEqual(event["timing"]["parse_total"], 30)
+        self.assertLess(event["timing"]["encode"], event["timing"]["parse_total"])
+
+        second_response = self.post_pdf(client)
+        self.assertEqual(payload["instance_id"], second_response.json()["instance_id"])
+
+    def test_event_records_page_complexity(self):
+        info = PdfInfo(page_count=16, scanned_pages=3, pages_without_text=0, max_page_area_pt=500_000.0, max_words_per_page=674, max_drawings_per_page=191)
+        client = self.make_client(inspector=FakeInspector(info=info))
+        self.assertEqual(200, self.post_pdf(client).status_code)
+        self.assertEqual({"words": 674, "drawings": 191}, self.store.events[-1]["complexity"])
 
 
 class TestParseRejections(TrialApiCase):
@@ -252,6 +323,16 @@ class TestParseRejections(TrialApiCase):
         self.assertEqual([], self.parser.calls)
         self.assertEqual(0, self.used())
         self.assertEqual(4, self.store.events[-1]["source_pages"])
+
+    def test_too_complex_pages_are_rejected_before_charging(self):
+        info = PdfInfo(page_count=3, scanned_pages=3, pages_without_text=0, max_page_area_pt=500_000.0, max_words_per_page=9000, max_drawings_per_page=0)
+        client = self.make_client(inspector=FakeInspector(info=info))
+        response = self.post_pdf(client)
+        self.assertEqual(422, response.status_code)
+        self.assertEqual("page_too_complex", response.json()["error"]["code"])
+        self.assertEqual("ai", response.json()["error"]["feature"])
+        self.assertEqual(0, self.used())
+        self.assertEqual({"words": 9000, "drawings": 0}, self.store.events[-1]["complexity"])
 
     def test_daily_limit_after_three_uses(self):
         client = self.make_client()
@@ -298,6 +379,22 @@ class TestParseRejections(TrialApiCase):
         self.assertEqual(1, self.used())
         self.assertEqual("parse_failed", self.store.events[-1]["reject_code"])
 
+    def test_oversized_preview_returns_controlled_rejection_and_keeps_charge(self):
+        client = self.make_client(config=TrialConfig(ip_salt="salt", parse_concurrency=1))
+        original_encoder = trial_server.build_parse_body
+
+        def tiny_budget(*args, **kwargs):
+            return original_encoder(*args, **kwargs, budget_bytes=10)
+
+        with mock.patch.object(trial_server, "build_parse_body", side_effect=tiny_budget):
+            response = self.post_pdf(client)
+        self.assertRejected(response, 422, "page_too_complex", "ai")
+        self.assertLess(len(response.content), 1024)
+        self.assertEqual(1, self.used())  # The parser already spent CPU.
+        self.assertEqual("response_budget", self.store.events[-1]["reject_detail"])
+        # Encoding failure must also release the only processing slot.
+        self.assertEqual(200, self.post_pdf(client).status_code)
+
     def test_consume_with_unknown_outcome_is_refunded_by_request_id(self):
         store = CommitThenTimeoutStore()
         client = self.make_client(store=store)
@@ -328,6 +425,77 @@ class TestParseRejections(TrialApiCase):
         self.assertEqual([], self.verifier.calls)
         self.assertEqual([], self.parser.calls)
 
+    def test_not_ready_records_reason(self):
+        client = self.make_client(config=TrialConfig(production=True, ip_salt="salt", cron_secret="cron-secret"))
+        response = self.post_pdf(client)
+        self.assertEqual(503, response.status_code)
+        self.assertEqual("not_ready", self.store.events[-1]["reject_detail"])
+
+    def test_rejections_still_carry_instance_id(self):
+        client = self.make_client(config=TrialConfig(production=True, ip_salt="salt", cron_secret="cron-secret"))
+        self.post_pdf(client)
+        self.assertRegex(self.store.events[-1]["instance_id"], r"^[0-9a-f]{8}$")
+        self.assertIsNone(self.store.events[-1]["timing"])
+
+    def test_turnstile_outage_records_reason_and_does_not_charge(self):
+        client = self.make_client(verifier=FakeVerifier(error=TurnstileUnavailable("down")))
+        response = self.post_pdf(client)
+        self.assertEqual(503, response.status_code)
+        self.assertEqual("turnstile", self.store.events[-1]["reject_detail"])
+        self.assertEqual(0, self.used())
+
+    def test_quota_store_outage_records_reason(self):
+        client = self.make_client(store=CommitThenTimeoutStore())
+        response = self.post_pdf(client)
+        self.assertEqual(503, response.status_code)
+        self.assertEqual("quota_store", self.store.events[-1]["reject_detail"])
+
+    def test_global_limit_records_reason(self):
+        client = self.make_client(config=TrialConfig(ip_salt="salt", cron_secret="cron-secret", global_daily_limit=1))
+        self.assertEqual(200, self.post_pdf(client, ip="203.0.113.1").status_code)
+        response = self.post_pdf(client, ip="203.0.113.2")
+        self.assertEqual(503, response.status_code)
+        self.assertEqual("global_limit", self.store.events[-1]["reject_detail"])
+
+    def test_slot_wait_timeout_records_reason_and_does_not_charge(self):
+        gate = threading.Event()
+        client = self.make_client(
+            config=TrialConfig(ip_salt="salt", cron_secret="cron-secret", parse_concurrency=1, parse_wait_seconds=0.3),
+            parser=FakeParser(gate=gate),
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(self.post_pdf, client, ip="203.0.113.1")
+            time.sleep(0.2)  # let the first request take the only slot
+            second = self.post_pdf(client, ip="203.0.113.2")
+            # Check right away: the still-blocked first request only finishes (and
+            # records its own event) after gate.set() below, which would otherwise
+            # shadow the busy event we're checking for here.
+            self.assertEqual(503, second.status_code)
+            self.assertEqual("slot_wait", self.store.events[-1]["reject_detail"])
+            self.assertEqual(0, self.used("203.0.113.2"))
+            gate.set()
+            self.assertEqual(200, first.result().status_code)
+
+    def test_parser_crash_stays_charged_and_has_no_detail(self):
+        client = self.make_client(parser=FakeParser(error=RuntimeError("boom")))
+        response = self.post_pdf(client)
+        self.assertEqual(500, response.status_code)
+        self.assertEqual("parse_failed", response.json()["error"]["code"])
+        self.assertEqual(1, self.used())  # parsing started, so the use stays charged (spec §6)
+        self.assertIsNone(self.store.events[-1]["reject_detail"])
+
+    def test_success_and_ordinary_rejections_have_no_detail(self):
+        client = self.make_client()
+        self.post_pdf(client)
+        self.assertIsNone(self.store.events[-1]["reject_detail"])
+        self.post_pdf(client, body=b"\x89PNG\r\n\x1a\n" + b"0" * 100)
+        self.assertEqual("image_not_supported", self.store.events[-1]["reject_code"])
+        self.assertIsNone(self.store.events[-1]["reject_detail"])
+        for _ in range(3):
+            self.post_pdf(client)
+        self.assertEqual("daily_limit", self.store.events[-1]["reject_code"])
+        self.assertIsNone(self.store.events[-1]["reject_detail"])
+
     def test_concurrency_limit_answers_busy_without_charging(self):
         gate = threading.Event()
         config = TrialConfig(ip_salt="salt", parse_concurrency=1, parse_wait_seconds=0.2)
@@ -344,6 +512,52 @@ class TestParseRejections(TrialApiCase):
         self.assertEqual(0, self.used("203.0.113.2"))
         self.assertEqual(1, self.used("203.0.113.1"))
         self.assertEqual(1, len(self.store.charges))
+
+    def test_inspection_is_bounded_before_quota_is_consumed(self):
+        entered = threading.Event()
+        release = threading.Event()
+        inspector = FakeInspector()
+
+        def blocking_inspector(source, *, max_pages):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test inspector gate timed out")
+            return inspector(source, max_pages=max_pages)
+
+        client = self.make_client(
+            config=TrialConfig(ip_salt="salt", parse_concurrency=1, parse_wait_seconds=0.1),
+            inspector=blocking_inspector,
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(self.post_pdf, client, ip="203.0.113.1")
+            try:
+                self.assertTrue(entered.wait(timeout=5))
+                self.assertEqual(0, self.used("203.0.113.1"))
+                second = self.post_pdf(client, ip="203.0.113.2")
+                self.assertRejected(second, 503, "busy")
+                self.assertEqual("slot_wait", self.store.events[-1]["reject_detail"])
+                self.assertEqual(0, self.used("203.0.113.2"))
+                self.assertEqual([], self.parser.calls)
+            finally:
+                release.set()
+            self.assertEqual(200, first.result(timeout=5).status_code)
+        self.assertEqual(1, len(inspector.calls))
+
+    def test_invalid_input_releases_inspection_slot_without_charging(self):
+        inspector = FakeInspector(error=PdfUnreadableError("locked"))
+        client = self.make_client(
+            config=TrialConfig(ip_salt="salt", parse_concurrency=1, parse_wait_seconds=0.1),
+            inspector=inspector,
+        )
+        self.assertRejected(self.post_pdf(client), 422, "unreadable_pdf")
+        self.assertEqual(0, self.used())
+        inspector.error = None
+        inspector.info = PdfInfo(page_count=1, scanned_pages=1, pages_without_text=1, max_page_area_pt=500_000.0)
+        self.assertRejected(self.post_pdf(client), 422, "no_text_layer", "scan")
+        self.assertEqual(0, self.used())
+        inspector.info = FakeInspector().info
+        self.assertEqual(200, self.post_pdf(client).status_code)
+        self.assertEqual(1, self.used())
 
     def test_waiting_requests_are_not_charged_and_do_not_block_other_routes(self):
         gate = threading.Event()

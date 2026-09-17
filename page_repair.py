@@ -8,9 +8,11 @@ import os
 import re
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from itertools import zip_longest
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib import error, request
 
 from PIL import Image
@@ -40,6 +42,88 @@ _PROBLEM_UNIT_TRIGGER_REASONS = {
 
 _SUPPORTED_PROVIDER_ALIASES = {"gemini", "google"}
 
+# Gemini's finishReason values that mean "the response was cut off by the
+# output token budget", as opposed to a genuinely malformed JSON response
+# (finish_reason STOP) -- see GeminiRepairResponseError below.
+_GEMINI_TRUNCATION_FINISH_REASONS = {"MAX_TOKENS", "LENGTH"}
+
+
+class GeminiRepairResponseError(RuntimeError):
+    """A Gemini page-repair response failed to parse as the expected JSON
+    object, carrying the diagnostics needed to tell that failure apart from
+    an output-token-budget truncation (``truncated``) instead of just a
+    prose message. See ``_gemini_response_diagnostics`` for the fields.
+    """
+
+    def __init__(self, message: str, *, diagnostics: dict[str, Any], truncated: bool = False) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
+        self.truncated = truncated
+
+
+class GeminiRepairTruncatedError(GeminiRepairResponseError):
+    """The response's ``finishReason`` was MAX_TOKENS/LENGTH: Gemini stopped
+    generating before the JSON closed because it ran out of output-token
+    budget (``effective_max_output_tokens`` in ``diagnostics``), not because
+    the model produced a malformed answer. The fix is a bigger budget or a
+    smaller unit of work, not a same-model retry -- and that is not merely a
+    ``temperature=0.0`` theory (FALLBACK_GEMINI_REPAIR_MODEL is a gemini-3
+    flash model, and ``_request_gemini_repair`` pops ``temperature`` for
+    exactly that family, so an identical retry against it is not
+    deterministic). It is observed: the pre-fix
+    ``oracle_failures/english_go2_hakpyeong_20260324.json`` failure record
+    reads "AI repair failed after retries: ... Unterminated string", i.e.
+    the retry that ``_request_ai_repair_with_retry`` already ran reproduced
+    the identical truncation. That retry-skip only fires when the caller
+    fixed the output-token budget via ``AIFallbackConfig.max_output_token_cap``
+    (``scripts/trial_bench/oracle.py``'s ``force_config`` -- see
+    ``_request_ai_repair_with_retry``); every desktop caller leaves that cap
+    unset, so a truncation there still gets the normal retry, because the
+    undercounting per-block estimate that causes it (see
+    ``_repair_output_token_budget``) is still in place for desktop and the
+    retry is the only recovery available.
+    """
+
+    def __init__(self, message: str, *, diagnostics: dict[str, Any]) -> None:
+        super().__init__(message, diagnostics=diagnostics, truncated=True)
+
+
+def _gemini_response_diagnostics(
+    *,
+    model: str,
+    finish_reason: str,
+    effective_max_output_tokens: int,
+    configured_max_output_tokens: int,
+    prompt: str,
+    response_text: str,
+    block_count: int,
+    include_problem_units: bool,
+) -> dict[str, Any]:
+    """Everything needed to tell a genuine malformed-JSON response apart
+    from an output-token-budget truncation, without re-running the request:
+    the finishReason Gemini actually returned, the token budget the code
+    computed for this call (vs. what force_config/build_ai_fallback_config
+    configured), and enough of the raw response (sizes plus head/tail) to
+    see where and how it broke without dumping the whole page's text into a
+    log or an oracle failure record.
+    """
+    prompt_bytes = prompt.encode("utf-8")
+    response_bytes = response_text.encode("utf-8")
+    return {
+        "model": model,
+        "finish_reason": finish_reason,
+        "effective_max_output_tokens": effective_max_output_tokens,
+        "configured_max_output_tokens": configured_max_output_tokens,
+        "block_count": block_count,
+        "include_problem_units": include_problem_units,
+        "prompt_char_count": len(prompt),
+        "prompt_byte_count": len(prompt_bytes),
+        "response_char_count": len(response_text),
+        "response_byte_count": len(response_bytes),
+        "response_head": response_text[:200],
+        "response_tail": response_text[-200:],
+    }
+
 
 @dataclass(slots=True)
 class AIFallbackConfig:
@@ -52,6 +136,23 @@ class AIFallbackConfig:
     timeout_ms: int = 30000
     save_debug: bool = False
     fail_on_error: bool = False
+    # None (every desktop caller) means _repair_output_token_budget uses its
+    # built-in per-block estimate and 2048/3072 hard cap, unchanged. Set only
+    # by scripts/trial_bench/oracle.py's force_config, to bypass that
+    # estimate for the forced-repair oracle path -- see
+    # _repair_output_token_budget's docstring for why the estimate itself
+    # (not just the hard cap) truncated real English pages.
+    #
+    # Deliberately absent from to_metadata(): this is a bench-only knob and
+    # to_metadata() is desktop-visible output (build_structured_page_json.py
+    # writes it to the run summary's "ai_fallback" and to every page's
+    # metadata["ai_config"], which structured_schema.page_to_dict serializes
+    # to disk). Exporting it would change every desktop export's metadata
+    # byte-for-byte. Nothing reads the key back out of that metadata --
+    # build_problem_board_edb._to_page_ai_config reads it from the caller's
+    # own ai_fallback_config dict (oracle.py's force_config), not from an
+    # exported page -- so the dataclass field alone is enough.
+    max_output_token_cap: int | None = None
 
     @property
     def resolved_model(self) -> str:
@@ -77,6 +178,10 @@ class AIFallbackConfig:
         return self.normalized_mode != "off"
 
     def to_metadata(self) -> dict[str, Any]:
+        # Desktop-visible, serialized-to-disk output. Its key set is pinned
+        # by test_page_repair.py's TestAIFallbackConfigMetadataSurface, so
+        # adding a key here is a deliberate change to every export's
+        # metadata, not an accident of adding a dataclass field.
         return {
             "mode": self.normalized_mode,
             "provider": self.normalized_provider,
@@ -101,6 +206,7 @@ def build_ai_fallback_config(
     timeout_ms: int = 30000,
     save_debug: bool = False,
     fail_on_error: bool = False,
+    max_output_token_cap: int | None = None,
 ) -> AIFallbackConfig:
     return AIFallbackConfig(
         mode=mode,
@@ -112,6 +218,7 @@ def build_ai_fallback_config(
         timeout_ms=timeout_ms,
         save_debug=save_debug,
         fail_on_error=fail_on_error,
+        max_output_token_cap=int(max_output_token_cap) if max_output_token_cap else None,
     )
 
 
@@ -133,9 +240,171 @@ def _page_repair_stage_metadata(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class _PageOutputState(NamedTuple):
+    """Snapshot of everything an AI page repair can write that reaches the
+    scored output (``scripts/trial_bench/common.py``'s
+    ``observation_from_result``, and from there score.py's keys, regions and
+    review rate).
+
+    Included, because each of these is only ever written when the AI
+    actually supplied it:
+
+    - ``block_types`` -- ``_apply_repair_payload``'s re-typing of blocks.
+    - ``problem_partition`` -- the stem/choice/figure block-id partition of
+      the regrouped ProblemUnits, i.e. the grouping itself.
+    - ``block_titles`` -- ``block.metadata["display_title"]``, which the AI's
+      ``display_titles`` writes and assemble_page.py's
+      ``_problem_display_title`` turns into ``ProblemUnit.title``, which
+      ``common.problem_key`` turns into the observation key (and which the
+      passage-range detection reads).
+    - ``problem_titles`` -- the per-problem title that results, in page order.
+    - ``problem_boxes`` -- ``problem.metadata["bbox_px"]``, which
+      build_problem_board_edb.py's ``_should_prefer_problem_metadata_bbox``
+      makes *replace* the locally derived crop box on every AI-grouped
+      problem -- i.e. every region the oracle observation scores.
+    - ``problem_annotations`` -- ``problem.metadata["review_flags"]`` (score.py's
+      review rate) and whether an ``ai_problem_unit`` was attached at all.
+
+    Excluded: ``grouping_source``, ``grouping_reason`` and
+    ``ai_grouping_role``. ``_apply_repair_payload`` and
+    ``_annotate_problem_metadata`` stamp those onto every block and problem
+    they touch whether or not the AI's answer differed from the local
+    baseline, so diffing them would make every applied page read as
+    "changed".
+    """
+
+    block_types: dict[str, BlockType]
+    problem_partition: frozenset[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]]
+    block_titles: dict[str, str | None]
+    problem_titles: tuple[str | None, ...]
+    problem_boxes: tuple[str, ...]
+    problem_annotations: tuple[str, ...]
+
+
+def _metadata_fingerprint(value: Any) -> str:
+    """Hashable, key-order-insensitive rendering of a metadata value, so two
+    snapshots compare equal exactly when the value is the same."""
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _classification_state(page: PageModel) -> _PageOutputState:
+    block_types = {block.block_id: block.block_type for block in page.blocks}
+    block_titles: dict[str, str | None] = {}
+    for block in page.blocks:
+        raw_title = block.metadata.get("display_title")
+        block_titles[block.block_id] = raw_title.strip() if isinstance(raw_title, str) else None
+    problem_partition = frozenset(
+        (
+            tuple(sorted(problem.stem_block_ids)),
+            tuple(sorted(problem.choice_block_ids)),
+            tuple(sorted(problem.figure_block_ids)),
+        )
+        for problem in page.problems
+    )
+    problem_titles = tuple(problem.title for problem in page.problems)
+    problem_boxes = tuple(
+        _metadata_fingerprint(problem.metadata.get("bbox_px")) for problem in page.problems
+    )
+    problem_annotations = tuple(
+        _metadata_fingerprint(
+            {
+                "review_flags": problem.metadata.get("review_flags"),
+                "ai_problem_unit": bool(problem.metadata.get("ai_problem_unit")),
+            }
+        )
+        for problem in page.problems
+    )
+    return _PageOutputState(
+        block_types=block_types,
+        problem_partition=problem_partition,
+        block_titles=block_titles,
+        problem_titles=problem_titles,
+        problem_boxes=problem_boxes,
+        problem_annotations=problem_annotations,
+    )
+
+
+def _count_changed_blocks(
+    baseline_by_block_id: Mapping[str, Any],
+    repaired_by_block_id: Mapping[str, Any],
+) -> int:
+    all_ids = set(baseline_by_block_id) | set(repaired_by_block_id)
+    return sum(
+        1
+        for block_id in all_ids
+        if baseline_by_block_id.get(block_id) != repaired_by_block_id.get(block_id)
+    )
+
+
+_MISSING_SLOT = object()
+
+
+def _count_changed_slots(baseline: Sequence[Any], repaired: Sequence[Any]) -> int:
+    """Per-problem diff, index-aligned in page (reading) order. A repair that
+    changes the number of problems counts every surplus/missing slot as
+    changed -- that regrouping is also reported on its own through
+    ``problems_regrouped``."""
+    return sum(
+        1
+        for before, after in zip_longest(baseline, repaired, fillvalue=_MISSING_SLOT)
+        if before != after
+    )
+
+
+def _repair_change_counters(
+    baseline: _PageOutputState,
+    repaired: _PageOutputState,
+) -> dict[str, Any]:
+    """The change signal behind the bench oracle's "NO AI EVIDENCE" verdict
+    (scripts/trial_bench/oracle.py) and score.py's zero-evidence footnote.
+
+    Kept as separate counters so "the AI regrouped the page" stays
+    distinguishable from "the AI only supplied titles, crop boxes or review
+    flags"; ``changed`` is their union, because any one of them is the AI's
+    answer reaching the scored output.
+    """
+    blocks_changed = _count_changed_blocks(baseline.block_types, repaired.block_types)
+    problems_regrouped = repaired.problem_partition != baseline.problem_partition
+    titles_changed = _count_changed_blocks(
+        baseline.block_titles, repaired.block_titles
+    ) + _count_changed_slots(baseline.problem_titles, repaired.problem_titles)
+    boxes_overridden = _count_changed_slots(baseline.problem_boxes, repaired.problem_boxes)
+    problem_metadata_changed = _count_changed_slots(
+        baseline.problem_annotations, repaired.problem_annotations
+    )
+    return {
+        "blocks_changed": blocks_changed,
+        "problems_regrouped": problems_regrouped,
+        "titles_changed": titles_changed,
+        "boxes_overridden": boxes_overridden,
+        "problem_metadata_changed": problem_metadata_changed,
+        "changed": bool(
+            blocks_changed
+            or problems_regrouped
+            or titles_changed
+            or boxes_overridden
+            or problem_metadata_changed
+        ),
+    }
+
+
 def _attach_ai_fallback_summary(page: PageModel, summary: dict[str, Any]) -> PageModel:
     summary.setdefault("stage", "page_repair")
     summary.setdefault("stage_label", "3단계 문항 경계 보정")
+    # Every summary that never reaches an "applied" branch (disabled,
+    # not_needed, missing_api_key, error, invalid_response, ...) never
+    # changed the page's output either, so default every counter here; the
+    # two "applied" branches in repair_page_model overwrite them with the
+    # real diff against the pre-repair baseline.
+    summary.setdefault("blocks_changed", 0)
+    summary.setdefault("problems_regrouped", False)
+    summary.setdefault("titles_changed", 0)
+    summary.setdefault("boxes_overridden", 0)
+    summary.setdefault("problem_metadata_changed", 0)
+    summary.setdefault("changed", False)
     page.metadata["ai_fallback"] = summary
     raw_stages = page.metadata.get("ai_stages")
     stages = dict(raw_stages) if isinstance(raw_stages, dict) else {}
@@ -156,6 +425,11 @@ def repair_page_model(
     resolved_config = config or AIFallbackConfig()
     pipeline_cache = cache or PipelineCache.for_source(prepared_page.source_path)
     baseline = group_problem_units(page)
+    # Snapshot the pre-repair output state now, before anything mutates
+    # `baseline` in place: `_apply_repair_payload` below writes onto
+    # `baseline.blocks` directly and returns the same object, so capturing
+    # this after that call would compare the repaired page against itself.
+    baseline_state = _classification_state(baseline)
     route_decision = decide_page_route(
         baseline,
         ocr_mode=ocr_mode,
@@ -235,6 +509,12 @@ def repair_page_model(
                 trigger_reasons=trigger_reasons,
             )
             repaired = group_problem_units(replace(repaired, problems=[]))
+            repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
+            repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
+            # Snapshot *after* the AI's problem-unit metadata is written, not
+            # straight after grouping: bbox_px and review_flags land here and
+            # reach the crop boxes and review rate the oracle scores.
+            _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
             summary.update(
                 {
                     "applied": True,
@@ -245,6 +525,7 @@ def repair_page_model(
                     "repaired_problem_count": len(repaired.problems),
                     "ai_notes": list(repair_payload.get("notes") or []),
                     "problem_units_accepted": len(problem_unit_metadata),
+                    **_repair_change_counters(baseline_state, _classification_state(repaired)),
                 }
             )
             if cached_model and cached_model != resolved_config.resolved_model:
@@ -255,9 +536,6 @@ def repair_page_model(
                 }
             if problem_unit_warnings:
                 summary["problem_units_warnings"] = problem_unit_warnings
-            repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
-            repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
-            _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
             return _attach_ai_fallback_summary(repaired, summary)
 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -330,6 +608,12 @@ def repair_page_model(
         response_id=response_id,
     )
 
+    repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
+    repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
+    # Snapshot *after* the AI's problem-unit metadata is written, not straight
+    # after grouping: bbox_px and review_flags land here and reach the crop
+    # boxes and review rate the oracle scores.
+    _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
     summary.update(
         {
             "applied": True,
@@ -341,6 +625,7 @@ def repair_page_model(
             "repaired_problem_count": len(repaired.problems),
             "ai_notes": list(repair_payload.get("notes") or []),
             "problem_units_accepted": len(problem_unit_metadata),
+            **_repair_change_counters(baseline_state, _classification_state(repaired)),
         }
     )
     if used_model != resolved_config.resolved_model:
@@ -359,9 +644,6 @@ def repair_page_model(
         }
     if problem_unit_warnings:
         summary["problem_units_warnings"] = problem_unit_warnings
-    repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
-    repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
-    _annotate_problem_metadata(repaired, trigger_reasons, problem_unit_metadata)
     _maybe_write_debug_artifacts(
         prepared_page=prepared_page,
         page=repaired,
@@ -479,7 +761,9 @@ def _request_ai_repair_with_model_fallback(
             attempts.append({"model": model, "status": "error", "error": str(exc)})
             if _is_fatal_ai_repair_error(exc):
                 break
-    raise RuntimeError(f"AI repair failed after model fallback: {last_exc}") from last_exc
+    wrapped = RuntimeError(f"AI repair failed after model fallback: {last_exc}")
+    _copy_gemini_diagnostics(source=last_exc, target=wrapped)
+    raise wrapped from last_exc
 
 
 def _request_ai_repair_with_retry(
@@ -490,7 +774,19 @@ def _request_ai_repair_with_retry(
     trigger_reasons: list[str],
     api_key: str,
 ) -> tuple[dict[str, Any], str | None, dict[str, int]]:
-    """Call Gemini for the repair. Retry once on transient failure."""
+    """Call Gemini for the repair. Retry once on transient failure.
+
+    A truncated response (``GeminiRepairResponseError.truncated``) skips
+    that retry only when ``config.max_output_token_cap`` is set -- i.e. only
+    for scripts/trial_bench/oracle.py's ``force_config``, whose fixed budget
+    is what proved the retry pointless there (see
+    ``GeminiRepairTruncatedError``'s docstring for the observed evidence).
+    Every desktop caller leaves ``max_output_token_cap`` unset, so a
+    truncated response there still goes through the normal
+    ``_is_retryable_ai_repair_error`` check below and gets retried, because
+    the undercounting per-block estimate that causes the truncation is still
+    in place for desktop and the retry is the only recovery it has.
+    """
     last_exc: Exception | None = None
     for attempt in range(2):
         if attempt > 0:
@@ -505,12 +801,39 @@ def _request_ai_repair_with_retry(
             )
         except Exception as exc:
             last_exc = exc
+            if (
+                config.max_output_token_cap is not None
+                and isinstance(exc, GeminiRepairResponseError)
+                and exc.truncated
+            ):
+                raise
             if not _is_retryable_ai_repair_error(exc):
                 raise
-    raise RuntimeError(f"AI repair failed after retries: {last_exc}") from last_exc
+    wrapped = RuntimeError(f"AI repair failed after retries: {last_exc}")
+    _copy_gemini_diagnostics(source=last_exc, target=wrapped)
+    raise wrapped from last_exc
+
+
+def _copy_gemini_diagnostics(*, source: Exception | None, target: Exception) -> None:
+    """Carry a GeminiRepairResponseError's diagnostics onto a wrapping
+    RuntimeError, so oracle.py's failure record still sees the finishReason,
+    token budget and response sizes after `_request_ai_repair_with_retry`/
+    `_request_ai_repair_with_model_fallback` rewrap the underlying error with
+    a summary message. A bare ``raise`` (the non-retryable/non-fatal exit
+    paths) re-raises the original object and never needs this.
+    """
+    diagnostics = getattr(source, "diagnostics", None)
+    if diagnostics is not None:
+        target.diagnostics = diagnostics
+        target.truncated = bool(getattr(source, "truncated", False))
 
 
 def _is_retryable_ai_repair_error(exc: Exception) -> bool:
+    # A truncated response's own same-model retry skip is decided by the
+    # caller (_request_ai_repair_with_retry), gated on
+    # config.max_output_token_cap, not here -- this function has no access
+    # to that config and must stay correct for every desktop caller, which
+    # still wants the retry below when a truncation occurs.
     if _is_fatal_ai_repair_error(exc):
         return False
     message = str(exc)
@@ -562,8 +885,33 @@ def _repair_output_token_budget(
     *,
     configured_max_tokens: int,
     include_problem_units: bool,
+    max_output_token_cap: int | None = None,
 ) -> int:
-    """Bound structured repair output without truncating normal block arrays."""
+    """Bound structured repair output without truncating normal block arrays.
+
+    ``max_output_token_cap`` (AIFallbackConfig.max_output_token_cap, unset by
+    every desktop caller) bypasses the per-block estimate and hard cap below
+    entirely, returning ``min(configured_max_tokens, max_output_token_cap)``
+    instead. Only scripts/trial_bench/oracle.py's force_config sets it, so
+    every existing caller computes exactly the value it always has.
+
+    That bypass exists because the estimate itself, not just the 2048/3072
+    hard cap, was the actual truncation cause diagnosed on
+    english_2020suneung_go3_20191107 (oracle_failures/): with block_count=11
+    and include_problem_units=False, "512 + 24*block_count" computed 776,
+    under the 2048 hard cap and nowhere near force_config's configured 4096.
+    "24 tokens per block" was calibrated against short synthetic block ids
+    ("block-1"); a real per-page id
+    ("<case>-page-001-block-011", 50+ characters) appears twice per block --
+    once in problem_start_block_ids, once as a display_titles entry -- so
+    the true per-block cost scales with the source filename length, which
+    this estimate never accounts for. The response was captured
+    mid-``display_titles`` array (its ``block_id`` string cut off
+    mid-write), and Gemini's own finishReason was MAX_TOKENS -- see
+    page_repair.GeminiRepairTruncatedError and the diagnostics it carries.
+    """
+    if max_output_token_cap is not None:
+        return max(512, min(int(configured_max_tokens), int(max_output_token_cap)))
     block_count = max(1, len(page.blocks))
     estimated = 512 + 24 * block_count
     if include_problem_units:
@@ -586,6 +934,7 @@ def _request_gemini_repair(
         page,
         configured_max_tokens=config.max_tokens,
         include_problem_units=include_problem_units,
+        max_output_token_cap=config.max_output_token_cap,
     )
     prompt = _build_repair_prompt(
         page,
@@ -638,13 +987,45 @@ def _request_gemini_repair(
     json_text = "".join(
         part.get("text", "") for part in parts if isinstance(part, dict) and part.get("text")
     )
+    finish_reason = str(candidates[0].get("finishReason") or "unknown")
     if not json_text:
-        finish_reason = candidates[0].get("finishReason") or "unknown"
-        raise RuntimeError(f"Gemini response contained no text (finish={finish_reason})")
+        diagnostics = _gemini_response_diagnostics(
+            model=config.resolved_model,
+            finish_reason=finish_reason,
+            effective_max_output_tokens=output_token_limit,
+            configured_max_output_tokens=config.max_tokens,
+            prompt=prompt,
+            response_text=json_text,
+            block_count=len(page.blocks),
+            include_problem_units=include_problem_units,
+        )
+        message = f"Gemini response contained no text (finish={finish_reason})"
+        if finish_reason in _GEMINI_TRUNCATION_FINISH_REASONS:
+            raise GeminiRepairTruncatedError(message, diagnostics=diagnostics)
+        raise GeminiRepairResponseError(message, diagnostics=diagnostics)
     try:
         parsed = json.loads(json_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Gemini response JSON decode failed: {exc}") from exc
+        diagnostics = _gemini_response_diagnostics(
+            model=config.resolved_model,
+            finish_reason=finish_reason,
+            effective_max_output_tokens=output_token_limit,
+            configured_max_output_tokens=config.max_tokens,
+            prompt=prompt,
+            response_text=json_text,
+            block_count=len(page.blocks),
+            include_problem_units=include_problem_units,
+        )
+        if finish_reason in _GEMINI_TRUNCATION_FINISH_REASONS:
+            raise GeminiRepairTruncatedError(
+                f"Gemini response truncated at {output_token_limit} output tokens "
+                f"(finish_reason={finish_reason}, model={config.resolved_model}): {exc}",
+                diagnostics=diagnostics,
+            ) from exc
+        raise GeminiRepairResponseError(
+            f"Gemini response JSON decode failed (finish_reason={finish_reason}): {exc}",
+            diagnostics=diagnostics,
+        ) from exc
     if not isinstance(parsed, dict):
         raise RuntimeError("Gemini response was not a JSON object")
     token_usage = normalize_gemini_token_usage(raw_response)

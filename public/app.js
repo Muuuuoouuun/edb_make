@@ -2,12 +2,13 @@
   "use strict";
 
   const logic = window.TRIAL_LOGIC;
+  const demo = document.body.dataset.trialMode === "demo" ? window.TRIAL_DEMO : null;
   const TURNSTILE_SCRIPT = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
   // Long enough for a visitor to notice and finish an interactive challenge.
   const TOKEN_WAIT_MS = 60000;
 
   const state = {
-    config: { inquiry_url: "https://classin.co.kr/contact", turnstile_site_key: null, max_bytes: 4000000, max_pages: 3, daily_limit: 3 },
+    config: { inquiry_url: "https://classin.co.kr/contact", turnstile_site_key: null, max_bytes: 4000000, max_pages: 4, daily_limit: 3 },
     widgetId: null,
     token: null,
     tokenWaiters: [],
@@ -15,6 +16,7 @@
     configReady: null,
     lastPayload: null,
     popupContext: {},
+    previewMode: "raw",
   };
 
   const $ = id => document.getElementById(id);
@@ -43,6 +45,7 @@
   }
 
   function sendEvent(feature, action) {
+    if (demo) return; // Keep event demonstrations out of the public conversion funnel.
     const body = JSON.stringify({ feature, action });
     try {
       if (navigator.sendBeacon && navigator.sendBeacon("/api/event", new Blob([body], { type: "text/plain" }))) {
@@ -127,15 +130,30 @@
 
   async function loadConfig() {
     try {
-      const response = await fetch("/api/config", { cache: "no-store" });
-      if (response.ok) {
-        state.config = { ...state.config, ...(await response.json()) };
+      if (demo) {
+        const config = await demo.initialize(() => {
+          state.lastPayload = null;
+          $("pages").replaceChildren();
+          $("problems").replaceChildren();
+          $("preview-toggle").hidden = true;
+          $("file-input").value = "";
+          if ($("premium-dialog").open) $("premium-dialog").close();
+          showView("upload");
+        });
+        state.config = { ...state.config, ...config, turnstile_site_key: null };
+      } else {
+        const response = await fetch("/api/config", { cache: "no-store" });
+        if (response.ok) {
+          state.config = { ...state.config, ...(await response.json()) };
+        }
       }
     } catch (error) {
       // keep defaults; the upload will report connection problems
     }
     const mb = Math.floor(state.config.max_bytes / 1000000);
-    $("limits-text").textContent = `앞 ${state.config.max_pages}쪽 · ${mb}MB · 하루 ${state.config.daily_limit}회`;
+    $("limits-text").textContent = demo
+      ? `앞 ${state.config.max_pages}쪽 · ${mb}MB · 시연 기간에는 반복 이용 가능`
+      : `앞 ${state.config.max_pages}쪽 · ${mb}MB · 하루 ${state.config.daily_limit}회`;
     $("header-inquiry").href = state.config.inquiry_url;
     if (state.config.turnstile_site_key) {
       loadTurnstile(state.config.turnstile_site_key);
@@ -163,6 +181,8 @@
     try {
       // Without the config we do not know whether a Turnstile token is required.
       await state.configReady;
+      if (demo && !demo.canParse()) return;
+      if (demo) demo.setBusy(true);
       showUploadMessage("");
       const precheck = logic.precheckFile(file, state.config);
       if (precheck) {
@@ -195,7 +215,10 @@
         if (token) {
           headers["x-turnstile-token"] = token;
         }
-        const response = await fetch("/api/parse", { method: "POST", body: file, headers });
+        if (demo) headers["X-Demo-Request"] = "1";
+        const response = await fetch(demo ? "/api/demo/parse" : "/api/parse", {
+          method: "POST", body: file, headers, credentials: "same-origin",
+        });
         status = response.status;
         text = await response.text();
       } catch (error) {
@@ -204,6 +227,7 @@
         resetToken();
       }
 
+      if (demo && (demo.handleResponse(status, text) || !demo.canParse())) return;
       if (status === 200) {
         let payload = null;
         try {
@@ -226,6 +250,7 @@
     } finally {
       stopTimer();
       state.busy = false;
+      if (demo) demo.setBusy(false);
       $("file-input").value = "";
     }
   }
@@ -289,6 +314,46 @@
     }
   }
 
+  function isBoardSource(problem, source) {
+    return state.previewMode === "board" && source !== null && source === problem.board;
+  }
+
+  function syncPreviewToggle(payload) {
+    const toggle = $("preview-toggle");
+    const available = logic.hasBoardPreviews(payload);
+    if (!available) {
+      state.previewMode = "raw";
+    }
+    toggle.hidden = !available;
+    for (const button of toggle.querySelectorAll("[data-mode]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.mode === state.previewMode));
+    }
+  }
+
+  function setPreviewMode(mode) {
+    if ((mode !== "raw" && mode !== "board") || mode === state.previewMode) {
+      return;
+    }
+    state.previewMode = mode;
+    const payload = state.lastPayload;
+    if (payload) {
+      const byId = new Map(payload.problems.map(problem => [problem.problem_id, problem]));
+      for (const item of $("problems").querySelectorAll(".problem-card")) {
+        const problem = byId.get(item.dataset.problemId);
+        const image = item.querySelector("img");
+        if (!problem || !image) {
+          continue;
+        }
+        const source = logic.cardImageSource(problem, state.previewMode);
+        if (source) {
+          image.src = source;
+        }
+        item.classList.toggle("problem-card--board", isBoardSource(problem, source));
+      }
+    }
+    syncPreviewToggle(payload);
+  }
+
   function renderProblems(payload) {
     const list = $("problems");
     list.replaceChildren();
@@ -312,13 +377,15 @@
       }
       item.appendChild(head);
 
-      if (logic.isSafeImageSource(problem.preview)) {
+      const source = logic.cardImageSource(problem, state.previewMode);
+      if (source) {
         const image = document.createElement("img");
-        image.src = problem.preview;
+        image.src = source;
         image.alt = `${logic.problemLabel(problem)} 미리보기`;
         image.loading = "lazy";
         item.appendChild(image);
       }
+      item.classList.toggle("problem-card--board", isBoardSource(problem, source));
 
       if (problem.needs_review) {
         const ai = document.createElement("button");
@@ -353,7 +420,9 @@
     const summary = logic.summarize(payload);
     $("result-title").textContent = summary.headline;
     $("result-meta").textContent = `${summary.seconds} · 앞 ${payload.processed_page_count}쪽 처리`;
-    $("remaining-text").textContent = logic.remainingText(payload.remaining_today);
+    $("remaining-text").textContent = demo
+      ? "시연 기간에는 횟수 제한 없이 다시 이용할 수 있어요"
+      : logic.remainingText(payload.remaining_today);
 
     const banner = logic.pagesBanner(payload);
     const bannerButton = $("pages-banner");
@@ -366,6 +435,7 @@
     const empty = payload.problems.length === 0;
     $("empty-result").hidden = !empty;
     $("result-body").hidden = empty;
+    syncPreviewToggle(payload);
     renderPages(payload);
     renderProblems(payload);
     showView("result");
@@ -409,6 +479,12 @@
       }
     });
 
+    $("preview-toggle").addEventListener("click", event => {
+      const button = event.target.closest("[data-mode]");
+      if (button) {
+        setPreviewMode(button.dataset.mode);
+      }
+    });
     $("pages-banner").addEventListener("click", () => openPremium("limit_pages", state.popupContext));
     $("premium-inquiry").addEventListener("click", event => sendEvent(event.currentTarget.dataset.feature || "ai", "inquiry"));
     $("retry-button").addEventListener("click", () => {

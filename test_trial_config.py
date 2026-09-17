@@ -22,13 +22,14 @@ class TestTrialConfig(unittest.TestCase):
         self.assertEqual(DEFAULT_INQUIRY_URL, config.inquiry_url)
         self.assertEqual("https://classin.co.kr/contact", config.inquiry_url)
         self.assertEqual(4_000_000, config.limits.max_bytes)
-        self.assertEqual(3, config.limits.max_pages)
+        self.assertEqual(4, config.limits.max_pages)
         self.assertEqual(100, config.limits.max_source_pages)
         self.assertAlmostEqual(2 * A3_AREA_PT, config.limits.max_page_area_pt)
         self.assertEqual(3, config.daily_limit)
         self.assertEqual(500, config.global_daily_limit)
-        self.assertEqual(2, config.parse_concurrency)
+        self.assertEqual(1, config.parse_concurrency)
         self.assertEqual(20.0, config.parse_wait_seconds)
+        self.assertTrue(config.board_previews)
         self.assertEqual(frozenset(), config.expected_hostnames)
         self.assertIsNone(config.turnstile_secret)
         self.assertEqual([], config.missing_production_settings())
@@ -82,6 +83,24 @@ class TestTrialConfig(unittest.TestCase):
     def test_non_https_inquiry_url_raises(self):
         with self.assertRaises(ValueError):
             TrialConfig.from_env({"TRIAL_INQUIRY_URL": "javascript:alert(1)"})
+
+    def test_complexity_limits_from_env(self):
+        config = TrialConfig.from_env({"TRIAL_MAX_WORDS_PER_PAGE": "1234", "TRIAL_MAX_DRAWINGS_PER_PAGE": "567"})
+        self.assertEqual(1234, config.limits.max_words_per_page)
+        self.assertEqual(567, config.limits.max_drawings_per_page)
+        defaults = TrialConfig.from_env({})
+        self.assertEqual(4500, defaults.limits.max_words_per_page)
+        self.assertEqual(2000, defaults.limits.max_drawings_per_page)
+        # The dataclass defaults and the from_env defaults are the same numbers, named once.
+        self.assertEqual(TrialConfig().limits, TrialConfig.from_env({}).limits)
+
+    def test_board_previews_flag(self):
+        for value in ("0", "false", "No", "OFF"):
+            self.assertFalse(TrialConfig.from_env({"TRIAL_BOARD_PREVIEWS": value}).board_previews, value)
+        for value in ("1", "true", "Yes", "ON"):
+            self.assertTrue(TrialConfig.from_env({"TRIAL_BOARD_PREVIEWS": value}).board_previews, value)
+        with self.assertRaises(ValueError):
+            TrialConfig.from_env({"TRIAL_BOARD_PREVIEWS": "maybe"})
 
 
 if __name__ == "__main__":
