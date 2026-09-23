@@ -169,6 +169,19 @@
     return { headline, seconds, questionCount, passageCount };
   }
 
+  // Validate fields traversed by the shared renderer before leaving the processing view.
+  function isValidResultPayload(payload) {
+    if (!payload || !Array.isArray(payload.pages) || !Array.isArray(payload.problems)) return false;
+    const positive = value => Number.isFinite(value) && value > 0;
+    return payload.pages.every(page => page && typeof page.page_id === "string"
+      && Number.isInteger(page.index) && page.index >= 0 && positive(page.width) && positive(page.height))
+      && payload.problems.every(problem => problem && typeof problem.problem_id === "string"
+        && Array.isArray(problem.regions) && problem.regions.every(region => region
+          && typeof region.page_id === "string" && region.bbox
+          && ["left", "top", "width", "height"].every(key => Number.isFinite(region.bbox[key]))
+          && region.bbox.width >= 0 && region.bbox.height >= 0));
+  }
+
   function pagesBanner(payload) {
     const source = Number(payload.source_page_count) || 0;
     const processed = Number(payload.processed_page_count) || 0;
@@ -227,6 +240,7 @@
     hasBoardPreviews,
     interpretError,
     isSafeImageSource,
+    isValidResultPayload,
     pagesBanner,
     popupContent,
     precheckFile,

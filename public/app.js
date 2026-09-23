@@ -6,14 +6,19 @@
   const TURNSTILE_SCRIPT = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
   // Long enough for a visitor to notice and finish an interactive challenge.
   const TOKEN_WAIT_MS = 60000;
+  const CONFIG_TIMEOUT_MS = 15000;
+  // The server allows up to 60 seconds; leave room for upload and response transfer.
+  const PARSE_TIMEOUT_MS = 90000;
 
   const state = {
     config: { inquiry_url: "https://classin.co.kr/contact", turnstile_site_key: null, max_bytes: 4000000, max_pages: 4, daily_limit: 3 },
     widgetId: null,
     token: null,
     tokenWaiters: [],
+    tokenError: false,
     busy: false,
     configReady: null,
+    retryFile: null,
     lastPayload: null,
     popupContext: {},
     previewMode: "raw",
@@ -42,6 +47,33 @@
     const element = $("upload-hint");
     element.textContent = message || "";
     element.hidden = !message;
+  }
+
+  function offerRetry(file, mayHaveUsedTrial = false) {
+    state.retryFile = file || null;
+    $("upload-retry").hidden = !file;
+    $("upload-retry").title = file ? file.name : "";
+    $("retry-notice").hidden = !file || !mayHaveUsedTrial || !!demo;
+  }
+
+  function setBusy(busy) {
+    state.busy = busy;
+    $("file-input").disabled = busy;
+    $("upload-retry").disabled = busy;
+    $("dropzone").setAttribute("aria-busy", String(busy));
+    if (demo) demo.setBusy(busy);
+  }
+
+  async function requestText(url, options, timeout) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      // Include response-body transfer in the deadline too.
+      return { ok: response.ok, status: response.status, text: await response.text() };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function sendEvent(feature, action) {
@@ -88,43 +120,64 @@
     if (state.token) {
       return Promise.resolve(state.token);
     }
+    if (state.tokenError) {
+      return Promise.resolve(null);
+    }
     return new Promise(resolve => {
-      state.tokenWaiters.push(resolve);
-      setTimeout(() => resolve(state.token), TOKEN_WAIT_MS);
+      const finish = token => {
+        clearTimeout(timer);
+        state.tokenWaiters = state.tokenWaiters.filter(waiter => waiter !== finish);
+        resolve(token);
+      };
+      const timer = setTimeout(() => finish(state.token), TOKEN_WAIT_MS);
+      state.tokenWaiters.push(finish);
     });
   }
 
   function resetToken() {
     state.token = null;
+    state.tokenError = false;
     if (window.turnstile && state.widgetId !== null) {
-      window.turnstile.reset(state.widgetId);
+      try {
+        window.turnstile.reset(state.widgetId);
+      } catch (error) {
+        state.tokenError = true;
+      }
     }
   }
 
   function loadTurnstile(siteKey) {
+    state.tokenError = false;
     const script = document.createElement("script");
     script.src = TURNSTILE_SCRIPT;
     script.async = true;
-    script.onload = () => {
-      state.widgetId = window.turnstile.render("#turnstile-widget", {
-        sitekey: siteKey,
-        action: "parse",
-        language: "ko",
-        callback: token => {
-          state.token = token;
-          resolveTokenWaiters(token);
-        },
-        "expired-callback": () => {
-          state.token = null;
-        },
-        "error-callback": () => {
-          state.token = null;
-          // Waiters would otherwise sit out the full timeout for a token that cannot come.
-          resolveTokenWaiters(null);
-        },
-      });
+    const failed = () => {
+      state.tokenError = true;
+      state.token = null;
+      resolveTokenWaiters(null);
+      showUploadMessage("확인 도구에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.");
     };
-    script.onerror = () => showUploadMessage("확인 도구를 불러오지 못했어요. 새로고침 후 다시 시도해 주세요.");
+    script.onload = () => {
+      try {
+        state.widgetId = window.turnstile.render("#turnstile-widget", {
+          sitekey: siteKey,
+          action: "parse",
+          language: "ko",
+          callback: token => {
+            state.token = token;
+            state.tokenError = false;
+            resolveTokenWaiters(token);
+          },
+          "expired-callback": () => {
+            state.token = null;
+          },
+          "error-callback": failed,
+        });
+      } catch (error) {
+        failed();
+      }
+    };
+    script.onerror = failed;
     document.head.appendChild(script);
   }
 
@@ -133,6 +186,9 @@
       if (demo) {
         const config = await demo.initialize(() => {
           state.lastPayload = null;
+          offerRetry(null);
+          showUploadMessage("");
+          showUploadHint("");
           $("pages").replaceChildren();
           $("problems").replaceChildren();
           $("preview-toggle").hidden = true;
@@ -142,13 +198,15 @@
         });
         state.config = { ...state.config, ...config, turnstile_site_key: null };
       } else {
-        const response = await fetch("/api/config", { cache: "no-store" });
-        if (response.ok) {
-          state.config = { ...state.config, ...(await response.json()) };
-        }
+        const response = await requestText("/api/config", { cache: "no-store" }, CONFIG_TIMEOUT_MS);
+        if (!response.ok) throw new Error("config unavailable");
+        const config = JSON.parse(response.text);
+        if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("invalid config");
+        state.config = { ...state.config, ...config };
       }
     } catch (error) {
-      // keep defaults; the upload will report connection problems
+      showUploadMessage("체험 정보를 불러오지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.");
+      return false;
     }
     const mb = Math.floor(state.config.max_bytes / 1000000);
     $("limits-text").textContent = demo
@@ -158,6 +216,7 @@
     if (state.config.turnstile_site_key) {
       loadTurnstile(state.config.turnstile_site_key);
     }
+    return true;
   }
 
   function startElapsedTimer() {
@@ -176,14 +235,24 @@
     if (state.busy || !file) {
       return;
     }
-    state.busy = true;
+    setBusy(true);
+    offerRetry(null);
     let stopTimer = () => {};
+    let parseStarted = false;
     try {
       // Without the config we do not know whether a Turnstile token is required.
-      await state.configReady;
-      if (demo && !demo.canParse()) return;
-      if (demo) demo.setBusy(true);
       showUploadMessage("");
+      showUploadHint("체험 정보를 확인하고 있어요.");
+      if (!(await state.configReady)) {
+        state.configReady = loadConfig();
+        if (!(await state.configReady)) {
+          offerRetry(file);
+          return;
+        }
+      }
+      if (demo && !demo.canParse()) return;
+      showUploadMessage("");
+      showUploadHint("");
       const precheck = logic.precheckFile(file, state.config);
       if (precheck) {
         if (precheck.feature) {
@@ -195,13 +264,20 @@
       }
 
       // Wait on the upload view: the widget lives there and may need a click.
+      if (state.config.turnstile_site_key && state.tokenError) {
+        if (state.widgetId !== null) resetToken();
+        else loadTurnstile(state.config.turnstile_site_key);
+      }
       if (state.config.turnstile_site_key && !state.token) {
         showUploadHint("아래 확인을 완료하면 바로 시작해요.");
       }
       const token = await waitForToken();
       showUploadHint("");
       if (state.config.turnstile_site_key && !token) {
-        showUploadMessage("사람 확인이 아직 끝나지 않았어요. 확인 상자를 완료한 뒤 다시 올려 주세요.");
+        showUploadMessage(state.tokenError
+          ? "확인 도구에 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
+          : "사람 확인이 아직 끝나지 않았어요. 확인 상자를 완료한 뒤 다시 시도해 주세요.");
+        offerRetry(file);
         return;
       }
 
@@ -210,19 +286,22 @@
       stopTimer = startElapsedTimer();
       let status = 0;
       let text = "";
+      let timedOut = false;
       try {
         const headers = { "content-type": "application/pdf" };
         if (token) {
           headers["x-turnstile-token"] = token;
         }
         if (demo) headers["X-Demo-Request"] = "1";
-        const response = await fetch(demo ? "/api/demo/parse" : "/api/parse", {
+        parseStarted = true;
+        const response = await requestText(demo ? "/api/demo/parse" : "/api/parse", {
           method: "POST", body: file, headers, credentials: "same-origin",
-        });
+        }, PARSE_TIMEOUT_MS);
         status = response.status;
-        text = await response.text();
+        text = response.text;
       } catch (error) {
         status = 0;
+        timedOut = error.name === "AbortError";
       } finally {
         resetToken();
       }
@@ -235,7 +314,7 @@
         } catch (error) {
           payload = null;
         }
-        if (payload && Array.isArray(payload.pages)) {
+        if (logic.isValidResultPayload(payload)) {
           renderResult(payload);
           return;
         }
@@ -243,14 +322,21 @@
       const problem = logic.interpretError(status, text);
       showView("upload");
       // Say what happened even when a premium popup follows, e.g. a parse failure.
-      showUploadMessage(problem.message);
+      showUploadMessage(timedOut
+        ? "처리 시간이 길어져 연결을 마쳤어요. 잠시 후 다시 시도해 주세요."
+        : status === 200 ? "처리 결과를 불러오지 못했어요. 다시 시도해 주세요." : problem.message);
+      if (status === 0 || status === 200 || status >= 500) offerRetry(file, parseStarted);
       if (problem.feature) {
         openPremium(problem.feature);
       }
+    } catch (error) {
+      showView("upload");
+      showUploadMessage("처리 결과를 불러오지 못했어요. 다시 시도해 주세요.");
+      offerRetry(file, parseStarted);
     } finally {
       stopTimer();
-      state.busy = false;
-      if (demo) demo.setBusy(false);
+      showUploadHint("");
+      setBusy(false);
       $("file-input").value = "";
     }
   }
@@ -491,6 +577,7 @@
       showUploadMessage("");
       showView("upload");
     });
+    $("upload-retry").addEventListener("click", () => handleFile(state.retryFile));
 
     const dialog = $("premium-dialog");
     dialog.addEventListener("click", event => {

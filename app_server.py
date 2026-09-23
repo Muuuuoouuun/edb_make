@@ -1993,7 +1993,10 @@ def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> 
             if response.status != HTTPStatus.OK:
                 return False
             payload = json.loads(response.read().decode("utf-8"))
-    except Exception:
+    except (OSError, TimeoutError, json.JSONDecodeError):
+        return False
+    except Exception as exc:
+        print(f"[app-server] unexpected error in health check: {exc}", file=sys.stderr)
         return False
     return bool(isinstance(payload, dict) and payload.get("ok"))
 
@@ -2989,7 +2992,11 @@ def _rewrite_staged_artifact_references(staging_dir: Path, final_dir: Path) -> N
         if not path.is_file():
             continue
         if path.suffix.lower() == ".json":
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"[app-server] skipping unparseable staged json {path}: {exc}", file=sys.stderr)
+                continue
             remapped = _remap_artifact_paths(payload, staging_dir, final_dir)
             _atomic_write_text(path, json.dumps(remapped, ensure_ascii=False, indent=2))
         elif path.suffix.lower() in {".md", ".js"}:
@@ -8106,8 +8113,8 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                     "error": str(exc),
                     "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 }
-            except Exception:
-                pass
+            except Exception as err:
+                print(f"[app-server] failed to record AI retry failure for problem {problem_id}: {err}", file=sys.stderr)
             summaries.append({
                 "problemId": problem_id,
                 "status": "failed",

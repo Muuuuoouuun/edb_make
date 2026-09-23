@@ -1230,13 +1230,13 @@ def build_ocr_backend(name: str = "auto", *, refresh_capabilities: bool = False)
         if PaddleOCR is not None:
             try:
                 return PaddleOCRBackend()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[ocr_backend] PaddleOCRBackend initialization failed: {exc}", file=sys.stderr, flush=True)
         if _tesseract_binary_available(refresh=refresh_capabilities):
             try:
                 return TesseractOCRBackend()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[ocr_backend] TesseractOCRBackend initialization failed: {exc}", file=sys.stderr, flush=True)
         print(
             "[ocr_backend] WARNING: local OCR requested but no PaddleOCR or "
             "Tesseract engine is available; using NoOcrBackend.",
@@ -1258,18 +1258,18 @@ def build_ocr_backend(name: str = "auto", *, refresh_capabilities: bool = False)
     if os.environ.get("GEMINI_API_KEY", "").strip():
         try:
             return GeminiOCRBackend()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[ocr_backend] GeminiOCRBackend initialization failed: {exc}", file=sys.stderr, flush=True)
     if PaddleOCR is not None:
         try:
             return PaddleOCRBackend()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[ocr_backend] PaddleOCRBackend initialization failed: {exc}", file=sys.stderr, flush=True)
     if _tesseract_binary_available(refresh=refresh_capabilities):
         try:
             return TesseractOCRBackend()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[ocr_backend] TesseractOCRBackend initialization failed: {exc}", file=sys.stderr, flush=True)
     # Last resort. Surface this loudly: a silent NoOcr fallback is the most
     # common reason problem numbers, choices, and figures get split into
     # separate fake "problems" downstream.

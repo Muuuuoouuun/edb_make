@@ -439,7 +439,13 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
     if fitz is None:
         return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
 
-    doc = fitz.open(source_path)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"PDF source file not found: {source_path}")
+
+    try:
+        doc = fitz.open(source_path)
+    except Exception as exc:
+        raise ValueError(f"Failed to open PDF document {source_path}: {exc}") from exc
     pages: list[NormalizedPageImage] = []
     try:
         scale = dpi / 72.0

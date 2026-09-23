@@ -8,7 +8,7 @@
 <link rel="preload" href="vendor/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="vendor/fonts/JetBrainsMonoVariable.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
-<link rel="stylesheet" href="board.css?v=board-css-eefe34f9ddbdcc390291fcc921301a7cc247bc8885a2a4ff4de6561bd8aa0d3b" />
+<link rel="stylesheet" href="board.css?v=board-css-dac1f5d4b812d31b638ff267a3b329c115f1204a845263d8e761bb5f491b9d3d" />
 </head>
 <body>
 <div id="root"></div>
@@ -27,11 +27,46 @@
   }
   function showRuntimeError(entry){
     captureRuntimeDiagnostic(entry);
+    if (entry && entry.skipGlobalPanel) return;
     if (!document.body || document.querySelector('.runtime-crash-panel')) return;
     const panel = document.createElement('div');
     panel.className = 'runtime-crash-panel';
-    panel.style.cssText = 'position:fixed;inset:16px;z-index:2147483647;box-sizing:border-box;overflow:auto;border:1px solid #ef4444;background:#fff5f5;color:#1f2937;padding:16px;font:13px/1.5 system-ui,-apple-system,sans-serif;white-space:pre-wrap;';
-    panel.textContent = '앱 실행 중 오류가 발생했습니다.\n\n' + messageFrom(entry.error || entry.reason || entry.message);
+    panel.setAttribute('role', 'alert');
+    panel.style.cssText = 'position:fixed;inset:16px;z-index:2147483647;box-sizing:border-box;overflow:auto;border:1px solid #ef4444;background:#fff5f5;color:#1f2937;padding:16px;font:13px/1.5 system-ui,-apple-system,sans-serif;border-radius:10px;box-shadow:0 12px 36px rgba(0,0,0,0.18);display:flex;flex-direction:column;gap:12px;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #fecaca;padding-bottom:10px;';
+
+    const title = document.createElement('strong');
+    title.style.cssText = 'font-size:15px;color:#991b1b;';
+    title.textContent = '앱 실행 중 오류가 발생했습니다';
+
+    const btnGroup = document.createElement('div');
+    btnGroup.style.cssText = 'display:flex;gap:8px;';
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.textContent = '새로고침';
+    reloadBtn.type = 'button';
+    reloadBtn.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid #dc2626;background:#ef4444;color:#fff;font-weight:600;font-size:12px;cursor:pointer;';
+    reloadBtn.onclick = function(){ window.location.reload(); };
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '닫기';
+    closeBtn.type = 'button';
+    closeBtn.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid #d1d5db;background:#fff;color:#374151;font-size:12px;cursor:pointer;';
+    closeBtn.onclick = function(){ panel.remove(); };
+
+    btnGroup.appendChild(reloadBtn);
+    btnGroup.appendChild(closeBtn);
+    header.appendChild(title);
+    header.appendChild(btnGroup);
+
+    const body = document.createElement('pre');
+    body.style.cssText = 'margin:0;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:monospace;font-size:12px;color:#7f1d1d;flex:1;background:#fef2f2;padding:12px;border-radius:6px;';
+    body.textContent = messageFrom(entry.error || entry.reason || entry.message);
+
+    panel.appendChild(header);
+    panel.appendChild(body);
     document.body.appendChild(panel);
   }
   window.EDB_RUNTIME_DIAGNOSTICS = diagnostics;
@@ -59,6 +94,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-layout-gap-20260901"></script>
-<script src="app.bundle.js?v=frontend-bundle-3d26e708d25783bca15d334e4f26cbdfe5ca145c724197a1a71ceb13ef2669bd"></script>
+<script src="app.bundle.js?v=frontend-bundle-b261d1354037bb6e80abdf5e7bcd40b8e6cfae949b8e74012d58a926efb88585"></script>
 </body>
 </html>

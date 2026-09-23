@@ -439,7 +439,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("downloadInFlightRef.current || downloadBusy", reset_source)
         self.assertIn("EDB 다운로드 준비가 끝난 뒤 초기화해 주세요", reset_source)
         self.assertIn(
-            "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            "operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
         )
         self.assertIn(

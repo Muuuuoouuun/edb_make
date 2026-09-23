@@ -30,7 +30,7 @@ class TestUiPublishGuard(unittest.TestCase):
             on_publish.index("publishInFlightRef.current = true;"),
         )
         self.assertIn(
-            "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            "operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
         )
         self.assertIn("if (operationRecovery?.conflict)", on_publish)

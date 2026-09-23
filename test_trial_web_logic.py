@@ -118,6 +118,27 @@ class TestTrialWebLogic(unittest.TestCase):
             """
         )
 
+    def test_result_validation_rejects_broken_render_inputs(self) -> None:
+        run_node(
+            """
+            const { isValidResultPayload: valid } = require('./public/trial_logic.js');
+            const page = {page_id:'p1', index:0, width:600, height:800};
+            const region = {page_id:'p1', bbox:{left:0, top:0, width:100, height:100}};
+            const problem = {problem_id:'q1', number:1, regions:[region]};
+            const payload = {pages:[page], problems:[problem]};
+            assert.equal(valid(payload), true);
+            assert.equal(valid({pages:[], problems:[]}), true);
+            for (const invalid of [null, {}, {pages:[]}, {pages:[null], problems:[]},
+              {...payload, pages:[{...page, width:0}]},
+              {...payload, pages:[{...page, height:Infinity}]},
+              {...payload, problems:[null]},
+              {...payload, problems:[{...problem, regions:null}]},
+              {...payload, problems:[{...problem, regions:[{page_id:'p1'}]}]},
+              {...payload, problems:[{...problem, regions:[{...region, bbox:{...region.bbox, width:NaN}}]}]},
+            ]) assert.equal(valid(invalid), false, JSON.stringify(invalid));
+            """
+        )
+
     def test_summary_banner_labels_and_remaining(self) -> None:
         run_node(
             """

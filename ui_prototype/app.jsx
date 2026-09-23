@@ -65,6 +65,7 @@ class AppErrorBoundary extends React.Component {
     reportRuntimeDiagnostic(error, {
       type: 'react-render',
       componentStack: info?.componentStack || '',
+      skipGlobalPanel: true,
     });
   }
 
@@ -336,6 +337,7 @@ const REVIEW_ZOOM_MIN = 0.72;
 const REVIEW_ZOOM_MAX = 1.65;
 const REVIEW_ZOOM_STEP = 0.08;
 const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
+const RECENT_SESSIONS_PAGE_SIZE = 5;
 const RIGHT_PANEL_TAB_KEY = 'edb.rightPanel.tab';
 const ADVANCED_SETTINGS_OPEN_KEY = 'edb.rightPanel.advancedSettingsOpen';
 const BOARD_LAYOUT_OPEN_KEY = 'edb.rightPanel.boardLayoutOpen';
@@ -1233,6 +1235,11 @@ const Icon = {
   grip:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>,
   chevronUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 14.5L12 9l5.5 5.5"/></svg>,
   chevronDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"/></svg>,
+  plus: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>,
+  sparkle: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>,
+  clock: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>,
+  photo: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>,
+  alert: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
 };
 
 const PROCESSING_STEPS = new Set(['raw', 's1', 's2', 's3']);
@@ -2069,7 +2076,16 @@ function TooltipLayer(){
 
   const restoreNativeTitle = useCallback((element) => {
     if (!element?.dataset || element.dataset.nativeTooltipTitle == null) return;
-    element.setAttribute('title', element.dataset.nativeTooltipTitle);
+    // A React update may have replaced the title while the tooltip was open.
+    if (!element.hasAttribute('title')) {
+      element.setAttribute('title', element.dataset.nativeTooltipTitle);
+    }
+    if (element.dataset.nativeTooltipAriaLabel != null) {
+      if (element.getAttribute('aria-label') === element.dataset.nativeTooltipAriaLabel) {
+        element.removeAttribute('aria-label');
+      }
+      delete element.dataset.nativeTooltipAriaLabel;
+    }
     delete element.dataset.nativeTooltipTitle;
   }, []);
 
@@ -2094,6 +2110,19 @@ function TooltipLayer(){
     }
     if (element.hasAttribute?.('title') && element.dataset?.nativeTooltipTitle == null) {
       element.dataset.nativeTooltipTitle = element.getAttribute('title') || '';
+      // Icon-only controls often use title as their accessible name. Keep that
+      // name available while suppressing the browser's duplicate tooltip.
+      if (
+        element.matches?.('button, a, summary, [role="button"]')
+        && !element.getAttribute('aria-label')
+        && !element.getAttribute('aria-labelledby')
+        && !element.textContent?.trim()
+        && !element.querySelector?.('img[alt]:not([alt=""]), svg title')
+        && element.dataset.nativeTooltipTitle.trim()
+      ) {
+        element.dataset.nativeTooltipAriaLabel = element.dataset.nativeTooltipTitle;
+        element.setAttribute('aria-label', element.dataset.nativeTooltipAriaLabel);
+      }
       element.removeAttribute('title');
     }
     activeRef.current = element;
@@ -5194,7 +5223,7 @@ function ItemsRail({
   session, items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, selectedPendingFileKey, onSelectPendingFile,
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
-  addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
+  addMockSample, canAddDummy, recentSessions, restoringSessionId, recentSessionRestoreBlocked, onRestoreRecentSession,
   onDownloadPublish, publishDownloadBusy,
   onDownloadItemImage, downloadingItemId, reorderBusy, moveFeedback,
   selectedItemIds, setSelectedItemIds,
@@ -5234,6 +5263,13 @@ function ItemsRail({
       return true;
     }
   });
+  const [recentSessionQuery, setRecentSessionQuery] = useState('');
+  const [recentSessionLimit, setRecentSessionLimit] = useState(RECENT_SESSIONS_PAGE_SIZE);
+  const filteredRecentSessions = useMemo(
+    () => filterRecentSessions(recentSessions, recentSessionQuery),
+    [recentSessions, recentSessionQuery]
+  );
+  const visibleRecentSessions = filteredRecentSessions.slice(0, recentSessionLimit);
   const hasSessionItems = items.length > 0;
   const railReviewMode = globalThis.EDB_REVIEW_FILTERS?.sessionReviewMode?.(session) || 'problems';
   const materialCounts = useMemo(() => ({
@@ -5975,7 +6011,25 @@ function ItemsRail({
             </button>
             {!recentSessionsCollapsed && (
               <div className="session-history-list" id="recent-session-history-list">
-                {recentSessions.slice(0, 5).map(entry => {
+                <label className="session-history-search">
+                  <input
+                    type="search"
+                    aria-label="최근 작업 검색"
+                    placeholder="작업 이름으로 검색"
+                    value={recentSessionQuery}
+                    onChange={event => {
+                      setRecentSessionQuery(event.target.value);
+                      setRecentSessionLimit(RECENT_SESSIONS_PAGE_SIZE);
+                    }}
+                    onKeyDown={event => {
+                      if (event.key !== 'Escape') return;
+                      event.preventDefault();
+                      setRecentSessionQuery('');
+                      setRecentSessionLimit(RECENT_SESSIONS_PAGE_SIZE);
+                    }}
+                  />
+                </label>
+                {visibleRecentSessions.map(entry => {
                   const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
                   const hasPublishActions = Boolean(publish && (
                     publish.canDownload
@@ -5996,7 +6050,16 @@ function ItemsRail({
                       </div>
                       <div className="session-history-actions">
                         {hasPublishActions && (
-                          <details className="session-history-more">
+                          <details
+                            className="session-history-more"
+                            onToggle={event => {
+                              if (!event.currentTarget.open) return;
+                              event.currentTarget.querySelector('.session-history-menu')?.scrollIntoView({
+                                block: 'nearest',
+                                inline: 'nearest',
+                              });
+                            }}
+                          >
                             <summary className="icon-btn" title="최근 제작 파일 작업" aria-label="최근 제작 파일 작업">
                               {Icon.more}
                             </summary>
@@ -6032,7 +6095,7 @@ function ItemsRail({
                         <button
                           className="btn"
                           type="button"
-                          disabled={restoringSessionId === entry.id}
+                          disabled={Boolean(restoringSessionId) || recentSessionRestoreBlocked || !onRestoreRecentSession}
                           onClick={() => onRestoreRecentSession?.(entry.id)}
                           title="이 작업을 다시 엽니다"
                         >
@@ -6042,6 +6105,23 @@ function ItemsRail({
                     </div>
                   );
                 })}
+                {!filteredRecentSessions.length && (
+                  <p className="session-history-empty" role="status">검색한 작업이 없습니다. 다른 이름으로 검색해 주세요.</p>
+                )}
+                {!!filteredRecentSessions.length && (
+                  <div className="session-history-footer">
+                    <span role="status" aria-live="polite">{visibleRecentSessions.length} / {filteredRecentSessions.length}개 표시</span>
+                    {visibleRecentSessions.length < filteredRecentSessions.length && (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => setRecentSessionLimit(limit => limit + RECENT_SESSIONS_PAGE_SIZE)}
+                      >
+                        {Math.min(RECENT_SESSIONS_PAGE_SIZE, filteredRecentSessions.length - visibleRecentSessions.length)}개 더 보기
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -6072,6 +6152,7 @@ function ItemsRail({
                   aria-label={`${file.name || '이름 없는 파일'} 미리보기`}
                   onClick={() => onSelectPendingFile?.(key)}
                   onKeyDown={e => {
+                    if (e.target !== e.currentTarget) return;
                     if (e.key !== 'Enter' && e.key !== ' ') return;
                     e.preventDefault();
                     onSelectPendingFile?.(key);
@@ -6482,6 +6563,9 @@ function BoardStage({
   items, activeId, setActive, boardColor, boardColumns, layoutGapMode, fileName, addSample,
   setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
   publishPlan, publishPlanBusy,
+  recentSessions = [], onRestoreRecentSession, restoringSessionId, recentSessionRestoreBlocked = false,
+  handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
+  aiEnabled = true, userSettings = null,
 }){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
@@ -7212,7 +7296,7 @@ function BoardStage({
     <div className="col center workspace-stage-surface">
       <div className="stage">
         <div className="stage-toolbar">
-          <span className="name">실시간 칠판 미리보기</span>
+          <span className="name">{items.length ? '실시간 칠판 미리보기' : '칠판 자료 홈'}</span>
           <span className="pill"><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
           <div className="spacer" />
           <div className="stage-preview-controls" role="group" aria-label="미리보기 배율">
@@ -7250,6 +7334,22 @@ function BoardStage({
           </div>
         </div>
 
+        {items.length === 0 ? (
+          <HomeDashboard
+            onUpload={triggerUpload || addSample}
+            onFilesDropped={handleFiles}
+            onAddMockSample={addMockSample}
+            canAddDummy={canAddDummy}
+            recentSessions={recentSessions}
+            onRestoreRecentSession={onRestoreRecentSession}
+            restoringSessionId={restoringSessionId}
+            recentSessionRestoreBlocked={recentSessionRestoreBlocked}
+            runtimeDiagnostics={runtimeDiagnostics}
+            aiEnabled={aiEnabled}
+            hasApiKey={Boolean(userSettings?.hasGeminiApiKey)}
+          />
+        ) : (
+          <>
         <div className="stage-wrap">
           <div
             className="stage-estimate-bar"
@@ -7576,6 +7676,246 @@ function BoardStage({
           >
             {processedCount}/{items.length} · C{previewEstimate.classinPageCount}
           </span>
+        </div>
+        </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HomeDashboard({
+  onUpload, onFilesDropped, onAddMockSample, canAddDummy,
+  recentSessions, onRestoreRecentSession, restoringSessionId,
+  recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey,
+}){
+  const [dropActive, setDropActive] = useState(false);
+  const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
+  const hangulMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
+
+  const handleDragEnter = (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    setDropActive(true);
+  };
+  const handleDragOver = (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setDropActive(true);
+  };
+  const handleDragLeave = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setDropActive(false);
+  };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDropActive(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length && onFilesDropped) onFilesDropped(files);
+  };
+
+  const sessionsToShow = Array.isArray(recentSessions) ? recentSessions.slice(0, 6) : [];
+
+  return (
+    <div
+      className="home-dashboard"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <div className="home-dashboard-inner">
+        <div className="home-hero-head">
+          <div className="home-hero-badge">ClassIn EDB 제작기</div>
+          <h1 className="home-hero-title">수업용 칠판 자료 만들기</h1>
+          <p className="home-hero-lead">
+            시험지 PDF, 한글(HWP), 문제 이미지를 넣으면 1문제=1.2페이지로 자동 분할하고 우측 판서 공간을 유지한 ClassIn 보드로 배치합니다.
+          </p>
+        </div>
+
+        <div
+          className={`home-hero-dropzone ${dropActive ? 'is-active' : ''}`}
+          onClick={onUpload}
+          role="button"
+          tabIndex={0}
+          aria-label="자료 파일 끌어다 놓기 또는 파일 선택"
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onUpload?.();
+            }
+          }}
+        >
+          <div className="home-dropzone-icon" aria-hidden="true">
+            {Icon.upload}
+          </div>
+          <div className="home-dropzone-text">
+            <strong>자료 파일을 여기에 끌어다 놓으세요</strong>
+            <span>또는 클릭하여 컴퓨터에서 파일 선택</span>
+          </div>
+          <button
+            type="button"
+            className="btn primary home-upload-btn"
+            onClick={e => {
+              e.stopPropagation();
+              onUpload?.();
+            }}
+          >
+            {Icon.plus} 파일 선택하기
+          </button>
+          <div className="home-format-badges" aria-label="지원 형식">
+            <span className="home-format-badge badge-pdf">{Icon.fileText} PDF (시험지·모의고사)</span>
+            <span className="home-format-badge badge-hwp">{Icon.pen} HWP / HWPX (한글 시험지)</span>
+            <span className="home-format-badge badge-img">{Icon.photo} PNG / JPG (교재 스캔본)</span>
+          </div>
+        </div>
+
+        <div className="home-quick-cards" role="group" aria-label="빠른 시작">
+          <div
+            className="home-quick-card"
+            role="button"
+            tabIndex={0}
+            onClick={onUpload}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onUpload?.(); } }}
+          >
+            <div className="home-card-icon">{Icon.plus}</div>
+            <div className="home-card-info">
+              <strong>새 시험지 작업</strong>
+              <p>PDF 또는 HWP 시험지를 불러와 문항을 분할합니다.</p>
+            </div>
+          </div>
+          {canAddDummy && (
+            <div
+              className="home-quick-card accent"
+              role="button"
+              tabIndex={0}
+              onClick={onAddMockSample}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAddMockSample?.(); } }}
+            >
+              <div className="home-card-icon accent">{Icon.sparkle}</div>
+              <div className="home-card-info">
+                <strong>샘플로 둘러보기</strong>
+                <p>3개 문항 더미 데이터로 편집기 기능을 바로 체험합니다.</p>
+              </div>
+            </div>
+          )}
+          <div className="home-quick-card feature">
+            <div className="home-card-icon">{Icon.board}</div>
+            <div className="home-card-info">
+              <strong>1.2페이지 자동 배치</strong>
+              <p>우측 판서 공간을 유지한 ClassIn 규격으로 제작됩니다.</p>
+            </div>
+          </div>
+        </div>
+
+        {sessionsToShow.length > 0 && (
+          <div className="home-section home-recent-section" aria-label="최근 작업 이어하기">
+            <div className="home-section-head">
+              <h2>{Icon.clock} 최근 작업 이어하기</h2>
+              <span className="home-section-count">{recentSessions.length}개 저장됨</span>
+            </div>
+            <div className="home-recent-grid">
+              {sessionsToShow.map(entry => {
+                const isRestoring = restoringSessionId === entry.id;
+                const problemCount = entry.problemCount ?? entry.problem_count;
+                return (
+                  <div
+                    key={entry.id}
+                    className={`home-recent-card ${isRestoring ? 'is-restoring' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`${entry.sessionName || '이름 없는 작업'} 열기`}
+                    onClick={() => {
+                      if (!recentSessionRestoreBlocked && !isRestoring) {
+                        onRestoreRecentSession?.(entry.id);
+                      }
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (!recentSessionRestoreBlocked && !isRestoring) {
+                          onRestoreRecentSession?.(entry.id);
+                        }
+                      }
+                    }}
+                  >
+                    <div className="home-recent-card-body">
+                      <div className="home-recent-card-title" title={entry.sessionName}>
+                        {entry.sessionName || '이름 없는 작업'}
+                      </div>
+                      <div className="home-recent-card-meta">
+                        <span className="home-recent-count">
+                          {recentSessionCountLabel(entry) || (problemCount ? `${problemCount}개 문항` : '저장된 작업')}
+                        </span>
+                        {entry.updatedAt && (
+                          <span className="home-recent-date">
+                            {formatPublishTime(entry.updatedAt)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn home-recent-open-btn"
+                      disabled={recentSessionRestoreBlocked || isRestoring}
+                      onClick={e => {
+                        e.stopPropagation();
+                        onRestoreRecentSession?.(entry.id);
+                      }}
+                    >
+                      {isRestoring ? '여는 중…' : '열기'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="home-section home-workflow-section" aria-label="자료 제작 3단계 가이드">
+          <div className="home-section-head">
+            <h2>자료 제작 3단계</h2>
+          </div>
+          <div className="home-workflow-steps">
+            <div className="home-step-card">
+              <div className="home-step-num">1</div>
+              <div className="home-step-content">
+                <strong>자료 수집</strong>
+                <p>PDF, 한글, 이미지 파일을 대기열에 담고 페이지 그대로 또는 문항별 분할을 선택합니다.</p>
+              </div>
+            </div>
+            <div className="home-step-arrow" aria-hidden="true">{Icon.arrowRight}</div>
+            <div className="home-step-card">
+              <div className="home-step-num">2</div>
+              <div className="home-step-content">
+                <strong>AI 인식 & 검수</strong>
+                <p>문항 번호와 지문을 자동 분리하고 필요 시 영역 자르기 및 순서를 조정합니다.</p>
+              </div>
+            </div>
+            <div className="home-step-arrow" aria-hidden="true">{Icon.arrowRight}</div>
+            <div className="home-step-card">
+              <div className="home-step-num">3</div>
+              <div className="home-step-content">
+                <strong>칠판 배치 & EDB 저장</strong>
+                <p>우측 판서 공간을 유지한 ClassIn 칠판에 배치하고 .edb 파일로 바로 내보냅니다.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="home-dashboard-footer">
+          <div className="home-status-pills">
+            <span className={`home-status-pill ${hangulMeta.tone === 'positive' ? 'positive' : hangulMeta.tone === 'warning' ? 'warning' : ''}`}>
+              한글(HWP): {hangulMeta.badge}
+            </span>
+            <span className={`home-status-pill ${hasApiKey ? 'positive' : 'neutral'}`}>
+              AI 기능: {hasApiKey ? 'API 키 등록됨' : '기본 인식'}
+            </span>
+          </div>
+          <div className="home-shortcuts-hint">
+            단축키: <kbd>⌥1</kbd>·<kbd>⌥2</kbd>·<kbd>⌥3</kbd> 패널 전환 · <kbd>Esc</kbd> 취소 · <kbd>Shift</kbd> 다중 선택
+          </div>
         </div>
       </div>
     </div>
@@ -7951,6 +8291,7 @@ function SidePanel({
   updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
+  triggerUpload, addSample,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -8705,6 +9046,20 @@ function SidePanel({
                 processQueuedFiles={processQueuedFiles}
                 onPreviewError={onPendingPreviewError}
               />
+            ) : items.length === 0 ? (
+              <div className="side-panel-home-empty">
+                <div className="side-panel-empty-icon">{Icon.upload}</div>
+                <strong>자료를 추가해 주세요</strong>
+                <p>가운데 화면에 시험지나 문항 파일을 끌어다 놓거나, 최근 작업을 열어 시작하세요.</p>
+                <button
+                  type="button"
+                  className="btn primary"
+                  style={{ width: '100%', marginTop: 10 }}
+                  onClick={triggerUpload || addSample}
+                >
+                  {Icon.plus} 자료 파일 선택
+                </button>
+              </div>
             ) : (
               <div style={{
                 padding: 40, textAlign: 'center',
@@ -10346,6 +10701,23 @@ function assertExportPayloadFits(files){
 
 function fileQueueKey(file){
   return [file?.name || 'file', file?.size || 0, file?.lastModified || 0].join('::');
+}
+
+function appendUniquePendingFiles(currentFiles, incomingFiles){
+  const current = Array.isArray(currentFiles) ? currentFiles : [];
+  const incoming = Array.from(incomingFiles || []);
+  const seen = new Set(current.map(fileQueueKey));
+  const addedFiles = incoming.filter(file => {
+    const key = fileQueueKey(file);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return {
+    files: addedFiles.length ? [...current, ...addedFiles] : current,
+    addedFiles,
+    duplicateCount: incoming.length - addedFiles.length,
+  };
 }
 
 function sourceFileExtension(file){
@@ -13252,6 +13624,17 @@ function recentSessionCountLabel(entry){
   }, Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0).countLabel;
 }
 
+function filterRecentSessions(entries, query){
+  const normalize = value => String(value || '').normalize('NFKC').toLocaleLowerCase();
+  const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
+  const sessions = Array.isArray(entries) ? entries.filter(entry => entry?.id) : [];
+  if (!terms.length) return sessions;
+  return sessions.filter(entry => {
+    const name = normalize(entry.sessionName || entry.session_name || '이름 없는 작업');
+    return terms.every(term => name.includes(term));
+  });
+}
+
 function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
 }
@@ -14142,6 +14525,7 @@ function App(){
   const [session, setSession] = useState(null);
   const [layoutGapMode, setLayoutGapModeState] = useState(LAYOUT_GAP_MODE_GRID);
   const [initialSessionLoaded, setInitialSessionLoaded] = useState(false);
+  const [initialSessionError, setInitialSessionError] = useState(null);
   const [loading, setLoading] = useState(null); // {label, hint, startedAt} when busy
   const [backgroundJobs, setBackgroundJobs] = useState([]);
   const [recognitionReview, setRecognitionReview] = useState(null);
@@ -14189,6 +14573,7 @@ function App(){
   const mutatingRef = useRef(false);
   const resetInFlightRef = useRef(false);
   const restoreInFlightRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
   const publishInFlightRef = useRef(false);
   const publishPlanRequestRef = useRef(0);
   const downloadInFlightRef = useRef(false);
@@ -14208,7 +14593,9 @@ function App(){
   const viewTransitionTimerRef = useRef(null);
   const activeViewTransitionRef = useRef(null);
   const jobControllersRef = useRef(new Map());
+  const jobDismissTimersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
+  const pendingFilesRef = useRef([]);
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
   const recognitionInFlightRef = useRef(false);
@@ -14243,6 +14630,8 @@ function App(){
     if (moveFeedbackTimerRef.current) window.clearTimeout(moveFeedbackTimerRef.current);
     if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
     if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    jobDismissTimersRef.current.forEach(timer => window.clearTimeout(timer));
+    jobDismissTimersRef.current.clear();
     activeViewTransitionRef.current?.skipTransition?.();
   }, []);
   const canUndo = historyStack.length > 0 && !mutating;
@@ -14343,10 +14732,18 @@ function App(){
     boardColumns,
   ]);
 
-  const showToast = useCallback((msg) => {
+  const showToast = useCallback((msg, type = 'info') => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    setToast(msg);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+    if (actionToastTimerRef.current) {
+      window.clearTimeout(actionToastTimerRef.current);
+      actionToastTimerRef.current = null;
+    }
+    setActionToast(null);
+    const toastObj = typeof msg === 'object' && msg !== null && 'message' in msg
+      ? { message: String(msg.message || ''), type: msg.type || type }
+      : { message: String(msg || ''), type };
+    setToast(toastObj);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2500);
   }, []);
 
   const showActionToast = useCallback((message, actionLabel, onAction) => {
@@ -14367,7 +14764,7 @@ function App(){
         ? error.recoverySteps.map(step => String(step || '').trim()).filter(Boolean).slice(0, 5)
         : [],
     });
-    showToast(simpleToastErrorMessage(error, fallbackMessage));
+    showToast(simpleToastErrorMessage(error, fallbackMessage), 'error');
     return diagnostic;
   }, [showToast]);
 
@@ -14489,12 +14886,13 @@ function App(){
   }, [showSimpleErrorToast]);
 
   const setPendingFilesTracked = useCallback((updater) => {
-    setPendingFiles(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      pendingFileKeysRef.current = new Set((next || []).map(fileQueueKey));
-      queueGenerationRef.current += 1;
-      return next || [];
-    });
+    const prev = pendingFilesRef.current;
+    const next = (typeof updater === 'function' ? updater(prev) : updater) || [];
+    if (next === prev) return;
+    pendingFilesRef.current = next;
+    pendingFileKeysRef.current = new Set(next.map(fileQueueKey));
+    queueGenerationRef.current += 1;
+    setPendingFiles(next);
   }, []);
 
   const queueRequestIsCurrent = useCallback((generation, fileKeys) => (
@@ -14640,6 +15038,11 @@ function App(){
   }, []);
 
   const dismissBackgroundJob = useCallback((id) => {
+    const timer = jobDismissTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      jobDismissTimersRef.current.delete(id);
+    }
     setBackgroundJobs(prev => prev.filter(job => job.id !== id));
     jobControllersRef.current.delete(id);
   }, []);
@@ -14647,10 +15050,17 @@ function App(){
   const settleBackgroundJob = useCallback((id, patch, autoDismissMs = 1800) => {
     jobControllersRef.current.delete(id);
     setBackgroundJobs(prev => prev.map(job => job.id === id ? { ...job, ...patch } : job));
+    const prevTimer = jobDismissTimersRef.current.get(id);
+    if (prevTimer) {
+      window.clearTimeout(prevTimer);
+      jobDismissTimersRef.current.delete(id);
+    }
     if (autoDismissMs) {
-      window.setTimeout(() => {
+      const timer = window.setTimeout(() => {
+        jobDismissTimersRef.current.delete(id);
         setBackgroundJobs(prev => prev.filter(job => job.id !== id));
       }, autoDismissMs);
+      jobDismissTimersRef.current.set(id, timer);
     }
   }, []);
 
@@ -14690,6 +15100,8 @@ function App(){
     return () => {
       jobControllersRef.current.forEach(controller => controller.abort());
       jobControllersRef.current.clear();
+      jobDismissTimersRef.current.forEach(timer => window.clearTimeout(timer));
+      jobDismissTimersRef.current.clear();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, []);
@@ -15205,10 +15617,13 @@ function App(){
         const s = await fetchLatestSession();
         if (cancelled) return;
         if (s) applySession(s);
-      } catch (e) {
-        if (!cancelled) console.warn('[board] session load skipped:', e.message);
-      } finally {
+        setInitialSessionError(null);
         if (!cancelled) setInitialSessionLoaded(true);
+      } catch (e) {
+        if (!cancelled) {
+          setInitialSessionError(simpleToastErrorMessage(e, '세션 로드 실패'));
+          console.warn('[board] session load skipped:', e.message);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -15414,12 +15829,16 @@ function App(){
   }, [showSimpleErrorToast, showToast]);
 
   const refreshSession = useCallback(async () => {
+    if (refreshInFlightRef.current || restoreInFlightRef.current || loading || hasRunningBackgroundJobs || mutatingRef.current) {
+      showToast('진행 중인 작업이 끝난 뒤 새로고침해 주세요');
+      return;
+    }
+    refreshInFlightRef.current = true;
     setRefreshing(true);
     try {
       const s = await fetchLatestSession();
       if (s && Array.isArray(s.problems) && s.problems.length) {
         applySession(s);
-        refreshSessionHistory();
         showToast(`새로고침 완료 · ${formatProblemCount(sessionProblemCounts(s))}`);
       } else {
         if (!usingMock) {
@@ -15432,18 +15851,36 @@ function App(){
         }
         showToast(usingMock ? '저장된 세션 없음 · 더미 유지' : '저장된 세션 없음 · 빈 세션');
       }
+      refreshSessionHistory();
+      setInitialSessionError(null);
+      setInitialSessionLoaded(true);
       clearOperationRecovery();
     } catch (e) {
+      if (!initialSessionLoaded) setInitialSessionError(simpleToastErrorMessage(e, '세션 로드 실패'));
       showSimpleErrorToast(e, '새로고침 실패');
     } finally {
+      refreshInFlightRef.current = false;
       setRefreshing(false);
     }
-  }, [applySession, usingMock, refreshSessionHistory, clearOperationRecovery, showSimpleErrorToast, showToast]);
+  }, [applySession, usingMock, refreshSessionHistory, clearOperationRecovery, showSimpleErrorToast, showToast, loading, hasRunningBackgroundJobs, initialSessionLoaded]);
 
   const restoreRecentSession = useCallback(async (id, options = {}) => {
     if (!id) return false;
     if (restoreInFlightRef.current || restoringSessionId) {
       showToast('이미 최근 작업을 여는 중입니다');
+      return false;
+    }
+    if (!initialSessionLoaded) {
+      showToast('저장된 작업을 먼저 불러온 뒤 최근 작업을 열어 주세요');
+      return false;
+    }
+    if (
+      loading || refreshInFlightRef.current || resetInFlightRef.current || publishInFlightRef.current
+      || recognitionInFlightRef.current || queueRegistrationInFlightRef.current
+      || sessionRecognitionInFlightRef.current || mutatingRef.current || hasRunningBackgroundJobs
+      || hasPendingSessionConflict
+    ) {
+      showToast('진행 중인 작업이 끝난 뒤 최근 작업을 열어 주세요');
       return false;
     }
     const recoveryDraft = options.recoveryDraft
@@ -15484,31 +15921,23 @@ function App(){
       setRestoringSessionId(null);
       setLoading(null);
     }
-  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, session, items, fileName, boardColumns, showToast]);
+  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, session, items, fileName, boardColumns, showToast, initialSessionLoaded, loading, hasRunningBackgroundJobs, hasPendingSessionConflict]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
   const handleFiles = (fileList) => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    setRecognitionReview(null);
-    const existingKeys = new Set(pendingFiles.map(fileQueueKey));
-    const firstAddedKey = files.map(fileQueueKey).find(key => !existingKeys.has(key)) || null;
-    setPendingFilesTracked(prev => {
-      const seen = new Set(prev.map(fileQueueKey));
-      const next = [...prev];
-      files.forEach(file => {
-        const key = fileQueueKey(file);
-        if (!seen.has(key)) {
-          seen.add(key);
-          next.push(file);
-        }
-      });
-      return next;
-    });
-    if (firstAddedKey) selectPendingFile(firstAddedKey);
-    showToast(`${files.length}개 파일을 대기열에 추가했어요`);
+    const addition = appendUniquePendingFiles(pendingFilesRef.current, files);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!addition.addedFiles.length) {
+      showToast('이미 대기열에 있는 파일입니다');
+      return;
+    }
+    setRecognitionReview(null);
+    setPendingFilesTracked(addition.files);
+    selectPendingFile(fileQueueKey(addition.addedFiles[0]));
+    showToast(`${addition.addedFiles.length}개 파일을 대기열에 추가했어요${addition.duplicateCount ? ` · 중복 ${addition.duplicateCount}개 제외` : ''}`);
   };
 
   const removePendingFile = useCallback((key) => {
@@ -15539,6 +15968,10 @@ function App(){
   const processQueuedFiles = useCallback(async (mode, targetKey = null) => {
     if (!initialSessionLoaded) {
       showToast('기존 작업을 불러오는 중입니다. 잠시 후 다시 시도해 주세요');
+      return;
+    }
+    if (restoreInFlightRef.current || refreshInFlightRef.current || resetInFlightRef.current || publishInFlightRef.current) {
+      showToast('진행 중인 작업이 끝난 뒤 자료를 처리해 주세요');
       return;
     }
     if (operationRecovery?.conflict) {
@@ -16861,14 +17294,14 @@ function App(){
         onReset={resetSession}
         onRefresh={refreshSession}
         refreshing={refreshing}
-        canReset={(!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading && !resetBusy && !publishBusy && !downloadBusy && !hasRunningBackgroundJobs && !hasPendingSessionConflict}
+        canReset={initialSessionLoaded && (!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading && !resetBusy && !publishBusy && !downloadBusy && !hasRunningBackgroundJobs && !hasPendingSessionConflict}
         view={view}
         setView={requestViewChange}
         reviewAvailable={reviewAvailable}
         reviewComplete={reviewComplete}
         recognitionBusy={Boolean(runningRecognitionJob)}
         pageReviewActive={Boolean(recognitionReview)}
-        operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
+        operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
         resetBlocked={hasRunningBackgroundJobs}
         conflictBlocked={hasPendingSessionConflict}
         onUndo={undoMutation}
@@ -16878,6 +17311,30 @@ function App(){
         exportingImages={exportingImages}
         canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
       />
+      {initialSessionError && (
+        <div className="initial-session-notice" role="alert">
+          <div>
+            <strong>저장된 작업을 불러오지 못했어요</strong>
+            <p>기존 작업을 확인한 뒤 자료 처리를 시작할 수 있습니다.</p>
+            <p>{initialSessionError}</p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn" type="button" onClick={refreshSession} disabled={refreshing}>
+              {Icon.refresh}{refreshing ? '불러오는 중…' : '다시 불러오기'}
+            </button>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => {
+                setInitialSessionError(null);
+                setInitialSessionLoaded(true);
+              }}
+            >
+              새 작업으로 시작
+            </button>
+          </div>
+        </div>
+      )}
       {viewTransitionBanner && (
         <div className="view-transition-banner" role="status" aria-live="polite">
           {viewTransitionBanner}
@@ -16958,6 +17415,7 @@ function App(){
           canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0 && !hasPendingSessionConflict}
           recentSessions={recentSessions}
           restoringSessionId={restoringSessionId}
+          recentSessionRestoreBlocked={!initialSessionLoaded || Boolean(loading) || refreshing || mutating || hasRunningBackgroundJobs || hasPendingSessionConflict}
           onRestoreRecentSession={restoreRecentSession}
           onDownloadPublish={target => void handlePublishDownload(target)}
           publishDownloadBusy={downloadBusy}
@@ -17021,6 +17479,17 @@ function App(){
             onSaveScrollTop={setBoardScrollTop}
             publishPlan={publishPlan}
             publishPlanBusy={publishPlanBusy}
+            recentSessions={recentSessions}
+            onRestoreRecentSession={restoreRecentSession}
+            restoringSessionId={restoringSessionId}
+            recentSessionRestoreBlocked={!initialSessionLoaded || Boolean(loading) || refreshing || mutating || hasRunningBackgroundJobs || hasPendingSessionConflict}
+            handleFiles={handleFiles}
+            triggerUpload={triggerUpload}
+            addMockSample={addMockSample}
+            canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0 && !hasPendingSessionConflict}
+            runtimeDiagnostics={runtimeDiagnostics}
+            aiEnabled={aiEnabled}
+            userSettings={userSettings}
           />
         )}
             <SidePanel
@@ -17077,6 +17546,8 @@ function App(){
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           onPendingPreviewError={showPendingPreviewError}
+          triggerUpload={triggerUpload}
+          addSample={addSample}
             />
           </>
         )}
@@ -17095,11 +17566,21 @@ function App(){
 
       <TooltipLayer />
 
-      {toast && (
-        <div className="toast" role="status" aria-live="polite" aria-atomic="true">
-          {Icon.check}<span>{toast}</span>
-        </div>
-      )}
+      {toast && (() => {
+        const isError = typeof toast === 'object' && toast !== null ? toast.type === 'error' : false;
+        const message = typeof toast === 'object' && toast !== null ? (toast.message || '') : String(toast || '');
+        return (
+          <div
+            className={`toast ${isError ? 'toast-error' : ''}`}
+            role={isError ? 'alert' : 'status'}
+            aria-live={isError ? 'assertive' : 'polite'}
+            aria-atomic="true"
+          >
+            {isError ? Icon.alert : Icon.check}
+            <span>{message}</span>
+          </div>
+        );
+      })()}
       {actionToast && (
         <div className="undo-toast" role="status" aria-live="polite" aria-atomic="true">
           <span className="undo-toast-copy">{actionToast.message}</span>
@@ -17107,13 +17588,36 @@ function App(){
             className="undo-toast-action"
             type="button"
             onClick={() => {
+              if (actionToastTimerRef.current) {
+                window.clearTimeout(actionToastTimerRef.current);
+                actionToastTimerRef.current = null;
+              }
               const action = actionToast.onAction;
               setActionToast(null);
-              action?.();
+              try {
+                action?.();
+              } catch (actionErr) {
+                console.error('[undo-toast] action error:', actionErr);
+                showToast('되돌리기 실행 중 오류가 발생했습니다', 'error');
+              }
             }}
             disabled={mutating}
           >
             {actionToast.actionLabel}
+          </button>
+          <button
+            className="undo-toast-close"
+            type="button"
+            aria-label="닫기"
+            onClick={() => {
+              if (actionToastTimerRef.current) {
+                window.clearTimeout(actionToastTimerRef.current);
+                actionToastTimerRef.current = null;
+              }
+              setActionToast(null);
+            }}
+          >
+            {Icon.close}
           </button>
         </div>
       )}
