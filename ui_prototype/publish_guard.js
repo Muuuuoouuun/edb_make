@@ -193,9 +193,10 @@
         ? normalizedScale
         : scaleNearPreviousBoundary(startYPages, heightPages, normalizedScale, slotHeightPages);
       const renderedHeightPages = heightPages * requestedScale;
+      const extraSlots = Math.max(0, Math.min(10, Math.round(firstNumber(item, ["placementExtraSlots", "placement_extra_slots"], 0))));
       const snappedNextStartYPages = rounded(continuous
-        ? startYPages + renderedHeightPages
-        : snapUpPages(startYPages + renderedHeightPages, slotHeightPages));
+        ? startYPages + renderedHeightPages + extraSlots * slotHeightPages
+        : snapUpPages(startYPages + renderedHeightPages, slotHeightPages) + extraSlots * slotHeightPages);
       const slotSpanPages = Math.max(renderedHeightPages, snappedNextStartYPages - startYPages);
       const verticalRoomPages = Math.max(0, slotSpanPages - renderedHeightPages);
       const yRatio = verticalRoomPages > 0.001

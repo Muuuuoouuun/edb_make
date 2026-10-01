@@ -1623,6 +1623,12 @@ def _coerce_placement_y_ratio(value: Any) -> float | None:
     return max(0.0, min(1.0, ratio))
 
 
+def _coerce_placement_extra_slots(value: Any) -> int:
+    from placement_engine import normalize_placement_extra_slots
+
+    return normalize_placement_extra_slots(value)
+
+
 def _coerce_placement_scale_ratio(value: Any) -> float | None:
     if isinstance(value, dict):
         for key in ("scaleRatio", "placementScaleRatio", "placement_scale_ratio"):
@@ -4327,6 +4333,7 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                 risk_flags=[str(flag) for flag in (problem.get("riskFlags") or []) if flag],
                 placement_x_ratio=_coerce_placement_x_ratio(problem),
                 placement_y_ratio=_coerce_placement_y_ratio(problem),
+                placement_extra_slots=_coerce_placement_extra_slots(problem),
                 placement_scale_ratio=_coerce_placement_scale_ratio(problem),
                 preserve_legacy_placement_scale=_problem_preserves_legacy_placement_scale(problem),
                 processing_step=_normalize_processing_step(
@@ -4742,6 +4749,7 @@ def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
         "imageRecordCount": parent.get("imageRecordCount", 1),
         "placementXRatio": _coerce_placement_x_ratio(parent),
         "placementYRatio": _coerce_placement_y_ratio(parent),
+        "placementExtraSlots": _coerce_placement_extra_slots(parent),
         "placementScaleRatio": _coerce_placement_scale_ratio(parent),
         "riskFlags": [],  # mutated entries lose the auto-detected risk
     }
@@ -8941,6 +8949,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 y_ratio = _coerce_placement_y_ratio(problem_copy)
             if y_ratio is not None:
                 problem_copy["placementYRatio"] = y_ratio
+            extra_patch = placement_payload.get(problem_id)
+            has_extra_patch = isinstance(extra_patch, dict) and any(
+                key in extra_patch for key in ("extraSlots", "placementExtraSlots", "placement_extra_slots")
+            )
+            problem_copy["placementExtraSlots"] = _coerce_placement_extra_slots(
+                extra_patch if has_extra_patch else problem_copy
+            )
             scale_ratio = _coerce_placement_scale_ratio(placement_payload.get(problem_id))
             if scale_ratio is None:
                 scale_ratio = _coerce_placement_scale_ratio(problem_copy)

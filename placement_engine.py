@@ -10,6 +10,23 @@ from structured_schema import PageModel, ProblemUnit, Subject
 
 EPSILON = 1e-9
 CONTINUOUS_PLACEMENT_MODES = {"continuous", "continuous-page-as-is"}
+PLACEMENT_EXTRA_SLOTS_MAX = 10
+
+
+def normalize_placement_extra_slots(value: object) -> int:
+    if isinstance(value, dict):
+        value = next(
+            (value[key] for key in ("extraSlots", "placementExtraSlots", "placement_extra_slots")
+             if value.get(key) is not None),
+            None,
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not math.isfinite(number):
+        return 0
+    return max(0, min(PLACEMENT_EXTRA_SLOTS_MAX, math.floor(number + 0.5)))
 
 
 def snap_up_to_slot(value_pages: float, base_slot_height_pages: float) -> float:
@@ -76,6 +93,8 @@ def _rendered_flow_height_pages(
             default=1.0,
         ),
     )
+    if normalize_placement_extra_slots(problem.metadata):
+        return actual_height_pages * scale_ratio
     return max(actual_height_pages, actual_height_pages * scale_ratio)
 
 
@@ -117,6 +136,8 @@ def place_problem(
             nominal_slot_height_pages,
         )
     )
+    extra_slots = normalize_placement_extra_slots(problem.metadata)
+    snapped_next_start_y_pages = round(snapped_next_start_y_pages + extra_slots * nominal_slot_height_pages, 6)
     overflow_amount_pages = max(0.0, flow_height_pages - nominal_slot_height_pages)
     overflow_violation = overflow_amount_pages > 0 and not overflow_allowed
     slot_span_count = max(

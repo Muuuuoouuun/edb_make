@@ -63,7 +63,7 @@ from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page
 from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from page_tiling import PageTilingOptions, tile_page_columns
 from passage_quality import assess_passage_crop_quality
-from placement_engine import place_problems
+from placement_engine import place_problems, normalize_placement_extra_slots
 from preprocess import PreparedPage, prepare_source_pages
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
 
@@ -1850,6 +1850,7 @@ class ProblemEntry:
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
     source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
+    placement_extra_slots: int = 0
 
 
 @dataclass(slots=True)
@@ -9200,6 +9201,7 @@ def build_ui_session(
                 "slotSpanCount": int(placement["slot_span_count"]),
                 "placementXRatio": float(placement.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(placement.get("placement_y_ratio") or 0.0),
+                "placementExtraSlots": normalize_placement_extra_slots(placement.get("placement_extra_slots")),
                 "placementScaleRatio": float(placement.get("placement_scale_ratio") or 1.0),
                 "preserveLegacyPlacementScale": bool(placement.get("preserve_legacy_placement_scale")),
                 "preserve_legacy_placement_scale": bool(placement.get("preserve_legacy_placement_scale")),
@@ -9810,6 +9812,7 @@ def placement_inputs(
                 "source_segments": [dict(segment) for segment in entry.source_segments],
                 "risk_flags": list(entry.risk_flags),
                 "processing_step": _normalize_processing_step(entry.processing_step),
+                "placement_extra_slots": normalize_placement_extra_slots(entry.placement_extra_slots),
                 "placement_scale_ratio": _clamp_placement_scale_ratio(
                     entry.placement_scale_ratio,
                     PLACEMENT_FIT_WIDTH_SCALE_MAX
@@ -9818,7 +9821,7 @@ def placement_inputs(
                     else PLACEMENT_SCALE_MAX,
                 ) or 1.0,
                 "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
-                "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry),
+                "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry) or normalize_placement_extra_slots(entry.placement_extra_slots) > 0,
                 "input_intent": entry.input_intent,
                 "force_full_page_bounds": entry.force_full_page_bounds,
             },
@@ -10474,6 +10477,7 @@ def build_image_only_records(
             snapped_next_start_y_pages = (
                 start_y_pages
                 + rendered_height_pages
+                + normalize_placement_extra_slots(entry.placement_extra_slots) * template.base_slot_height_pages
                 + CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH
             )
             overflow_amount_pages = max(0.0, rendered_height_pages - template.base_slot_height_pages)
@@ -10482,7 +10486,8 @@ def build_image_only_records(
                 math.ceil((snapped_next_start_y_pages - start_y_pages - 1e-9) / template.base_slot_height_pages),
             )
             x_px = _problem_origin_x_px(entry, rendered_width_px)
-            y_px = start_y_pages * CANVAS_WIDTH + TOP_PADDING_PX
+            extra_height_pages = normalize_placement_extra_slots(entry.placement_extra_slots) * template.base_slot_height_pages
+            y_px = (start_y_pages + extra_height_pages * float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0)) * CANVAS_WIDTH + TOP_PADDING_PX
             continuous_cursor_pages = snapped_next_start_y_pages
         else:
             start_y_pages = placement.start_y_pages
@@ -10555,6 +10560,7 @@ def build_image_only_records(
                 "record_page_count_hint": int(template.board_page_count),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
+                "placement_extra_slots": normalize_placement_extra_slots(entry.placement_extra_slots),
                 "placement_scale_ratio": float(scale_ratio),
                 "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
             }
@@ -10734,6 +10740,7 @@ def build_mixed_records(
                 "board_theme": _resolve_board_theme(board_theme),
                 "placement_x_ratio": float(_clamp_placement_x_ratio(entry.placement_x_ratio) or 0.0),
                 "placement_y_ratio": float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0),
+                "placement_extra_slots": normalize_placement_extra_slots(entry.placement_extra_slots),
                 "placement_scale_ratio": float(scale_ratio),
                 "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
                 "blocks": block_summaries,
@@ -11010,6 +11017,7 @@ def write_ui_prototype_data(output_path: Path, placements: list[dict[str, object
                 "readingHeavy": item["overflow_allowed"],
                 "placementXRatio": float(item.get("placement_x_ratio") or 0.0),
                 "placementYRatio": float(item.get("placement_y_ratio") or 0.0),
+                "placementExtraSlots": normalize_placement_extra_slots(item.get("placement_extra_slots")),
                 "placementScaleRatio": float(item.get("placement_scale_ratio") or 1.0),
                 "preserveLegacyPlacementScale": bool(item.get("preserve_legacy_placement_scale")),
             }

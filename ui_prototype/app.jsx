@@ -292,6 +292,7 @@ const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
 const DEFAULT_PLACEMENT_X_RATIO = 0;
 const DEFAULT_PLACEMENT_Y_RATIO = 0;
+const PLACEMENT_EXTRA_SLOTS_MAX = 10;
 const DEFAULT_PLACEMENT_SCALE_RATIO = 1;
 const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
@@ -338,6 +339,15 @@ function normalizePlacementXRatio(value){
 function normalizePlacementYRatio(value){
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_Y_RATIO;
+}
+
+function normalizePlacementExtraSlots(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(PLACEMENT_EXTRA_SLOTS_MAX, Math.round(n))) : 0;
+}
+
+function placementExtraSlots(item){
+  return normalizePlacementExtraSlots(item?.placementExtraSlots ?? item?.placement_extra_slots);
 }
 
 function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
@@ -742,9 +752,8 @@ function deriveBoardPreviewEstimate(layoutItems, activeId, slotHeight = DEFAULT_
     const startPages = Number.isFinite(Number(activeItem.startYPages))
       ? Math.max(0, Number(activeItem.startYPages))
       : 0;
-    const renderedBottomPages = Number.isFinite(Number(activeItem.renderedBottomYPages))
-      ? Math.max(startPages, Number(activeItem.renderedBottomYPages))
-      : startPages + itemRenderedHeightPages(activeItem);
+    const renderedStartPages = startPages + verticalPlacementRoomPages(activeItem) * normalizePlacementYRatio(activeItem.placementYRatio);
+    const renderedBottomPages = renderedStartPages + itemRenderedHeightPages(activeItem);
     const nextStartPages = Number.isFinite(Number(activeItem.snappedNextStartYPages))
       ? Math.max(renderedBottomPages, Number(activeItem.snappedNextStartYPages))
       : renderedBottomPages;
@@ -757,12 +766,12 @@ function deriveBoardPreviewEstimate(layoutItems, activeId, slotHeight = DEFAULT_
       ? Number(activeItem._previewOriginalScaleRatio)
       : null;
     active = {
-      startPages,
+      startPages: renderedStartPages,
       renderedBottomPages,
       nextStartPages,
       blankHeightPages: Math.max(0, nextStartPages - renderedBottomPages),
       scaleRatio,
-      classinStartPage: Math.floor((startPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
+      classinStartPage: Math.floor((renderedStartPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
       classinEndPage: classinPageNumberForRenderedEnd(renderedBottomPages, normalizedSlotHeight),
       classinNextPage: Math.floor((nextStartPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
       autoScaleAdjusted: originalScaleRatio !== null && originalScaleRatio > scaleRatio + PLACEMENT_EPSILON_PAGES,
@@ -788,12 +797,12 @@ function placementSlotHeightPages(item){
   if (!item) return 0;
   const heightPages = itemHeightPages(item);
   const renderedHeightPages = itemRenderedHeightPages(item);
-  if (itemUsesContinuousPageFlow(item)) return renderedHeightPages;
+  if (itemUsesContinuousPageFlow(item)) return renderedHeightPages + placementExtraSlots(item) * DEFAULT_SLOT_HEIGHT_PAGES;
   const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
   const snappedNext = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startPages + renderedHeightPages, item.snappedNextStartYPages)
     : snapUpPages(startPages + renderedHeightPages);
-  return Math.max(heightPages, renderedHeightPages, snappedNext - startPages);
+  return Math.max(heightPages, renderedHeightPages, snappedNext - startPages, itemSlotSpanPages(item));
 }
 
 function maxPlacementScaleRatio(item){
@@ -817,6 +826,12 @@ function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio
 function applyPlacementPatchToItem(item, patch){
   if (!item || !patch) return item;
   const next = { ...item };
+  if (Object.prototype.hasOwnProperty.call(patch, 'extraSlots')) {
+    next.placementExtraSlots = normalizePlacementExtraSlots(patch.extraSlots);
+    next.placement_extra_slots = next.placementExtraSlots;
+    // Drop the previous reservation before recomputing a reduced movement area.
+    if (next.placementExtraSlots < placementExtraSlots(item)) next.snappedNextStartYPages = null;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, 'xRatio')) {
     next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
     next.placementXEdited = patch.xEdited === false ? false : true;
@@ -890,15 +905,37 @@ function isContinuousPlacementItem(item){
 function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!item) return slotHeight;
   const renderedHeightPages = itemRenderedHeightPages(item);
+  const extraHeight = placementExtraSlots(item) * slotHeight;
   if (isContinuousPlacementItem(item)) {
     // Continuous page-as-is flow follows the current rendered height. A span
     // saved at a previous scale must not survive scale-down as blank space.
-    return renderedHeightPages;
+    return renderedHeightPages + extraHeight;
   }
   if (renderedHeightPages > slotHeight + PLACEMENT_EPSILON_PAGES) {
-    return renderedHeightPages;
+    return renderedHeightPages + extraHeight;
   }
-  return Math.max(renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight));
+  return Math.max(renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight)) + extraHeight;
+}
+
+// Keep the drop position and its reserved space in the same coordinate system.
+// Extra space is explicit, bounded and persisted; moving back up never changes order.
+function verticalBoardDragPatch(item, rowSpanPages, startOffsetPages, deltaPages){
+  const desired = Math.max(0, startOffsetPages + deltaPages);
+  const rendered = itemRenderedHeightPages(item);
+  const start = Math.max(0, Number(item.startYPages) || 0);
+  const continuous = isContinuousPlacementItem(item);
+  let extraSlots = placementExtraSlots(item);
+  const baseSpan = itemSlotSpanPages(item) - extraSlots * DEFAULT_SLOT_HEIGHT_PAGES;
+  let room = 0;
+  for (; extraSlots <= PLACEMENT_EXTRA_SLOTS_MAX; extraSlots += 1) {
+    const span = Math.max(rowSpanPages, baseSpan + extraSlots * DEFAULT_SLOT_HEIGHT_PAGES);
+    const reserved = continuous ? span : rendered > DEFAULT_SLOT_HEIGHT_PAGES + PLACEMENT_EPSILON_PAGES
+      ? snapUpPages(start + span) - start : snapUpPages(span);
+    room = Math.max(0, reserved - rendered);
+    if (desired <= room + PLACEMENT_EPSILON_PAGES || extraSlots === PLACEMENT_EXTRA_SLOTS_MAX) break;
+  }
+  const offsetPages = Math.min(desired, room);
+  return { extraSlots, yRatio: room > 0.001 ? offsetPages / room : 0, offsetPages };
 }
 
 function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
@@ -6337,6 +6374,7 @@ function BoardStage({
   const previousBoardOrder = useRef('');
   const syncLock = useRef(0);
   const positionDragRef = useRef(null);
+  const positionDragFrameRef = useRef(null);
   const suppressClickRef = useRef(null);
   const selectionAnchorRef = useRef(null);
   const boardDropTargetRef = useRef(null);
@@ -6373,7 +6411,12 @@ function BoardStage({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setPageH(el.clientHeight || 400);
+    const measure = () => {
+      const height = el.clientHeight || 400;
+      const drag = positionDragRef.current;
+      if (drag && height !== drag.pageH) cancelPositionDrag({ pointerId: drag.pointerId });
+      setPageH(height);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -6383,7 +6426,12 @@ function BoardStage({
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    const measure = () => setContentW(el.clientWidth || 0);
+    const measure = () => {
+      const width = el.clientWidth || 0;
+      const drag = positionDragRef.current;
+      if (drag && width !== drag.contentWidth) cancelPositionDrag({ pointerId: drag.pointerId });
+      setContentW(width);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -6515,7 +6563,8 @@ function BoardStage({
     const container = scrollRef.current;
     const idx = items.findIndex(x => x.id === activeId);
     if (!container || idx < 0) return;
-    const target = Math.max(0, layout.positions[idx].top - 8);
+    const position = layout.positions[idx];
+    const target = Math.max(0, position.top + position.yRatio * Math.max(0, position.rowHeightPages - position.renderedHeightPages) * pageH - 8);
     if (Math.abs(container.scrollTop - target) < 6) return;
     smoothScrollTo(container, target);
   }, [activeId, boardOrderSignature, pageH, columnCount]);
@@ -6573,7 +6622,8 @@ function BoardStage({
     const container = scrollRef.current;
     const idx = items.findIndex(x => x.id === activeId);
     if (!container || idx < 0) return;
-    const target = Math.max(0, layout.positions[idx].top - 8);
+    const position = layout.positions[idx];
+    const target = Math.max(0, position.top + position.yRatio * Math.max(0, position.rowHeightPages - position.renderedHeightPages) * pageH - 8);
     syncLock.current = Date.now();
     smoothScrollTo(container, target);
   };
@@ -6648,6 +6698,10 @@ function BoardStage({
 
   const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
     const drag = positionDragRef.current;
+    if (drag && !drag.reorderMode) {
+      setCurrentBoardDropTarget(null);
+      return null;
+    }
     const dragDistanceY = drag?.contentDy ?? (drag ? clientY - drag.startY : 0);
     if (!force && drag && Math.abs(dragDistanceY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
       setCurrentBoardDropTarget(null);
@@ -6681,27 +6735,24 @@ function BoardStage({
     const scrollDeltaY = scroll.scrollTop - drag.startScrollTop;
     const contentDy = clientY - drag.startY + scrollDeltaY;
     const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + rawDx));
-    const visualDx = nextLeft - drag.startLeft;
-    const nextTopOffset = Math.max(
-      0,
-      Math.min(drag.maxTopOffset, drag.startTopOffset + contentDy)
-    );
+    const rawVisualDx = nextLeft - drag.startLeft;
+    const vertical = verticalBoardDragPatch(drag.item, drag.rowSpanPages, drag.startTopOffset / drag.pageH, contentDy / drag.pageH);
     const rawXRatio = drag.maxLeft > 0
       ? nextLeft / drag.maxLeft
       : DEFAULT_PLACEMENT_X_RATIO;
-    drag.currentDxPx = visualDx;
+    drag.currentDxPx = rawVisualDx;
     drag.contentDy = contentDy;
     const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
     const nextXRatio = magnet.ratio;
-    const nextYRatio = drag.maxTopOffset > 0
-      ? nextTopOffset / drag.maxTopOffset
-      : DEFAULT_PLACEMENT_Y_RATIO;
+    const visualDx = drag.reorderMode ? rawVisualDx : nextXRatio * drag.maxLeft - drag.startLeft;
     drag.pendingPlacement = {
       xRatio: nextXRatio,
-      yRatio: nextYRatio,
+      yRatio: vertical.yRatio,
+      extraSlots: vertical.extraSlots,
       magnetColumnIndex: magnet.snapped ? magnet.index : null,
     };
-    drag.tile.style.transform = `translate3d(${visualDx}px, ${contentDy}px, 0)`;
+    const visualDy = drag.reorderMode ? contentDy : vertical.offsetPages * drag.pageH - drag.startTopOffset;
+    drag.tile.style.transform = `translate3d(${visualDx}px, ${visualDy}px, 0)`;
     drag.tile.style.zIndex = '12';
     const magnetKey = magnet.snapped ? `${magnet.index}:${magnet.ratio}` : '';
     if (magnetKey !== drag.lastMagnetKey) {
@@ -6724,6 +6775,10 @@ function BoardStage({
       return;
     }
     const rect = scroll.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right) {
+      stopBoardAutoScroll();
+      return;
+    }
     const baseDelta = edgeAutoScrollDelta(
       rect,
       clientY,
@@ -6781,6 +6836,10 @@ function BoardStage({
 
   const removePositionDragWindowListeners = (drag = positionDragRef.current) => {
     if (!drag) return;
+    if (positionDragFrameRef.current != null) {
+      window.cancelAnimationFrame(positionDragFrameRef.current);
+      positionDragFrameRef.current = null;
+    }
     if (drag.windowPointerMove) {
       window.removeEventListener('pointermove', drag.windowPointerMove);
       drag.windowPointerMove = null;
@@ -6793,20 +6852,29 @@ function BoardStage({
       window.removeEventListener('pointercancel', drag.windowPointerCancel);
       drag.windowPointerCancel = null;
     }
+    window.removeEventListener('blur', drag.windowBlur);
+    window.removeEventListener('keydown', drag.windowKeyDown);
+    drag.captureTarget?.removeEventListener('lostpointercapture', drag.windowPointerCancelCapture);
   };
 
   useEffect(() => () => removePositionDragWindowListeners(), []);
 
   const beginPositionDrag = (evt, item, placement) => {
-    if (evt.button !== 0 || !contentRef.current) return;
+    if (evt.button !== 0 || !contentRef.current || positionDragRef.current) return;
+    const tile = tileRefs.current[item.id];
+    if (!tile) return;
     evt.preventDefault();
+    cancelSmoothScroll(scrollRef.current);
     const contentRect = contentRef.current.getBoundingClientRect();
-    const tileRect = evt.currentTarget.getBoundingClientRect();
+    const tileRect = tile.getBoundingClientRect();
     const scroll = scrollRef.current;
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
     const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
     const startXRatio = normalizePlacementXRatio(placement.xRatio);
     const startYRatio = normalizePlacementYRatio(placement.yRatio);
+    const layoutItem = layout.items.find(candidate => candidate.id === item.id) || item;
+    const rowSpanPages = placement.snappedNext - placement.startPages;
+    const maximumOffset = verticalBoardDragPatch(layoutItem, rowSpanPages, 0, Number.MAX_VALUE).offsetPages;
     const startMagnet = nearestBoardColumnMagnet(
       startXRatio,
       placement.columnCount || columnCount,
@@ -6817,7 +6885,14 @@ function BoardStage({
       id: item.id,
       pointerId: evt.pointerId,
       captureTarget: evt.currentTarget,
-      tile: evt.currentTarget,
+      tile,
+      item: layoutItem,
+      pageH,
+      rowSpanPages,
+      contentWidth: contentRef.current.clientWidth,
+      reorderMode: evt.altKey,
+      contentHeight: contentRef.current.style.height,
+      extendedContentHeight: `${layout.totalH + Math.max(0, maximumOffset * pageH - maxTopOffset)}px`,
       startX: evt.clientX,
       startY: evt.clientY,
       lastClientX: evt.clientX,
@@ -6840,15 +6915,26 @@ function BoardStage({
     drag.windowPointerMove = event => movePositionDrag(event);
     drag.windowPointerEnd = event => endPositionDrag(event);
     drag.windowPointerCancel = event => cancelPositionDrag(event);
+    drag.windowBlur = () => cancelPositionDrag({ pointerId: drag.pointerId });
+    drag.windowKeyDown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelPositionDrag({ pointerId: drag.pointerId });
+      }
+    };
+    drag.windowPointerCancelCapture = () => cancelPositionDrag({ pointerId: drag.pointerId });
     positionDragRef.current = drag;
     setPositioningId(item.id);
     setCurrentBoardDropTarget(null);
     syncLock.current = Date.now();
     setActive(item.id);
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
+    evt.currentTarget.addEventListener('lostpointercapture', drag.windowPointerCancelCapture);
     window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
     window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
     window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
+    window.addEventListener('blur', drag.windowBlur);
+    window.addEventListener('keydown', drag.windowKeyDown);
   };
 
   const movePositionDrag = (evt) => {
@@ -6857,20 +6943,36 @@ function BoardStage({
     const dx = evt.clientX - drag.startX;
     const dy = evt.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
-    drag.moved = true;
     evt.preventDefault();
-    updatePositionDragVisual(drag, evt.clientX, evt.clientY);
-    applyBoardAutoScroll(evt.clientX, evt.clientY);
-    updateBoardDropTarget(evt.clientX, evt.clientY, drag.id);
+    if (!drag.moved && !drag.reorderMode && contentRef.current) {
+      contentRef.current.style.height = drag.extendedContentHeight;
+    }
+    drag.moved = true;
+    drag.lastClientX = evt.clientX;
+    drag.lastClientY = evt.clientY;
+    if (positionDragFrameRef.current != null) return;
+    positionDragFrameRef.current = window.requestAnimationFrame(() => {
+      positionDragFrameRef.current = null;
+      if (positionDragRef.current !== drag) return;
+      updatePositionDragVisual(drag, drag.lastClientX, drag.lastClientY);
+      applyBoardAutoScroll(drag.lastClientX, drag.lastClientY);
+      updateBoardDropTarget(drag.lastClientX, drag.lastClientY, drag.id);
+    });
   };
 
   const endPositionDrag = (evt) => {
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
+    const viewport = scrollRef.current?.getBoundingClientRect();
+    if (viewport && (evt.clientX < viewport.left || evt.clientX > viewport.right || evt.clientY < viewport.top || evt.clientY > viewport.bottom)) {
+      cancelPositionDrag(evt);
+      return;
+    }
+    const finalScrollTop = scrollRef.current?.scrollTop || 0;
     updatePositionDragVisual(drag, evt.clientX, evt.clientY);
-    const canReorder = drag.moved && Math.abs(drag.contentDy) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
+    const canReorder = drag.reorderMode && drag.moved && Math.abs(drag.contentDy) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
     const target = canReorder
-      ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id) || boardDropTargetRef.current
+      ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id)
       : null;
     const reorderedPreview = target?.id
       ? reorderItemsForDrop(items, drag.id, target.id, target.position)
@@ -6884,7 +6986,7 @@ function BoardStage({
       }, 0);
       if (orderChanged) {
         reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
-      } else if (drag.pendingPlacement) {
+      } else if (!drag.reorderMode && drag.pendingPlacement) {
         setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
@@ -6892,22 +6994,34 @@ function BoardStage({
     drag.tile.style.zIndex = '';
     removePositionDragWindowListeners(drag);
     const captureTarget = drag.captureTarget || evt.currentTarget;
-    captureTarget?.releasePointerCapture?.(evt.pointerId);
+    if (captureTarget?.hasPointerCapture?.(evt.pointerId)) captureTarget.releasePointerCapture(evt.pointerId);
+    if (contentRef.current) contentRef.current.style.height = drag.contentHeight;
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
     setDragMagnet(null);
     stopBoardAutoScroll();
-    window.requestAnimationFrame(captureBoardTileRects);
+    window.requestAnimationFrame(() => {
+      if (scrollRef.current && !positionDragRef.current) scrollRef.current.scrollTop = finalScrollTop;
+      captureBoardTileRects();
+    });
   };
 
   const cancelPositionDrag = (evt) => {
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
+    if (drag.moved) {
+      suppressClickRef.current = drag.id;
+      window.setTimeout(() => {
+        if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
+      }, 0);
+    }
     drag.tile.style.transform = '';
     drag.tile.style.zIndex = '';
     removePositionDragWindowListeners(drag);
-    drag.captureTarget?.releasePointerCapture?.(evt.pointerId);
+    if (drag.captureTarget?.hasPointerCapture?.(evt.pointerId)) drag.captureTarget.releasePointerCapture(evt.pointerId);
+    if (contentRef.current) contentRef.current.style.height = drag.contentHeight;
+    if (scrollRef.current) scrollRef.current.scrollTop = drag.startScrollTop;
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
@@ -7123,8 +7237,9 @@ function BoardStage({
                 {layout.items.map((it, i) => {
                   const p = layout.positions[i];
                   if (!p) return null;
-                  const tileRenderedBottomPages = p.startPages + p.renderedHeightPages;
-                  const tileClassinStartPage = classinBoardPageNumberAtOffset(p.startPages);
+                  const tileRenderedTopPages = p.startPages + p.yRatio * Math.max(0, p.rowHeightPages - p.renderedHeightPages);
+                  const tileRenderedBottomPages = tileRenderedTopPages + p.renderedHeightPages;
+                  const tileClassinStartPage = classinBoardPageNumberAtOffset(tileRenderedTopPages);
                   const tileClassinEndPage = classinPageNumberForRenderedEnd(
                     tileRenderedBottomPages,
                     DEFAULT_SLOT_HEIGHT_PAGES
@@ -7175,12 +7290,13 @@ function BoardStage({
                       className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
                       onClick={event => onTileClick(it.id, event)}
                       title={problemDisplayName(it, i)}
-                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 드래그하여 배치 또는 순서 이동`}
+                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 제목 줄 드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}
                       aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
                       style={tileStyle}
                     >
                       <div
                         className="tile-hd"
+                        title={`드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}
                         onPointerDown={e => beginPositionDrag(e, it, p)}
                       >
                         <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
@@ -7636,6 +7752,7 @@ function SidePanel({
   const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
   const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
+  const extraMovementSlots = placementExtraSlots(item);
   const selectedPassageGroupId = item ? passageGroupIdFor(item) : '';
   const selectedPassageRangeLabel = item ? passageRangeLabelFor(item) : '';
   const selectedGroupItems = useMemo(() => {
@@ -7807,6 +7924,7 @@ function SidePanel({
   };
   const resetPlacement = () => {
     updatePlacementTargets({
+      extraSlots: 0,
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
       scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
@@ -8408,6 +8526,13 @@ function SidePanel({
                   </div>
                 </div>
               </div>
+              <div className="placement-extra-space">
+                <span>세로 이동 공간</span>
+                <button type="button" className="btn" aria-label="세로 이동 공간 줄이기" disabled={!item || extraMovementSlots === 0} onClick={() => updatePlacementTargets(target => ({ extraSlots: placementExtraSlots(target) - 1 }))}>−</button>
+                <strong aria-live="polite">+{extraMovementSlots}페이지</strong>
+                <button type="button" className="btn" aria-label="세로 이동 공간 늘리기" disabled={!item || extraMovementSlots >= PLACEMENT_EXTRA_SLOTS_MAX} onClick={() => updatePlacementTargets(target => ({ extraSlots: placementExtraSlots(target) + 1 }))}>+</button>
+              </div>
+              <small className="placement-movement-help">제목 줄을 아래로 끌면 공간이 늘어나고 다음 자료는 밀려납니다. {ALTERNATE_MODIFIER_LABEL}+드래그는 순서 이동, Esc는 취소입니다.</small>
               {showFitWidth && (
                 <button className="btn placement-fit-width" type="button" disabled={!item} onClick={fitPlacementWidth}>
                   {Icon.stretchHorizontal} 너비 맞춤 이어붙임
@@ -9958,6 +10083,8 @@ function applyItemStateToProblem(problem, item){
     ? normalizePlacementYRatio(item.placementYRatio)
     : DEFAULT_PLACEMENT_Y_RATIO;
   next.placement_y_ratio = next.placementYRatio;
+  next.placementExtraSlots = placementExtraSlots(item);
+  next.placement_extra_slots = next.placementExtraSlots;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
   next.placement_scale_ratio = next.placementScaleRatio;
   const renderedHeightPages = actualHeightPages * next.placementScaleRatio;
@@ -10101,6 +10228,7 @@ function rebaseSessionBoardLayout(latestSession, localDraft, boardColumns = BOAR
         placementXRatio: localItem.placementXRatio,
         placementXEdited: localItem.placementXEdited,
         placementYRatio: localItem.placementYRatio,
+        placementExtraSlots: placementExtraSlots(localItem),
         placementScaleRatio: localItem.placementScaleRatio,
         boardColumnCount: localItem.boardColumnCount,
         boardColumnIndex: localItem.boardColumnIndex,
@@ -10580,6 +10708,7 @@ function mapProblemToItem(problem, idx){
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
+    placementExtraSlots: placementExtraSlots(problem),
     placementScaleRatio: initialScale,
     boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
     boardColumnIndex: Number.isFinite(Number(problem.boardColumnIndex ?? problem.board_column_index))
@@ -10611,6 +10740,7 @@ function placementPersistenceSignature(rawSession){
       stableNumber(item.placementXRatio),
       Boolean(item.placementXEdited),
       stableNumber(item.placementYRatio),
+      placementExtraSlots(item),
       stableNumber(item.placementScaleRatio),
       item.boardColumnCount,
       item.boardColumnIndex,
@@ -15120,6 +15250,7 @@ function App(){
     const patchById = new Map(validUpdates.map(update => [String(update.id), update.patch]));
     const scaleChanged = validUpdates.some(update => (
       update.patch.fitWidth
+      || Object.prototype.hasOwnProperty.call(update.patch, 'extraSlots')
       || Object.prototype.hasOwnProperty.call(update.patch, 'scaleRatio')
     ));
     setItems(it => {
@@ -15507,6 +15638,7 @@ function App(){
         .filter(item => sessionIds.has(item.id))
         .map(item => [item.id, {
           xRatio: normalizePlacementXRatio(item.placementXRatio),
+          extraSlots: placementExtraSlots(item),
           yRatio: verticalPlacementRoomPages(item) > 0.001
             ? normalizePlacementYRatio(item.placementYRatio)
             : DEFAULT_PLACEMENT_Y_RATIO,

@@ -1401,6 +1401,7 @@
   }
   .placement-section{
     display: grid;
+    min-width: 0;
     gap: 9px;
     padding: 15px 0;
     border-bottom: 1px solid var(--line);
@@ -1505,6 +1506,10 @@
   .placement-width-row{
     grid-template-columns: minmax(78px, 1fr) auto;
   }
+  @media (max-width: 1100px){
+    .placement-width-row{ grid-template-columns: minmax(0, 1fr); }
+    .placement-width-options{ min-width: 0; width: 100%; }
+  }
   .placement-scale-row{
     grid-template-columns: 86px minmax(0, 1fr) 42px;
   }
@@ -1549,6 +1554,24 @@
     padding: 6px;
     font-size: 10.5px;
   }
+  @media (max-width: 1100px){
+    .placement-scale-row{ grid-template-columns: minmax(0, 1fr) 42px; }
+    .placement-scale-row > span{ grid-column: 1 / -1; }
+    .position-control.placement-position-control{ grid-template-columns: minmax(0, 1fr); }
+    .placement-position-control .position-pad{ justify-self: center; }
+    .placement-scale-actions .btn{ white-space: nowrap; }
+  }
+  .placement-extra-space{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .placement-extra-space > span{ flex: 1; font-size: 12px; }
+  .placement-extra-space .btn{ min-width: 32px; min-height: 32px; }
+  .placement-extra-space strong{ font-size: 12px; }
+  .placement-movement-help{ display: block; margin-top: 8px; color: var(--muted); line-height: 1.5; }
   .placement-fit-width{
     width: 100%;
     justify-content: center;
@@ -7221,6 +7244,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-151298f7759bc436a82bf4b2a5b40ef5b2569aea7104c2be4369065aec6af9bf"></script>
+<script src="app.bundle.js?v=frontend-bundle-0402624cbecb662f3e003907ccef864522a36f56d313d1104ef12824e3471c22"></script>
 </body>
 </html>
