@@ -321,11 +321,38 @@
     };
   }
 
+  function originalProblemNumberInfo(item) {
+    const metadata = item?.metadata || {};
+    const raw = item?.problemNumber ?? item?.problem_number ?? metadata.problemNumber ?? metadata.problem_number;
+    const numeric = typeof raw === 'number' || typeof raw === 'string' && /^\d+$/.test(raw.trim())
+      ? Number(raw) : NaN;
+    const number = Number.isSafeInteger(numeric) && numeric > 0 ? numeric : null;
+    const source = String(item?.problemNumberSource ?? item?.problem_number_source
+      ?? metadata.problemNumberSource ?? metadata.problem_number_source ?? '').trim();
+    const role = item?.passageRole || item?.passage_role || metadata.passageRole || metadata.passage_role;
+    if (role === 'passage_fragment') {
+      return { number: null, source, status: 'passage', label: '공통 지문', description: '공통 지문에는 개별 문제 번호를 붙이지 않습니다.' };
+    }
+    if (number && (source === 'manual' || /^(?:ocr_|text_|pdf_text_marker$|hwp_text_snippet$)/.test(source))) {
+      return { number, source, status: 'known', label: `원문 ${number}번`,
+        description: source === 'manual' ? '직접 확인한 원문 문제 번호' : '원본 인식 과정에서 읽은 문제 번호 · 잘못 읽었다면 자료 패널에서 수정하세요.' };
+    }
+    if (number && source.startsWith('inferred_')) {
+      return { number, source, status: 'inferred', label: `추정 ${number}번`, description: '앞뒤 문항에서 추정한 번호입니다. 이미지의 실제 번호를 확인해 주세요.' };
+    }
+    return { number: source === 'user_intent' ? null : number, source, status: 'unknown', label: '번호 미확인',
+      description: '원문에서 읽은 번호인지 확인되지 않았습니다. 자료 패널에서 직접 입력할 수 있습니다.' };
+  }
+
   function problemDisplayName(item, index) {
     const raw = String(item?.name ?? item?.title ?? '').trim();
     const order = Math.max(1, Number(index) + 1 || 1);
     const splitMatch = raw.match(/\((위|아래)\)\s*$/);
     const splitLabel = splitMatch?.[1] === '위' ? '위쪽' : splitMatch?.[1] === '아래' ? '아래쪽' : '';
+    const numberInfo = originalProblemNumberInfo(item);
+    if (numberInfo.status === 'known' || numberInfo.status === 'inferred') {
+      return `${numberInfo.label}${splitLabel ? ` · ${splitLabel}` : ''}`;
+    }
     const withoutSplit = splitMatch ? raw.slice(0, splitMatch.index).trim() : raw;
     const looksLikePath = /(?:^file:|[\\/])/.test(withoutSplit);
     const looksLikeFile = /\.(?:pdf|hwp|hwpx|png|jpe?g|webp|tiff?|bmp)(?:\s|$)/i.test(withoutSplit);
@@ -362,6 +389,7 @@
     nearestPlacementIndex,
     normalizeDropPosition,
     orderedSelectionIds,
+    originalProblemNumberInfo,
     problemDisplayName,
     problemSourceLabel,
     reorderItemGroupForDrop,

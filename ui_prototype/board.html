@@ -2442,6 +2442,18 @@
     border-radius: 9px;
     background: var(--surface-2);
   }
+  .original-number-editor{ display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+  .original-number-editor label{ display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; font-weight: 650; }
+  .original-number-editor label span{ color: var(--muted); font-weight: 400; }
+  .original-number-fields{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .original-number-fields input{ min-width: 0; width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+  .original-number-fields .btn{ white-space: nowrap; }
+  .original-number-editor small{ color: var(--muted); line-height: 1.5; font-size: 11px; }
+  .original-number-error{ color: var(--danger); font-size: 12px; }
+  .original-number-error:empty{ display: none; }
+  @media (max-width: 1100px){
+    .item-classification{ grid-template-columns: minmax(0, 1fr); }
+  }
   .item-classification > div:first-child{
     display: grid;
     gap: 2px;
@@ -3735,6 +3747,9 @@
     flex-wrap: nowrap;
     overflow: hidden;
   }
+  .item .meta .name .original-number-label{ min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+  .item .meta .name.original-number-unknown,
+  .item .meta .name.original-number-inferred{ color: var(--muted); }
   .item .meta .sub .tag{
     display: inline-flex;
     align-items: center;
@@ -3944,6 +3959,29 @@
       display: flex;
       opacity: 1;
     }
+  }
+
+  /* Keep original numbers readable without hiding keyboard-accessible actions. */
+  .item[data-item-id]{
+    grid-template-columns: 22px 40px minmax(0, 1fr);
+    gap: 4px 6px;
+    contain-intrinsic-size: auto 86px;
+  }
+  .item[data-item-id] .grip{ grid-column: 1; grid-row: 1 / span 2; }
+  .item[data-item-id] .thumb{ grid-column: 2; grid-row: 1; width: 40px; height: 40px; }
+  .item[data-item-id] .meta{ grid-column: 3; grid-row: 1; }
+  .item[data-item-id] .actions{
+    grid-column: 2 / -1;
+    grid-row: 2;
+    width: auto;
+    display: grid;
+    grid-template-columns: repeat(4, 26px);
+    justify-content: end;
+  }
+  @media (min-width: 701px) and (max-width: 920px){
+    .item[data-item-id]{ grid-template-columns: 22px minmax(0, 1fr); }
+    .item[data-item-id] .meta{ grid-column: 2; }
+    .item[data-item-id] .actions{ grid-template-columns: repeat(3, 26px); }
   }
 
   /* Center workspace */
@@ -7240,10 +7278,10 @@
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
 
-<script src="reorder.js?v=reorder-20260729-multiselect-pointer-relative"></script>
+<script src="reorder.js?v=original-problem-number-20261001"></script>
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-passage-envelope-20260803"></script>
-<script src="app.bundle.js?v=frontend-bundle-0402624cbecb662f3e003907ccef864522a36f56d313d1104ef12824e3471c22"></script>
+<script src="app.bundle.js?v=frontend-bundle-4eaeb6f07cdcba0b903c8b6a56d9922f227c7fcfdce3d72cc852b63be8a13ba5"></script>
 </body>
 </html>

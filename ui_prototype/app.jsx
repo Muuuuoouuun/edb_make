@@ -272,6 +272,9 @@ const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positio
 });
 const problemDisplayName = REORDER_HELPERS.problemDisplayName || ((item, index) => item?.name || `문제 ${index + 1}`);
 const problemSourceLabel = REORDER_HELPERS.problemSourceLabel || (item => item?.source || '업로드 원본');
+const originalProblemNumberInfo = REORDER_HELPERS.originalProblemNumberInfo || (() => ({
+  number: null, source: '', status: 'unknown', label: '번호 미확인', description: '원문 문제 번호를 확인할 수 없습니다.',
+}));
 
 // 자료별 자연 높이 (1.0 = 한 페이지)
 const HEIGHT_BY_KIND = {
@@ -6182,6 +6185,7 @@ function ItemsRail({
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
           const hasPageChrome = hasPageChromeArtifactFlag(it);
+          const originalNumber = originalProblemNumberInfo(it);
           const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
           const moveDirection = isJustMoved ? moveFeedback.direction : null;
           const downloadTitle = isDownloading
@@ -6257,12 +6261,12 @@ function ItemsRail({
               <TileImage item={it} forceMode="raw" />
             </div>
             <div className="meta">
-              <div className="name">
+              <div className={`name original-number-${originalNumber.status}`} title={`${originalNumber.description}\n자료명: ${it.name || ''}`}>
                 <span
                   className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
                   title={it.statusReason || it.statusLabel}
                 />
-                {problemDisplayName(it, i)}
+                <span className="original-number-label">{originalNumber.status === 'known' || originalNumber.status === 'inferred' ? problemDisplayName(it, i) : originalNumber.label}</span>
               </div>
               <div className="sub">
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
@@ -7644,6 +7648,42 @@ function PublishResultPanel({
   );
 }
 
+function OriginalProblemNumberEditor({ item, disabled, onSave }){
+  const info = originalProblemNumberInfo(item);
+  const [draft, setDraft] = useState(info.number == null ? '' : String(info.number));
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setDraft(info.number == null ? '' : String(info.number));
+    setError('');
+  }, [item.id, info.number, info.source]);
+  if (info.status === 'passage') return null;
+  const save = async event => {
+    event.preventDefault();
+    if (disabled) return;
+    const text = draft.trim();
+    if (text && (!/^\d{1,6}$/.test(text) || Number(text) < 1)) {
+      setError('1~999999 사이의 정수 번호를 입력하세요.');
+      return;
+    }
+    setError('');
+    await onSave('problem-number', { problemId: item.id, problemNumber: text ? Number(text) : null });
+  };
+  return (
+    <form className="original-number-editor" onSubmit={save}>
+      <label htmlFor="original-problem-number">원문 문제 번호 <span>{info.label}</span></label>
+      <div className="original-number-fields">
+        <input id="original-problem-number" type="text" inputMode="numeric" maxLength={6}
+          value={draft} disabled={disabled} placeholder="예: 12" aria-invalid={!!error}
+          aria-describedby="original-number-help original-number-error"
+          onChange={event => { setDraft(event.target.value); setError(''); }} />
+        <button className="btn" type="submit" disabled={disabled || (draft.trim() === String(info.number ?? '') && info.source === 'manual')}>번호 저장</button>
+      </div>
+      <small id="original-number-help">이미지에 적힌 번호만 입력하세요. 빈칸으로 저장하면 미확인으로 표시됩니다. 배치 순서는 바뀌지 않습니다.</small>
+      <span id="original-number-error" className="original-number-error" role="alert">{error}</span>
+    </form>
+  );
+}
+
 // ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
 function SidePanel({
   item, items, activeIndex,
@@ -8066,6 +8106,8 @@ function SidePanel({
                   </div>
                   <div className="pos-tag">{itemPosLabel}</div>
                 </div>
+
+                <OriginalProblemNumberEditor key={item.id} item={item} disabled={mutating || !session} onSave={mutateSession} />
 
                 <div className="item-classification">
                   <div>
@@ -10669,6 +10711,8 @@ function mapProblemToItem(problem, idx){
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
+    problemNumber: problem.problemNumber ?? problem.problem_number ?? problem.metadata?.problemNumber ?? problem.metadata?.problem_number ?? null,
+    problemNumberSource: problem.problemNumberSource ?? problem.problem_number_source ?? problem.metadata?.problemNumberSource ?? problem.metadata?.problem_number_source ?? '',
     source: problem.sourcePageId || problem.subject || '업로드',
     type: 'image',
     kind: KIND_BY_SUBJECT[problem.subject] || 'paragraph',
@@ -14092,6 +14136,7 @@ function App(){
         : action === 'confirm' ? '확인 상태를 저장하는 중…'
         : action === 'confirm-page' ? '페이지 확인 상태를 저장하는 중…'
         : action === 'classify' ? '자료 분류를 저장하는 중…'
+        : action === 'problem-number' ? '원문 문제 번호를 저장하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
     });
@@ -14111,6 +14156,7 @@ function App(){
         : action === 'confirm' ? '확인 상태를 저장했어요'
         : action === 'confirm-page' ? '지문 없음으로 확인했어요'
         : action === 'classify' ? '자료 분류를 변경했어요'
+        : action === 'problem-number' ? '원문 문제 번호를 저장했어요'
         : '문제를 제외했어요'
       );
       return next;

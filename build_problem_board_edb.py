@@ -9174,6 +9174,7 @@ def build_ui_session(
                     int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
                 ),
                 "problemNumber": int(placement["problem_number"]) if str(placement.get("problem_number") or "").isdigit() else None,
+                "problemNumberSource": str(problem_metadata.get("problem_number_source") or problem_metadata.get("problemNumberSource") or placement.get("problem_number_source") or ""),
                 "subject": str(placement["subject"]),
                 "imagePath": _to_file_uri(crop_path),
                 # Keep an immutable pointer to the first-generation crop. Image

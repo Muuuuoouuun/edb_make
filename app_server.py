@@ -4725,9 +4725,11 @@ def _render_board_crop_from_raw(
 def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
     """Carry over the fields that survive a split/merge unchanged — the
     surgical fields (id, bbox, image paths, title) are filled in by caller."""
+    metadata = parent.get("metadata") if isinstance(parent.get("metadata"), dict) else {}
     skeleton = {
         "title": parent.get("title"),
         "problemNumber": parent.get("problemNumber"),
+        "problemNumberSource": parent.get("problemNumberSource") or parent.get("problem_number_source") or metadata.get("problemNumberSource") or metadata.get("problem_number_source") or "",
         "subject": parent.get("subject"),
         "sourceFileName": parent.get("sourceFileName"),
         "sourceImagePath": parent.get("sourceImagePath"),
@@ -4910,6 +4912,7 @@ HWP_COUNT_MATCH_DISMISSIBLE_REVIEW_RISK_FLAGS = {
 }
 
 PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS = (
+    ("problemNumberSource", "problem_number_source"),
     ("passageGroupId", "passage_group_id"),
     ("passageRange", "passage_range"),
     ("passageRole", "passage_role"),
@@ -7911,6 +7914,22 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
     return session
 
 
+def _mutate_problem_number(session: dict[str, Any], problem_id: str, value: Any) -> dict[str, Any]:
+    """Update label metadata only; never rerun OCR or change layout/image assets."""
+    text = str(value).strip() if value is not None else ""
+    if text and (not re.fullmatch(r"[0-9]{1,6}", text) or int(text) < 1):
+        raise ValueError("원문 문제 번호는 1~999999 사이 정수 또는 빈칸이어야 합니다.")
+    _index, problem = _find_problem(session, problem_id)
+    metadata = problem.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        problem["metadata"] = metadata
+    for container in (problem, metadata):
+        container["problemNumber"] = container["problem_number"] = int(text) if text else None
+        container["problemNumberSource"] = container["problem_number_source"] = "manual"
+    return session
+
+
 def _mutate_classify(session: dict[str, Any], problem_id: str, classification: str) -> dict[str, Any]:
     normalized = str(classification or "").strip().lower().replace("_", "-")
     if normalized not in {"question", "shared-passage"}:
@@ -9455,7 +9474,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json(response)
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "confirm" | "confirm-page" | "classify", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "confirm" | "confirm-page" | "problem-number" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session, current_revision = self._current_session_state()
@@ -9523,6 +9542,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     ids_raw = [payload.get("pageId", payload.get("page_id"))]
                 decision = str(payload.get("decision") or "no_passage")
                 new_session = _mutate_confirm_pages(session, ids_raw, decision=decision)
+            elif action == "problem-number":
+                if "problemNumber" not in payload:
+                    raise ValueError("problemNumber is required")
+                new_session = _mutate_problem_number(session, str(payload.get("problemId") or ""), payload["problemNumber"])
             elif action == "classify":
                 classification = str(payload.get("classification") or "")
                 ids_raw = payload.get("problemIds", payload.get("problem_ids"))
@@ -9537,7 +9560,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|confirm-page|classify|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|confirm-page|problem-number|classify|retry-ai|enhance-image)"},
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
