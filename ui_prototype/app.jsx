@@ -4498,7 +4498,7 @@ function ReviewStage({
 
   if (!pages.length) {
     return (
-      <div className="col center">
+      <div className="col center" id="workspace-stage" role="region" aria-label="검수 화면">
         <div className="stage">
           <div className="stage-toolbar">
             <span className="name">검수 — 검출된 문제 박스</span>
@@ -4812,7 +4812,7 @@ function ReviewStage({
   );
 
   return (
-    <div className="col center workspace-stage-surface">
+    <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="검수 화면">
       <div className="stage">
         <div className="stage-toolbar review-stage-toolbar">
           <div className="review-stage-heading">
@@ -6159,9 +6159,9 @@ function ItemsRail({
   }, [activeId]);
 
   return (
-    <div className="col left">
+    <div className="col left" id="workspace-rail" role="region" aria-label="자료 목록">
       <div className="col-hd">
-        <h2>자료</h2>
+        <h2>자료 목록</h2>
         <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
         <div className="spacer" />
         {hasSessionItems && <button className="icon-btn" aria-label="전체를 2단계 원문 보존 변환" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')}>{Icon.aiBatch}</button>}
@@ -6279,6 +6279,13 @@ function ItemsRail({
         </label>
         {!hasSessionItems && (
           <p className="upload-intent-hint">{uploadIntentOption.description}</p>
+        )}
+        {!hasSessionItems && pendingFiles.length === 0 && (
+          <div className="rail-empty-state">
+            {Icon.fileText}
+            <strong>추가한 자료가 여기에 모여요</strong>
+            <p>가운데에서 파일을 추가하거나 샘플로 시작하세요. 목록에서 문항을 선택하고 순서를 바꿀 수 있어요.</p>
+          </div>
         )}
 
         {!!recentSessions?.length && (
@@ -7696,7 +7703,7 @@ function BoardStage({
   }
 
   return (
-    <div className="col center workspace-stage-surface">
+    <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="칠판 미리보기">
       <div className="stage">
         <div className="stage-toolbar">
           <span className="name">{items.length ? '실시간 칠판 미리보기' : '칠판 자료 홈'}</span>
@@ -8748,7 +8755,7 @@ function SidePanel({
   updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
-  triggerUpload, addSample,
+  triggerUpload, addSample, onRevealPanel,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -8837,10 +8844,11 @@ function SidePanel({
       if (!nextTab) return;
       evt.preventDefault();
       setTab(nextTab);
+      if (typeof onRevealPanel === 'function') onRevealPanel();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setTab]);
+  }, [setTab, onRevealPanel]);
 
   useEffect(() => {
     setCropDraft(item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP });
@@ -9232,7 +9240,7 @@ function SidePanel({
   };
 
   return (
-    <div className={`col right ${view === 'review' ? 'review-context' : ''}`}>
+    <div className={`col right ${view === 'review' ? 'review-context' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정">
       <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
         <button
           type="button"
@@ -9654,8 +9662,8 @@ function SidePanel({
             ) : items.length === 0 ? (
               <div className="side-panel-home-empty">
                 <div className="side-panel-empty-icon">{Icon.upload}</div>
-                <strong>자료를 추가해 주세요</strong>
-                <p>가운데 화면에 시험지나 문항 파일을 끌어다 놓거나, 최근 작업을 열어 시작하세요.</p>
+                <strong>선택한 자료를 편집해요</strong>
+                <p>자료를 추가한 뒤 목록이나 칠판에서 선택하면 처리 방식과 세부 설정을 조절할 수 있어요.</p>
               </div>
             ) : (
               <div style={{
@@ -15344,6 +15352,9 @@ function App(){
   const [mobilePane, setMobilePane] = useState('stage');
   const [reviewFocus, setReviewFocus] = useState(null);
   const [reviewEditorActive, setReviewEditorActive] = useState(false);
+  const revealSidePanel = useCallback(() => {
+    if (!reviewEditorActive) setMobilePane('panel');
+  }, [reviewEditorActive]);
   const [mutating, setMutating] = useState(false);
   const mutatingRef = useRef(false);
   const resetInFlightRef = useRef(false);
@@ -18300,6 +18311,7 @@ function App(){
                 className={mobilePane === pane ? 'on' : ''}
                 type="button"
                 aria-pressed={mobilePane === pane}
+                aria-controls={pane === 'rail' ? 'workspace-rail' : pane === 'panel' ? 'workspace-panel' : 'workspace-stage'}
                 disabled={reviewEditorActive && pane !== 'stage'}
                 onClick={() => setMobilePane(pane)}
               >{label}</button>
@@ -18425,6 +18437,7 @@ function App(){
           />
         )}
             <SidePanel
+          onRevealPanel={revealSidePanel}
           item={active}
           items={items}
           activeIndex={activeIndex}

@@ -108,7 +108,7 @@ class TestUiPerformance(unittest.TestCase):
 
         self.assertIn("display: flex", stage_wrap_css)
         self.assertIn("flex-direction: column", stage_wrap_css)
-        self.assertIn("gap: 10px", stage_wrap_css)
+        self.assertIn("gap: 12px", stage_wrap_css)
         self.assertIn("max-width: var(--stage-preview-max-width)", stage_board_css)
         self.assertIn("max-width: var(--stage-preview-max-width)", estimate_css)
         self.assertIn(".stage-wrap:has(.stage-estimate-bar)", board)

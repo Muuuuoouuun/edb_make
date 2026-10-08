@@ -221,15 +221,15 @@ class TestUiSidebarHierarchy(unittest.TestCase):
         assert.equal(prevented, handled);
         """)
 
-    def test_empty_sidebar_points_to_central_upload_without_a_competing_action(self) -> None:
+    def test_empty_sidebar_explains_selection_without_a_competing_upload_action(self) -> None:
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
         compile(sandbox, 'globalThis.renderEmpty = () => ('
           + section('              <div className="side-panel-home-empty">', '            ) : (') + ');');
         const empty = sandbox.renderEmpty();
         assert.equal(walk(empty).filter(node => node.type === 'button').length, 0);
-        assert.ok(text(empty).includes('가운데 화면'));
-        assert.ok(text(empty).includes('최근 작업'));
+        assert.ok(text(empty).includes('목록이나 칠판에서 선택'));
+        assert.ok(text(empty).includes('처리 방식과 세부 설정'));
         """)
 
 
