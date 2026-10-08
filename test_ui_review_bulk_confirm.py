@@ -6,6 +6,21 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+def board_document() -> str:
+    """board.html plus the stylesheet it links.
+
+    The editor theme used to be an inline <style> block; it now lives in
+    ui_prototype/board.css. These assertions cover both halves of the document.
+    """
+
+    ui_root = PROJECT_ROOT / "ui_prototype"
+    return (
+        (ui_root / "board.html").read_text(encoding="utf-8")
+        + "\n"
+        + (ui_root / "board.css").read_text(encoding="utf-8")
+    )
+
+
 
 class TestUiReviewBulkConfirm(unittest.TestCase):
     def test_review_stage_exposes_bulk_confirm_actions(self) -> None:
@@ -81,7 +96,7 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
     def test_review_stage_exposes_persistent_completion_bar(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
@@ -97,11 +112,11 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertIn(".review-completion-shortcut", html)
         completion_css = html.split(".review-completion-bar{", 1)[1].split("}", 1)[0]
         primary_css = html.split(".review-completion-primary{", 1)[1].split("}", 1)[0]
-        self.assertIn("min-height: 54px", completion_css)
-        self.assertIn("min-height: 38px", primary_css)
-        board_preview_css = html.split(".review-board-preview-button{", 1)[1].split("}", 1)[0]
-        self.assertIn("justify-content: center", board_preview_css)
-        self.assertIn("gap: 6px", board_preview_css)
+        self.assertIn("min-height: 72px", completion_css)
+        self.assertIn("min-height: var(--control-height)", primary_css)
+        completion_actions_css = html.split(".review-completion-actions{", 1)[1].split("}", 1)[0]
+        self.assertIn("display: inline-flex", completion_actions_css)
+        self.assertIn("max-width: 100%", completion_actions_css)
 
     def test_review_confirmation_advances_and_has_a_keyboard_shortcut(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -150,14 +165,14 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         box_editor = source.split("function BoxEditPanel", 1)[1].split("function ManualSplitEditor", 1)[0]
 
         self.assertIn("view !== 'review'", side_panel)
-        self.assertIn("처리 방식 적용", side_panel)
-        self.assertIn("전체 처리 적용", side_panel)
+        self.assertIn("선택 1개에 적용", side_panel)
+        self.assertIn("수업 전체 ${items.length}개에 적용", side_panel)
         self.assertNotIn("<button className=\"btn\" disabled={!item}>건너뛰기</button>", side_panel)
         self.assertIn("합치고 다음 검수", box_editor)
 
     def test_review_top_toolbar_prioritizes_status_remaining_and_quick_actions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
@@ -177,7 +192,7 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
     def test_review_diagnostics_are_collapsed_behind_one_disclosure(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
@@ -190,7 +205,7 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         self.assertIn(".review-summary-details", html)
 
     def test_board_uses_review_bulk_confirm_cache_bust(self) -> None:
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
 
         self.assertIn("review_filters.js?v=review-mode-copy-20260818", html)
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)

@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -439,6 +440,8 @@ BOTTOM_WATERMARK_SCAN_RATIO = 0.22
 BOTTOM_WATERMARK_MIN_Y_RATIO = 0.82
 BOTTOM_WATERMARK_BLUE_DELTA = 22
 BOTTOM_WATERMARK_TRIM_PADDING_PX = 10
+BOTTOM_WATERMARK_MIN_HORIZONTAL_SPAN_RATIO = 0.08
+BOTTOM_WATERMARK_MIN_HORIZONTAL_SPAN_PX = 32
 CORNER_PAGE_BADGE_SCAN_RATIO = 0.18
 CORNER_PAGE_BADGE_SCAN_MAX_PX = 180
 CORNER_PAGE_BADGE_EDGE_SEED_PX = 10
@@ -670,6 +673,11 @@ def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
     scan_top = max(scan_top, int(round(height * BOTTOM_WATERMARK_MIN_Y_RATIO)))
     if scan_top >= height - 2:
         return image
+    min_row_blue_count = max(4, int(round(width * 0.006)))
+    min_horizontal_span = max(
+        BOTTOM_WATERMARK_MIN_HORIZONTAL_SPAN_PX,
+        int(round(width * BOTTOM_WATERMARK_MIN_HORIZONTAL_SPAN_RATIO)),
+    )
     if np is not None:
         arr = np.asarray(rgb, dtype=np.int16)
         lower = arr[scan_top:, :, :]
@@ -684,17 +692,28 @@ def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
         )
         if int(np.count_nonzero(blue_mask)) < max(18, int(round(width * height * 0.00035))):
             return image
-        rows = np.where(np.count_nonzero(blue_mask, axis=1) >= max(4, int(round(width * 0.006))))[0]
+        row_blue_counts = np.count_nonzero(blue_mask, axis=1)
+        # Copyright footers and their rules are horizontally distributed.
+        # A colored column divider can contribute the same few pixels to
+        # every row, so color/count alone must not make it a bottom boundary.
+        first_blue_columns = np.argmax(blue_mask, axis=1)
+        last_blue_columns = width - 1 - np.argmax(blue_mask[:, ::-1], axis=1)
+        row_blue_spans = last_blue_columns - first_blue_columns + 1
+        rows = np.where(
+            (row_blue_counts >= min_row_blue_count)
+            & (row_blue_spans >= min_horizontal_span)
+        )[0]
         if rows.size == 0:
             return image
         first_y = scan_top + int(rows.min())
     else:
         pixels = rgb.load()
-        min_row_blue_count = max(4, int(round(width * 0.006)))
         total_blue_count = 0
         first_y: int | None = None
         for y in range(scan_top, height):
             row_blue_count = 0
+            first_blue_x: int | None = None
+            last_blue_x: int | None = None
             for x in range(width):
                 red, green, blue = pixels[x, y]
                 saturation = max(red, green, blue) - min(red, green, blue)
@@ -704,8 +723,20 @@ def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
                     and saturation >= 32
                 ):
                     row_blue_count += 1
+                    if first_blue_x is None:
+                        first_blue_x = x
+                    last_blue_x = x
             total_blue_count += row_blue_count
-            if first_y is None and row_blue_count >= min_row_blue_count:
+            horizontal_span = (
+                last_blue_x - first_blue_x + 1
+                if first_blue_x is not None and last_blue_x is not None
+                else 0
+            )
+            if (
+                first_y is None
+                and row_blue_count >= min_row_blue_count
+                and horizontal_span >= min_horizontal_span
+            ):
                 first_y = y
         if total_blue_count < max(18, int(round(width * height * 0.00035))) or first_y is None:
             return image
@@ -1843,6 +1874,7 @@ class ProblemEntry:
     placement_x_ratio: float | None = None
     placement_y_ratio: float | None = None
     placement_scale_ratio: float | None = None
+    placement_gap_after_pages: float | None = None
     preserve_legacy_placement_scale: bool = False
     processing_step: str = PROCESSING_STEP_RAW
     input_intent: str | None = None
@@ -1873,6 +1905,7 @@ class _ProblemAssetTask:
     subject: Subject = Subject.UNKNOWN
     source_hints: tuple[str, ...] = ()
     source_media_regions: tuple[dict[str, Any], ...] = ()
+    render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -1916,6 +1949,12 @@ class _ImageOnlyRecordImage:
     source_width_px: int = 0
     source_height_px: int = 0
     resolution_policy: str = "source-preserving"
+
+
+def _record_ms(timings: dict[str, int] | None, key: str, started_at: float) -> None:
+    """Store a stage duration when the caller asked for timings; no-op otherwise."""
+    if timings is not None:
+        timings[key] = int(round((time.perf_counter() - started_at) * 1000))
 
 
 def _resolve_problem_asset_worker_count(task_count: int) -> int:
@@ -2258,7 +2297,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL,
             optimize=False,
         )
-        _render_problem_board_asset(crop, task)
+        if task.render_board_asset:
+            _render_problem_board_asset(crop, task)
         return crop.size
 
     passage_column_divider_x = (
@@ -2395,7 +2435,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL,
         optimize=False,
     )
-    _render_problem_board_asset(crop, task)
+    if task.render_board_asset:
+        _render_problem_board_asset(crop, task)
     return crop.size
 
 
@@ -2472,7 +2513,8 @@ def _render_problem_assets(tasks: list[_ProblemAssetTask]) -> list[tuple[int, in
         if task is canonical:
             continue
         _copy_problem_asset(canonical.crop_path, task.crop_path)
-        _copy_problem_asset(canonical.board_render_path, task.board_render_path)
+        if task.render_board_asset:
+            _copy_problem_asset(canonical.board_render_path, task.board_render_path)
         task.rendered_media_regions = [
             dict(region)
             for region in canonical.rendered_media_regions
@@ -2587,7 +2629,9 @@ def build_pages(
     input_intent: str = "auto",
     ocr_semaphore: threading.BoundedSemaphore | None = None,
     global_ocr_worker_limit: int | None = None,
+    timings: dict[str, int] | None = None,
 ) -> tuple[list[PreparedPage], list[PageModel]]:
+    render_started_at = time.perf_counter()
     prepared_pages = prepare_source_pages(
         source,
         pdf_dpi=pdf_dpi,
@@ -2596,6 +2640,7 @@ def build_pages(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
+    _record_ms(timings, "render", render_started_at)
     if _normalize_input_intent(input_intent) == "page-as-is":
         prepared_pages = _tile_page_as_is_prepared_pages(
             prepared_pages,
@@ -2604,6 +2649,7 @@ def build_pages(
         return prepared_pages, _build_page_as_is_models(prepared_pages, subject=subject)
 
     page_ai_config = _to_page_ai_config(ai_fallback_config)
+    segment_started_at = time.perf_counter()
     page_models = build_page_models_for_prepared_pages(
         prepared_pages,
         subject=subject,
@@ -2612,6 +2658,7 @@ def build_pages(
         ocr_semaphore=ocr_semaphore,
         global_ocr_worker_limit=global_ocr_worker_limit,
     )
+    _record_ms(timings, "segment", segment_started_at)
     if debug_segments_dir is not None:
         for prepared_page, page in zip(prepared_pages, page_models):
             debug_path = debug_segments_dir / f"{page.page_id}_segments.png"
@@ -5750,6 +5797,8 @@ def _coalesce_cross_page_passage_drafts(
     drafts: list[_ProblemEntryDraft],
     crop_sizes: list[tuple[int, int]],
     pages: Sequence[PageModel],
+    *,
+    render_board_assets: bool = True,
 ) -> tuple[list[_ProblemEntryDraft], list[tuple[int, int]]]:
     problem_units_by_id = {
         problem.unit_id: problem
@@ -5862,11 +5911,12 @@ def _coalesce_cross_page_passage_drafts(
         ]
         if primary.asset_task is not None:
             primary.asset_task.rendered_media_regions = list(stitched_regions)
-        _stitch_passage_image_files(
-            [drafts[index].board_render_path for index in ordered_indices],
-            primary.board_render_path,
-            transparent=True,
-        )
+        if render_board_assets:
+            _stitch_passage_image_files(
+                [drafts[index].board_render_path for index in ordered_indices],
+                primary.board_render_path,
+                transparent=True,
+            )
 
         # A stitched passage is a single rendered image. Keeping blocks from
         # later pages would make mixed-mode export crop those bboxes from the
@@ -5985,11 +6035,15 @@ def build_problem_entries(
     *,
     board_theme: str = DEFAULT_BOARD_THEME,
     content_target: str = "all",
+    render_board_assets: bool = True,
+    timings: dict[str, int] | None = None,
 ) -> list[ProblemEntry]:
+    entries_started_at = time.perf_counter()
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
     cutout_dir = output_dir / "problem_cutouts"
-    cutout_dir.mkdir(parents=True, exist_ok=True)
+    if render_board_assets:
+        cutout_dir.mkdir(parents=True, exist_ok=True)
     chalk_color = _resolve_chalk_color(board_theme)
     resolved_content_target = _normalize_content_target(content_target)
     prepared_by_page_id = {page.page_id: page for page in prepared_pages}
@@ -6317,13 +6371,18 @@ def build_problem_entries(
                             if _problem_allows_selective_media_preservation(problem)
                             else ()
                         ),
+                        render_board_asset=render_board_assets,
                     ),
                 )
             )
 
+    _record_ms(timings, "entries", entries_started_at)
+    assets_started_at = time.perf_counter()
     rendered_crop_sizes = iter(
         _render_problem_assets([draft.asset_task for draft in drafts if draft.asset_task is not None])
     )
+    _record_ms(timings, "assets", assets_started_at)
+    coalesce_started_at = time.perf_counter()
     crop_sizes = [
         draft.prepared_page.image.size if draft.asset_task is None else next(rendered_crop_sizes)
         for draft in drafts
@@ -6331,8 +6390,15 @@ def build_problem_entries(
     for draft in drafts:
         if draft.asset_task is not None:
             draft.preserve_media_regions = list(draft.asset_task.rendered_media_regions)
-    drafts, crop_sizes = _coalesce_cross_page_passage_drafts(drafts, crop_sizes, pages)
+    drafts, crop_sizes = _coalesce_cross_page_passage_drafts(
+        drafts,
+        crop_sizes,
+        pages,
+        render_board_assets=render_board_assets,
+    )
     _annotate_passage_crop_quality(drafts, pages)
+    _record_ms(timings, "coalesce", coalesce_started_at)
+    finish_started_at = time.perf_counter()
     entries: list[ProblemEntry] = []
     for draft, crop_size in zip(drafts, crop_sizes):
         actual_height_pages = (
@@ -6367,6 +6433,7 @@ def build_problem_entries(
                 board_render_preprocessed=draft.asset_task is not None,
             )
         )
+    _record_ms(timings, "finish", finish_started_at)
     return entries
 
 
@@ -6401,7 +6468,7 @@ def _build_ai_fallback_config(
     effective_enabled = resolved_mode != "off"
     if (
         not effective_enabled
-        and provider in {"openai", "gemini"}
+        and provider in {"gemini", "google"}
         and not model
         and not prompt
         and max_tokens == 4096
@@ -6432,6 +6499,14 @@ def _build_ai_fallback_config(
 def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackConfig:
     if not ai_fallback_config:
         return build_page_ai_fallback_config()
+    # max_output_token_cap has no desktop caller (_build_ai_fallback_config
+    # above never emits it): only scripts/trial_bench/oracle.py's
+    # force_config sets this key, to bypass page_repair.py's per-block
+    # output-token estimate for the forced oracle path. Every desktop
+    # config dict is missing the key, so .get(...) is None there and
+    # build_page_ai_fallback_config keeps its own default (None => no
+    # bypass, unchanged behaviour).
+    raw_max_output_token_cap = ai_fallback_config.get("max_output_token_cap")
     return build_page_ai_fallback_config(
         mode=str(ai_fallback_config.get("mode") or ("auto" if bool(ai_fallback_config.get("enabled")) else "off")),
         provider=str(ai_fallback_config.get("provider") or "gemini"),
@@ -6442,6 +6517,7 @@ def _to_page_ai_config(ai_fallback_config: dict[str, Any] | None) -> AIFallbackC
         timeout_ms=int(ai_fallback_config.get("timeout_ms") or 30000),
         save_debug=bool(ai_fallback_config.get("save_debug")),
         fail_on_error=bool(ai_fallback_config.get("fail_on_error")),
+        max_output_token_cap=int(raw_max_output_token_cap) if raw_max_output_token_cap else None,
     )
 
 
@@ -8569,7 +8645,25 @@ def _classin_board_placement_overlap_issues(problems: Sequence[dict[str, Any]]) 
         scale_ratio = _problem_float(problem, "placementScaleRatio", "placement_scale_ratio")
         if scale_ratio is None:
             scale_ratio = 1.0
-        rendered_bottom_y_pages = start_y_pages + max(0.0, height_pages) * max(0.0, scale_ratio)
+        rendered_height_pages = max(0.0, height_pages) * max(0.0, scale_ratio)
+        geometry = problem.get("imageRecordGeometry") or problem.get("image_record_geometry")
+        if isinstance(geometry, dict):
+            base_height = _problem_float(geometry, "baseHeightPages")
+            base_width = _problem_float(geometry, "baseDisplayWidthPx")
+            max_width = _problem_float(geometry, "maxDisplayWidthPx")
+            if all(value is not None and math.isfinite(value) and value > 0 for value in (base_height, base_width, max_width)):
+                # The saved slider retains the requested scale. ClassIn may
+                # clamp the image width, so overlap checks use its effective
+                # rendered size rather than the unclamped slider value.
+                continuous = _normalize_input_intent(
+                    str(problem.get("inputIntent") or problem.get("input_intent") or "")
+                ) == "page-as-is"
+                allowed_max = PLACEMENT_FIT_WIDTH_SCALE_MAX if (
+                    continuous or _mapping_preserves_legacy_placement_scale(problem)
+                ) else PLACEMENT_SCALE_MAX
+                effective_scale = max(PLACEMENT_SCALE_MIN, min(scale_ratio, allowed_max, max_width / base_width))
+                rendered_height_pages = base_height * effective_scale
+        rendered_bottom_y_pages = start_y_pages + rendered_height_pages
         placements.append((start_y_pages, rendered_bottom_y_pages, problem))
 
     placements.sort(key=lambda item: (item[0], str(item[2].get("id") or "")))
@@ -9059,6 +9153,101 @@ def _page_quality_payload(page: PageModel | None) -> dict[str, Any]:
     }
 
 
+def _image_record_geometry(
+    template: LayoutTemplate,
+    *,
+    crop_format: str,
+    base_width_px: float,
+    base_height_pages: float,
+    reserved_height_pages: float,
+) -> dict[str, Any]:
+    return {
+        "baseDisplayWidthPx": float(base_width_px),
+        "baseHeightPages": float(base_height_pages),
+        "reservedHeightPages": float(reserved_height_pages),
+        "maxDisplayWidthPx": float(CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX),
+        "canvasPageHeightPx": float(CANVAS_WIDTH),
+        "topPaddingPages": float(TOP_PADDING_PX / CANVAS_WIDTH),
+        "continuousGapPages": float(CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH),
+        "cropFormat": crop_format,
+    }
+
+
+def _image_record_geometry_from_placement(
+    placement: Mapping[str, Any], template: LayoutTemplate, *, crop_format: str,
+) -> dict[str, Any] | None:
+    if placement.get("record_mode") != "image-only":
+        return None
+    if crop_format == CROP_FORMAT_V1 and template.metadata.get("preserve_source_layout"):
+        return None
+    scale = float(placement.get("placement_scale_ratio") or 1.0)
+    width = float(placement.get("rendered_width_px") or 0.0)
+    height = float(placement.get("rendered_height_px") or 0.0)
+    if any(not math.isfinite(value) or value <= 0 for value in (scale, width, height)):
+        return None
+    return _image_record_geometry(
+        template, crop_format=crop_format, base_width_px=width / scale,
+        base_height_pages=height / scale / CANVAS_WIDTH,
+        reserved_height_pages=float(placement.get("actual_content_height_pages") or 0.0),
+    )
+
+
+def annotate_session_image_record_geometry(
+    session: dict[str, Any], *, template: LayoutTemplate | None = None,
+) -> None:
+    """Refresh image geometry from current crops without changing saved placement.
+
+    HTTP responses use this for sessions created before geometry metadata, and
+    after crop/merge/split actions. Missing legacy assets and mixed text records
+    remain valid sessions without this optional preview metadata.
+    """
+    crop_format = str(session.get("cropFormat") or session.get("crop_format") or DEFAULT_CROP_FORMAT)
+    if crop_format not in {CROP_FORMAT_V1, CROP_FORMAT_V2}:
+        return
+    if template is None:
+        raw_template = session.get("template") if isinstance(session.get("template"), dict) else {}
+        try:
+            template = LayoutTemplate(
+                "preview-geometry", fixed_left_zone_ratio=float(raw_template.get("fixed_left_zone_ratio") or 1 / 3)
+            )
+        except (TypeError, ValueError):
+            return
+        if isinstance(raw_template.get("metadata"), dict):
+            template.metadata.update(raw_template["metadata"])
+    try:
+        left_ratio = float(template.fixed_left_zone_ratio)
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(left_ratio) or not 0 < left_ratio <= 1:
+        return
+    source_layout = crop_format == CROP_FORMAT_V1 and template.metadata.get("preserve_source_layout")
+    raw_problems = session.get("problems")
+    for problem in raw_problems if isinstance(raw_problems, list) else []:
+        if not isinstance(problem, dict):
+            continue
+        record_mode = problem.get("recordMode") or problem.get("record_mode") or session.get("recordMode") or session.get("record_mode") or "image-only"
+        if source_layout or record_mode != "image-only":
+            problem.pop("imageRecordGeometry", None)
+            problem.pop("image_record_geometry", None)
+            continue
+        try:
+            path = _session_asset_path(problem.get("imagePath") or problem.get("crop_path"))
+            if path is None:
+                continue
+            with Image.open(path) as image:
+                width_px, height_px = image.size
+        except (OSError, ValueError, TypeError):
+            continue
+        base_width = float(V2_TARGET_IMAGE_WIDTH_PX) if crop_format == CROP_FORMAT_V2 else _v1_default_display_width_px(template)
+        base_height = base_width * height_px / max(width_px, 1) / CANVAS_WIDTH
+        geometry = _image_record_geometry(
+            template, crop_format=crop_format, base_width_px=base_width,
+            base_height_pages=base_height, reserved_height_pages=max(MIN_HEIGHT_PAGES, base_height),
+        )
+        problem["imageRecordGeometry"] = geometry
+        problem["image_record_geometry"] = geometry
+
+
 def build_ui_session(
     prepared_pages: list[PreparedPage],
     placements: list[dict[str, object]],
@@ -9159,6 +9348,9 @@ def build_ui_session(
             placement.get("processing_step") or placement.get("step")
         )
         layout_diagnostics = _layout_diagnostic_from_placement(placement)
+        image_record_geometry = _image_record_geometry_from_placement(
+            placement, resolved_template, crop_format=crop_format,
+        )
         problem_placement_mode = (
             "continuous-page-as-is"
             if problem_input_intent == "page-as-is"
@@ -9187,6 +9379,8 @@ def build_ui_session(
                 "preserveMediaRegions": list(placement.get("preserve_media_regions") or []),
                 "preserve_media_regions": list(placement.get("preserve_media_regions") or []),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
+                **({"imageRecordGeometry": image_record_geometry, "image_record_geometry": image_record_geometry}
+                   if image_record_geometry is not None else {}),
                 "renderedHeightPages": layout_diagnostics["renderedHeightPages"],
                 "overflowAllowed": bool(placement["overflow_allowed"]),
                 "readingHeavy": bool(placement["overflow_allowed"]),
@@ -9821,6 +10015,7 @@ def placement_inputs(
                     or _entry_preserves_legacy_placement_scale(entry)
                     else PLACEMENT_SCALE_MAX,
                 ) or 1.0,
+                "placement_gap_after_pages": entry.placement_gap_after_pages,
                 "preserve_legacy_placement_scale": _entry_preserves_legacy_placement_scale(entry),
                 "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry) or normalize_placement_extra_slots(entry.placement_extra_slots) > 0,
                 "input_intent": entry.input_intent,
@@ -9851,7 +10046,11 @@ def _image_only_layout_height_pages(
         return entry.actual_height_pages
 
     estimated = rendered_width_px * (float(height_px) / max(float(width_px), 1.0)) / CANVAS_WIDTH
-    return max(MIN_HEIGHT_PAGES, min(MAX_HEIGHT_PAGES, estimated))
+    # This reservation follows the real image aspect ratio, rather than the
+    # bounded content estimate used during extraction. Tall records remain
+    # tall in ClassIn, so clipping their reservation creates overlaps when a
+    # continuous page is followed by a regular problem.
+    return max(MIN_HEIGHT_PAGES, estimated)
 
 
 def _image_only_layout_heights_by_problem_id(
@@ -10023,6 +10222,262 @@ def split_problem_entries_for_classin_page_limit(
     if current:
         chunks.append(current)
     return chunks
+
+
+def _classin_rendered_flow_metrics(
+    problem_entries: Sequence[ProblemEntry],
+    placements: Sequence[Mapping[str, object]],
+) -> tuple[list[float], list[float]]:
+    """Return per-entry cursor advances and rendered tails.
+
+    A part's flow is not always the sum of ``end - start`` values: a record may
+    end before its reserved next cursor, while the final record may extend past
+    it.  Keeping advance and tail separately lets the partitioner reproduce
+    ``max(prefix advance + record tail)`` for every candidate interval.
+    """
+
+    if len(problem_entries) != len(placements):
+        return [], []
+    advances: list[float] = []
+    tails: list[float] = []
+    for entry, placement in zip(problem_entries, placements):
+        raw_start = placement.get("start_y_pages")
+        raw_next = placement.get("snapped_next_start_y_pages")
+        if raw_start is None or raw_next is None:
+            return [], []
+        try:
+            start_pages = float(raw_start)
+            next_start_pages = float(raw_next)
+        except (TypeError, ValueError):
+            return [], []
+        placement_id = str(placement.get("problem_id") or placement.get("problemId") or "")
+        if placement_id and placement_id != entry.problem_id:
+            return [], []
+        end_pages = _placement_summary_end_pages(dict(placement))
+        advance = next_start_pages - start_pages
+        tail = end_pages - start_pages
+        if (
+            not math.isfinite(advance)
+            or not math.isfinite(tail)
+            or advance <= 1e-9
+            or tail <= 1e-9
+        ):
+            return [], []
+        advances.append(advance)
+        tails.append(tail)
+    return advances, tails
+
+
+def balanced_classin_part_ranges(
+    flow_weights: Sequence[float],
+    *,
+    tail_weights: Sequence[float] | None = None,
+    max_page_count: int = CLASSIN_MAX_BOARD_PAGE_COUNT,
+    part_count: int | None = None,
+    balance_min_part_count: int = 1,
+) -> list[tuple[int, int, float]]:
+    """Split ordered rendered spans into the fewest, most balanced parts.
+
+    Problem order is preserved.  A greedy pass establishes the minimum number
+    of contiguous bins under ClassIn's page limit; dynamic programming then
+    chooses boundaries that minimize squared distance from the ideal per-part
+    flow.  The optional ``part_count`` keeps an already-proven safe count while
+    moving only its boundaries.
+    """
+
+    advances = [float(value) for value in flow_weights]
+    tails = [float(value) for value in (tail_weights if tail_weights is not None else flow_weights)]
+    if not advances:
+        return []
+    if len(advances) != len(tails):
+        raise ValueError("ClassIn rendered advances and tails must have equal lengths")
+    max_pages = float(max(1, int(max_page_count)))
+    for advance, tail in zip(advances, tails):
+        if not math.isfinite(advance) or advance <= 0 or not math.isfinite(tail) or tail <= 0:
+            raise ValueError("ClassIn rendered flow weights must be positive finite values")
+        if tail > max_pages + 1e-6:
+            raise ValueError(
+                f"A rendered problem exceeds ClassIn's {int(max_pages)}-page limit "
+                f"({tail:.3f} pages)"
+            )
+
+    item_count = len(advances)
+    interval_flow = [[0.0] * (item_count + 1) for _ in range(item_count)]
+    for start in range(item_count):
+        cursor_pages = 0.0
+        flow_end_pages = 0.0
+        for end in range(start, item_count):
+            flow_end_pages = max(flow_end_pages, cursor_pages + tails[end])
+            interval_flow[start][end + 1] = flow_end_pages
+            cursor_pages += advances[end]
+
+    greedy_ranges: list[tuple[int, int, float]] = []
+    start = 0
+    while start < item_count:
+        best_end = start
+        for end in range(start + 1, item_count + 1):
+            if interval_flow[start][end] > max_pages + 1e-6:
+                break
+            best_end = end
+        if best_end <= start:
+            raise ValueError(
+                f"A rendered problem exceeds ClassIn's {int(max_pages)}-page limit"
+            )
+        greedy_ranges.append((start, best_end, interval_flow[start][best_end]))
+        start = best_end
+
+    minimum_part_count = len(greedy_ranges)
+    if part_count is None:
+        resolved_part_count = minimum_part_count
+    else:
+        resolved_part_count = min(item_count, max(1, int(part_count)))
+        if resolved_part_count < minimum_part_count:
+            raise ValueError(
+                f"{resolved_part_count} ClassIn parts cannot contain the rendered flow safely"
+            )
+    if resolved_part_count < max(1, int(balance_min_part_count)):
+        return greedy_ranges
+    target_pages = interval_flow[0][item_count] / resolved_part_count
+
+    # dp[parts_used][end] = (sum_squared_error, max_abs_error, previous_end)
+    dp: list[dict[int, tuple[float, float, int]]] = [
+        {} for _ in range(resolved_part_count + 1)
+    ]
+    dp[0][0] = (0.0, 0.0, -1)
+    for parts_used in range(1, resolved_part_count + 1):
+        min_end = parts_used
+        max_end = item_count - (resolved_part_count - parts_used)
+        for end in range(min_end, max_end + 1):
+            best: tuple[float, float, int] | None = None
+            for previous_end in range(parts_used - 1, end):
+                previous = dp[parts_used - 1].get(previous_end)
+                if previous is None:
+                    continue
+                part_pages = interval_flow[previous_end][end]
+                if part_pages > max_pages + 1e-6:
+                    continue
+                deviation = abs(part_pages - target_pages)
+                candidate = (
+                    previous[0] + deviation * deviation,
+                    max(previous[1], deviation),
+                    previous_end,
+                )
+                if best is None or candidate[:2] < best[:2]:
+                    best = candidate
+            if best is not None:
+                dp[parts_used][end] = best
+
+    if item_count not in dp[resolved_part_count]:
+        raise ValueError(
+            f"Could not balance rendered problems into {resolved_part_count} "
+            f"ClassIn parts under {int(max_pages)} pages"
+        )
+
+    ranges: list[tuple[int, int, float]] = []
+    end = item_count
+    for parts_used in range(resolved_part_count, 0, -1):
+        previous_end = dp[parts_used][end][2]
+        ranges.append((previous_end, end, interval_flow[previous_end][end]))
+        end = previous_end
+    ranges.reverse()
+    return ranges
+
+
+def plan_classin_limited_edb_parts(
+    problem_entries: list[ProblemEntry],
+    template: LayoutTemplate,
+    output_dir: Path,
+    *,
+    record_mode: str,
+    text_confidence_threshold: float,
+    dark_board: bool,
+    board_theme: str,
+    crop_format: str,
+) -> list[dict[str, Any]]:
+    """Preview final ClassIn part boundaries without writing EDB files."""
+
+    if not problem_entries:
+        return []
+    render_template = template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
+    _records, placements, _header_flag = build_records(
+        problem_entries,
+        render_template,
+        record_mode=record_mode,
+        output_dir=output_dir,
+        text_confidence_threshold=text_confidence_threshold,
+        dark_board=dark_board,
+        board_theme=board_theme,
+        crop_format=crop_format,
+        reserve_image_layout_height=True,
+        generate_records=False,
+        expand_board_capacity=False,
+    )
+    _validate_record_page_count_hints(
+        placements,
+        expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
+    )
+    if not render_template.metadata.get("preserve_source_layout"):
+        _validate_sequential_record_placements(placements)
+    advances, tails = _classin_rendered_flow_metrics(problem_entries, placements)
+    if not advances:
+        raise ValueError("Final rendered ClassIn placements could not be measured")
+    ranges = balanced_classin_part_ranges(
+        advances,
+        tail_weights=tails,
+        balance_min_part_count=3,
+    )
+    part_count = len(ranges)
+    parts: list[dict[str, Any]] = []
+    for part_index, (start, end, estimated_pages) in enumerate(ranges, start=1):
+        chunk_entries = problem_entries[start:end]
+        _chunk_records, chunk_placements, _chunk_header_flag = build_records(
+            chunk_entries,
+            render_template,
+            record_mode=record_mode,
+            output_dir=output_dir,
+            text_confidence_threshold=text_confidence_threshold,
+            dark_board=dark_board,
+            board_theme=board_theme,
+            crop_format=crop_format,
+            reserve_image_layout_height=True,
+            generate_records=False,
+            expand_board_capacity=False,
+        )
+        _validate_record_page_count_hints(
+            chunk_placements,
+            expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
+        )
+        if not render_template.metadata.get("preserve_source_layout"):
+            _validate_sequential_record_placements(chunk_placements)
+        verified_pages = _placement_summaries_flow_end_pages(chunk_placements)
+        if verified_pages > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+            raise ValueError(
+                f"Projected ClassIn part {part_index} exceeds the "
+                f"{CLASSIN_MAX_BOARD_PAGE_COUNT}-page limit after final rendering "
+                f"({verified_pages:.3f} pages)"
+            )
+        problem_ids = [entry.problem_id for entry in chunk_entries]
+        parts.append(
+            {
+                "partIndex": part_index,
+                "part_index": part_index,
+                "partCount": part_count,
+                "part_count": part_count,
+                "problemCount": len(chunk_entries),
+                "problem_count": len(chunk_entries),
+                "estimatedFlowEndPages": float(verified_pages or estimated_pages),
+                "estimated_flow_end_pages": float(verified_pages or estimated_pages),
+                "pageCountHint": CLASSIN_MAX_BOARD_PAGE_COUNT,
+                "page_count_hint": CLASSIN_MAX_BOARD_PAGE_COUNT,
+                "problemIds": problem_ids,
+                "problem_ids": problem_ids,
+                "firstProblemTitle": chunk_entries[0].title if chunk_entries else "",
+                "first_problem_title": chunk_entries[0].title if chunk_entries else "",
+                "lastProblemTitle": chunk_entries[-1].title if chunk_entries else "",
+                "last_problem_title": chunk_entries[-1].title if chunk_entries else "",
+            }
+        )
+    return parts
 
 
 def edb_part_file_name(edb_name: str, part_index: int, part_count: int) -> str:
@@ -10380,10 +10835,11 @@ def build_image_only_records(
         if reserve_rendered_layout_height
         else None
     )
-    placements = place_problems(
-        placement_inputs(problem_entries, actual_height_pages_by_problem_id=layout_heights),
-        template=template,
+    layout_inputs = placement_inputs(
+        problem_entries, actual_height_pages_by_problem_id=layout_heights
     )
+    placements = place_problems(layout_inputs, template=template)
+    layout_inputs_by_problem_id = {item.problem_id: item for item in layout_inputs}
     # Standalone/preview builds may grow the logical board to fit all content.
     # ClassIn-limited part builds must keep this disabled: their EDB header is
     # fixed to CLASSIN_MAX_BOARD_PAGE_COUNT, and image y/height hints must be
@@ -10420,9 +10876,15 @@ def build_image_only_records(
         target_image_width_px=target_image_width_px,
         generate_records=generate_records,
     )
-    continuous_cursor_pages: float | None = None
+    render_cursor_pages: float | None = None
 
     for placement, image_payload in zip(placements, image_payloads):
+        if source_layout is None and render_cursor_pages is not None:
+            placement = place_problems(
+                [layout_inputs_by_problem_id[placement.problem_id]],
+                template=template,
+                start_y_pages=render_cursor_pages,
+            )[0]
         entry = entries_by_problem_id[placement.problem_id]
         continuous_flow = _entry_uses_continuous_page_flow(entry) and source_layout is None
         processing_step = _normalize_processing_step(
@@ -10471,7 +10933,13 @@ def build_image_only_records(
             y_px = _problem_origin_y_px(entry, placement, rendered_height_px)
 
         if continuous_flow:
-            start_y_pages = continuous_cursor_pages if continuous_cursor_pages is not None else placement.start_y_pages
+            if entry.placement_gap_after_pages is not None:
+                continuous_gap_px = max(0.0, float(entry.placement_gap_after_pages)) * CANVAS_WIDTH
+            elif template.metadata.get("layout_gap_mode") == "compact":
+                continuous_gap_px = 0.0
+            else:
+                continuous_gap_px = CONTINUOUS_RECORD_GAP_PX
+            start_y_pages = placement.start_y_pages
             actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
             rendered_height_pages = rendered_height_px / CANVAS_WIDTH
             actual_bottom_y_pages = start_y_pages + actual_height_pages
@@ -10479,7 +10947,7 @@ def build_image_only_records(
                 start_y_pages
                 + rendered_height_pages
                 + normalize_placement_extra_slots(entry.placement_extra_slots) * template.base_slot_height_pages
-                + CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH
+                + continuous_gap_px / CANVAS_WIDTH
             )
             overflow_amount_pages = max(0.0, rendered_height_pages - template.base_slot_height_pages)
             slot_span_count = max(
@@ -10489,7 +10957,6 @@ def build_image_only_records(
             x_px = _problem_origin_x_px(entry, rendered_width_px)
             extra_height_pages = normalize_placement_extra_slots(entry.placement_extra_slots) * template.base_slot_height_pages
             y_px = (start_y_pages + extra_height_pages * float(_clamp_placement_y_ratio(entry.placement_y_ratio) or 0.0)) * CANVAS_WIDTH + TOP_PADDING_PX
-            continuous_cursor_pages = snapped_next_start_y_pages
         else:
             start_y_pages = placement.start_y_pages
             actual_height_pages = placement.actual_content_height_pages
@@ -10497,7 +10964,12 @@ def build_image_only_records(
             snapped_next_start_y_pages = placement.snapped_next_start_y_pages
             overflow_amount_pages = placement.overflow_amount_pages
             slot_span_count = placement.slot_span_count
-            continuous_cursor_pages = None
+
+        if source_layout is None:
+            # Carry the final rendered cursor across every following entry,
+            # including regular problems. Width-limited continuous records
+            # and their trailing gap can differ from the initial engine plan.
+            render_cursor_pages = snapped_next_start_y_pages
 
         parent_record_id = next_record_id
         if generate_records:
@@ -10534,7 +11006,7 @@ def build_image_only_records(
                 "snapped_next_start_y_pages": round(snapped_next_start_y_pages, 6),
                 "record_top_y_pages": round(y_px / CANVAS_WIDTH, 6),
                 "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
-                "record_gap_px": CONTINUOUS_RECORD_GAP_PX if continuous_flow else 0.0,
+                "record_gap_px": continuous_gap_px if continuous_flow else 0.0,
                 "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),
@@ -10917,6 +11389,47 @@ def write_classin_limited_edb_files(
                 continue
         compacted_chunks.append(rendered_chunk)
     rendered_chunks = compacted_chunks
+
+    # The safety splitter above proves every part fits, but recursive overflow
+    # recovery can leave a very small middle/tail part (for example 31/10/37).
+    # Recompute boundaries from the final rendered record spans so the minimum
+    # safe part count is retained and its page usage is distributed evenly.
+    if len(rendered_chunks) >= 3 and not template.metadata.get("preserve_source_layout"):
+        flattened_entries = [
+            entry
+            for rendered_chunk in rendered_chunks
+            for entry in list(rendered_chunk["entries"])
+        ]
+        flattened_placements = [
+            placement
+            for rendered_chunk in rendered_chunks
+            for placement in list(rendered_chunk["placements"])
+        ]
+        rendered_advances, rendered_tails = _classin_rendered_flow_metrics(
+            flattened_entries,
+            flattened_placements,
+        )
+        if rendered_advances:
+            try:
+                balanced_ranges = balanced_classin_part_ranges(
+                    rendered_advances,
+                    tail_weights=rendered_tails,
+                    part_count=len(rendered_chunks),
+                )
+                balanced_chunks = [
+                    build_rendered_chunk(flattened_entries[start:end])
+                    for start, end, _estimated_pages in balanced_ranges
+                ]
+                if all(
+                    float(chunk["flow_end_pages"]) <= CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6
+                    for chunk in balanced_chunks
+                ):
+                    rendered_chunks = balanced_chunks
+            except ValueError:
+                # The already-rendered chunks are the safety fallback. A
+                # balancing failure must never turn a valid publish into an
+                # error or increase its proven part count.
+                pass
 
     part_count = len(rendered_chunks)
     parts: list[dict[str, Any]] = []
@@ -11444,6 +11957,81 @@ def run_problem_export(
     }
 
 
+def _archive_previous_cli_edbs(
+    previous_summary: object,
+    *,
+    source_path: Path,
+    output_dir: Path,
+    current_edb_paths: Sequence[Path],
+    expected_edb_name: str | None = None,
+    warnings: list[str] | None = None,
+) -> list[str]:
+    """Recoverably retire only obsolete EDBs explicitly owned by this CLI run."""
+    if not isinstance(previous_summary, dict):
+        return []
+    previous_source = previous_summary.get("source")
+    previous_output = previous_summary.get("output_dir")
+    if not isinstance(previous_source, str) or not isinstance(previous_output, str):
+        return []
+    output_root = output_dir.resolve()
+    try:
+        if Path(previous_source).resolve() != source_path.resolve():
+            return []
+        if Path(previous_output).resolve() != output_root:
+            return []
+        raw_paths = previous_summary.get("edb_paths")
+        if raw_paths is None:
+            raw_paths = [previous_summary.get("edb_path")]
+        if not isinstance(raw_paths, list) or not raw_paths:
+            return []
+        previous_paths: list[Path] = []
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                return []
+            candidate = Path(raw_path)
+            if candidate.is_symlink():
+                return []
+            candidate = candidate.resolve()
+            if candidate.parent != output_root or not re.fullmatch(
+                re.escape(Path(expected_edb_name).stem if expected_edb_name is not None else source_path.stem)
+                + r"(?:_part\d+)?\.edb", candidate.name
+            ):
+                return []
+            if candidate not in previous_paths:
+                previous_paths.append(candidate)
+        current_paths = {path.resolve() for path in current_edb_paths}
+        obsolete_paths = [path for path in previous_paths if path not in current_paths and path.is_file()]
+    except (OSError, ValueError):
+        return []
+    if not obsolete_paths:
+        return []
+
+    archive_root = output_root / "edb_archive"
+    if not archive_root.resolve().is_relative_to(output_root):
+        return []
+    try:
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archive_dir = Path(tempfile.mkdtemp(prefix=datetime.now().strftime("%Y%m%d-%H%M%S-"), dir=archive_root))
+        (archive_dir / "board_run_summary.json").write_text(
+            json.dumps(previous_summary, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError as exc:
+        if warnings is not None:
+            warnings.append(f"Previous EDB archive could not be prepared: {exc}")
+        return []
+    archived_paths: list[str] = []
+    for obsolete_path in obsolete_paths:
+        archived_path = archive_dir / obsolete_path.relative_to(output_root)
+        try:
+            obsolete_path.replace(archived_path)
+        except OSError as exc:
+            if warnings is not None:
+                warnings.append(f"Previous EDB was preserved at {obsolete_path}: {exc}")
+            continue
+        archived_paths.append(str(archived_path))
+    return archived_paths
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build a problem-board EDB from a source image or PDF.")
     parser.add_argument("source", help="Path to a PDF or image source")
@@ -11528,6 +12116,11 @@ def main() -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "board_run_summary.json"
+    try:
+        previous_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous_summary = None
     subject = resolve_subject(args.subject)
     resolved_input_intent = _normalize_input_intent(args.input_intent)
     resolved_board_theme = _resolve_board_theme(args.board_theme)
@@ -11610,16 +12203,23 @@ def main() -> int:
         crop_format=resolved_crop_format,
     )
 
-    edb_path = output_dir / f"{Path(args.source).stem}.edb"
-    write_edb(
-        edb_path,
-        build_edb(
-            records,
-            header_flag=header_flag,
-            version=version_string_for_crop_format(resolved_crop_format),
-            page_count_hint=template.board_page_count,
-        ),
+    edb_parts = write_classin_limited_edb_files(
+        problem_entries,
+        template,
+        output_dir,
+        f"{Path(args.source).stem}.edb",
+        record_mode=resolved_record_mode,
+        text_confidence_threshold=args.text_confidence_threshold,
+        dark_board=not args.light_board,
+        board_theme=resolved_board_theme,
+        crop_format=resolved_crop_format,
+        existing_records=records,
+        existing_placements=placements,
+        existing_header_flag=header_flag,
     )
+    if not edb_parts:
+        raise ValueError("No problems were found for EDB export")
+    edb_path = Path(str(edb_parts[0]["edbPath"]))
     ai_summary = _summarize_ai_fallback_usage(pages, ai_fallback_config)
     ocr_summary = _summarize_ocr_usage(pages)
     token_usage = aggregate_token_usage(
@@ -11636,6 +12236,10 @@ def main() -> int:
         "source": str(args.source),
         "output_dir": str(output_dir),
         "edb_path": str(edb_path),
+        "edb_paths": [part["edbPath"] for part in edb_parts],
+        "edb_parts": edb_parts,
+        "edb_part_count": len(edb_parts),
+        "edb_split": len(edb_parts) > 1,
         "pages_json_path": str(output_dir / "pages.json"),
         "problem_crop_dir": str(output_dir / "problem_crops"),
         "block_crop_dir": str(output_dir / "block_crops"),
@@ -11659,9 +12263,6 @@ def main() -> int:
         "processing_step_override": args.processing_step or None,
         "full_width": bool(args.full_width),
     }
-    summary_path = output_dir / "board_run_summary.json"
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-
     prototype_path: Path | None = None
     if str(args.prototype_data_out or "").strip():
         prototype_path = resolve_legacy_prototype_data_path(args.prototype_data_out)
@@ -11686,10 +12287,22 @@ def main() -> int:
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
     )
+    annotate_ui_session_with_edb_part_metadata(ui_session, edb_parts)
+    ui_session.update(
+        {
+            "edb_parts": edb_parts,
+            "edbParts": edb_parts,
+            "edb_part_count": len(edb_parts),
+            "edbPartCount": len(edb_parts),
+            "edb_split": len(edb_parts) > 1,
+            "edbSplit": len(edb_parts) > 1,
+        }
+    )
     classin_handoff_path, classin_handoff_markdown_path = write_classin_handoff_manifest(
         output_dir,
         source_paths=[Path(args.source).resolve()],
         edb_path=edb_path,
+        edb_parts=edb_parts,
         ui_session=ui_session,
         summary=summary,
         template=template,
@@ -11698,7 +12311,6 @@ def main() -> int:
     summary["classin_handoff_path"] = str(classin_handoff_path)
     summary["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
     summary.update(handoff_session_fields)
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     ui_session["classin_handoff_path"] = str(classin_handoff_path)
     ui_session["classinHandoffPath"] = str(classin_handoff_path)
     ui_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
@@ -11709,9 +12321,31 @@ def main() -> int:
         ui_session,
         sync_ui=False,
     )
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    edb_archive_warnings: list[str] = []
+    try:
+        archived_edb_paths = _archive_previous_cli_edbs(
+            previous_summary,
+            source_path=Path(args.source),
+            output_dir=output_dir,
+            current_edb_paths=[Path(str(part["edbPath"])) for part in edb_parts],
+            warnings=edb_archive_warnings,
+        )
+    except OSError as exc:
+        archived_edb_paths = []
+        edb_archive_warnings.append(f"Previous EDB archive could not be completed: {exc}")
+    if archived_edb_paths or edb_archive_warnings:
+        summary["archived_edb_paths"] = archived_edb_paths
+        summary["edb_archive_warnings"] = edb_archive_warnings
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     result = {
         "edb_path": str(edb_path),
+        "edb_paths": [part["edbPath"] for part in edb_parts],
+        "edb_part_count": len(edb_parts),
+        "edb_split": len(edb_parts) > 1,
+        "archived_edb_paths": archived_edb_paths,
+        "edb_archive_warnings": edb_archive_warnings,
         "pages_json_path": str(output_dir / "pages.json"),
         "board_run_summary_path": str(summary_path),
         "ui_session_path": str(ui_session_path),

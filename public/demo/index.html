@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>문제 파서 행사 시연 · ClassIn EDB</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="description" content="행사 참여자를 위한 문제 파서 시연 페이지입니다.">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/trial_logic.js" defer></script>
+  <script src="/demo.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body data-trial-mode="demo">
+  <header class="site-header">
+    <div class="site-header__inner">
+      <span class="brand">ClassIn EDB <span class="brand__tag">문제 파서</span></span>
+      <a class="header-link" id="header-inquiry" href="https://classin.co.kr/contact" target="_blank" rel="noopener">프리미엄 도입 문의</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="demo-gate" id="demo-gate" aria-labelledby="demo-title">
+      <p class="eyebrow">행사 전용 시연</p>
+      <h1 id="demo-title">문제 파서를 체험해 보세요</h1>
+      <p class="lead">안내받은 비밀번호를 한 번 입력하면 시연 기간 동안 반복해서 이용할 수 있어요.</p>
+      <p class="hint" id="demo-message" role="status">시연 정보를 확인하고 있어요.</p>
+      <form class="demo-login" id="demo-login" hidden>
+        <label for="demo-password">시연 비밀번호</label>
+        <input id="demo-password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+        <button class="primary-button" id="demo-login-button" type="submit">시연 시작하기</button>
+      </form>
+      <button type="button" class="secondary-button" id="demo-config-retry" hidden>다시 확인하기</button>
+      <a class="text-button" href="/">일반 무료 체험으로 이동</a>
+    </section>
+    <div class="demo-session" id="demo-session" hidden>
+      <p id="demo-expiration" class="muted"></p>
+      <button type="button" class="secondary-button" id="demo-logout">시연 종료 · 로그아웃</button>
+    </div>
+    <div id="demo-app" hidden>
+    <section class="view view--upload" id="view-upload" aria-labelledby="upload-title">
+      <div class="hero">
+        <p class="eyebrow">행사 시연 · 설치 없이</p>
+        <h1 id="upload-title">시험지를 올리면<br>문항을 나눠 드려요</h1>
+        <p class="lead">글자가 들어 있는 PDF(예: 모의고사 원본)를 올려 보세요. 앞 4쪽의 문항과 지문을 바로 찾아 드려요.</p>
+      </div>
+
+      <label class="dropzone" id="dropzone" for="file-input">
+        <input id="file-input" class="visually-hidden" type="file" accept="application/pdf,.pdf">
+        <span class="dropzone__icon" aria-hidden="true">PDF</span>
+        <span class="dropzone__title">PDF를 끌어놓거나 눌러서 고르세요</span>
+        <span class="dropzone__limits" id="limits-text">앞 4쪽 · 4MB · 시연 기간에는 반복 이용 가능</span>
+      </label>
+
+      <!-- Not id="turnstile": element ids become window globals and would shadow the Turnstile API. -->
+      <div class="turnstile" id="turnstile-widget"></div>
+      <p class="hint" id="upload-hint" role="status" hidden></p>
+      <p class="notice" id="upload-message" role="alert" hidden></p>
+      <button type="button" class="secondary-button upload-retry" id="upload-retry" hidden>같은 파일 다시 시도</button>
+      <p class="muted retry-notice" id="retry-notice" hidden>다시 시도하면 체험 횟수가 추가로 사용될 수 있어요.</p>
+
+      <ul class="assurances">
+        <li>올린 파일은 처리 후 바로 삭제하고 저장하지 않아요</li>
+        <li>스캔본·사진은 <button type="button" class="text-button" data-premium="scan">프리미엄 AI 인식 ✦</button>으로 처리해요</li>
+      </ul>
+    </section>
+
+    <section class="view view--processing" id="view-processing" hidden>
+      <div class="spinner" aria-hidden="true"></div>
+      <div role="status" aria-live="polite">
+        <h2>문항을 찾는 중이에요</h2>
+        <p class="muted" id="processing-file"></p>
+      </div>
+      <p class="muted">보통 15~30초 걸려요<span aria-hidden="true"> · <span id="processing-elapsed">0초</span></span></p>
+    </section>
+
+    <section class="view view--result" id="view-result" aria-labelledby="result-title" hidden>
+      <div class="result-head">
+        <div>
+          <h2 id="result-title"></h2>
+          <p class="muted" id="result-meta"></p>
+        </div>
+        <div class="premium-actions" role="group" aria-label="프리미엄 기능">
+          <button type="button" class="premium-button" data-premium="edb">EDB 내보내기 <span aria-hidden="true">✦</span></button>
+          <button type="button" class="premium-button" data-premium="image">이미지 저장 <span aria-hidden="true">✦</span></button>
+          <button type="button" class="premium-button" data-premium="edit">문항 수정 <span aria-hidden="true">✦</span></button>
+        </div>
+      </div>
+
+      <button type="button" class="pages-banner" id="pages-banner" hidden></button>
+
+      <div class="empty-result" id="empty-result" hidden>
+        <p>문항 번호를 찾지 못했어요. 글자가 윤곽선으로 바뀐 PDF이거나 특이한 배치일 수 있어요.</p>
+        <button type="button" class="premium-button" data-premium="ai">AI로 더 정확하게 <span aria-hidden="true">✦</span></button>
+      </div>
+
+      <div class="result-body" id="result-body">
+        <section class="problems-panel" id="found-problems" aria-labelledby="problems-title" tabindex="-1">
+          <div class="problems-head">
+            <h3 class="problems-head__label" id="problems-title">찾은 문항</h3>
+            <a class="result-jump" href="#source-pages">원본 페이지로 이동 ↓</a>
+            <div class="preview-toggle" id="preview-toggle" role="group" aria-label="문항 보기 방식" hidden>
+              <button type="button" data-mode="raw" aria-pressed="true">원본</button>
+              <button type="button" data-mode="board" aria-pressed="false">칠판용</button>
+            </div>
+          </div>
+          <ol class="problems" id="problems" aria-label="찾은 문항"></ol>
+        </section>
+        <section class="source-panel" id="source-pages" aria-labelledby="source-title" tabindex="-1">
+          <div class="problems-head">
+            <h3 class="problems-head__label" id="source-title">원본 페이지</h3>
+            <a class="result-jump" href="#found-problems">문항으로 돌아가기 ↑</a>
+          </div>
+          <div class="pages" id="pages" aria-label="페이지 미리보기"></div>
+        </section>
+      </div>
+
+      <div class="result-foot">
+        <button type="button" class="secondary-button" id="retry-button">다른 파일 해보기</button>
+        <span class="muted" id="remaining-text"></span>
+        <button type="button" class="text-button text-button--accent" data-premium="edb">✦ 프리미엄으로 더 누려보세요 →</button>
+      </div>
+    </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>시연 기간에는 하루 횟수 제한 없이 이용할 수 있어요. 올린 파일은 처리 후 바로 삭제해요. 이미지 저장·문항 수정·EDB 내보내기는 프리미엄 기능이에요.</p>
+  </footer>
+
+  <dialog class="premium-dialog" id="premium-dialog" aria-labelledby="premium-title">
+    <form method="dialog" class="premium-dialog__inner">
+      <p class="premium-dialog__badge" id="premium-badge">✦ 프리미엄</p>
+      <h2 id="premium-title"></h2>
+      <p id="premium-body"></p>
+      <div class="premium-dialog__actions">
+        <a class="primary-button" id="premium-inquiry" href="https://classin.co.kr/contact" target="_blank" rel="noopener">프리미엄 도입 문의</a>
+        <button class="secondary-button" id="premium-close" value="close">계속 체험하기</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

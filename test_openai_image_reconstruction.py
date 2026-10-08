@@ -14,7 +14,6 @@ import build_problem_board_edb
 import image_reconstruction_backend as image_backend
 from image_reconstruction_backend import (
     DEFAULT_GEMINI_IMAGE_MODEL,
-    DEFAULT_OPENAI_IMAGE_MODEL,
     ImageReconstructionResult,
     analyze_reconstruction_content_preservation,
     build_content_safe_upscale,
@@ -26,12 +25,10 @@ from image_reconstruction_backend import (
 class TestImageReconstructionMutation(unittest.TestCase):
     def setUp(self):
         self._prev_gemini_key = os.environ.get("GEMINI_API_KEY")
-        self._prev_openai_key = os.environ.get("OPENAI_API_KEY")
         os.environ["GEMINI_API_KEY"] = "test-gemini-key"
 
     def tearDown(self):
         self._restore_env("GEMINI_API_KEY", self._prev_gemini_key)
-        self._restore_env("OPENAI_API_KEY", self._prev_openai_key)
 
     def _restore_env(self, name: str, value: str | None) -> None:
         if value is None:
@@ -352,24 +349,17 @@ class TestImageReconstructionMutation(unittest.TestCase):
 
             self.assertEqual(original_path.resolve(), Path(reconstruct.call_args.args[0]).resolve())
 
-    def test_openai_provider_still_supported_as_fallback(self):
-        os.environ["OPENAI_API_KEY"] = "test-openai-key"
+    def test_non_gemini_provider_is_rejected(self):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             session = self._build_session(root)
 
-            with patch.object(app_server, "reconstruct_problem_image", side_effect=self._fake_reconstruct) as mock_reconstruct:
-                updated = app_server._mutate_enhance_image(
+            with self.assertRaises(ValueError) as ctx:
+                app_server._mutate_enhance_image(
                     session,
                     {"problemIds": ["problem-1"], "provider": "openai", "mode": "ai"},
                 )
-
-            problem = updated["problems"][0]
-            self.assertEqual(problem["aiImageReconstruction"]["provider"], "openai")
-            self.assertEqual(problem["aiImageReconstruction"]["model"], DEFAULT_OPENAI_IMAGE_MODEL)
-            called_kwargs = mock_reconstruct.call_args.kwargs
-            self.assertEqual(called_kwargs["provider"], "openai")
-            self.assertEqual(called_kwargs["model"], DEFAULT_OPENAI_IMAGE_MODEL)
+            self.assertIn("unsupported image reconstruction provider", str(ctx.exception))
 
     def test_enhance_image_adds_specific_formula_loss_review_flag(self):
         with TemporaryDirectory() as raw_tmp:
@@ -673,6 +663,51 @@ class TestImageReconstructionMutation(unittest.TestCase):
         self.assertEqual(cleaned.getpixel((10, 10))[3], 0)
         self.assertEqual(cleaned.getpixel((42, 30))[3], 255)
         self.assertLess(cleaned.getpixel((80, 60))[3], 255)
+
+    def test_clean_transparency_preserves_white_ink_with_transparent_border(self):
+        image = Image.new("RGBA", (100, 60), (0, 0, 0, 0))
+        for x in range(30, 70):
+            for y in range(20, 40):
+                image.putpixel((x, y), (248, 248, 246, 255))
+
+        for numpy_backend in (image_backend.np, None):
+            with self.subTest(numpy=numpy_backend is not None):
+                with patch.object(image_backend, "np", numpy_backend):
+                    cleaned, stats = clean_problem_image_transparency(
+                        image, remove_corner_page_artifacts=False,
+                    )
+
+                self.assertEqual(image.tobytes(), cleaned.tobytes())
+                self.assertEqual("none", stats["background_kind"])
+                self.assertGreater(stats["transparent_ratio"], 0)
+
+    def test_python_alpha_cleanup_counts_existing_transparency_once(self):
+        image = Image.new("RGBA", (10, 10), (255, 255, 255, 255))
+        image.putpixel((0, 0), (0, 0, 0, 0))
+        with patch.object(image_backend, "np", None):
+            cleaned, stats = clean_problem_image_transparency(
+                image, remove_corner_page_artifacts=False,
+            )
+
+        self.assertEqual(cleaned.getchannel("A").histogram()[0], stats["transparent_pixels"])
+        self.assertEqual(1.0, stats["transparent_ratio"])
+
+    def test_content_safe_upscale_preserves_existing_white_chalk_cutout(self):
+        with TemporaryDirectory() as raw_tmp:
+            source_path = Path(raw_tmp) / "source.png"
+            output_path = Path(raw_tmp) / "output.png"
+            source = Image.new("RGBA", (100, 60), (0, 0, 0, 0))
+            for x in range(30, 70):
+                for y in range(20, 40):
+                    source.putpixel((x, y), (248, 248, 246, 255))
+            source.save(source_path)
+
+            build_content_safe_upscale(source_path, output_path, sharpen=False)
+
+            with Image.open(output_path) as output:
+                self.assertEqual((200, 120), output.size)
+                self.assertEqual(255, output.getpixel((100, 60))[3])
+                self.assertEqual(0, output.getpixel((0, 0))[3])
 
     def test_clean_transparency_removes_lower_right_pdf_page_badge(self):
         image = Image.new("RGBA", (120, 90), (18, 22, 26, 255))

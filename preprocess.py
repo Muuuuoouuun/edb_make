@@ -50,8 +50,8 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", 
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
 PDF_NORMALIZED_CACHE_VERSION = 3
-IMAGE_NORMALIZED_CACHE_VERSION = 1
-HWP_NORMALIZED_CACHE_VERSION = 5
+IMAGE_NORMALIZED_CACHE_VERSION = 2
+HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
 
@@ -512,7 +512,13 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
     if fitz is None:
         return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
 
-    doc = fitz.open(source_path)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"PDF source file not found: {source_path}")
+
+    try:
+        doc = fitz.open(source_path)
+    except Exception as exc:
+        raise ValueError(f"Failed to open PDF document {source_path}: {exc}") from exc
     pages: list[NormalizedPageImage] = []
     try:
         scale = dpi / 72.0
@@ -2303,6 +2309,28 @@ def _hwp_normalized_pages_cache_path(
     return target_dir / f".{cache_key}.hwp-normalized-pages.json"
 
 
+def _hwp_preprocess_output_dir(
+    target_dir: Path,
+    source_path: Path,
+    *,
+    dpi: int,
+    enable_deskew: bool,
+    enable_margin_crop: bool,
+    max_dimension: int | None,
+) -> Path:
+    source_key = _file_sha1(source_path)[:16]
+    options = _hwp_normalized_cache_options(
+        dpi=dpi,
+        enable_deskew=enable_deskew,
+        enable_margin_crop=enable_margin_crop,
+        max_dimension=max_dimension,
+    )
+    option_key = hashlib.sha1(
+        json.dumps(options, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    return target_dir / "hwp" / f"{source_key}-{option_key}"
+
+
 def _load_cached_hwp_normalized_pages(
     source_path: Path,
     target_dir: Path,
@@ -3423,12 +3451,17 @@ def _extract_pdf_media_regions(
 
 
 def load_image(source: str | Path) -> Image.Image:
-    return Image.open(source).convert("RGB")
+    with Image.open(source) as image:
+        return ImageOps.exif_transpose(image).convert("RGB")
 
 
 def _read_image_dimensions(source: str | Path) -> tuple[int, int] | None:
     try:
         with Image.open(source) as image:
+            # A camera image needs normalization even when every optional
+            # transform is off; its stored raster can be rotated or mirrored.
+            if image.getexif().get(274, 1) in {2, 3, 4, 5, 6, 7, 8}:
+                return None
             return image.size
     except OSError:
         return None
@@ -3917,15 +3950,26 @@ def prepare_pages(
         if cached_hwp_pages:
             return cached_hwp_pages
 
+        # Renderer and normalized page names are based on the source stem.
+        # Keep every cached content/options variant in its own directory so
+        # a later document revision cannot overwrite an earlier cache's PNGs.
+        hwp_output_dir = _hwp_preprocess_output_dir(
+            normalized_dir,
+            source_path,
+            dpi=dpi,
+            enable_deskew=enable_deskew,
+            enable_margin_crop=enable_margin_crop,
+            max_dimension=max_dimension,
+        )
         hwp_inspection = inspect_hangul_document(source_path)
         can_try_direct_hwp_renderer = (
             hwp_inspection.get("hwp_signature") == "HWP Document File"
             or bool(hwp_inspection.get("hwpx_zip_file"))
         )
         if can_try_direct_hwp_renderer:
-            rendered = _render_hwp_pages_with_rhwp_core(source_path, normalized_dir / "rhwp_core_rendered", dpi=dpi)
+            rendered = _render_hwp_pages_with_rhwp_core(source_path, hwp_output_dir / "rhwp_core_rendered", dpi=dpi)
             if not rendered:
-                rendered = _render_hwp_pages_with_rhwp_python(source_path, normalized_dir / "rhwp_python_rendered", dpi=dpi)
+                rendered = _render_hwp_pages_with_rhwp_python(source_path, hwp_output_dir / "rhwp_python_rendered", dpi=dpi)
             if rendered:
                 hwp_renderer = str(rendered[0].metadata.get("hwp_renderer") or "rhwp-core")
                 conversion_quality: dict[str, Any] = {
@@ -3968,7 +4012,7 @@ def prepare_pages(
                     )
                     normalized = normalize_image(
                         page.normalized_path,
-                        normalized_dir / "normalized",
+                        hwp_output_dir / "normalized",
                         page_id=page.page_id,
                         page_index=page.page_index,
                         enable_perspective=False,
@@ -3994,8 +4038,8 @@ def prepare_pages(
                     pages=normalized_pages,
                 )
                 return normalized_pages
-        converted_pdf = convert_hwp_to_pdf(source_path, normalized_dir / "converted")
-        rendered = render_pdf_pages(converted_pdf, normalized_dir / "rendered", dpi=dpi)
+        converted_pdf = convert_hwp_to_pdf(source_path, hwp_output_dir / "converted")
+        rendered = render_pdf_pages(converted_pdf, hwp_output_dir / "rendered", dpi=dpi)
         conversion_quality = _summarize_pdf_render_quality(rendered)
         conversion_quality = _prefer_pdf_text_stem_markers_when_numeric_sparse(rendered, conversion_quality)
         for key in (
@@ -4022,7 +4066,7 @@ def prepare_pages(
         for page in rendered:
             normalized = normalize_image(
                 page.normalized_path,
-                normalized_dir / "normalized",
+                hwp_output_dir / "normalized",
                 page_id=page.page_id,
                 page_index=page.page_index,
                 enable_perspective=False,

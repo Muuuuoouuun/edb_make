@@ -17,6 +17,7 @@
   const OVERLAP_TOLERANCE_PAGES = 0.01;
   const SOURCE_BBOX_OVERLAP_RATIO = 0.65;
   const PASSAGE_GROUP_SOURCE_REUSE_RATIO = 0.65;
+  const LAYOUT_GAP_MODE_COMPACT = "compact";
 
   function finiteNumber(value, fallback) {
     const number = Number(value);
@@ -40,6 +41,21 @@
     const slot = finiteNumber(slotHeightPages, DEFAULT_SLOT_HEIGHT_PAGES);
     if (slot <= 0 || !Number.isFinite(value) || value <= 0) return 0;
     return Math.ceil((value - PLACEMENT_EPSILON_PAGES) / slot) * slot;
+  }
+
+  function normalizeLayoutGapMode(value) {
+    return String(value || "").trim().toLowerCase() === LAYOUT_GAP_MODE_COMPACT
+      ? LAYOUT_GAP_MODE_COMPACT
+      : "classin-grid";
+  }
+
+  function placementGapAfterPages(item) {
+    const raw = item?.placementGapAfterPages
+      ?? item?.placement_gap_after_pages
+      ?? item?.gapAfterPages;
+    if (raw === null || raw === undefined || raw === "") return null;
+    const number = Number(raw);
+    return Number.isFinite(number) ? Math.max(0, number) : null;
   }
 
   function problemIdFor(item, index) {
@@ -137,6 +153,32 @@
     return placementMode === "continuous" || placementMode === "continuous-page-as-is";
   }
 
+  function imageRecordGeometryFor(item) {
+    const geometry = item?.imageRecordGeometry || item?.image_record_geometry;
+    if (!geometry || typeof geometry !== "object" || Array.isArray(geometry)) return null;
+    const height = numberOrNull(geometry.baseHeightPages);
+    return height !== null && height > 0 ? geometry : null;
+  }
+
+  function imageHeightPagesFor(item) {
+    const geometry = imageRecordGeometryFor(item);
+    return geometry
+      ? Number(geometry.baseHeightPages)
+      : Math.max(
+        MIN_HEIGHT_PAGES,
+        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
+      );
+  }
+
+  function renderedScaleFor(item, requestedScale) {
+    const geometry = imageRecordGeometryFor(item);
+    const baseWidth = numberOrNull(geometry?.baseDisplayWidthPx);
+    const maxWidth = numberOrNull(geometry?.maxDisplayWidthPx);
+    return baseWidth !== null && baseWidth > 0 && maxWidth !== null && maxWidth > 0
+      ? Math.max(PLACEMENT_SCALE_MIN, Math.min(requestedScale, maxWidth / baseWidth))
+      : requestedScale;
+  }
+
   function scaleNearPreviousBoundary(startYPages, heightPages, scaleRatio, slotHeightPages) {
     if (scaleRatio < DEFAULT_SCALE_RATIO || slotHeightPages <= 0) return scaleRatio;
     const renderedBottomYPages = startYPages + heightPages * scaleRatio;
@@ -159,6 +201,9 @@
 
   function simulatedBoardPlacements(items, options = {}) {
     const slotHeightPages = finiteNumber(options.slotHeightPages, DEFAULT_SLOT_HEIGHT_PAGES);
+    const layoutGapMode = normalizeLayoutGapMode(
+      options.layoutGapMode ?? options.layout_gap_mode
+    );
     const problemIds = normalizeIdFilter(options.sessionProblemIds);
     const placements = [];
     let cursorPages = 0;
@@ -168,14 +213,11 @@
       const problemId = problemIdFor(item, index);
       if (!problemId || (problemIds && !problemIds.has(problemId))) return;
 
-      const heightPages = Math.max(
-        MIN_HEIGHT_PAGES,
-        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
-      );
+      const heightPages = imageHeightPagesFor(item);
       const continuous = usesContinuousPageFlow(item);
-      const startYPages = rounded(continuous
-        ? Math.max(0, cursorPages)
-        : snapUpPages(cursorPages, slotHeightPages));
+      // The previous item already decided whether its trailing edge is snapped,
+      // continuous, or compact. Re-snapping here would re-create a removed gap.
+      const startYPages = rounded(Math.max(0, cursorPages));
       const persistedScale = numberOrNull(item.placementScaleRatio ?? item.placement_scale_ratio);
       const preserveLegacyScale = !continuous
         && persistedScale !== null
@@ -189,14 +231,37 @@
           firstNumber(item, ["placementScaleRatio", "placement_scale_ratio", "scaleRatio"], DEFAULT_SCALE_RATIO)
         )
       );
-      const requestedScale = continuous || preserveLegacyScale
+      const autoFitDisabled = Boolean(
+        item.placementAutoFitDisabled || item.placement_auto_fit_disabled
+      );
+      const requestedScale = continuous
+        || preserveLegacyScale
+        || autoFitDisabled
+        || Math.abs(normalizedScale - DEFAULT_SCALE_RATIO) > PLACEMENT_EPSILON_PAGES
         ? normalizedScale
         : scaleNearPreviousBoundary(startYPages, heightPages, normalizedScale, slotHeightPages);
-      const renderedHeightPages = heightPages * requestedScale;
+      const renderedHeightPages = heightPages * renderedScaleFor(item, requestedScale);
+      const geometry = imageRecordGeometryFor(item);
+      const reservedHeightPages = numberOrNull(geometry?.reservedHeightPages);
+      const flowHeightPages = !continuous && reservedHeightPages !== null && reservedHeightPages > 0
+        ? Math.max(renderedHeightPages, reservedHeightPages * requestedScale)
+        : renderedHeightPages;
+      const gapAfterPages = placementGapAfterPages(item);
+      const compact = layoutGapMode === LAYOUT_GAP_MODE_COMPACT || gapAfterPages !== null;
+      let nextStartYPages;
+      if (continuous) {
+        const defaultGapPages = Math.max(0, finiteNumber(geometry?.continuousGapPages, 0));
+        nextStartYPages = startYPages + renderedHeightPages
+          + (gapAfterPages !== null ? gapAfterPages : compact ? 0 : defaultGapPages);
+      } else if (compact) {
+        nextStartYPages = startYPages + flowHeightPages + (gapAfterPages || 0);
+      } else if (flowHeightPages <= slotHeightPages + PLACEMENT_EPSILON_PAGES) {
+        nextStartYPages = startYPages + snapUpPages(flowHeightPages, slotHeightPages);
+      } else {
+        nextStartYPages = snapUpPages(startYPages + flowHeightPages, slotHeightPages);
+      }
       const extraSlots = Math.max(0, Math.min(10, Math.round(firstNumber(item, ["placementExtraSlots", "placement_extra_slots"], 0))));
-      const snappedNextStartYPages = rounded(continuous
-        ? startYPages + renderedHeightPages + extraSlots * slotHeightPages
-        : snapUpPages(startYPages + renderedHeightPages, slotHeightPages) + extraSlots * slotHeightPages);
+      const snappedNextStartYPages = rounded(nextStartYPages + extraSlots * slotHeightPages);
       const slotSpanPages = Math.max(renderedHeightPages, snappedNextStartYPages - startYPages);
       const verticalRoomPages = Math.max(0, slotSpanPages - renderedHeightPages);
       const yRatio = verticalRoomPages > 0.001
@@ -214,10 +279,67 @@
         snappedNextStartYPages,
         heightPages,
         requestedScale,
+        gapAfterPages,
+        layoutGapMode,
       });
       cursorPages = snappedNextStartYPages;
     });
 
+    return placements;
+  }
+
+  function resolvedBoardPlacements(items, options = {}) {
+    const problemIds = normalizeIdFilter(options.sessionProblemIds);
+    const placements = [];
+    (Array.isArray(items) ? items : []).forEach((item, index) => {
+      if (!item || typeof item !== "object") return;
+      const problemId = problemIdFor(item, index);
+      if (!problemId || (problemIds && !problemIds.has(problemId))) return;
+      const startYPages = numberOrNull(item.startYPages ?? item.start_y_pages);
+      const snappedNextStartYPages = numberOrNull(
+        item.snappedNextStartYPages ?? item.snapped_next_start_y_pages
+      );
+      if (startYPages === null || snappedNextStartYPages === null) return;
+
+      const heightPages = imageHeightPagesFor(item);
+      const continuous = usesContinuousPageFlow(item);
+      const persistedScale = numberOrNull(item.placementScaleRatio ?? item.placement_scale_ratio);
+      const preserveLegacyScale = !continuous
+        && persistedScale !== null
+        && persistedScale > PLACEMENT_SCALE_MAX;
+      const requestedScale = Math.max(
+        0,
+        Math.min(
+          continuous || preserveLegacyScale ? PLACEMENT_FIT_WIDTH_SCALE_MAX : PLACEMENT_SCALE_MAX,
+          firstNumber(item, ["placementScaleRatio", "placement_scale_ratio", "scaleRatio"], DEFAULT_SCALE_RATIO)
+        )
+      );
+      const renderedHeightPages = heightPages * renderedScaleFor(item, requestedScale);
+      const normalizedStartYPages = rounded(Math.max(0, startYPages));
+      const normalizedNextStartYPages = rounded(Math.max(
+        normalizedStartYPages,
+        snappedNextStartYPages
+      ));
+      const verticalRoomPages = Math.max(
+        0,
+        normalizedNextStartYPages - normalizedStartYPages - renderedHeightPages
+      );
+      const yRatio = verticalRoomPages > 0.001
+        ? clamp01(firstNumber(item, ["placementYRatio", "placement_y_ratio", "yRatio"], 0))
+        : 0;
+      const renderedTopYPages = rounded(normalizedStartYPages + yRatio * verticalRoomPages);
+      const renderedBottomYPages = rounded(renderedTopYPages + renderedHeightPages);
+      placements.push({
+        problemId,
+        problemTitle: problemTitleFor(item, problemId),
+        startYPages: normalizedStartYPages,
+        renderedTopYPages,
+        renderedBottomYPages,
+        snappedNextStartYPages: normalizedNextStartYPages,
+        heightPages,
+        requestedScale,
+      });
+    });
     return placements;
   }
 
@@ -354,7 +476,9 @@
 
   function findBoardPlacementOverlaps(items, options = {}) {
     const tolerancePages = finiteNumber(options.tolerancePages, OVERLAP_TOLERANCE_PAGES);
-    const placements = simulatedBoardPlacements(items, options);
+    const placements = options.resolvedPlacements === true
+      ? resolvedBoardPlacements(items, options)
+      : simulatedBoardPlacements(items, options);
     const issues = [];
     for (let index = 0; index < placements.length - 1; index += 1) {
       const current = placements[index];
@@ -380,6 +504,7 @@
     findBoardPlacementOverlaps,
     findPassageGroupSourceReuse,
     findSourceProblemOverlaps,
+    resolvedBoardPlacements,
     simulatedBoardPlacements,
   };
 });

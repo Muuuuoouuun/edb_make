@@ -18,12 +18,16 @@ if (args.size) {
 const inputFiles = ["art.jsx", "tweaks-panel.jsx", "app.jsx"];
 const outputFile = path.join(uiRoot, "app.bundle.js");
 const boardFile = path.join(uiRoot, "board.html");
+const styleFile = path.join(uiRoot, "board.css");
+const publishGuardFile = path.join(uiRoot, "publish_guard.js");
 const digestInputs = [
   ...inputFiles.map((fileName) => path.join("ui_prototype", fileName)),
   path.join("scripts", "build_frontend_bundle.mjs"),
   path.join("scripts", "vendor", "babel.min.js"),
 ];
 const bundleCacheBustPattern = /app\.bundle\.js\?v=frontend-bundle-[A-Za-z0-9._-]+/g;
+const styleCacheBustPattern = /board\.css\?v=board-css-[A-Za-z0-9._-]+/g;
+const publishGuardCacheBustPattern = /publish_guard\.js\?v=[A-Za-z0-9._-]+/g;
 
 async function frontendSourceDigest() {
   const hash = crypto.createHash("sha256");
@@ -68,7 +72,29 @@ const matches = boardHtml.match(bundleCacheBustPattern) || [];
 if (matches.length !== 1) {
   throw new Error(`Expected exactly one cache-busted app.bundle.js reference in ${path.relative(projectRoot, boardFile)}`);
 }
-const expectedBoardHtml = boardHtml.replace(bundleCacheBustPattern, bundleSrc);
+
+// board.css is a separate file, so an in-place app update must be able to
+// invalidate a stale stylesheet the same way it invalidates a stale bundle.
+const styleDigest = crypto.createHash("sha256").update(await fs.readFile(styleFile)).digest("hex");
+const styleSrc = `board.css?v=board-css-${styleDigest}`;
+const styleMatches = boardHtml.match(styleCacheBustPattern) || [];
+if (styleMatches.length !== 1) {
+  throw new Error(`Expected exactly one cache-busted board.css reference in ${path.relative(projectRoot, boardFile)}`);
+}
+
+// The publish guard runs outside the React bundle. Its fixes must also reach
+// browsers that cached a previous version of the local app.
+const publishGuardDigest = crypto.createHash("sha256").update(await fs.readFile(publishGuardFile)).digest("hex");
+const publishGuardSrc = `publish_guard.js?v=publish-guard-${publishGuardDigest}`;
+const publishGuardMatches = boardHtml.match(publishGuardCacheBustPattern) || [];
+if (publishGuardMatches.length !== 1) {
+  throw new Error(`Expected exactly one cache-busted publish_guard.js reference in ${path.relative(projectRoot, boardFile)}`);
+}
+
+const expectedBoardHtml = boardHtml
+  .replace(bundleCacheBustPattern, bundleSrc)
+  .replace(styleCacheBustPattern, styleSrc)
+  .replace(publishGuardCacheBustPattern, publishGuardSrc);
 
 if (checkOnly) {
   const currentBundle = await fs.readFile(outputFile, "utf8");
@@ -84,10 +110,14 @@ if (checkOnly) {
   }
   console.log(`Checked deterministic ${path.relative(projectRoot, outputFile)} output`);
   console.log(`Checked ${path.relative(projectRoot, boardFile)} cache bust frontend-bundle-${sourceDigest}`);
+  console.log(`Checked ${path.relative(projectRoot, boardFile)} cache bust board-css-${styleDigest}`);
+  console.log(`Checked ${path.relative(projectRoot, boardFile)} cache bust publish-guard-${publishGuardDigest}`);
 } else {
   await fs.writeFile(outputFile, expectedBundle, "utf8");
   await fs.writeFile(boardFile, expectedBoardHtml, "utf8");
 
   console.log(`Built ${path.relative(projectRoot, outputFile)} from ${inputFiles.join(", ")}`);
   console.log(`Updated ${path.relative(projectRoot, boardFile)} cache bust to frontend-bundle-${sourceDigest}`);
+  console.log(`Updated ${path.relative(projectRoot, boardFile)} cache bust to board-css-${styleDigest}`);
+  console.log(`Updated ${path.relative(projectRoot, boardFile)} cache bust to publish-guard-${publishGuardDigest}`);
 }

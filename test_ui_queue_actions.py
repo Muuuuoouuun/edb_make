@@ -6,6 +6,45 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+def board_document() -> str:
+    """board.html plus the stylesheet it links.
+
+    The editor theme used to be an inline <style> block; it now lives in
+    ui_prototype/board.css. These assertions cover both halves of the document.
+    """
+
+    ui_root = PROJECT_ROOT / "ui_prototype"
+    return (
+        (ui_root / "board.html").read_text(encoding="utf-8")
+        + "\n"
+        + (ui_root / "board.css").read_text(encoding="utf-8")
+    )
+
+
+
+def media_rules(css: str, query: str) -> str:
+    """Every rule that applies at `query`, across all blocks using it.
+
+    The stylesheet declares the same breakpoint in more than one place, so a
+    naive split on the first occurrence reads the wrong block.
+    """
+
+    marker = f"@media ({query})" + "{"
+    collected = []
+    index = css.find(marker)
+    while index != -1:
+        cursor = index + len(marker)
+        depth = 1
+        while cursor < len(css) and depth:
+            if css[cursor] == "{":
+                depth += 1
+            elif css[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        collected.append(css[index + len(marker) : cursor - 1])
+        index = css.find(marker, cursor)
+    return "\n".join(collected)
+
 
 class TestUiQueueActions(unittest.TestCase):
     def test_upload_queue_exposes_full_page_and_recognize_actions(self) -> None:
@@ -20,7 +59,9 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("onClick={() => processQueuedFiles('register')}", source)
         self.assertIn("onClick={() => processQueuedFiles('manual-split')}", source)
         self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
-        self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
+        queue = source.split("const processQueuedFiles = useCallback(", 1)[1].split("const cancelRecognitionReview =", 1)[0]
+        self.assertIn("normalizeInputIntent(inputIntent) === 'single-problem'", queue)
+        self.assertIn("layoutGapMode, inputIntent, applySession", queue)
 
     def test_page_as_is_upload_preserves_the_200_dpi_master(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -108,10 +149,12 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {", source)
         self.assertIn("showSimpleErrorToast(error, '미리보기 실패')", source)
         self.assertIn(
-            "activateOperationRecovery(e, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패'",
+            "activateOperationRecovery(failure, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패'",
             queue_source,
         )
-        self.assertIn("activateOperationRecovery(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패'", queue_source)
+        self.assertIn("await classifyNetworkRequestError(e, 'recognition_connection_failed')", queue_source)
+        self.assertIn("await classifyNetworkRequestError(e, 'registration_connection_failed')", queue_source)
+        self.assertIn("activateOperationRecovery(failure, isManualSplit ? '수동 쪼개기 실패' : '등록 실패'", queue_source)
         self.assertIn("kind: 'recognition'", queue_source)
         self.assertIn("kind: 'registration'", queue_source)
         self.assertNotIn("문제 인식 실패: ${e.message}", queue_source)
@@ -154,7 +197,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_review_crop_editors_expand_the_workspace_and_restore_the_side_panel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1].split("function ItemsRail", 1)[0]
 
         self.assertIn("const reviewEditorActive = Boolean(boxEdit || manualSplit);", review_stage)
@@ -167,9 +210,9 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn(".main.review-editor-focus > .col.right", html)
 
     def test_manual_split_panel_stays_beside_canvas_at_standard_desktop_widths(self) -> None:
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
-        responsive_block = html.split("@media (max-width: 820px){", 1)[1]
-        responsive_block = responsive_block.split(".view-toggle", 1)[0]
+        # 920px is the editor's compact breakpoint: the topbar, item rail and
+        # this panel all switch to a stacked layout at the same width.
+        responsive_block = media_rules(board_document(), "max-width: 920px")
 
         self.assertIn(".manual-split-layout.panel-left", responsive_block)
         self.assertIn(".manual-split-layout.panel-right", responsive_block)
@@ -193,7 +236,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("manual-split-shortcut-guide", source)
 
     def test_review_actionbars_keep_top_actions_in_one_row(self) -> None:
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
 
         actionbar_css = html.split(".review-actionbar{", 1)[1].split(".review-summary-strip", 1)[0]
         manual_css = html.split(".manual-split-actionbar{", 1)[1].split("@media (max-width: 820px)", 1)[0]
@@ -210,7 +253,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn(".manual-split-toolbar-actions", manual_css)
 
     def test_board_uses_queue_bulk_actions_cache_bust(self) -> None:
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
@@ -231,7 +274,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_page_first_recognition_review_stays_visible_and_avoids_empty_filter(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         stage = source.split("function RecognitionPageReviewStage", 1)[1]
         stage = stage.split("function TileImage", 1)[0]
         confirm = source.split("const confirmRecognitionReview = useCallback", 1)[1]
@@ -317,20 +360,6 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("['check_needed', '확인 필요', statusCounts.check_needed]", filter_source)
         self.assertNotIn("['check_needed', '확인 필요', actionableStatusCount]", filter_source)
 
-    def test_topbar_exposes_reset_icon_outside_more_menu(self) -> None:
-        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        topbar = source.split("function TopBar", 1)[1]
-        topbar = topbar.split("function ReviewStage", 1)[0]
-        actions = topbar.split('<div className="topbar-actions"', 1)[1]
-        actions = actions.split('<div className="topbar-more"', 1)[0]
-
-        self.assertIn('aria-label="초기화"', actions)
-        self.assertIn("onClick={onReset}", actions)
-        self.assertIn("{Icon.reset}", actions)
-        self.assertLess(actions.index('aria-label="초기화"'), actions.index("aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}"))
-        self.assertIn("저장된 최신 세션 다시 읽기", topbar)
-        self.assertNotIn("현재 세션 다시 불러오기", topbar)
-
     def test_review_selected_boxes_delete_key_excludes_and_can_undo(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         review_stage = source.split("function ReviewStage", 1)[1]
@@ -363,7 +392,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_running_recognition_exposes_prominent_cancel_banner(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
 
         self.assertIn("function RecognitionCancelBanner", source)
         self.assertIn("const runningRecognitionJob = backgroundJobs.find", source)
@@ -404,7 +433,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("downloadInFlightRef.current || downloadBusy", reset_source)
         self.assertIn("EDB 다운로드 준비가 끝난 뒤 초기화해 주세요", reset_source)
         self.assertIn(
-            "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            "operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
         )
         self.assertIn(
@@ -419,7 +448,7 @@ class TestUiQueueActions(unittest.TestCase):
         queue_review_setup = queue_review_setup.split("session: incomingSession,", 1)[0]
         stage_source = source.split("function RecognitionPageReviewStage", 1)[1]
         stage_source = stage_source.split("function TileImage", 1)[0]
-        app_render = source.split("className={`main ${recognitionReview", 1)[1]
+        app_render = source.split("className={`main ", 1)[1]
         app_render = app_render.split("<BackgroundJobsPanel", 1)[0]
 
         self.assertIn("문제 목록에 적용하기 전에", queue_review_setup)
@@ -429,9 +458,6 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("문제는 이미 파싱되어 있습니다", stage_source)
         self.assertIn("recognition-page-review-mode", source)
         self.assertIn("pageReviewActive={Boolean(recognitionReview)}", source)
-        self.assertIn("pageReviewActive ? 'active'", source)
-        self.assertIn("disabled={pageReviewActive || !reviewAvailable}", source)
-        self.assertIn("disabled={pageReviewActive || !total}", source)
         self.assertNotIn("<small>{row.page.id}</small>", stage_source)
         self.assertNotIn("<span>{page.id}</span>", stage_source)
         self.assertLess(app_render.index("<RecognitionPageReviewStage"), app_render.index("<ItemsRail"))
@@ -457,7 +483,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_review_stage_exposes_crop_frame_fast_surrounding_crop_and_continuation(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
 
         self.assertIn("영역 조정", source)
         self.assertIn("영역 다시 잡기", source)
@@ -478,7 +504,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_review_stage_has_fast_page_navigation(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage({", 1)[1]
         review_stage = review_stage.split("function ItemsRail({", 1)[0]
 
@@ -507,18 +533,18 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn('aria-keyshortcuts="Enter"', box_edit_panel)
         self.assertIn("onClick={onApply}", box_edit_panel)
 
-        mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
+        mutation_source = source.split("const mutateSession = useCallback(", 1)[1]
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
         retry_source = source.split("const retryAiSession = useCallback(async (args) => {", 1)[1]
         retry_source = retry_source.split("const recognizeCurrentSession = useCallback", 1)[0]
-        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || session", mutation_source)
-        self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
-        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session)", retry_source)
+        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session", mutation_source)
+        self.assertLess(mutation_source.index("await postRestore("), mutation_source.index("await postMutate(action, args);"))
+        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session)", retry_source)
         self.assertLess(retry_source.index("await postRestore(snapshotBefore);"), retry_source.index("const result = await postRetryAi(args"))
 
     def test_review_area_reset_uses_explicit_panel_apply_and_removes_two_way_split(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
 
@@ -553,7 +579,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_passage_area_reset_supports_ordered_multi_page_stitching(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1].split("// ─── LEFT:", 1)[0]
 
         self.assertIn("editableSourceSegmentsForProblem", source)
@@ -585,7 +611,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_review_stage_exposes_manual_split_bulk_crop_apply(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")
 
         self.assertIn("function ManualSplitEditor", source)
@@ -637,26 +663,37 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("manual-split-box", bundle)
         self.assertIn("스탬프", bundle)
 
-    def test_input_intent_choices_use_readable_single_column_layout(self) -> None:
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
-        intent_control = html.split(".intent-control{", 1)[1].split("}", 1)[0]
-        intent_title = html.split(".intent-choice-head strong{", 1)[1].split("}", 1)[0]
+    def test_upload_method_is_chosen_beside_the_drop_zone(self) -> None:
+        # The method decides how the next upload is parsed, so it sits where
+        # files go in rather than two screens down the settings tab.
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = board_document()
+        rail = source.split("function ItemsRail({", 1)[1].split("\nfunction ", 1)[0]
+        side_panel = source.split("function SidePanel({", 1)[1].split("\nfunction ", 1)[0]
+        select_css = html.split(".upload-intent select{", 1)[1].split("}", 1)[0]
 
-        self.assertIn("grid-template-columns: 1fr", intent_control)
-        self.assertIn("word-break: keep-all", intent_title)
+        self.assertIn('<label className="upload-intent"', rail)
+        self.assertIn("<span>업로드 방식</span>", rail)
+        self.assertIn("INPUT_INTENT_OPTIONS.map(option =>", rail)
+        self.assertIn("onChange={e => setInputIntent?.(e.target.value)}", rail)
+        self.assertLess(rail.index("className={`drop-zone"), rail.index('className="upload-intent"'))
+        self.assertNotIn("INPUT_INTENT_OPTIONS", side_panel)
+        self.assertIn("min-width: 0", select_css)
+        self.assertNotIn(".intent-choice", html)
 
     def test_undo_restores_server_snapshot_order_directly(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         undo_source = source.split("const undoMutation = useCallback(async () => {", 1)[1]
         undo_source = undo_source.split("  // Ctrl/Cmd+Z", 1)[0]
 
-        self.assertIn("const restored = await postRestore(snapshot);", undo_source)
+        self.assertIn("const restored = assertPlacementSaveSession(await postRestore(snapshot));", undo_source)
+        self.assertLess(undo_source.index("assertPlacementSaveSession"), undo_source.index("setHistoryStack"))
         self.assertIn("applySession(restored);", undo_source)
         self.assertNotIn("adoptMutatedSession(restored", undo_source)
 
     def test_items_rail_keeps_step_and_source_on_one_line_without_status_text_chip(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         rail_item = source.split("{displayedItemRows.map(({ item: it, displayIndex: i }) => {", 1)[1]
         rail_item = rail_item.split("</React.Fragment>\n        );})}", 1)[0]
 

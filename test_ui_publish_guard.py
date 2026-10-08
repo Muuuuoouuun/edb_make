@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import unittest
 from pathlib import Path
 
@@ -20,9 +21,17 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("setPublishBusy(true);", on_publish)
         self.assertIn("publishInFlightRef.current = false;", on_publish)
         self.assertIn("setPublishBusy(false);", on_publish)
-        self.assertLess(on_publish.index("const placements ="), on_publish.index("publishInFlightRef.current = true;"))
+        # The publish payload is assembled before the in-flight flag is set, so an
+        # early bail-out cannot leave the guard stuck on. The payload moved from an
+        # inline `placements` map to prepareSessionPublishRequest(); the order rule
+        # is the same.
+        self.assertIn("prepareSessionPublishRequest(", on_publish)
+        self.assertLess(
+            on_publish.index("const publishRequest ="),
+            on_publish.index("publishInFlightRef.current = true;"),
+        )
         self.assertIn(
-            "operationBusy={Boolean(loading) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            "operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
         )
         self.assertIn("if (operationRecovery?.conflict)", on_publish)
@@ -64,6 +73,9 @@ class TestUiPublishGuard(unittest.TestCase):
         on_publish = on_publish.split("  return (", 1)[0]
 
         self.assertIn("findBoardPlacementOverlaps", on_publish)
+        self.assertIn("findBoardPlacementOverlaps(itemsForPublish", on_publish)
+        self.assertIn("layoutGapMode,", on_publish)
+        self.assertIn("resolvedPlacements: true", on_publish)
         self.assertIn("board_placement_overlap", on_publish)
         self.assertIn("문항 배치가 겹칠 수 있어", on_publish)
         self.assertIn("setView('board')", on_publish)
@@ -142,7 +154,7 @@ class TestUiPublishGuard(unittest.TestCase):
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
         review_usage = source.split("<ReviewStage", 1)[1]
         review_usage = review_usage.split("/>", 1)[0]
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.css").read_text(encoding="utf-8")
 
         self.assertIn("hasPageChromeArtifactFlag", source)
         self.assertIn("selectedPageChromeProblemIds", review_stage)
@@ -161,7 +173,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
-        self.assertIn("publish_guard.js?v=preflight-passage-envelope-20260803", html)
+        guard_digest = hashlib.sha256((PROJECT_ROOT / "ui_prototype" / "publish_guard.js").read_bytes()).hexdigest()
+        self.assertEqual(1, html.count(f'publish_guard.js?v=publish-guard-{guard_digest}'))
 
 
 if __name__ == "__main__":

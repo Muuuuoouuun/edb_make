@@ -80,16 +80,15 @@ def test_settings_atomic_replace_failure_preserves_previous_file() -> None:
             assert os.environ["GEMINI_API_KEY"] == "original-env"
 
 
-def test_concurrent_settings_updates_do_not_drop_provider_key() -> None:
+def test_concurrent_settings_updates_preserve_key_and_ai_preference() -> None:
     with TemporaryDirectory() as raw_tmp:
         runtime_dir = Path(raw_tmp)
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GEMINI_API_KEY", None)
-            os.environ.pop("OPENAI_API_KEY", None)
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [
                     executor.submit(user_settings.update_api_keys, runtime_dir, gemini_api_key="gemini-key"),
-                    executor.submit(user_settings.update_api_keys, runtime_dir, openai_api_key="openai-key"),
+                    executor.submit(user_settings.update_api_keys, runtime_dir, ai_enabled=False),
                 ]
                 for future in futures:
                     future.result()
@@ -97,7 +96,7 @@ def test_concurrent_settings_updates_do_not_drop_provider_key() -> None:
         stored = user_settings.load_user_settings(runtime_dir)
 
     assert stored["gemini_api_key"] == "gemini-key"
-    assert stored["openai_api_key"] == "openai-key"
+    assert stored["ai_enabled"] is False
 
 
 def test_preprocess_discovers_standard_windows_office_and_browser_installs() -> None:

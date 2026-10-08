@@ -13,6 +13,8 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from build_problem_board_edb import (
+    CLASSIN_MAX_BOARD_PAGE_COUNT,
+    _archive_previous_cli_edbs,
     _annotate_cross_page_passage_groups,
     _collapse_marker_document_continuation_page,
     _collect_problem_risk_flags,
@@ -24,6 +26,7 @@ from build_problem_board_edb import (
     _remove_hwp_template_instruction_problems,
     _session_passage_groups,
     _session_problem_count_payload,
+    edb_part_file_name,
     PDF_TEXT_MARKER_HORIZONTAL_PADDING_PX,
 )
 from build_structured_page_json import build_page_model
@@ -176,7 +179,7 @@ def _build_ai_fallback_config(
     effective_enabled = resolved_mode != "off"
     if (
         not effective_enabled
-        and provider in {"openai", "gemini"}
+        and provider in {"gemini", "google"}
         and not model
         and not prompt
         and max_tokens == 4096
@@ -468,39 +471,99 @@ def render_board_page(page_model: PageModel, prepared_image: Image.Image, left_z
     return canvas
 
 
-def export_board_edb(board_images: list[Image.Image], output_path: Path, template_name: str) -> None:
-    # Each board page record advances by ~1.2 logical pages (matches the
-    # 0.024 norm step used previously when page_count_hint was hard-coded to 50).
-    # Scale page_count_hint with the record count so ClassIn allocates a logical
-    # canvas tall enough to contain every page record — same convention real
-    # published EDBs use (~2x record count, floor 50).
-    page_count_hint = max(50, len(board_images) * 2)
-    step_pages = 1.2  # 0.024 * 50 — preserves the legacy 708px vertical step
+def export_board_edb(
+    board_images: list[Image.Image], output_path: Path, template_name: str,
+) -> list[dict[str, Any]]:
+    if not board_images:
+        raise ValueError("EDB requires at least one board page")
+    # A record occupies 1.2 logical pages. ClassIn accepts at most 50 pages
+    # per file, so split the ordered page records instead of growing its header.
+    page_count_hint = CLASSIN_MAX_BOARD_PAGE_COUNT
+    step_pages = 1.2
     y_step = step_pages / page_count_hint
-    records: list[bytes] = []
-    for index, image in enumerate(board_images):
-        primary = _encode_jpeg(image, quality=92)
-        secondary = _encode_jpeg(_make_thumbnail(image), quality=86)
-        records.append(
-            build_image_record(
-                ImageRecordSpec(
-                    record_id=index,
-                    image_primary=primary,
-                    image_secondary=secondary,
-                    x=0.0,
-                    y=round(index * y_step, 6),
-                    width_hint=1 / 3,
-                    height_hint=round(y_step, 6),
+    max_records = int(page_count_hint / step_pages)
+    part_count = (len(board_images) + max_records - 1) // max_records
+    base_count, extra_count = divmod(len(board_images), part_count)
+    parts: list[dict[str, Any]] = []
+    start = 0
+    for part_index in range(part_count):
+        count = base_count + (1 if part_index < extra_count else 0)
+        end = start + count
+        records: list[bytes] = []
+        for local_index, image in enumerate(board_images[start:end]):
+            primary = _encode_jpeg(image, quality=92)
+            secondary = _encode_jpeg(_make_thumbnail(image), quality=86)
+            records.append(
+                build_image_record(
+                    ImageRecordSpec(
+                        record_id=local_index,
+                        image_primary=primary,
+                        image_secondary=secondary,
+                        x=0.0,
+                        y=round(local_index * y_step, 6),
+                        width_hint=1 / 3,
+                        height_hint=round(y_step, 6),
+                    )
                 )
             )
+        part_path = output_path.with_name(edb_part_file_name(output_path.name, part_index, part_count))
+        payload = build_edb(
+            records,
+            header_flag=4,
+            version="6.0.5.3911",
+            page_count_hint=page_count_hint,
         )
-    payload = build_edb(
-        records,
-        header_flag=4,
-        version="6.0.5.3911",
-        page_count_hint=page_count_hint,
-    )
-    write_edb(output_path, payload)
+        write_edb(part_path, payload)
+        parts.append({
+            "partIndex": part_index + 1,
+            "partCount": part_count,
+            "edbFileName": part_path.name,
+            "edbPath": str(part_path.resolve()),
+            "edbFileUri": _to_file_uri(part_path),
+            "pageCountHint": page_count_hint,
+            "recordCount": count,
+            "sourcePageStartIndex": start + 1,
+            "sourcePageEndIndex": end,
+            "flowEndPages": round(count * step_pages, 6),
+        })
+        start = end
+    return parts
+
+
+def _attach_edb_parts(payload: dict[str, Any], parts: list[dict[str, Any]]) -> None:
+    payload.update({
+        "edb_parts": parts,
+        "edbParts": parts,
+        "edb_paths": [part["edbPath"] for part in parts],
+        "edbPaths": [part["edbPath"] for part in parts],
+        "edb_part_count": len(parts),
+        "edbPartCount": len(parts),
+        "edb_split": len(parts) > 1,
+        "edbSplit": len(parts) > 1,
+    })
+
+
+def _previous_board_export_summary(output_dir: Path, source_paths: Sequence[Path]) -> dict[str, Any] | None:
+    """Identify a previous batch by its complete ordered input list."""
+    try:
+        previous = json.loads((output_dir / "ui_session.json").read_text(encoding="utf-8"))
+        if not isinstance(previous, dict):
+            return None
+        previous_sources = previous.get("input_files")
+        previous_output = previous.get("output_dir")
+        if not isinstance(previous_sources, list) or not previous_sources:
+            return None
+        if any(not isinstance(path, str) or not path.strip() for path in previous_sources):
+            return None
+        if not isinstance(previous_output, str) or not previous_output.strip():
+            return None
+        if [Path(path).resolve() for path in previous_sources] != list(source_paths):
+            return None
+        if Path(previous_output).resolve() != output_dir.resolve():
+            return None
+    except (OSError, ValueError, TypeError):
+        return None
+    return {**previous, "source": str(source_paths[0]), "output_dir": str(output_dir.resolve())}
 
 
 def page_model_to_board_plan_dict(page_models: list[PageModel], export_plan) -> dict[str, object]:
@@ -715,6 +778,7 @@ def run_export(
 
     subject = _resolve_subject(subject_name)
     source_paths = _coerce_source_paths(source)
+    previous_export = _previous_board_export_summary(out_dir, source_paths) if export_edb else None
     ai_fallback_config = _build_ai_fallback_config(
         enabled=ai_fallback_enabled,
         mode=ai_fallback,
@@ -780,10 +844,18 @@ def run_export(
     (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     edb_path: Path | None = None
+    edb_parts: list[dict[str, Any]] = []
     if export_edb:
-        edb_path = out_dir / edb_name
-        export_board_edb(board_images, edb_path, export_plan.template.name)
+        edb_parts = export_board_edb(board_images, out_dir / edb_name, export_plan.template.name)
+        edb_path = Path(edb_parts[0]["edbPath"])
+        for part in edb_parts:
+            start = int(part["sourcePageStartIndex"]) - 1
+            end = int(part["sourcePageEndIndex"])
+            part_pages = page_models[start:end]
+            part["pageIds"] = [page.page_id for page in part_pages]
+            part["problemIds"] = [problem.unit_id for page in part_pages for problem in page.problems]
         board_plan_dict["edb_path"] = str(edb_path)
+        _attach_edb_parts(board_plan_dict, edb_parts)
         (out_dir / "placements.json").write_text(json.dumps(board_plan_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     ui_session = build_ui_session(
@@ -797,7 +869,28 @@ def run_export(
         ai_fallback_config=ai_fallback_config,
         ai_summary=ai_summary,
     )
+    _attach_edb_parts(ui_session, edb_parts)
+    part_by_page_id = {page_id: part for part in edb_parts for page_id in part["pageIds"]}
+    for item in [*ui_session["pages"], *ui_session["problems"]]:
+        page_id = item.get("sourcePageId") or item.get("id")
+        part = part_by_page_id.get(page_id)
+        if part is not None:
+            item["edbPartIndex"] = part["partIndex"]
+            item["edbPartFileName"] = part["edbFileName"]
     ui_session_path, synced_ui_path = write_ui_session_bundle(out_dir, ui_session, sync_ui=sync_ui)
+    archive_warnings: list[str] = []
+    archived_edb_paths = (
+        _archive_previous_cli_edbs(
+            previous_export,
+            source_path=source_paths[0],
+            output_dir=out_dir,
+            current_edb_paths=[Path(part["edbPath"]) for part in edb_parts],
+            expected_edb_name=edb_name,
+            warnings=archive_warnings,
+        )
+        if export_edb
+        else []
+    )
 
     return {
         "output_dir": out_dir,
@@ -806,6 +899,12 @@ def run_export(
         "problem_crop_paths": problem_crop_paths,
         "rendered_board_paths": rendered_board_paths,
         "edb_path": edb_path,
+        "edb_paths": [Path(part["edbPath"]) for part in edb_parts],
+        "edb_parts": edb_parts,
+        "edb_part_count": len(edb_parts),
+        "edb_split": len(edb_parts) > 1,
+        "archived_edb_paths": archived_edb_paths,
+        "warnings": archive_warnings,
         "ui_session": ui_session,
         "ui_session_path": ui_session_path,
         "synced_ui_path": synced_ui_path,
@@ -875,7 +974,11 @@ def main() -> int:
         f"{len(result['problem_crop_paths'])} problem crops, and {len(result['rendered_board_paths'])} board page renders -> {result['output_dir']}"
     )
     if args.export_edb:
-        print(f"exported EDB -> {result['edb_path']}")
+        for part in result["edb_parts"]:
+            suffix = f" ({part['partIndex']}/{part['partCount']})" if len(result["edb_parts"]) > 1 else ""
+            print(f"exported EDB{suffix} -> {part['edbPath']}")
+    for warning in result["warnings"]:
+        print(f"warning: {warning}")
     print(f"wrote UI session -> {result['ui_session_path']}")
     if result["synced_ui_path"] is not None:
         print(f"synced UI session -> {result['synced_ui_path']}")

@@ -8,6 +8,7 @@ reports_worker/node_modules/
 .wrangler/
 .env.local
 .claude/settings.local.json
+.claude/worktrees/
 .DS_Store
 
 # Local runtime state
@@ -60,3 +61,4 @@ test_output_*/
 # Local one-off packaging/install smoke logs
 /.audit/*-smoke-*.log
 /.audit/package-*.log
+.gstack/

@@ -69,16 +69,23 @@ for (const scale of [0.6, 1, 1.4, 1.6]) {
     close(offset(result[1]), 1.9);
   }
 }
+for (const gapMode of ['classin-grid', 'compact']) {
 for (const intent of ['multi-problem', 'page-as-is']) {
   const input = [{id:'a', heightFrac:0.8, placementExtraSlots:2, placementYRatio:0.8, inputIntent:intent}, {id:'b', heightFrac:0.9, inputIntent:intent}];
-  const ui = reflow(input);
-  const validated = guard.simulatedBoardPlacements(ui);
+  const ui = reflow(input, 1.2, 1, gapMode);
+  const validated = guard.simulatedBoardPlacements(ui, {layoutGapMode:gapMode});
   close(ui[1].startYPages, validated[1].startYPages);
   close(ui[0].startYPages + offset(ui[0]), validated[0].renderedTopYPages);
   assert.equal(guard.findBoardPlacementOverlaps(ui).length, 0);
   const estimate = sandbox.deriveBoardPreviewEstimate(ui, 'a');
   assert.equal(estimate.active.classinStartPage, Math.floor(validated[0].renderedTopYPages / 1.2) + 1);
   close(estimate.active.renderedBottomPages, validated[0].renderedBottomYPages);
+  const movement = drag(ui[0], ui[0].boardRowHeightPages, offset(ui[0]), 1.7);
+  const moved = reflow([patch(ui[0], movement), ui[1]], 1.2, 1, gapMode);
+  close(offset(moved[0]), offset(ui[0]) + 1.7);
+  const reduced = reflow([patch(moved[0], {extraSlots:0, yRatio:0}), moved[1]], 1.2, 1, gapMode);
+  assert.ok(reduced[1].startYPages < moved[1].startYPages, 'reducing space must release the reservation');
+}
 }
 """], cwd=ROOT, check=True)
 
@@ -236,7 +243,7 @@ assert.equal(listeners.size, 0);
         self.assertIn("event.key === 'Escape'", stage)
         self.assertIn("hasPointerCapture", stage)
         self.assertIn("positionDragFrameRef.current = window.requestAnimationFrame", stage)
-        self.assertIn("height !== drag.pageH", stage)
+        self.assertIn("height !== drag.viewportHeight", stage)
         self.assertIn("width !== drag.contentWidth", stage)
 
 

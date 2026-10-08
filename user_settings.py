@@ -27,15 +27,12 @@ def settings_path(runtime_dir: Path) -> Path:
 
 def load_user_settings(runtime_dir: Path) -> dict[str, Any]:
     path = settings_path(runtime_dir)
-    if not path.exists():
-        return {}
-    try:
-        # ``utf-8-sig`` also accepts plain UTF-8 and tolerates files saved by
-        # Windows editors that prepend a BOM.
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (json.JSONDecodeError, OSError, UnicodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    with _SETTINGS_LOCK:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (json.JSONDecodeError, OSError, UnicodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
 
 def ai_enabled_from_settings(
@@ -99,7 +96,7 @@ def save_user_settings(runtime_dir: Path, settings: dict[str, Any]) -> Path:
 
 def apply_to_env(settings: dict[str, Any], *, overwrite: bool = False) -> dict[str, str]:
     """Promote relevant settings to ``os.environ`` so downstream pipeline code
-    that reads env vars (Gemini OCR/page repair, OpenAI image reconstruction)
+    that reads env vars (Gemini OCR, page repair, image reconstruction)
     picks them up.
 
     By default an externally-set env var wins so users who exported
@@ -110,13 +107,6 @@ def apply_to_env(settings: dict[str, Any], *, overwrite: bool = False) -> dict[s
         settings,
         env_key="GEMINI_API_KEY",
         settings_key="gemini_api_key",
-        overwrite=overwrite,
-        applied=applied,
-    )
-    _apply_key(
-        settings,
-        env_key="OPENAI_API_KEY",
-        settings_key="openai_api_key",
         overwrite=overwrite,
         applied=applied,
     )
@@ -171,12 +161,6 @@ def summarize_for_response(
         settings_key="gemini_api_key",
         env_overwrites=env_overwrites,
     )
-    openai = _summarize_key(
-        settings,
-        env_key="OPENAI_API_KEY",
-        settings_key="openai_api_key",
-        env_overwrites=env_overwrites,
-    )
 
     return {
         "aiEnabled": ai_enabled_from_settings(settings),
@@ -186,12 +170,6 @@ def summarize_for_response(
         "geminiApiKeySource": gemini["source"],
         "geminiApiKeyStoredPreview": gemini["stored_preview"],
         "hasStoredGeminiApiKey": gemini["has_stored_key"],
-        "openAiApiKey": "",  # never echoed
-        "openAiApiKeyPreview": openai["preview"],
-        "hasOpenAiApiKey": openai["has_key"],
-        "openAiApiKeySource": openai["source"],
-        "openAiApiKeyStoredPreview": openai["stored_preview"],
-        "hasStoredOpenAiApiKey": openai["has_stored_key"],
     }
 
 
@@ -208,7 +186,6 @@ def update_api_keys(
     runtime_dir: Path,
     *,
     gemini_api_key: str | None = None,
-    openai_api_key: str | None = None,
     ai_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """Persist supplied API keys and apply them to ``os.environ``.
@@ -218,28 +195,16 @@ def update_api_keys(
     """
     with _SETTINGS_LOCK:
         settings = load_user_settings(runtime_dir)
-        env_overwrites = False
+        env_overwrites = gemini_api_key is not None
         if gemini_api_key is not None:
             _store_key(settings, "gemini_api_key", gemini_api_key)
-            env_overwrites = True
-        if openai_api_key is not None:
-            _store_key(settings, "openai_api_key", openai_api_key)
-            env_overwrites = True
         if ai_enabled is not None:
             settings[_AI_ENABLED_KEY] = bool(ai_enabled)
         save_user_settings(runtime_dir, settings)
-        # Keep process state consistent with durable state if an atomic replace
-        # is rejected by antivirus software or a transient Windows file lock.
         if gemini_api_key is not None:
             _sync_env_key("GEMINI_API_KEY", gemini_api_key)
-        if openai_api_key is not None:
-            _sync_env_key("OPENAI_API_KEY", openai_api_key)
 
-    return summarize_for_response(runtime_dir, env_overwrites=env_overwrites)
-
-
-def update_openai_api_key(runtime_dir: Path, raw_key: str | None) -> dict[str, Any]:
-    return update_api_keys(runtime_dir, openai_api_key=raw_key)
+        return summarize_for_response(runtime_dir, env_overwrites=env_overwrites)
 
 
 def update_ai_enabled(runtime_dir: Path, enabled: bool) -> dict[str, Any]:
