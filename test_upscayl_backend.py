@@ -71,6 +71,40 @@ class TestUpscaylBackend(unittest.TestCase):
         discover.assert_not_called()
         run.assert_not_called()
 
+    def test_distorted_or_truncated_output_keeps_original_image(self) -> None:
+        for size in ((1600, 1), (1600, 1600)):
+            with self.subTest(size=size), TemporaryDirectory() as raw_tmp:
+                installation = self._installation(Path(raw_tmp))
+                source = Image.new("RGB", (640, 360), "white")
+
+                def fake_run(command, **_kwargs):
+                    Image.new("RGB", size, "white").save(command[command.index("-o") + 1])
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                with patch.object(upscayl_backend.subprocess, "run", side_effect=fake_run):
+                    result = upscayl_backend.auto_upscale_image(source, installation=installation)
+
+                self.assertEqual("failed", result.status)
+                self.assertEqual("invalid_output_size", result.reason)
+                self.assertIs(source, result.image)
+
+    def test_rgb_output_preserves_source_cutout_alpha(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            installation = self._installation(Path(raw_tmp))
+            source = Image.new("RGBA", (640, 360), (248, 248, 246, 0))
+            source.paste((248, 248, 246, 255), (240, 120, 400, 240))
+
+            def fake_run(command, **_kwargs):
+                Image.new("RGB", (1600, 900), "white").save(command[command.index("-o") + 1])
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(upscayl_backend.subprocess, "run", side_effect=fake_run):
+                result = upscayl_backend.auto_upscale_image(source, installation=installation)
+
+            self.assertTrue(result.applied)
+            self.assertEqual(0, result.image.getpixel((0, 0))[3])
+            self.assertEqual(255, result.image.getpixel((800, 450))[3])
+
     def test_missing_installation_keeps_original_image(self) -> None:
         source = Image.new("RGB", (640, 360), "white")
         with patch.object(upscayl_backend, "discover_upscayl_installation", return_value=None):

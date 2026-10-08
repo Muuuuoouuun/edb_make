@@ -248,6 +248,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             "ui_prototype/app.bundle.js",
             "ui_prototype/board.html",
             "ui_prototype/board.css",
+            "ui_prototype/publish_guard.js",
             "scripts/build_frontend_bundle.mjs",
             "scripts/vendor/babel.min.js",
         )

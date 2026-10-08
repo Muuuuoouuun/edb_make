@@ -153,6 +153,32 @@
     return placementMode === "continuous" || placementMode === "continuous-page-as-is";
   }
 
+  function imageRecordGeometryFor(item) {
+    const geometry = item?.imageRecordGeometry || item?.image_record_geometry;
+    if (!geometry || typeof geometry !== "object" || Array.isArray(geometry)) return null;
+    const height = numberOrNull(geometry.baseHeightPages);
+    return height !== null && height > 0 ? geometry : null;
+  }
+
+  function imageHeightPagesFor(item) {
+    const geometry = imageRecordGeometryFor(item);
+    return geometry
+      ? Number(geometry.baseHeightPages)
+      : Math.max(
+        MIN_HEIGHT_PAGES,
+        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
+      );
+  }
+
+  function renderedScaleFor(item, requestedScale) {
+    const geometry = imageRecordGeometryFor(item);
+    const baseWidth = numberOrNull(geometry?.baseDisplayWidthPx);
+    const maxWidth = numberOrNull(geometry?.maxDisplayWidthPx);
+    return baseWidth !== null && baseWidth > 0 && maxWidth !== null && maxWidth > 0
+      ? Math.max(PLACEMENT_SCALE_MIN, Math.min(requestedScale, maxWidth / baseWidth))
+      : requestedScale;
+  }
+
   function scaleNearPreviousBoundary(startYPages, heightPages, scaleRatio, slotHeightPages) {
     if (scaleRatio < DEFAULT_SCALE_RATIO || slotHeightPages <= 0) return scaleRatio;
     const renderedBottomYPages = startYPages + heightPages * scaleRatio;
@@ -187,10 +213,7 @@
       const problemId = problemIdFor(item, index);
       if (!problemId || (problemIds && !problemIds.has(problemId))) return;
 
-      const heightPages = Math.max(
-        MIN_HEIGHT_PAGES,
-        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
-      );
+      const heightPages = imageHeightPagesFor(item);
       const continuous = usesContinuousPageFlow(item);
       // The previous item already decided whether its trailing edge is snapped,
       // continuous, or compact. Re-snapping here would re-create a removed gap.
@@ -217,18 +240,25 @@
         || Math.abs(normalizedScale - DEFAULT_SCALE_RATIO) > PLACEMENT_EPSILON_PAGES
         ? normalizedScale
         : scaleNearPreviousBoundary(startYPages, heightPages, normalizedScale, slotHeightPages);
-      const renderedHeightPages = heightPages * requestedScale;
+      const renderedHeightPages = heightPages * renderedScaleFor(item, requestedScale);
+      const geometry = imageRecordGeometryFor(item);
+      const reservedHeightPages = numberOrNull(geometry?.reservedHeightPages);
+      const flowHeightPages = !continuous && reservedHeightPages !== null && reservedHeightPages > 0
+        ? Math.max(renderedHeightPages, reservedHeightPages * requestedScale)
+        : renderedHeightPages;
       const gapAfterPages = placementGapAfterPages(item);
       const compact = layoutGapMode === LAYOUT_GAP_MODE_COMPACT || gapAfterPages !== null;
       let nextStartYPages;
       if (continuous) {
-        nextStartYPages = startYPages + renderedHeightPages;
+        const defaultGapPages = Math.max(0, finiteNumber(geometry?.continuousGapPages, 0));
+        nextStartYPages = startYPages + renderedHeightPages
+          + (gapAfterPages !== null ? gapAfterPages : compact ? 0 : defaultGapPages);
       } else if (compact) {
-        nextStartYPages = startYPages + renderedHeightPages + (gapAfterPages || 0);
-      } else if (renderedHeightPages <= slotHeightPages + PLACEMENT_EPSILON_PAGES) {
-        nextStartYPages = startYPages + snapUpPages(renderedHeightPages, slotHeightPages);
+        nextStartYPages = startYPages + flowHeightPages + (gapAfterPages || 0);
+      } else if (flowHeightPages <= slotHeightPages + PLACEMENT_EPSILON_PAGES) {
+        nextStartYPages = startYPages + snapUpPages(flowHeightPages, slotHeightPages);
       } else {
-        nextStartYPages = snapUpPages(startYPages + renderedHeightPages, slotHeightPages);
+        nextStartYPages = snapUpPages(startYPages + flowHeightPages, slotHeightPages);
       }
       const snappedNextStartYPages = rounded(nextStartYPages);
       const slotSpanPages = Math.max(renderedHeightPages, snappedNextStartYPages - startYPages);
@@ -270,10 +300,7 @@
       );
       if (startYPages === null || snappedNextStartYPages === null) return;
 
-      const heightPages = Math.max(
-        MIN_HEIGHT_PAGES,
-        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
-      );
+      const heightPages = imageHeightPagesFor(item);
       const continuous = usesContinuousPageFlow(item);
       const persistedScale = numberOrNull(item.placementScaleRatio ?? item.placement_scale_ratio);
       const preserveLegacyScale = !continuous
@@ -286,7 +313,7 @@
           firstNumber(item, ["placementScaleRatio", "placement_scale_ratio", "scaleRatio"], DEFAULT_SCALE_RATIO)
         )
       );
-      const renderedHeightPages = heightPages * requestedScale;
+      const renderedHeightPages = heightPages * renderedScaleFor(item, requestedScale);
       const normalizedStartYPages = rounded(Math.max(0, startYPages));
       const normalizedNextStartYPages = rounded(Math.max(
         normalizedStartYPages,

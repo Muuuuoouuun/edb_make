@@ -18,14 +18,25 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const elements = new Map();
 const element = id => {
-  if (!elements.has(id)) elements.set(id, {hidden:false, value:'', disabled:false, handlers:{}, addEventListener(event, fn) {this.handlers[event]=fn;}});
+  if (!elements.has(id)) elements.set(id, {hidden:false, value:'', disabled:false, handlers:{}, attributes:{},
+    addEventListener(event, fn) {this.handlers[event]=fn;},
+    setAttribute(name, value) {this.attributes[name]=value;}});
   return elements.get(id);
+};
+const assertMessage = (pattern, error = false) => {
+  const message = element('demo-message');
+  assert.match(message.textContent, pattern);
+  assert.equal(message.hidden, false);
+  assert.equal(message.className, error ? 'notice' : 'hint');
+  assert.equal(message.attributes.role, error ? 'alert' : 'status');
 };
 const requests = [];
 const replies = [];
+const windowHandlers = {};
 let timer;
 const sandbox = {
-  window:{addEventListener(){}}, document:{getElementById:element,addEventListener(){}}, Date, Number, Math, JSON,
+  window:{addEventListener(event, fn) {windowHandlers[event]=fn;}},
+  document:{getElementById:element,addEventListener(){}}, Date, Number, Math, JSON,
   setTimeout(fn) { timer=fn; return 1; }, clearTimeout() {},
   fetch(url, options) {
     requests.push({url, options});
@@ -46,17 +57,28 @@ const end=new Date(Date.now()+3600000).toISOString();
   assert.equal(demo.canParse(),false);
   assert.equal(element('demo-app').hidden,true);
   assert.equal(element('demo-login').hidden,false);
+  assertMessage(/안내받은 시연 비밀번호/);
   element('demo-password').value='demo-test-secret';
   replies.push({status:401,body:{error:{code:'demo_auth_required'}}});
   const badLogin=element('demo-login').handlers.submit({preventDefault(){}});
   assert.equal(element('demo-password').value,'','password cleared before response');
+  assertMessage(/비밀번호를 확인하고 있어요/);
   await badLogin;
   assert.equal(demo.canParse(),false);
-  assert.match(element('demo-message').textContent,/비밀번호를 확인/);
+  assertMessage(/비밀번호를 확인해 주세요/,true);
   element('demo-password').value='demo-test-secret';
   replies.push({status:429,body:{error:{code:'throttled'}}});
   await element('demo-login').handlers.submit({preventDefault(){}});
-  assert.match(element('demo-message').textContent,/요청이 많아요/);
+  assertMessage(/요청이 많아요/,true);
+  replies.push(new Error('offline'));
+  const retryLogin=element('demo-login').handlers.submit({preventDefault(){}});
+  assertMessage(/비밀번호를 확인하고 있어요/);
+  await retryLogin;
+  assertMessage(/서버에 연결하지 못했어요/,true);
+  replies.push({status:200,body:{authenticated:false}});
+  await element('demo-login').handlers.submit({preventDefault(){}});
+  assert.equal(demo.canParse(),false);
+  assertMessage(/인증을 확인하지 못했어요/,true);
   replies.push({status:200,body:{authenticated:true,ends_at:end}});
   await element('demo-login').handlers.submit({preventDefault(){}});
   assert.equal(demo.canParse(),true);
@@ -69,7 +91,7 @@ const end=new Date(Date.now()+3600000).toISOString();
   assert.equal(demo.handleResponse(401,'{"error":{"code":"demo_auth_required"}}'),true);
   assert.equal(demo.canParse(),false);
   assert.equal(element('demo-app').hidden,true);
-  assert.match(element('demo-message').textContent,/인증이 만료/);
+  assertMessage(/인증이 만료/);
   replies.push({status:200,body:{authenticated:true,ends_at:end}});
   await element('demo-login').handlers.submit({preventDefault(){}});
   demo.setBusy(true);
@@ -78,13 +100,37 @@ const end=new Date(Date.now()+3600000).toISOString();
   replies.push({status:204});
   await element('demo-logout').handlers.click();
   assert.equal(demo.canParse(),false);
-  assert.match(element('demo-message').textContent,/로그아웃했어요/);
+  assertMessage(/로그아웃했어요/);
   assert.equal(requests.at(-1).options.headers['X-Demo-Request'],'1');
+  for (const reply of [{status:503}, new Error('offline')]) {
+    replies.push({status:200,body:{authenticated:true,ends_at:end}});
+    await element('demo-login').handlers.submit({preventDefault(){}});
+    replies.push(reply);
+    await element('demo-logout').handlers.click();
+    assert.equal(demo.canParse(),false);
+    assertMessage(/로그아웃을 완료하지 못했어요/,true);
+  }
   replies.push({status:200,body:{authenticated:true,ends_at:new Date(Date.now()-1000).toISOString()}});
   await element('demo-login').handlers.submit({preventDefault(){}});
   assert.equal(demo.canParse(),false);
   assert.equal(element('demo-login').hidden,true);
-  assert.match(element('demo-message').textContent,/기간이 끝났어요/);
+  assertMessage(/기간이 끝났어요/);
+  replies.push(new Error('config offline'));
+  windowHandlers.pageshow({persisted:true});
+  assertMessage(/시연 인증을 다시 확인/);
+  await new Promise(resolve=>setImmediate(resolve));
+  assertMessage(/시연 정보를 불러오지 못했어요/,true);
+  assert.equal(element('demo-config-retry').hidden,false);
+  replies.push({status:200,body:{active:true,authenticated:false,ends_at:end}});
+  windowHandlers.pageshow({persisted:true});
+  assertMessage(/시연 인증을 다시 확인/);
+  await new Promise(resolve=>setImmediate(resolve));
+  assertMessage(/안내받은 시연 비밀번호/);
+  assert.equal(element('demo-config-retry').hidden,true);
+  assert.equal(element('demo-login').hidden,false);
+  assert.equal(demo.handleResponse(404,'{"error":{"code":"demo_unavailable"}}'),true);
+  assertMessage(/지금은 시연 기간이 아니에요/);
+  assert.equal(element('demo-login').hidden,true);
   assert.ok(resets>=4,'locking clears rendered results');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''

@@ -4,12 +4,15 @@
   const $ = id => document.getElementById(id);
   const state = { active: false, authenticated: false, endsAt: 0, timer: null, reset: () => {}, busy: false };
 
-  function message(text) {
-    $("demo-message").textContent = text || "";
-    $("demo-message").hidden = !text;
+  function message(text, tone = "status") {
+    const notice = $("demo-message");
+    notice.className = tone === "error" ? "notice" : "hint";
+    notice.setAttribute("role", tone === "error" ? "alert" : "status");
+    notice.textContent = text || "";
+    notice.hidden = !text;
   }
 
-  function lock(text, inactive = false) {
+  function lock(text, inactive = false, tone = "status") {
     clearTimeout(state.timer);
     state.authenticated = false;
     if (inactive) state.active = false;
@@ -19,7 +22,7 @@
     $("demo-gate").hidden = false;
     $("demo-login").hidden = !state.active;
     $("demo-password").value = "";
-    message(text);
+    message(text, tone);
   }
 
   function canParse() {
@@ -80,7 +83,7 @@
       }
       return config;
     } catch (_) {
-      lock("시연 정보를 불러오지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.", true);
+      lock("시연 정보를 불러오지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.", true, "error");
       $("demo-config-retry").hidden = false;
       return {};
     }
@@ -104,16 +107,16 @@
       if (response.ok) {
         const payload = JSON.parse(text);
         if (payload.authenticated === true) unlock(payload.ends_at);
-        else lock("인증을 확인하지 못했어요. 다시 입력해 주세요.");
+        else lock("인증을 확인하지 못했어요. 다시 입력해 주세요.", false, "error");
       } else if (response.status === 401) {
-        lock("시연 비밀번호를 확인해 주세요.");
+        lock("시연 비밀번호를 확인해 주세요.", false, "error");
       } else if (!handleResponse(response.status, text)) {
         message(response.status === 429
           ? "비밀번호 확인 요청이 많아요. 잠시 후 다시 시도해 주세요."
-          : "시연을 시작하지 못했어요. 새로고침 후 다시 시도해 주세요.");
+          : "시연을 시작하지 못했어요. 새로고침 후 다시 시도해 주세요.", "error");
       }
     } catch (_) {
-      message("서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.");
+      message("서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.", "error");
     } finally {
       $("demo-password").value = "";
       button.disabled = false;
@@ -129,9 +132,9 @@
       });
       lock(response.ok
         ? "로그아웃했어요. 다시 이용하려면 비밀번호를 입력해 주세요."
-        : "서버에서 로그아웃을 완료하지 못했어요. 연결을 확인해 주세요.");
+        : "서버에서 로그아웃을 완료하지 못했어요. 연결을 확인해 주세요.", false, response.ok ? "status" : "error");
     } catch (_) {
-      lock("서버에서 로그아웃을 완료하지 못했어요. 연결을 확인해 주세요.");
+      lock("서버에서 로그아웃을 완료하지 못했어요. 연결을 확인해 주세요.", false, "error");
     } finally {
       $("demo-logout").disabled = false;
     }

@@ -46,30 +46,36 @@ class TestSettingsTabHoldsRealSettings(unittest.TestCase):
         self.assertNotIn("ACCENTS.map", SIDE_PANEL)
 
     def test_sections_are_ordered_by_how_often_they_matter(self) -> None:
-        order = ("AI <span", "칠판 <span", "문서 변환 <span", "앱 업데이트 <span", "문제 신고 <span")
+        order = (
+            "AI 사용·연결 <span", "미리보기 <span", 'title="도움말 및 문제 신고"',
+            "앱 관리 <span", 'title="한글 문서 변환 환경"', 'title="앱 업데이트"',
+        )
         positions = [SETTINGS_TAB.index(label) for label in order]
 
         self.assertEqual(sorted(positions), positions)
 
-    def test_ai_switch_key_and_recognition_share_the_first_section(self) -> None:
-        ai_section = SETTINGS_TAB.split("AI <span", 1)[1].split("칠판 <span", 1)[0]
+    def test_ai_preferences_stay_in_settings_and_session_recognition_does_not(self) -> None:
+        ai_section = SETTINGS_TAB.split("AI 사용·연결 <span", 1)[1].split('미리보기 <span', 1)[0]
 
-        self.assertIn("AI 전체 사용", ai_section)
+        self.assertIn("AI 기능 사용 허용", ai_section)
         self.assertIn("Gemini API 키", ai_section)
-        self.assertIn("onClick={onRecognizeSession}", ai_section)
-        self.assertIn("현재 자료 문제 인식", ai_section)
-        self.assertEqual(1, APP.count("onClick={onRecognizeSession}"))
+        self.assertNotIn("onRecognizeSession", SETTINGS_TAB)
+        self.assertNotIn("현재 자료 문제 인식", SETTINGS_TAB)
+        self.assertIn("aiConnectionLabel", ai_section)
 
     def test_saved_key_collapses_to_a_status_row(self) -> None:
         self.assertIn("const [keyEditorOpen, setKeyEditorOpen] = useState(false);", SIDE_PANEL)
-        self.assertIn("(!userSettings?.hasGeminiApiKey || keyEditorOpen) && (", SETTINGS_TAB)
-        self.assertIn("onClick={() => setKeyEditorOpen(true)}", SETTINGS_TAB)
-        self.assertIn("setKeyEditorOpen(false); }}", SETTINGS_TAB)
+        self.assertIn("{keyEditorOpen && (", SETTINGS_TAB)
+        self.assertIn("setKeySaveError(''); setKeyEditorOpen(true);", SETTINGS_TAB)
+        self.assertIn("void persistGeminiKeyDraft();", SETTINGS_TAB)
+        self.assertNotIn("!userSettings?.hasGeminiApiKey || keyEditorOpen", SETTINGS_TAB)
 
     def test_conversion_diagnostics_never_open_on_their_own(self) -> None:
         self.assertNotIn("setHangulDetailsExpanded(hangulDetailsOpen)", APP)
-        self.assertIn("const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);", SIDE_PANEL)
-        self.assertIn("aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}", SETTINGS_TAB)
+        self.assertNotIn("hangulDetailsExpanded", SIDE_PANEL)
+        self.assertIn('title="한글 문서 변환 환경"', SETTINGS_TAB)
+        self.assertIn('className="settings-environment-disclosure"', SETTINGS_TAB)
+        self.assertIn("<SidebarDisclosure", SETTINGS_TAB)
 
     def test_upload_method_moved_out_of_settings(self) -> None:
         self.assertNotIn("intent-control", SETTINGS_TAB)
@@ -97,24 +103,26 @@ class TestBoardColour(unittest.TestCase):
 
 
 class TestPlacementOwnsSessionLayout(unittest.TestCase):
-    def test_layout_is_a_collapsible_placement_section(self) -> None:
+    def test_common_layout_controls_stay_visible_and_secondary_rules_are_collapsible(self) -> None:
         self.assertIn("<BoardLayoutControls", PLACEMENT_TAB)
         self.assertNotIn("<BoardLayoutControls", ITEM_TAB)
-        self.assertIn("open={boardLayoutOpen || placementScope === 'all'}", PLACEMENT_TAB)
-        self.assertIn("<strong>전체 레이아웃</strong>", LAYOUT_CONTROLS)
-        self.assertIn("aria-expanded={open}", LAYOUT_CONTROLS)
-        self.assertIn("<small>{summary}</small>", LAYOUT_CONTROLS)
+        self.assertIn('className="row-control layout-gap-mode-control"', LAYOUT_CONTROLS)
+        self.assertIn('<SidebarDisclosure title="배치 규칙 및 개별 여백" summary={summary}', LAYOUT_CONTROLS)
+        self.assertLess(LAYOUT_CONTROLS.index('className="row-control layout-gap-mode-control"'), LAYOUT_CONTROLS.index("<SidebarDisclosure"))
+        self.assertNotIn("open={boardLayoutOpen", PLACEMENT_TAB)
 
     def test_permanently_disabled_column_buttons_are_gone(self) -> None:
         self.assertNotIn("[1,2,3].map", LAYOUT_CONTROLS)
-        self.assertIn("1열로 되돌리기", LAYOUT_CONTROLS)
+        self.assertIn("제작 가능한 1열로 복원", LAYOUT_CONTROLS)
+        self.assertNotIn("side-by-side", PLACEMENT_TAB)
+        self.assertNotIn("setBoardColumns?.(2)", PLACEMENT_TAB)
 
     def test_compact_gap_warning_only_shows_in_compact_mode(self) -> None:
         self.assertIn("gapMode === LAYOUT_GAP_MODE_COMPACT ? (", LAYOUT_CONTROLS)
         self.assertIn('className="layout-gap-hint"', LAYOUT_CONTROLS)
 
     def test_publish_guard_points_at_the_new_home(self) -> None:
-        self.assertIn("배치 탭의 전체 레이아웃에서 1열로 되돌린 뒤", APP)
+        self.assertIn("배치 탭에서 제작 가능한 1열로 복원을 누른 뒤", APP)
         self.assertNotIn("설정에서 1열로 바꾼 뒤", APP)
 
 
@@ -135,7 +143,10 @@ class TestRememberedPanelState(unittest.TestCase):
             SIDE_PANEL,
         )
         self.assertIn("useStoredPreference(ADVANCED_SETTINGS_OPEN_KEY, false, isStoredBoolean)", SIDE_PANEL)
-        self.assertIn("useStoredPreference(BOARD_LAYOUT_OPEN_KEY, false, isStoredBoolean)", SIDE_PANEL)
+        self.assertNotIn("boardLayoutOpen", SIDE_PANEL)
+        disclosure = component("SidebarDisclosure")
+        self.assertIn("<details", disclosure)
+        self.assertNotIn("open={", disclosure)
 
     def test_storage_failures_never_break_rendering(self) -> None:
         for name in ("readStoredPreference", "writeStoredPreference"):

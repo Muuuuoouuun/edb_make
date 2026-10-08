@@ -807,7 +807,7 @@ def clean_problem_image_transparency(
 
     rgba = image.convert("RGBA")
     total_pixels = max(1, rgba.width * rgba.height)
-    transparent_pixels = 0
+    transparent_pixels = rgba.getchannel("A").histogram()[0]
     partial_pixels = 0
     background_color: tuple[int, int, int] | None = None
     background_luminance: float | None = None
@@ -816,6 +816,7 @@ def clean_problem_image_transparency(
 
     if transparent_background and rgba.width > 0 and rgba.height > 0:
         background_color = _estimate_border_background(rgba)
+    if background_color is not None:
         background_luminance = _luminance(background_color)
         background_kind = "dark" if background_luminance <= 128 else "light"
         if np is not None:
@@ -827,6 +828,7 @@ def clean_problem_image_transparency(
             )
             alpha_backend = "numpy"
         else:
+            transparent_pixels = 0
             pixels = []
             image_pixels = rgba.get_flattened_data() if hasattr(rgba, "get_flattened_data") else rgba.getdata()
             for r, g, b, a in image_pixels:
@@ -939,7 +941,7 @@ def _remove_background_with_numpy(
     return Image.fromarray(out, mode="RGBA"), transparent_pixels, partial_pixels
 
 
-def _estimate_border_background(image: Any) -> tuple[int, int, int]:
+def _estimate_border_background(image: Any) -> tuple[int, int, int] | None:
     width, height = image.size
     border = max(2, min(24, int(round(min(width, height) * 0.035))))
     step = max(1, int(round(min(width, height) / 220)))
@@ -970,7 +972,9 @@ def _estimate_border_background(image: Any) -> tuple[int, int, int]:
             if a >= 180:
                 samples.append((r, g, b))
     if not samples:
-        return (255, 255, 255)
+        # A transparent border supplies no paper/board background evidence.
+        # Assuming white here erases white chalk in an already clean cutout.
+        return None
     return _median_rgb(samples)
 
 

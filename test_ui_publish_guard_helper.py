@@ -6,6 +6,7 @@ from pathlib import Path
 
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
 from placement_engine import place_problems
+from test_ui_image_record_geometry import GEOMETRY_SETUP
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -16,6 +17,60 @@ def run_node(script: str) -> None:
 
 
 class TestUiPublishGuardHelper(unittest.TestCase):
+    def test_native_geometry_mixed_flow_passes_preflight_with_requested_three_x_scale(self) -> None:
+        run_node(GEOMETRY_SETUP + r"""
+        const { findBoardPlacementOverlaps, simulatedBoardPlacements, resolvedBoardPlacements } = require('./ui_prototype/publish_guard.js');
+        const long = problemFor('v1', 'long');
+        const short = { id: 'short', actualHeightPages: 0.72, inputIntent: 'single-problem', placementScaleRatio: 3,
+          imageRecordGeometry: { baseDisplayWidthPx: 540, maxDisplayWidthPx: 1142, canvasPageHeightPx: 590,
+            baseHeightPages: 0.7322033898305085, reservedHeightPages: 0.72, cropFormat: 'v1' } };
+        const items = sandbox.reflowItemsForBoardOrder([long, short].map(sandbox.mapProblemToItem), 1.2, 1, 'classin-grid');
+        assert.equal(sandbox.deriveBoardPreviewEstimate(items, 'long', 1.2).classinPageCount, 22);
+        assert.equal(findBoardPlacementOverlaps(items, { resolvedPlacements: true }).length, 0,
+          'the real 22-page flow must not be blocked by recomputing raw height times requested scale');
+        assert.equal(findBoardPlacementOverlaps(items).length, 0);
+        const simulated = simulatedBoardPlacements(items);
+        const resolved = resolvedBoardPlacements(items);
+        for (const placements of [simulated, resolved]) {
+          near(placements[0].renderedBottomYPages, items[0].renderedBottomYPages, 'guard native long record bottom');
+          near(placements[1].startYPages, items[1].startYPages, 'guard native next record cursor');
+          near(placements[1].renderedBottomYPages, items[1].renderedBottomYPages, 'guard native short record bottom');
+          assert.equal(placements[0].requestedScale, 3);
+        }
+        """)
+
+    def test_native_geometry_does_not_hide_a_real_placement_overlap(self) -> None:
+        run_node(GEOMETRY_SETUP + r"""
+        const { findBoardPlacementOverlaps } = require('./ui_prototype/publish_guard.js');
+        const long = { ...problemFor('v1', 'long'), startYPages: 0, snappedNextStartYPages: 24.228814 };
+        const next = { id: 'next', actualHeightPages: 0.8, placementScaleRatio: 1,
+          startYPages: 24, snappedNextStartYPages: 25.2 };
+        const issues = findBoardPlacementOverlaps([long, next], { resolvedPlacements: true });
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].problemId, 'long');
+        assert.equal(issues[0].nextProblemId, 'next');
+        near(issues[0].overlapPages, 0.194915, 'real width-capped overlap');
+        """)
+
+    def test_guard_uses_authoritative_geometry_over_stale_heights_and_retains_legacy_checks(self) -> None:
+        run_node(GEOMETRY_SETUP + r"""
+        const { findBoardPlacementOverlaps } = require('./ui_prototype/publish_guard.js');
+        for (const field of ['imageRecordGeometry', 'image_record_geometry']) {
+          const long = { ...problemFor('v1', 'long'), actualHeightPages: 60,
+            startYPages: 0, snappedNextStartYPages: 24.228814 };
+          const geometry = long.imageRecordGeometry;
+          delete long.imageRecordGeometry;
+          long[field] = geometry;
+          const next = { id: 'next', actualHeightPages: 0.8, placementScaleRatio: 1,
+            startYPages: 24.228814, snappedNextStartYPages: 25.428814 };
+          assert.equal(findBoardPlacementOverlaps([long, next], { resolvedPlacements: true }).length, 0,
+            'stale extraction height cannot override current native image geometry');
+          delete long[field];
+          assert.equal(findBoardPlacementOverlaps([long, next], { resolvedPlacements: true }).length, 1,
+            'legacy placement checks still reject a real uncapped overlap when geometry is absent');
+        }
+        """)
+
     def test_one_problem_flow_uses_same_absolute_12_grid_across_layers(self) -> None:
         heights = [0.8, 1.43, 0.8]
         expected_starts = [0.0, 1.2, 3.6]

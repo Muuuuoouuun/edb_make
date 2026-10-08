@@ -458,7 +458,8 @@ def auto_upscale_image(
             work_dir = Path(raw_tmp)
             source_path = work_dir / "source.png"
             output_path = work_dir / "output.png"
-            source_mode = "RGBA" if "A" in image.getbands() else "RGB"
+            source_has_alpha = "A" in image.getbands() or "transparency" in image.info
+            source_mode = "RGBA" if source_has_alpha else "RGB"
             image.convert(source_mode).save(source_path, format="PNG")
             command = [
                 str(resolved.binary_path),
@@ -517,13 +518,20 @@ def auto_upscale_image(
                         cooldown_remaining_ms=cooldown_ms,
                     )
                 with Image.open(output_path) as loaded:
+                    output_has_alpha = "A" in loaded.getbands() or "transparency" in loaded.info
                     output_mode = (
                         "RGBA"
-                        if "A" in loaded.getbands() or "A" in image.getbands()
+                        if output_has_alpha or source_has_alpha
                         else "RGB"
                     )
                     output = loaded.convert(output_mode).copy()
-                if output.width < image.width or output.width * output.height > max_output_pixels:
+                expected_height = max(1, round(image.height * output.width / image.width))
+                if (
+                    output.width < image.width
+                    or output.height < image.height
+                    or abs(output.height - expected_height) > 1
+                    or output.width * output.height > max_output_pixels
+                ):
                     cooldown_ms = _record_failure(resolved, "invalid_output_size")
                     return _unchanged_result(
                         image,
@@ -533,6 +541,11 @@ def auto_upscale_image(
                         installation=resolved,
                         cooldown_remaining_ms=cooldown_ms,
                     )
+                if source_has_alpha and not output_has_alpha:
+                    # Some binaries return RGB even for an RGBA input. Keep
+                    # the source cutout instead of making its background opaque.
+                    alpha = image.convert("RGBA").getchannel("A")
+                    output.putalpha(alpha.resize(output.size, Image.Resampling.LANCZOS))
                 _record_success(resolved)
     except (OSError, ValueError) as exc:
         reason = f"runtime_error:{type(exc).__name__}"

@@ -370,7 +370,7 @@ def export_source_to_mvp_edb(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    template = LayoutTemplate(name="mvp-default")
+    template = LayoutTemplate(name="mvp-default", board_page_count=page_count_hint)
     merged_ai_fallback_settings = _normalize_ai_fallback_settings(ai_fallback_settings, **extra_options)
     pages, ai_fallback_stats = _prepare_pages_with_assets(
         source,
@@ -396,8 +396,16 @@ def export_source_to_mvp_edb(
     (out_dir / "placements.json").write_text(json.dumps(placement_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     records = _build_records_for_pages(pages, placements, template=template, page_count_hint=page_count_hint)
-    has_image_records = any(page.blocks and any(block.block_type == BlockType.IMAGE for block in page.blocks) for page in pages)
-    payload = build_edb(records, header_flag=4 if has_image_records else 3)
+    has_image_records = any(
+        not block.text or block.block_type in {BlockType.IMAGE, BlockType.DIAGRAM, BlockType.TABLE}
+        for page in pages
+        for block in page.blocks
+    )
+    payload = build_edb(
+        records,
+        header_flag=4 if has_image_records else 3,
+        page_count_hint=page_count_hint,
+    )
     output_edb = out_dir / "output_mvp.edb"
     write_edb(output_edb, payload)
 

@@ -24,7 +24,7 @@
       <p class="eyebrow">행사 전용 시연</p>
       <h1 id="demo-title">문제 파서를 체험해 보세요</h1>
       <p class="lead">안내받은 비밀번호를 한 번 입력하면 시연 기간 동안 반복해서 이용할 수 있어요.</p>
-      <p class="notice" id="demo-message" role="status">시연 정보를 확인하고 있어요.</p>
+      <p class="hint" id="demo-message" role="status">시연 정보를 확인하고 있어요.</p>
       <form class="demo-login" id="demo-login" hidden>
         <label for="demo-password">시연 비밀번호</label>
         <input id="demo-password" name="password" type="password" autocomplete="current-password" required maxlength="256">
@@ -95,17 +95,24 @@
       </div>
 
       <div class="result-body" id="result-body">
-        <div class="pages" id="pages" aria-label="페이지 미리보기"></div>
-        <div class="problems-panel">
+        <section class="problems-panel" id="found-problems" aria-labelledby="problems-title" tabindex="-1">
           <div class="problems-head">
-            <span class="problems-head__label">찾은 문항</span>
+            <h3 class="problems-head__label" id="problems-title">찾은 문항</h3>
+            <a class="result-jump" href="#source-pages">원본 페이지로 이동 ↓</a>
             <div class="preview-toggle" id="preview-toggle" role="group" aria-label="문항 보기 방식" hidden>
               <button type="button" data-mode="raw" aria-pressed="true">원본</button>
               <button type="button" data-mode="board" aria-pressed="false">칠판용</button>
             </div>
           </div>
           <ol class="problems" id="problems" aria-label="찾은 문항"></ol>
-        </div>
+        </section>
+        <section class="source-panel" id="source-pages" aria-labelledby="source-title" tabindex="-1">
+          <div class="problems-head">
+            <h3 class="problems-head__label" id="source-title">원본 페이지</h3>
+            <a class="result-jump" href="#found-problems">문항으로 돌아가기 ↑</a>
+          </div>
+          <div class="pages" id="pages" aria-label="페이지 미리보기"></div>
+        </section>
       </div>
 
       <div class="result-foot">

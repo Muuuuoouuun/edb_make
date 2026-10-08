@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import unittest
 from pathlib import Path
 
@@ -172,7 +173,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
-        self.assertIn("publish_guard.js?v=preflight-layout-gap-20260901", html)
+        guard_digest = hashlib.sha256((PROJECT_ROOT / "ui_prototype" / "publish_guard.js").read_bytes()).hexdigest()
+        self.assertEqual(1, html.count(f'publish_guard.js?v=publish-guard-{guard_digest}'))
 
 
 if __name__ == "__main__":

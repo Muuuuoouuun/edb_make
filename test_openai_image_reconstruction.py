@@ -664,6 +664,51 @@ class TestImageReconstructionMutation(unittest.TestCase):
         self.assertEqual(cleaned.getpixel((42, 30))[3], 255)
         self.assertLess(cleaned.getpixel((80, 60))[3], 255)
 
+    def test_clean_transparency_preserves_white_ink_with_transparent_border(self):
+        image = Image.new("RGBA", (100, 60), (0, 0, 0, 0))
+        for x in range(30, 70):
+            for y in range(20, 40):
+                image.putpixel((x, y), (248, 248, 246, 255))
+
+        for numpy_backend in (image_backend.np, None):
+            with self.subTest(numpy=numpy_backend is not None):
+                with patch.object(image_backend, "np", numpy_backend):
+                    cleaned, stats = clean_problem_image_transparency(
+                        image, remove_corner_page_artifacts=False,
+                    )
+
+                self.assertEqual(image.tobytes(), cleaned.tobytes())
+                self.assertEqual("none", stats["background_kind"])
+                self.assertGreater(stats["transparent_ratio"], 0)
+
+    def test_python_alpha_cleanup_counts_existing_transparency_once(self):
+        image = Image.new("RGBA", (10, 10), (255, 255, 255, 255))
+        image.putpixel((0, 0), (0, 0, 0, 0))
+        with patch.object(image_backend, "np", None):
+            cleaned, stats = clean_problem_image_transparency(
+                image, remove_corner_page_artifacts=False,
+            )
+
+        self.assertEqual(cleaned.getchannel("A").histogram()[0], stats["transparent_pixels"])
+        self.assertEqual(1.0, stats["transparent_ratio"])
+
+    def test_content_safe_upscale_preserves_existing_white_chalk_cutout(self):
+        with TemporaryDirectory() as raw_tmp:
+            source_path = Path(raw_tmp) / "source.png"
+            output_path = Path(raw_tmp) / "output.png"
+            source = Image.new("RGBA", (100, 60), (0, 0, 0, 0))
+            for x in range(30, 70):
+                for y in range(20, 40):
+                    source.putpixel((x, y), (248, 248, 246, 255))
+            source.save(source_path)
+
+            build_content_safe_upscale(source_path, output_path, sharpen=False)
+
+            with Image.open(output_path) as output:
+                self.assertEqual((200, 120), output.size)
+                self.assertEqual(255, output.getpixel((100, 60))[3])
+                self.assertEqual(0, output.getpixel((0, 0))[3])
+
     def test_clean_transparency_removes_lower_right_pdf_page_badge(self):
         image = Image.new("RGBA", (120, 90), (18, 22, 26, 255))
         pixels = image.load()

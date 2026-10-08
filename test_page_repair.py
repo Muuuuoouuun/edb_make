@@ -1,5 +1,7 @@
 import dataclasses
+import copy
 import json
+import tempfile
 import unittest
 from unittest.mock import patch
 import base64
@@ -10,6 +12,7 @@ from PIL import Image
 import page_repair
 from page_repair import build_ai_fallback_config, repair_page_model
 from preprocess import PreparedPage
+from pipeline_cache import PipelineCache
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject
 
 
@@ -54,6 +57,67 @@ class TestPageRepairConfig(unittest.TestCase):
             ],
         )
         return prepared_page, page
+
+    def test_changed_repair_is_cached_under_the_unmodified_input_page(self):
+        prepared_page, page = self._two_numbered_blocks_page()
+        original_page = copy.deepcopy(page)
+        config = build_ai_fallback_config(mode="force", model="test-model")
+        payload = {
+            "problem_start_block_ids": ["block-0"],
+            "choice_block_ids": ["block-1"],
+            "figure_block_ids": [],
+            "display_titles": [{"block_id": "block-0", "title": "교정된 제목"}],
+            "notes": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache = PipelineCache(temp_dir)
+            with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+                with patch.object(
+                    page_repair,
+                    "_request_ai_repair_with_model_fallback",
+                    return_value=(payload, "response-1", "test-model", [], {}),
+                ) as request:
+                    first = repair_page_model(
+                        prepared_page, page, ocr_mode="gemini", config=config, cache=cache,
+                    )
+                    second = repair_page_model(
+                        prepared_page, original_page, ocr_mode="gemini", config=config, cache=cache,
+                    )
+            self.assertEqual(1, request.call_count)
+            self.assertEqual("applied", first.metadata["ai_fallback"]["status"])
+            self.assertEqual("cache_hit", second.metadata["ai_fallback"]["status"])
+            self.assertTrue(second.metadata["ai_fallback"]["changed"])
+            self.assertEqual("교정된 제목", second.problems[0].title)
+
+    def test_malformed_provider_field_shapes_preserve_the_local_baseline(self):
+        malformed_fields = [
+            ("problem_start_block_ids", "block-0"),
+            ("problem_start_block_ids", [["block-0"]]),
+            ("choice_block_ids", [None]),
+            ("figure_block_ids", [{"block_id": "block-1"}]),
+            ("display_titles", 5),
+            ("notes", 5),
+        ]
+        for field, value in malformed_fields:
+            with self.subTest(field=field, value=value):
+                prepared_page, page = self._two_numbered_blocks_page()
+                payload = {
+                    "problem_start_block_ids": ["block-0"],
+                    "choice_block_ids": [], "figure_block_ids": [],
+                    "display_titles": [], "notes": [], field: value,
+                }
+                with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+                    with patch.object(
+                        page_repair, "_request_ai_repair_with_model_fallback",
+                        return_value=(payload, "response-1", "test-model", [], {}),
+                    ):
+                        repaired = repair_page_model(
+                            prepared_page, page, ocr_mode="gemini",
+                            config=build_ai_fallback_config(mode="force"), cache=_EmptyCache(),
+                        )
+                self.assertEqual("invalid_response", repaired.metadata["ai_fallback"]["status"])
+                self.assertFalse(repaired.metadata["ai_fallback"]["applied"])
+                self.assertEqual(2, len(repaired.problems))
 
     def test_max_tokens_propagates_to_gemini_payload(self):
         captured = {}

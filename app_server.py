@@ -267,6 +267,10 @@ def build_ui_session(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "build_ui_session", *args, **kwargs)
 
 
+def annotate_session_image_record_geometry(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_call("build_problem_board_edb", "annotate_session_image_record_geometry", *args, **kwargs)
+
+
 def estimate_height_pages(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "estimate_height_pages", *args, **kwargs)
 
@@ -2480,10 +2484,12 @@ def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dic
     record_offset = version_end + 17
     current = record_offset
     actual_records = 0
-    while current + 4 <= len(inner):
+    while current < len(inner):
+        if current + 4 > len(inner):
+            raise ValueError("EDB has a truncated record size at the end of its payload")
         size = struct.unpack_from(">I", inner, current)[0]
         if size < 5:
-            break
+            raise ValueError(f"EDB record {actual_records + 1} has invalid size {size}")
         max_end = current + size
         if max_end > len(inner) + 1:
             raise ValueError("EDB record extends past payload")
@@ -2494,6 +2500,10 @@ def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dic
     if actual_records < expected_min_records:
         raise ValueError(
             f"EDB contains {actual_records} records, expected at least {expected_min_records}"
+        )
+    if actual_records != record_count_hint:
+        raise ValueError(
+            f"EDB record count {actual_records} does not match header hint {record_count_hint}"
         )
     return {
         "outerSize": len(data),
@@ -4288,7 +4298,10 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         add_path(value)
 
     for problem in session.get("problems", []):
-        for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
+        for key in (
+            "imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath",
+            "cropBaseImagePath", "crop_base_image_path", "cropBaseBoardRenderPath", "crop_base_board_render_path",
+        ):
             add_path(problem.get(key))
 
     for page in session.get("pages", []):
@@ -4632,6 +4645,7 @@ def _template_from_session(session: dict[str, Any]) -> LayoutTemplate:
 
 def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
     rewritten = json.loads(json.dumps(session))
+    annotate_session_image_record_geometry(rewritten)
     _backfill_passage_source_segments(
         rewritten,
         pages_json_pages=_session_pages_json_pages(session),
@@ -5230,6 +5244,8 @@ def _copy_session_metadata_aliases_overwrite(
     target: dict[str, Any],
     source: dict[str, Any],
     aliases: tuple[str, ...],
+    *,
+    include_empty: bool = False,
 ) -> None:
     source_metadata = source.get("metadata")
     if not isinstance(source_metadata, dict):
@@ -5238,14 +5254,14 @@ def _copy_session_metadata_aliases_overwrite(
     found = False
     for key in aliases:
         candidate = source.get(key)
-        if _has_session_metadata_value(candidate):
+        if _has_session_metadata_value(candidate) or (include_empty and key in source):
             value = candidate
             found = True
             break
     if not found:
         for key in aliases:
             candidate = source_metadata.get(key)
-            if _has_session_metadata_value(candidate):
+            if _has_session_metadata_value(candidate) or (include_empty and key in source_metadata):
                 value = candidate
                 found = True
                 break
@@ -5256,14 +5272,50 @@ def _copy_session_metadata_aliases_overwrite(
 
 
 def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
+    requested_scale = _coerce_placement_scale_ratio(source)
+    if requested_scale is not None:
+        # Keep the user's requested slider value across publishing. The image
+        # record and layout diagnostics carry the effective, width-limited scale.
+        target["placementScaleRatio"] = requested_scale
+        target["placement_scale_ratio"] = requested_scale
     for aliases in (
         ("inputIntent", "input_intent"),
         ("placementMode", "placement_mode"),
         ("forceFullPageBounds", "force_full_page_bounds"),
         ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"),
         ("placementGapAfterPages", "placement_gap_after_pages"),
+        ("placementAutoFitDisabled", "placement_auto_fit_disabled"),
+        ("placementXEdited", "placement_x_edited"),
+        ("boardColumnCount", "board_column_count", "boardColumns", "board_columns"),
+        ("boardColumnIndex", "board_column_index"),
     ):
         _copy_session_metadata_aliases_overwrite(target, source, aliases)
+    for aliases in (
+        ("forceFullPageBounds", "force_full_page_bounds"),
+        ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"),
+        ("placementAutoFitDisabled", "placement_auto_fit_disabled"),
+        ("placementXEdited", "placement_x_edited"),
+    ):
+        key = next((key for key in aliases if key in target), None)
+        if key is not None:
+            value = _coerce_bool(target[key])
+            for alias in aliases:
+                target[alias] = value
+    # A cleared magnetic column is an explicit editor choice. Preserve null
+    # as well as zero instead of reviving a previous column after publishing.
+    _copy_session_metadata_aliases_overwrite(
+        target, source, ("placementMagnetColumnIndex", "placement_magnet_column_index"), include_empty=True,
+    )
+    # Publishing re-renders the existing crop. Retain its undo/edit context
+    # without replacing the newly measured record positions or image geometry.
+    for aliases in (
+        ("manualCrop", "manual_crop"),
+        ("cropBaseBbox", "crop_base_bbox"),
+        ("cropBaseImagePath", "crop_base_image_path"),
+        ("cropBaseBoardRenderPath", "crop_base_board_render_path"),
+        ("cropBasePreserveMediaRegions", "crop_base_preserve_media_regions"),
+    ):
+        _copy_session_metadata_aliases_overwrite(target, source, aliases, include_empty=True)
 
 
 def _session_actionable_problem_ids(
@@ -5733,6 +5785,7 @@ def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float
 
 
 def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
+    problem_ids = _coerce_problem_ids(problem_ids)
     if len(problem_ids) < 2:
         raise ValueError("merge requires at least 2 problems")
     targets: list[tuple[int, dict[str, Any]]] = []
@@ -5938,12 +5991,18 @@ def _coerce_crop_box(raw_box: Any, *, image_width: int, image_height: int) -> Bo
             height = float(bottom) - top
     except (TypeError, ValueError):
         raise ValueError("cropBox must include numeric left/top/width/height") from None
+    if not all(math.isfinite(value) for value in (left, top, width, height)):
+        raise ValueError("cropBox coordinates must be finite")
     if width <= 0 or height <= 0:
         raise ValueError("cropBox is empty")
-    left = max(0.0, min(float(image_width) - 1.0, left))
-    top = max(0.0, min(float(image_height) - 1.0, top))
-    right_edge = max(left + 1.0, min(float(image_width), left + width))
-    bottom_edge = max(top + 1.0, min(float(image_height), top + height))
+    # Intersect the requested box with the page. Clamping the origin before
+    # calculating its opposite edge would shift an out-of-page selection.
+    right_edge = min(float(image_width), left + width)
+    bottom_edge = min(float(image_height), top + height)
+    left = max(0.0, left)
+    top = max(0.0, top)
+    if right_edge <= left or bottom_edge <= top:
+        raise ValueError("cropBox is outside the source page")
     return Box(left=left, top=top, width=right_edge - left, height=bottom_edge - top)
 
 
@@ -9445,6 +9504,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             session,
             ("layoutGapMode", "layout_gap_mode"),
         )
+        _copy_session_metadata_aliases_overwrite(
+            new_session,
+            session,
+            ("boardColumns", "board_columns"),
+        )
         new_session["crop_format"] = crop_format
         # publish only re-renders records; page-level review metadata
         # (sourceImageUri, dimensions, riskFlags) is still meaningful for the
@@ -9798,7 +9862,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_split(session, problem_id, split_ratio)
             elif action == "merge":
                 ids_raw = payload.get("problemIds") or payload.get("problem_ids") or []
-                problem_ids = [str(pid) for pid in ids_raw if pid]
+                problem_ids = _coerce_problem_ids(ids_raw)
                 new_session = _mutate_merge(session, problem_ids)
             elif action in {"crop", "manual-crop", "manual_crop"}:
                 problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
@@ -10659,9 +10723,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if content_length > MAX_JSON_BODY_BYTES:
             raise RequestPayloadTooLarge(content_length, MAX_JSON_BODY_BYTES)
         raw_body = self.rfile.read(content_length) if content_length else b"{}"
+        if content_length and len(raw_body) != content_length:
+            raise json.JSONDecodeError("request body is incomplete", "", 0)
         if not raw_body:
             return {}
-        return json.loads(raw_body.decode("utf-8"))
+        try:
+            text_body = raw_body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise json.JSONDecodeError("request body must be UTF-8", "", 0) from exc
+        payload = json.loads(text_body)
+        if not isinstance(payload, dict):
+            raise json.JSONDecodeError("request body must be a JSON object", text_body, 0)
+        return payload
 
     def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
         response_payload = payload
@@ -10900,6 +10973,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         export_staging_dir: Path | None = None
         export_final_dir: Path | None = None
         export_working_dir: Path | None = None
+        export_cleanup_dir: Path | None = None
         try:
             payload = self._read_json_body()
             preview_only = _coerce_bool(
@@ -10926,6 +11000,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             source_paths = self._resolve_source_paths(payload, session=base_session)
             if preview_only:
                 output_dir = self._resolve_preview_output_dir(payload, source_paths)
+                # Claim only this request's fresh directory before tracking it
+                # for cleanup; never remove an already-existing preview.
+                output_dir.mkdir(parents=True, exist_ok=False)
+                export_cleanup_dir = output_dir
             else:
                 export_working_dir = self._resolve_output_dir(payload, source_paths)
                 generation_name = sanitize_output_dir_name(
@@ -10935,6 +11013,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 export_staging_dir = export_working_dir / ".export-staging" / generation_name
                 export_final_dir = export_working_dir / "exports" / generation_name
                 export_staging_dir.mkdir(parents=True, exist_ok=False)
+                export_cleanup_dir = export_staging_dir
                 output_dir = export_staging_dir
             export_mode = str(payload.get("exportMode") or payload.get("export_mode") or payload.get("layoutMode") or "question").lower()
             input_intent = _extract_input_intent(payload)
@@ -11012,12 +11091,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["ai_enabled"] = ai_enabled
                 result["aiEnabled"] = ai_enabled
         except RequestPayloadTooLarge:
-            if export_staging_dir is not None:
-                _discard_staged_publish(export_staging_dir)
+            if export_cleanup_dir is not None:
+                _discard_staged_publish(export_cleanup_dir)
             raise
         except Exception as exc:
-            if export_staging_dir is not None:
-                _discard_staged_publish(export_staging_dir)
+            if export_cleanup_dir is not None:
+                _discard_staged_publish(export_cleanup_dir)
             self._send_json(_export_error_payload(exc), status=HTTPStatus.BAD_REQUEST)
             return
 
@@ -11040,8 +11119,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["edb_parts"] = normalized_parts
                 result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
-                if export_staging_dir is not None:
-                    _discard_staged_publish(export_staging_dir)
+                if export_cleanup_dir is not None:
+                    _discard_staged_publish(export_cleanup_dir)
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
         elif edb_path:
@@ -11058,8 +11137,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 result["edb_parts"] = normalized_parts
                 result["edb_paths"] = [Path(str(part["edbPath"])) for part in normalized_parts]
             except Exception as exc:
-                if export_staging_dir is not None:
-                    _discard_staged_publish(export_staging_dir)
+                if export_cleanup_dir is not None:
+                    _discard_staged_publish(export_cleanup_dir)
                 self._send_json({"ok": False, "error": f"EDB validation failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
         if export_staging_dir is not None and export_final_dir is not None:

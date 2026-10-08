@@ -593,12 +593,8 @@ def repair_page_model(
         repair_payload,
         baseline.blocks,
     )
-    repaired = _apply_repair_payload(
-        baseline,
-        repair_payload,
-        trigger_reasons=trigger_reasons,
-    )
-    repaired = group_problem_units(replace(repaired, problems=[]))
+    # Applying the payload changes block types and display titles in place.
+    # Cache against the input that future recognition runs will reproduce.
     pipeline_cache.save_ai_repair(
         page=baseline,
         provider=provider_key,
@@ -607,6 +603,12 @@ def repair_page_model(
         repair_payload=repair_payload,
         response_id=response_id,
     )
+    repaired = _apply_repair_payload(
+        baseline,
+        repair_payload,
+        trigger_reasons=trigger_reasons,
+    )
+    repaired = group_problem_units(replace(repaired, problems=[]))
 
     repaired.metadata["difficulty_profile"] = baseline.metadata.get("difficulty_profile", {})
     repaired.metadata["route_decision"] = baseline.metadata.get("route_decision", {})
@@ -1261,6 +1263,25 @@ def _post_json(
 
 
 def _validate_repair_payload(payload: dict[str, Any], blocks: list[ContentBlock]) -> str | None:
+    if not isinstance(payload, dict):
+        return "repair payload must be an object"
+    for key in ("problem_start_block_ids", "choice_block_ids", "figure_block_ids", "notes"):
+        value = payload.get(key)
+        if value is not None and (
+            not isinstance(value, list) or any(not isinstance(item, str) for item in value)
+        ):
+            return f"{key} must be an array of strings"
+    display_titles = payload.get("display_titles")
+    if display_titles is not None and (
+        not isinstance(display_titles, list)
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("block_id"), str)
+            or not isinstance(item.get("title"), str)
+            for item in display_titles
+        )
+    ):
+        return "display_titles must be an array of block_id/title objects"
     known_ids = {block.block_id for block in blocks}
     start_ids = list(payload.get("problem_start_block_ids") or [])
     choice_ids = list(payload.get("choice_block_ids") or [])

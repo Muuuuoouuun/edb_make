@@ -179,7 +179,15 @@ class TestTextContrast(unittest.TestCase):
         self.dark_tokens = dark_theme_tokens()
 
     def _text_colour_tokens(self) -> set[str]:
-        return set(re.findall(r"color:\s*var\((--[a-z0-9-]+)\)\s*(?:!important)?;", self.css))
+        return set(re.findall(r"(?<![-\w])color:\s*var\((--[a-z0-9-]+)\)\s*(?:!important)?;", self.css))
+
+    def test_text_colour_audit_does_not_mistake_borders_or_form_accents_for_text(self) -> None:
+        self.css = """
+        .outline { border-color: var(--line); accent-color: var(--accent); }
+        .readable { color: var(--ink-2); }
+        .unreadable { color: var(--muted-2) !important; }
+        """
+        self.assertEqual({"--ink-2", "--muted-2"}, self._text_colour_tokens())
 
     def _sweep(self, palette, text_tokens, surface_tokens, label):
         failures = []
@@ -232,7 +240,7 @@ class TestTextContrast(unittest.TestCase):
         leaked = []
         for selector, body in rules:
             for token in DECORATIVE_COLOR_TOKENS:
-                if re.search(rf"color:\s*var\({token}\)\s*(?:!important)?;", body):
+                if re.search(rf"(?<![-\w])color:\s*var\({token}\)\s*(?:!important)?;", body):
                     if not re.search(r":hover|:disabled|::before|::after|\.disabled|\[open\]|-move\b", selector):
                         leaked.append(f"{token} in {selector.strip()[:70]}")
 
@@ -392,13 +400,16 @@ class TestLayerScale(unittest.TestCase):
 
 
 class TestBreakpointSet(unittest.TestCase):
-    CANONICAL_WIDTHS = {1280, 1100, 920, 700, 420}
+    CANONICAL_WIDTHS = {1280, 1100, 920, 900, 700, 420}
 
     def test_width_queries_use_the_canonical_breakpoints(self) -> None:
         css = board_style_block()
-        widths = {int(value) for value in re.findall(r"max-width:\s*(\d+)px\)", css)}
+        # Viewport breakpoints share a scale; component container queries use
+        # the component's available space and are independent of that scale.
+        media_queries = "\n".join(re.findall(r"@media\s+([^{}]+)\{", css))
+        widths = {int(value) for value in re.findall(r"max-width:\s*(\d+)px\)", media_queries)}
         widths |= {
-            int(value) - 1 for value in re.findall(r"min-width:\s*(\d+)px\)", css)
+            int(value) - 1 for value in re.findall(r"min-width:\s*(\d+)px\)", media_queries)
         }
 
         self.assertEqual(
@@ -548,3 +559,93 @@ class TestFilledSurfaceContrast(unittest.TestCase):
             leaked,
             "an --ink fill must label itself with var(--on-ink), which inverts with the theme",
         )
+
+    def test_disabled_primary_button_keeps_label_contrast_when_hovered(self) -> None:
+        """Exercise the base button cascade, where a hover fill can inherit
+        an incompatible label from .primary even when every rule looks sound
+        in isolation. Rendered viewport checks remain browser QA's job."""
+
+        css = re.sub(r"/\*.*?\*/", "", self.css, flags=re.DOTALL)
+        rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+        for hovered in (False, True):
+            matched = []
+            for order, (selectors, body) in enumerate(rules):
+                for selector in selectors.split(","):
+                    selector = selector.strip()
+                    if not re.fullmatch(r"(?:button)?(?:\.[\w-]+|:(?:disabled|hover|not\(:disabled\)))+", selector):
+                        continue
+                    if set(re.findall(r"\.([\w-]+)", selector)) - {"btn", "primary"}:
+                        continue
+                    if ":not(:disabled)" in selector or (":hover" in selector and not hovered):
+                        continue
+                    specificity = len(re.findall(r"\.[\w-]+|:(?:disabled|hover)", selector))
+                    matched.append((specificity, order, body))
+            effective = {}
+            for _, _, body in sorted(matched):
+                effective.update(dict(re.findall(r"([\w-]+):\s*([^;]+);", body)))
+            for theme, palette in (("light", root_tokens()), ("dark", dark_theme_tokens())):
+                with self.subTest(theme=theme, hovered=hovered):
+                    fill = self._resolve(effective.get("background"), palette)
+                    text = self._resolve(effective.get("color"), palette)
+                    self.assertIsNotNone(fill, "disabled buttons need a resolvable fill")
+                    self.assertIsNotNone(text, "disabled buttons need a resolvable label")
+                    self.assertGreaterEqual(contrast_ratio(text, fill), WCAG_AA_NORMAL_TEXT)
+
+    def test_toolbar_menu_states_keep_their_ink_when_hovered(self) -> None:
+        """ARIA-disabled actions stay focusable, so their cascade must match
+        disabled buttons without picking up an enabled or destructive hover."""
+
+        css = re.sub(r"/\*.*?\*/", "", self.css, flags=re.DOTALL)
+        rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+        for disabled in (None, "native", "aria"):
+            for danger in (False, True):
+                for hovered in (False, True):
+                    state = {
+                        ".is-danger": danger,
+                        ":hover": hovered,
+                        ":disabled": disabled == "native",
+                        '[aria-disabled="true"]': disabled == "aria",
+                    }
+                    matched = []
+                    for order, (selectors, body) in enumerate(rules):
+                        for selector in selectors.split(","):
+                            selector = selector.strip()
+                            match = re.fullmatch(
+                                r"(\.topbar-more-menu\s+)?button"
+                                r"((?:\.is-danger|:hover|:disabled|:not\(:disabled\)|"
+                                r'\[aria-disabled="true"\]|:not\(\[aria-disabled="true"\]\))*)',
+                                selector,
+                            )
+                            if match is None:
+                                continue
+                            parts = re.findall(r":not\([^()]*\)|\[[^]]+\]|:[\w-]+|\.[\w-]+", match.group(2))
+                            if not all(
+                                not state[part[5:-1]] if part.startswith(":not(") else state[part]
+                                for part in parts
+                            ):
+                                continue
+                            specificity = bool(match.group(1)) + len(parts)
+                            matched.append((specificity, order, body))
+                    effective = {}
+                    for _, _, body in sorted(matched):
+                        effective.update(dict(re.findall(r"([\w-]+):\s*([^;]+);", body)))
+                    for theme, palette in (("light", root_tokens()), ("dark", dark_theme_tokens())):
+                        with self.subTest(theme=theme, disabled=disabled, danger=danger, hovered=hovered):
+                            expected = "--muted" if disabled else "--danger-ink" if danger else "--ink" if hovered else "--ink-2"
+                            text = self._resolve(effective.get("color"), palette)
+                            self.assertEqual(palette[expected], text)
+                            background = effective.get("background", "transparent")
+                            if background in ("none", "transparent"):
+                                fill = palette["--surface"]
+                            else:
+                                fill = self._resolve(background, palette)
+                                mix = re.fullmatch(r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)", background)
+                                if mix:
+                                    proportion = int(mix.group(2)) / 100
+                                    channels = zip(hex_to_rgb(palette[mix.group(1)]), hex_to_rgb(palette[mix.group(3)]))
+                                    fill = "#" + "".join(f"{round(255 * (a * proportion + b * (1 - proportion))):02x}" for a, b in channels)
+                            self.assertIsNotNone(fill)
+                            self.assertGreaterEqual(contrast_ratio(text, fill), WCAG_AA_NORMAL_TEXT)
+                            if disabled:
+                                self.assertEqual(palette["--surface"], fill, "disabled hover must not highlight an unavailable action")
+                                self.assertEqual("not-allowed", effective.get("cursor"))

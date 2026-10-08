@@ -789,14 +789,15 @@ class TestUiReorderHelper(unittest.TestCase):
             if (
               estimate.active.classinStartPage !== 2
               || estimate.active.classinEndPage !== 2
-              || estimate.active.classinNextPage !== 3
+              || estimate.active.classinNextPage !== 2
             ) {
               throw new Error(`selected ClassIn boundaries are wrong: ${JSON.stringify(estimate.active)}`);
             }
             if (
               Math.abs(estimate.active.startPages - 1.2) > 1e-9
               || Math.abs(estimate.active.renderedBottomPages - 2.4) > 1e-9
-              || Math.abs(estimate.active.nextStartPages - 2.4) > 1e-9
+              || Math.abs(estimate.active.nextStartPages - 1.2) > 1e-9
+              || Math.abs(estimate.active.rowNextStartPages - 2.4) > 1e-9
             ) {
               throw new Error(`selected raw p values are wrong: ${JSON.stringify(estimate.active)}`);
             }

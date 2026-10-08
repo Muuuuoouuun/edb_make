@@ -113,16 +113,22 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("max-width: var(--stage-preview-max-width)", estimate_css)
         self.assertIn(".stage-wrap:has(.stage-estimate-bar)", board)
 
-    def test_board_estimate_contract_wraps_and_keeps_controls_touch_sized(self) -> None:
+    def test_board_estimate_keeps_one_touch_sized_row_and_details_out_of_flow(self) -> None:
         board = board_stylesheet()
-        estimate_track_css = board.split(".stage-estimate-track,", 1)[1].split("}", 1)[0]
-        estimate_action_css = board.split(".stage-estimate-action{", 1)[1].split("}", 1)[0]
+        estimate_css = board.split(".stage-estimate-bar{", 1)[1].split("}", 1)[0]
+        toggle_css = board.split(".stage-estimate-details-toggle{", 1)[1].split("}", 1)[0]
+        details_css = board.split(".stage-estimate-details{", 1)[1].split("}", 1)[0]
+        compact_css = board.split("@container stage-estimate (max-width: 460px)", 1)[1].split("}", 1)[0]
 
-        self.assertIn("flex-wrap: wrap", estimate_track_css)
-        self.assertIn("min-width: 44px", estimate_action_css)
-        self.assertIn("min-height: 44px", estimate_action_css)
-        self.assertIn("@media (max-width: 1100px)", board)
-        self.assertIn(".stage-estimate-track", board)
+        self.assertIn("height: 48px", estimate_css)
+        self.assertIn("flex-wrap: nowrap", estimate_css)
+        self.assertIn("min-width: var(--control-touch)", toggle_css)
+        self.assertIn("min-height: var(--control-touch)", toggle_css)
+        self.assertIn("position: fixed", details_css)
+        self.assertIn("overflow: auto", details_css)
+        self.assertNotIn(".stage-wrap:has(.stage-estimate-details", board)
+        self.assertIn(".stage-estimate-selection", compact_css)
+        self.assertIn("display: none", compact_css)
 
     def test_board_grid_and_active_slot_guides_are_visible_but_noninteractive(self) -> None:
         board = board_stylesheet()

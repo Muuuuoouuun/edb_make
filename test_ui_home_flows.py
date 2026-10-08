@@ -170,6 +170,10 @@ class TestUiHomeFlows(unittest.TestCase):
           refreshInFlightRef: { current: false }, restoreInFlightRef: { current: false },
           mutatingRef: { current: false }, loading: null, hasRunningBackgroundJobs: false,
           initialSessionLoaded: false, usingMock: false, LAYOUT_GAP_MODE_GRID: 'grid',
+          session: null, items: [], fileName: '', boardColumns: 1, layoutGapMode: 'classin-grid',
+          view: 'review', activeId: null,
+          materializeSessionForItems: () => null, sessionEditorDraftSignature: () => '',
+          historyStackRef: { current: [] }, setHistoryStack() {},
           fetchLatestSession: () => { state.fetches += 1; return new Promise(resolve => { resolveFetch = resolve; }); },
           applySession: () => {}, refreshSessionHistory: () => { state.historyLoads += 1; },
           setInitialSessionLoaded: ready => { state.ready = ready; },
@@ -203,7 +207,7 @@ class TestUiHomeFlows(unittest.TestCase):
           useCallback: fn => fn,
           restoringSessionId: null, initialSessionLoaded: true, loading: null,
           hasRunningBackgroundJobs: false, hasPendingSessionConflict: false,
-          session: null, items: [], fileName: 'new', boardColumns: 1,
+          session: null, items: [], fileName: 'new', boardColumns: 1, layoutGapMode: 'classin-grid',
           materializeSessionForItems: () => null,
           postRestoreSessionHistory: async () => { posts += 1; return { session: { problems: [{ id: 'p1' }] }, history: [] }; },
           applySession: () => true, setRecentSessionsAuthoritative() {}, activateOperationRecovery() {},
@@ -255,7 +259,37 @@ class TestUiHomeFlows(unittest.TestCase):
         assert.ok(homeDashSrc.includes('onAddMockSample'), 'HomeDashboard must support mock sample exploration');
         """)
 
+    def test_home_status_uses_runtime_labels_and_distinguishes_ai_permission(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const Babel = require('./scripts/vendor/babel.min.js');
+        const sandbox = {
+          React: { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }) },
+          Icon: new Proxy({}, { get: (_object, key) => key }),
+          useState: initial => [initial, () => {}],
+        };
+        vm.createContext(sandbox);
+        const components = section('function HomeDashboard({', 'async function downloadPublishSummary(')
+          + section('function hangulRuntimeStatusMeta(', 'function hangulRuntimeSummary(');
+        vm.runInContext(Babel.transform(components, { presets: ['react'] }).code, sandbox);
+        const text = value => !value ? '' : Array.isArray(value) ? value.map(text).join(' ')
+          : typeof value === 'object' ? text(value.props?.children) : String(value);
+        const base = { recentSessions: [], runtimeDiagnostics: { hangul: { status: 'ready' } } };
+        for (const [aiEnabled, hasApiKey, expected] of [
+          [true, true, 'AI 설정 준비됨 · 실행할 때 사용'],
+          [true, false, '로컬 처리 · AI 연결 설정 필요'],
+          [false, true, '로컬 처리 · AI 사용 꺼짐'],
+          [false, false, '로컬 처리 · AI 사용 꺼짐'],
+        ]) {
+          const rendered = text(sandbox.HomeDashboard({ ...base, aiEnabled, hasApiKey }));
+          assert.ok(rendered.replace(/\s+/g, ' ').includes('한글(HWP): 준비됨'), 'the existing label field must be displayed');
+          assert.ok(rendered.includes(expected));
+        }
+        const checking = text(sandbox.HomeDashboard({ ...base, runtimeDiagnostics: null }));
+        assert.ok(checking.includes('점검 중'));
+        const partial = text(sandbox.HomeDashboard({ ...base, runtimeDiagnostics: { hangul: { status: 'partial', label: '변환기 확인' } } }));
+        assert.ok(partial.includes('변환기 확인'));
+        """)
+
 
 if __name__ == "__main__":
     unittest.main()
-

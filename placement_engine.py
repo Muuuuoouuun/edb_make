@@ -153,7 +153,10 @@ def place_problem(
     ) else actual_height_pages
     actual_bottom_y_pages = round(start_y_pages + rendered_bottom_height_pages, 6)
     if continuous:
-        snapped_next_start_y_pages = round(start_y_pages + flow_height_pages, 6)
+        snapped_next_start_y_pages = round(
+            start_y_pages + flow_height_pages + (placement_gap_after_pages or 0.0),
+            6,
+        )
     elif compact:
         snapped_next_start_y_pages = round(
             start_y_pages + flow_height_pages + (placement_gap_after_pages or 0.0),

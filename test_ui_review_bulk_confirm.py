@@ -157,8 +157,8 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         box_editor = source.split("function BoxEditPanel", 1)[1].split("function ManualSplitEditor", 1)[0]
 
         self.assertIn("view !== 'review'", side_panel)
-        self.assertIn("처리 방식 적용", side_panel)
-        self.assertIn("전체 처리 적용", side_panel)
+        self.assertIn("선택 1개에 적용", side_panel)
+        self.assertIn("수업 전체 ${items.length}개에 적용", side_panel)
         self.assertNotIn("<button className=\"btn\" disabled={!item}>건너뛰기</button>", side_panel)
         self.assertIn("합치고 다음 검수", box_editor)
 

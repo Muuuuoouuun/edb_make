@@ -288,9 +288,22 @@ h2 { margin: 0; font-size: var(--text-2xl); letter-spacing: -0.01em; }
 .result-body {
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  grid-template-areas: "source problems";
   gap: 16px;
   align-items: start;
 }
+
+.source-panel {
+  grid-area: source;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.source-panel,
+.problems-panel { scroll-margin-top: 16px; }
+
+.result-jump { display: none; }
 
 .pages { display: grid; gap: 16px; }
 
@@ -348,17 +361,19 @@ h2 { margin: 0; font-size: var(--text-2xl); letter-spacing: -0.01em; }
 .region.is-active { background: rgba(47, 111, 237, .16); border-color: var(--accent); }
 
 .problems-panel {
+  grid-area: problems;
   position: sticky;
   top: 16px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
   max-height: calc(100vh - 32px);
 }
 
-.problems-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
+.problems-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
 
-.problems-head__label { color: var(--ink-2); font-size: var(--text-sm); font-weight: 700; }
+.problems-head__label { margin: 0; color: var(--ink-2); font-size: var(--text-sm); font-weight: 700; }
 
 .preview-toggle {
   display: inline-flex;
@@ -479,9 +494,11 @@ h2 { margin: 0; font-size: var(--text-2xl); letter-spacing: -0.01em; }
 
 @media (max-width: 760px) {
   .page { padding-block: 20px 32px; }
-  .result-body { grid-template-columns: minmax(0, 1fr); }
+  .result-body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "problems" "source"; gap: 24px; }
   .problems-panel { position: static; max-height: none; }
   .problems { overflow: visible; }
+  .source-panel { padding-top: 20px; border-top: 1px solid var(--line-strong); }
+  .result-jump { display: inline-flex; align-items: center; min-height: 32px; color: var(--accent-ink); font-size: var(--text-sm); font-weight: 600; text-underline-offset: 3px; }
   .result-foot .text-button--accent { margin-left: 0; }
 }
 

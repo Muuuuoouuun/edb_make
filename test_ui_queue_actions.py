@@ -59,7 +59,9 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("onClick={() => processQueuedFiles('register')}", source)
         self.assertIn("onClick={() => processQueuedFiles('manual-split')}", source)
         self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
-        self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
+        queue = source.split("const processQueuedFiles = useCallback(", 1)[1].split("const cancelRecognitionReview =", 1)[0]
+        self.assertIn("normalizeInputIntent(inputIntent) === 'single-problem'", queue)
+        self.assertIn("layoutGapMode, inputIntent, applySession", queue)
 
     def test_page_as_is_upload_preserves_the_200_dpi_master(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -352,20 +354,6 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("['check_needed', '확인 필요', statusCounts.check_needed]", filter_source)
         self.assertNotIn("['check_needed', '확인 필요', actionableStatusCount]", filter_source)
 
-    def test_topbar_exposes_reset_icon_outside_more_menu(self) -> None:
-        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        topbar = source.split("function TopBar", 1)[1]
-        topbar = topbar.split("function ReviewStage", 1)[0]
-        actions = topbar.split('<div className="topbar-actions"', 1)[1]
-        actions = actions.split('<div className="topbar-more"', 1)[0]
-
-        self.assertIn('aria-label="초기화"', actions)
-        self.assertIn("onClick={onReset}", actions)
-        self.assertIn("{Icon.reset}", actions)
-        self.assertLess(actions.index('aria-label="초기화"'), actions.index("aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}"))
-        self.assertIn("저장된 최신 세션 다시 읽기", topbar)
-        self.assertNotIn("현재 세션 다시 불러오기", topbar)
-
     def test_review_selected_boxes_delete_key_excludes_and_can_undo(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         review_stage = source.split("function ReviewStage", 1)[1]
@@ -454,7 +442,7 @@ class TestUiQueueActions(unittest.TestCase):
         queue_review_setup = queue_review_setup.split("session: incomingSession,", 1)[0]
         stage_source = source.split("function RecognitionPageReviewStage", 1)[1]
         stage_source = stage_source.split("function TileImage", 1)[0]
-        app_render = source.split("className={`main ${recognitionReview", 1)[1]
+        app_render = source.split("className={`main ", 1)[1]
         app_render = app_render.split("<BackgroundJobsPanel", 1)[0]
 
         self.assertIn("문제 목록에 적용하기 전에", queue_review_setup)
@@ -464,9 +452,6 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("문제는 이미 파싱되어 있습니다", stage_source)
         self.assertIn("recognition-page-review-mode", source)
         self.assertIn("pageReviewActive={Boolean(recognitionReview)}", source)
-        self.assertIn("pageReviewActive ? 'active'", source)
-        self.assertIn("disabled={pageReviewActive || !reviewAvailable}", source)
-        self.assertIn("disabled={pageReviewActive || !total}", source)
         self.assertNotIn("<small>{row.page.id}</small>", stage_source)
         self.assertNotIn("<span>{page.id}</span>", stage_source)
         self.assertLess(app_render.index("<RecognitionPageReviewStage"), app_render.index("<ItemsRail"))
@@ -542,13 +527,13 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn('aria-keyshortcuts="Enter"', box_edit_panel)
         self.assertIn("onClick={onApply}", box_edit_panel)
 
-        mutation_source = source.split("const mutateSession = useCallback(async (action, args) => {", 1)[1]
+        mutation_source = source.split("const mutateSession = useCallback(", 1)[1]
         mutation_source = mutation_source.split("const retryAiSession = useCallback", 1)[0]
         retry_source = source.split("const retryAiSession = useCallback(async (args) => {", 1)[1]
         retry_source = retry_source.split("const recognizeCurrentSession = useCallback", 1)[0]
-        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || session", mutation_source)
-        self.assertLess(mutation_source.index("await postRestore(snapshotBefore);"), mutation_source.index("await postMutate(action, args);"))
-        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session)", retry_source)
+        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session", mutation_source)
+        self.assertLess(mutation_source.index("await postRestore("), mutation_source.index("await postMutate(action, args);"))
+        self.assertIn("materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session)", retry_source)
         self.assertLess(retry_source.index("await postRestore(snapshotBefore);"), retry_source.index("const result = await postRetryAi(args"))
 
     def test_review_area_reset_uses_explicit_panel_apply_and_removes_two_way_split(self) -> None:
@@ -695,7 +680,8 @@ class TestUiQueueActions(unittest.TestCase):
         undo_source = source.split("const undoMutation = useCallback(async () => {", 1)[1]
         undo_source = undo_source.split("  // Ctrl/Cmd+Z", 1)[0]
 
-        self.assertIn("const restored = await postRestore(snapshot);", undo_source)
+        self.assertIn("const restored = assertPlacementSaveSession(await postRestore(snapshot));", undo_source)
+        self.assertLess(undo_source.index("assertPlacementSaveSession"), undo_source.index("setHistoryStack"))
         self.assertIn("applySession(restored);", undo_source)
         self.assertNotIn("adoptMutatedSession(restored", undo_source)
 

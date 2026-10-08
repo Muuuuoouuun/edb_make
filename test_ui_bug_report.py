@@ -25,7 +25,8 @@ class BugReportUiTests(unittest.TestCase):
             "function LoadingOverlay", 1
         )[0]
         self.assertIn('aria-label="버그 리포트"', settings)
-        self.assertIn("사용 중 문제가 있었나요?", settings)
+        self.assertIn('title="도움말 및 문제 신고"', settings)
+        self.assertIn('className="settings-support-disclosure"', settings)
         self.assertIn('htmlFor="bug-report-description"', settings)
         self.assertIn('id="bug-report-description"', settings)
         self.assertIn('htmlFor="bug-report-contact"', settings)
@@ -102,7 +103,7 @@ class BugReportUiTests(unittest.TestCase):
             self.assertIn(label, banner)
         self.assertIn("편집 내용은 안전합니다", banner)
         self.assertIn("초기화 후 원본 PDF를 다시 등록", banner)
-        self.assertIn("설정 → 문제 신고 → 버그 리포트", banner)
+        self.assertIn("설정 → 도움말 및 문제 신고", banner)
         self.assertIn("operationRecoverySummary(error)", banner)
         self.assertIn("onReset", banner)
         self.assertIn("onReport", banner)
