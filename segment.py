@@ -3499,13 +3499,14 @@ def _dark_numeric_problem_marker_component_offsets(
     if not digit_like:
         return []
 
-    offsets: list[int] = []
+    candidates: list[tuple[int, int]] = []
     for dot in dot_like:
         candidate_digits = [
             digit
             for digit in digit_like
-            if digit["right"] <= dot["x"] + 2
-            and 1 <= dot["x"] - digit["right"] <= 18
+            # the tail of a "2"/"7" can reach under the dot in scans
+            if digit["right"] <= dot["x"] + 4
+            and -3 <= dot["x"] - digit["right"] <= 18
             and dot["y"] >= digit["y"] + max(2, int(digit["height"] * 0.45))
             and dot["y"] <= digit["bottom"] + 8
         ]
@@ -3528,12 +3529,21 @@ def _dark_numeric_problem_marker_component_offsets(
             if previous_digit is None:
                 break
             leftmost = previous_digit
-        if leftmost["x"] > max_digit_left:
+        if leftmost["x"] > 50:
             continue
-        offsets.append(min(leftmost["y"], dot["y"]))
+        candidates.append((leftmost["x"], min(leftmost["y"], dot["y"])))
 
-    if not offsets:
+    if not candidates:
         return []
+    # Problem numbers share the column's left margin.  The column box edge
+    # may sit left of that margin (gutter, divider rule), so measure the
+    # indent from the leftmost candidate: choice marks, list items and
+    # annotations indented further are not problem numbers.
+    # the running page number / header in the top strip is not a margin
+    header_limit = image.height * 0.01 - top
+    body_candidates = [item for item in candidates if item[1] >= header_limit] or candidates
+    margin_x = min(x for x, _ in body_candidates)
+    offsets = [offset for x, offset in candidates if x <= margin_x + max_digit_left]
 
     clustered: list[int] = []
     for offset in sorted(offsets):
@@ -3981,7 +3991,7 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
 # sit.  Choice marks (①②…), list items and ㉠ annotations are indented by
 # 25px+ at 200 dpi; with the old 50px window they were read as problem
 # numbers and real scans were split into 2-3x as many regions.
-VISUAL_MARKER_MAX_DIGIT_LEFT_PX = 14
+VISUAL_MARKER_MAX_DIGIT_LEFT_PX = 14  # indent past the leftmost candidate
 
 
 def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[float]:
@@ -3996,8 +4006,8 @@ def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[flo
         top = column_box.top + float(offset)
         if top < column_box.top - 1.0 or top > column_box.bottom + 1.0:
             continue
-        # page-number box in the footer ("5 / 16")
-        if top > float(image.height) * 0.96:
+        # running header page number / footer page box ("5 / 16")
+        if top < float(image.height) * 0.01 or top > float(image.height) * 0.96:
             continue
         if tops and top - tops[-1] <= 22.0:
             continue
@@ -4716,6 +4726,94 @@ PDF_GROUP_INSTRUCTION_RE = re.compile(r"^\s*[\[［(<]\s*[0-9０-９]{1,3}\s*[~�
 UNCOVERED_REGION_ROW_GAP_PX = 28
 
 
+def _merge_consecutive_column_regions(
+    regions: list[tuple[int, Box]],
+    blocks: list[ContentBlock],
+    columns: list[Box],
+) -> list[tuple[int, Box]]:
+    """Join leftover regions of one column that no question block separates.
+
+    On scans a passage-only column (no problem number) is unclaimed ink cut
+    at every paragraph gap; each paragraph then became its own unit.  When no
+    block of that column lies between two leftovers they are one passage.
+    """
+    merged: list[tuple[int, Box]] = []
+    for column_index in sorted({index for index, _ in regions}):
+        column = columns[column_index]
+        separators = [
+            block.bbox
+            for block in blocks
+            if column.left - 4 <= (block.bbox.left + block.bbox.right) / 2.0 <= column.right + 4
+        ]
+        current: Box | None = None
+        for _, box in sorted((item for item in regions if item[0] == column_index), key=lambda item: item[1].top):
+            if current is not None and not any(
+                separator.top < box.top and separator.bottom > current.bottom for separator in separators
+            ):
+                current = _merge_box_pair(current, box)
+                continue
+            if current is not None:
+                merged.append((column_index, current))
+            current = box
+        if current is not None:
+            merged.append((column_index, current))
+    return merged
+
+
+def _segment_scan_passage_columns(
+    image: Image.Image,
+    page_id: str,
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    """Scanned page without any problem number: one block per text column.
+
+    Such pages carry passages only ((가)/(나) 지문, 대화문).  Row-band
+    segmentation cut them into 8-20 paragraph pieces; the passage reads as
+    one unit per column in N order.
+    """
+    if np is None:
+        return None
+    gray = np.array(image.convert("L"))
+    ink = gray < UNCOVERED_REGION_DARK_THRESHOLD
+    height, width = ink.shape
+    ink[:, ink.sum(axis=0) >= height * 0.42] = False
+    columns = _detect_pdf_visual_column_boxes(image) or [Box.from_points(0.0, 0.0, float(width), float(height))]
+    blocks: list[ContentBlock] = []
+    pad = max(8.0, float(height) * 0.006)
+    for column_index, column in enumerate(columns):
+        x0, x1 = max(0, int(column.left)), min(width, int(column.right) + 1)
+        sub = ink[: int(height * 0.96), x0:x1]
+        rows = np.where(sub.sum(axis=1) > 2)[0]
+        cols = np.where(sub.sum(axis=0) > 2)[0]
+        if rows.size == 0 or cols.size == 0:
+            continue
+        box = Box.from_points(
+            max(0.0, float(x0 + cols[0]) - pad),
+            max(0.0, float(rows[0]) - pad),
+            min(float(width), float(x0 + cols[-1] + 1) + pad),
+            min(float(height), float(rows[-1] + 1) + pad),
+        )
+        blocks.append(
+            ContentBlock(
+                block_id=f"{page_id}-column-{column_index + 1:03d}",
+                block_type=BlockType.STEM,
+                bbox=box,
+                reading_order=len(blocks),
+                confidence=0.5,
+                metadata={
+                    "segmenter": "scan-passage-columns",
+                    "column_index": column_index + 1,
+                    "question_band_index": 0,
+                    "scan_passage_column": True,
+                    "force_image_record": True,
+                    "review_flags": ["scan_unnumbered_column"],
+                },
+            )
+        )
+    if not blocks:
+        return None
+    return blocks, {"segmenter": "scan-passage-columns", "scan_passage_column_count": len(blocks)}
+
+
 def _recover_uncovered_document_regions(
     image: Image.Image,
     page_id: str,
@@ -4801,6 +4899,8 @@ def _recover_uncovered_document_regions(
             regions.append((column_index, box))
     if not regions:
         return blocks, 0
+    if not column_top_continuations_only:
+        regions = _merge_consecutive_column_regions(regions, blocks, columns)
 
     def _column_of(box: Box) -> int:
         centre = (box.left + box.right) / 2.0
@@ -5002,6 +5102,7 @@ def segment_page(
     if _is_document_like_page(image_path, image):
         source_metadata = _source_metadata(image_path)
         marker_result = None
+        scan_column_result = None
         raw_text_lines = source_metadata.get("pdf_text_lines")
         usable_text_lines = raw_text_lines if isinstance(raw_text_lines, list) else []
         raw_markers = source_metadata.get("pdf_problem_markers")
@@ -5027,6 +5128,12 @@ def segment_page(
             )
         if marker_result is None and _is_image_upload_document_source(image_path, source_metadata):
             marker_result = _segment_visual_problem_markers(image, page_id, resolved_options)
+            if (
+                marker_result is None
+                and str(source_metadata.get("source_type") or "").lower() == "pdf"
+                and _is_scanned_pdf_page_metadata(source_metadata)
+            ):
+                scan_column_result = _segment_scan_passage_columns(image, page_id)
             if (
                 marker_result is not None
                 and str(source_metadata.get("source_type") or "").lower() == "pdf"
@@ -5056,6 +5163,8 @@ def segment_page(
             if recovered_count:
                 metadata = dict(metadata)
                 metadata["recovered_uncovered_region_count"] = recovered_count
+        elif scan_column_result is not None:
+            blocks, metadata = scan_column_result
         else:
             blocks, metadata = _segment_document_page(image, page_id, resolved_options)
         source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
