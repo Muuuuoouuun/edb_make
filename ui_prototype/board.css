@@ -945,7 +945,8 @@
     font-family: var(--font-mono);
     font-size: var(--text-2xs);
     color: rgba(244,237,224,.7);
-    letter-spacing: .12em;
+    letter-spacing: .02em;
+    white-space: nowrap;
     border: 1px solid rgba(244,237,224,.16);
     border-radius: 999px;
     backdrop-filter: blur(4px);
@@ -954,6 +955,7 @@
     color: rgba(244,237,224,.86);
     letter-spacing: .04em;
   }
+  .page-divider .label .page-offset{ color: rgba(244,237,224,.86); }
   .active-slot-gap{
     position: absolute;
     left: 0;
@@ -1040,9 +1042,6 @@
       max-height: min(70dvh, 480px);
       padding-bottom: 16px;
       border-radius: var(--radius-lg);
-    }
-    .page-divider .label .classin-page{
-      display: none;
     }
   }
   .stage-column-guide{
@@ -4010,6 +4009,7 @@
     height: 100%;
     min-height: 0;
     grid-template-columns: 28px 56px minmax(0, 1fr);
+    grid-template-areas: "grip thumb meta";
     margin: 0;
     content-visibility: visible;
     contain: none;
@@ -4148,6 +4148,25 @@
   .drop-zone strong{ display:block; color: var(--ink); font-size: var(--text-sm); margin: 6px 0 4px; font-weight: 600; }
   .drop-zone.is-compact strong{ margin: 0; }
   .drop-zone small{ font-size: var(--text-2xs); color: var(--muted); }
+  .rail-primary-actions{
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    margin: 0 0 8px;
+  }
+  .rail-primary-actions.has-items{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rail-primary-actions .drop-zone{ width: 100%; min-width: 0; margin: 0; }
+  .rail-primary-actions.has-items > button{
+    min-width: 0;
+    min-height: var(--control-height);
+    padding: 4px;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    font-size: var(--text-xs);
+  }
+  .rail-primary-actions.has-items .drop-zone strong{ font-size: var(--text-xs); }
+  .rail-preserve-all .ic{ width: 16px; height: 16px; flex: 0 0 auto; }
 
   .source-queue-card{
     margin: 8px 6px 10px;
@@ -4540,12 +4559,12 @@
   .item{
     display: grid;
     content-visibility: auto;
-    contain-intrinsic-size: auto 84px;
-    grid-template-columns: 28px 44px minmax(0, 1fr);
-    grid-template-areas: "grip thumb meta" "grip thumb actions";
+    contain-intrinsic-size: auto 88px;
+    grid-template-columns: 24px 36px minmax(0, 1fr);
+    grid-template-areas: "grip thumb meta" "actions actions actions";
     gap: 4px 6px;
     align-items: center;
-    padding: 8px 6px 8px 4px;
+    padding: 6px 6px 6px 4px;
     margin: 2px 0;
     border-radius: 8px;
     border: 1px solid transparent;
@@ -4610,7 +4629,7 @@
     justify-content: center;
     gap: 2px;
     align-self: stretch;
-    min-height: 48px;
+    min-height: var(--control-compact);
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -4691,7 +4710,7 @@
   }
   .item .thumb{
     grid-area: thumb;
-    width: 44px; height: 44px; border-radius: 6px;
+    width: 36px; height: 36px; border-radius: 6px;
     background: var(--surface-2);
     border: 1px solid var(--line);
     overflow: hidden;
@@ -4813,8 +4832,8 @@
     opacity: 1;
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    flex-wrap: wrap;
+    gap: 4px;
+    flex-wrap: nowrap;
     padding-right: 0;
   }
   .item .actions .icon-btn{
@@ -4918,12 +4937,18 @@
   }
   @media (min-width: 701px) and (max-width: 1280px){
     .item{
-      grid-template-columns: 28px minmax(0, 1fr);
-      grid-template-areas: "grip meta" "grip actions";
+      grid-template-columns: 24px minmax(0, 1fr);
+      grid-template-areas: "grip meta" "actions actions";
     }
     .item .thumb{
       display: none;
     }
+  }
+  @media (max-width: 900px){
+    .item .grip{ min-height: var(--control-touch); }
+    .item .actions{ gap: 8px; }
+    .item .actions .icon-btn{ width: var(--control-touch); height: var(--control-touch); }
+    .rail-primary-actions.has-items > button{ min-height: var(--control-touch); }
   }
   @media (min-width: 701px) and (max-width: 920px){
     .placement-position-control{

@@ -1350,6 +1350,8 @@ const Icon = {
   eye: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>,
   eyeOff: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19.1 19.1 0 0 1-3 3.9M6.2 6.2A21.8 21.8 0 0 0 2 12s3.5 7 10 7a10.8 10.8 0 0 0 5.8-1.8M10 10a2.8 2.8 0 0 0 4 4"/></svg>,
   upload: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>,
+  folderPlus: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M8 13h8M12 9v8"/></svg>,
+  filesCheck: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="16" rx="2"/><path d="M7 22h12a2 2 0 0 0 2-2V7M7 11l3 3 4-5"/></svg>,
   trash:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 002 2h8a2 2 0 002-2l1-13M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>,
   crop:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 2v15h15M2 7h15v15"/></svg>,
   rotate: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0114.5-7.2M21 4v5h-5"/></svg>,
@@ -6164,8 +6166,6 @@ function ItemsRail({
         <h2>자료 목록</h2>
         <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
         <div className="spacer" />
-        {hasSessionItems && <button className="icon-btn" aria-label="전체를 2단계 원문 보존 변환" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')}>{Icon.aiBatch}</button>}
-        {(hasSessionItems || pendingFiles.length > 0) && <button className="icon-btn" aria-label="파일 추가" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" onClick={addSample}>{Icon.upload}</button>}
       </div>
 
       {hasSessionItems && (
@@ -6230,7 +6230,8 @@ function ItemsRail({
           applyRailAutoScroll(e.clientX, e.clientY);
         }}
       >
-        {(hasSessionItems || pendingFiles.length > 0) && <button
+        {(hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions ${hasSessionItems ? 'has-items' : ''}`} role="group" aria-label="자료 추가와 일괄 처리">
+        <button
           type="button"
           className={`drop-zone ${hasSessionItems ? 'is-compact' : ''} ${dropZoneActive ? 'is-active' : ''}`}
           aria-label="파일 추가"
@@ -6258,12 +6259,21 @@ function ItemsRail({
             if (files.length && handleFiles) handleFiles(files);
           }}
         >
-          {Icon.upload}
+          {Icon.folderPlus}
           <strong>
             {hasSessionItems ? '파일 추가' : '이미지·PDF·HWP 대기열에 추가'}
           </strong>
           <small>{hasSessionItems ? 'PNG 등록 / AI 인식' : '페이지 PNG로 바로 만들거나 문항을 AI 인식합니다'}</small>
-        </button>}
+        </button>
+        {hasSessionItems && <button
+          className="btn rail-preserve-all"
+          type="button"
+          aria-label="전체를 2단계 원문 보존 변환"
+          title="전체 자료를 원문 보존 방식으로 지정"
+          data-tooltip="AI 실행 없이 전체 자료의 처리 방식을 원문 보존으로 지정합니다"
+          onClick={() => bulkApply('s2')}
+        >{Icon.filesCheck}<span>전체 보존</span></button>}
+        </div>}
 
         <label className="upload-intent" title={uploadIntentOption.description}>
           <span>업로드 방식</span>
@@ -7858,9 +7868,9 @@ function BoardStage({
                     style={{ top: divider.top }}
                     aria-hidden="true"
                   >
-                    <span className="label">
-                      ClassIn {divider.classinPage}쪽
-
+                    <span className="label" title={`이 점선부터 ClassIn ${divider.classinPage}쪽 · 누적 높이 ${divider.offsetPages.toFixed(1)}페이지 (ClassIn 1쪽 = 1.2페이지)`}>
+                      <span className="classin-page">ClassIn {divider.classinPage}쪽</span>
+                      <span className="page-offset"> · {divider.offsetPages.toFixed(1)}p</span>
                     </span>
                   </div>
                 ))}

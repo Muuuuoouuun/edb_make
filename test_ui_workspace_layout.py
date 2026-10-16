@@ -5,7 +5,7 @@ import re
 import unittest
 
 from test_ui_sidebar_hierarchy import NODE_SETUP, RENDER_SETUP, run_node
-from test_ui_side_panel_settings import APP, CSS, component
+from test_ui_side_panel_settings import CSS, component
 
 
 class TestWorkspaceLayout(unittest.TestCase):
@@ -109,6 +109,85 @@ class TestWorkspaceLayout(unittest.TestCase):
     def test_all_review_and_board_stage_branches_expose_the_navigation_target(self) -> None:
         self.assertEqual(component("ReviewStage").count('id="workspace-stage"'), 2)
         self.assertEqual(component("BoardStage").count('id="workspace-stage"'), 1)
+
+
+class TestCompactRailAndBoundaries(unittest.TestCase):
+    def test_named_rail_actions_keep_upload_drop_and_preserve_callbacks(self) -> None:
+        run_node(RENDER_SETUP + r"""
+        const sandbox = renderSandbox();
+        let uploads = 0, preserved, dropped;
+        Object.assign(sandbox, { hasSessionItems: true, pendingFiles: [], dropZoneActive: false,
+          addSample: () => uploads++, bulkApply: step => { preserved = step; },
+          setDropZoneActive() {}, handleFiles: files => { dropped = files; } });
+        compile(sandbox, 'globalThis.actions = () => (<>'
+          + section('        {(hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions',
+            '        <label className="upload-intent"') + '</>);');
+        let tree = sandbox.actions();
+        const buttons = walk(tree).filter(node => node.type === 'button');
+        assert.equal(buttons.length, 2);
+        const upload = buttons.find(node => node.props['aria-label'] === '파일 추가');
+        const preserve = findClass(tree, 'rail-preserve-all');
+        assert.ok(text(upload).includes('파일 추가'));
+        assert.ok(text(preserve).includes('전체 보존'));
+        assert.ok(preserve.props['data-tooltip'].includes('AI 실행 없이'));
+        upload.props.onClick(); assert.equal(uploads, 1);
+        preserve.props.onClick(); assert.equal(preserved, 's2');
+        let prevented = 0;
+        upload.props.onDrop({ preventDefault: () => prevented++, dataTransfer: { files: ['sample.png'] } });
+        assert.deepEqual(Array.from(dropped), ['sample.png']); assert.equal(prevented, 1);
+        sandbox.hasSessionItems = false; sandbox.pendingFiles = [{ name: 'sample.png' }];
+        tree = sandbox.actions();
+        assert.equal(walk(tree).filter(node => node.type === 'button').length, 1);
+        assert.equal(findClass(tree, 'rail-preserve-all'), undefined);
+        sandbox.pendingFiles = [];
+        assert.equal(walk(sandbox.actions()).filter(node => node.type === 'button').length, 0);
+        """)
+
+    def test_rail_header_no_longer_duplicates_upload_or_uses_the_ai_icon_for_preservation(self) -> None:
+        rail = component("ItemsRail")
+        header = rail.split('<div className="col-hd">', 1)[1].split("{hasSessionItems && (", 1)[0]
+        self.assertNotIn("<button", header)
+        primary = rail.split('className={`rail-primary-actions', 1)[1].split('<label className="upload-intent"', 1)[0]
+        self.assertIn("Icon.folderPlus", primary)
+        self.assertIn("Icon.filesCheck", primary)
+        self.assertNotIn("Icon.aiBatch", primary)
+
+    def test_card_actions_use_the_full_width_without_wrapping_and_keep_touch_targets(self) -> None:
+        card = re.search(r"(?m)^  \.item\{([^}]+)\}", CSS)[1]
+        actions = CSS.split(".item .actions{", 1)[1].split("}", 1)[0]
+        self.assertIn('grid-template-areas: "grip thumb meta" "actions actions actions"', card)
+        self.assertIn("contain-intrinsic-size: auto 88px", card)
+        self.assertIn("flex-wrap: nowrap", actions)
+        self.assertIn(".item .actions .icon-btn{ width: var(--control-touch); height: var(--control-touch); }", CSS)
+
+    def test_divider_labels_pair_classin_start_page_with_exact_internal_height(self) -> None:
+        run_node(RENDER_SETUP + r"""
+        const sandbox = renderSandbox();
+        compile(sandbox, 'globalThis.boundaries = count => { const previewEstimate = { classinPageCount: count };'
+          + 'const pageH = 240;'
+          + section('  const dividers = [];', '  return (\n    <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="칠판 미리보기">')
+          + 'return (<>'
+          + section('                {dividers.map(divider => (', '                {activePlacement && activeTrailingGapPages')
+          + '</>); };');
+        for (const count of [0, 1]) assert.equal(walk(sandbox.boundaries(count))
+          .filter(node => String(node.props.className || '').includes('page-divider')).length, 0);
+        const tree = sandbox.boundaries(7);
+        const lines = walk(tree).filter(node => String(node.props.className || '').includes('page-divider'));
+        const labels = walk(tree).filter(node => node.props.className === 'label');
+        assert.equal(lines.length, 6);
+        labels.forEach((label, index) => {
+          const offset = ((index + 1) * 1.2).toFixed(1);
+          assert.equal(text(label), `ClassIn ${index + 2}쪽 · ${offset}p`);
+          assert.ok(label.props.title.includes(`누적 높이 ${offset}페이지`));
+          assert.ok(Math.abs(lines[index].props.style.top - (index + 1) * 1.2 * 240) < 1e-8);
+        });
+        assert.equal(text(labels[4]), 'ClassIn 6쪽 · 6.0p', 'one decimal avoids floating-point noise');
+        """)
+
+    def test_both_boundary_units_remain_visible_on_small_screens(self) -> None:
+        rules = re.findall(r"\.page-divider \.label \.classin-page\{([^}]+)\}", CSS)
+        self.assertTrue(rules)
+        self.assertTrue(all("display: none" not in rule for rule in rules))
 
 
 if __name__ == "__main__":
