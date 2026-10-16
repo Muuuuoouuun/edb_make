@@ -4631,6 +4631,7 @@ def _same_row_band(first: Box, second: Box) -> bool:
 
 
 UNCOVERED_REGION_DARK_THRESHOLD = 200
+PDF_GROUP_INSTRUCTION_RE = re.compile(r"^\s*[\[［(<]\s*[0-9０-９]{1,3}\s*[~～〜\-－]\s*[0-9０-９]{1,3}\s*[\]］)>]")
 UNCOVERED_REGION_ROW_GAP_PX = 28
 
 
@@ -4640,6 +4641,7 @@ def _recover_uncovered_document_regions(
     blocks: list[ContentBlock],
     *,
     column_top_continuations_only: bool = False,
+    text_lines: list[Any] | None = None,
 ) -> tuple[list[ContentBlock], int]:
     """Keep content that no marker-based crop claimed.
 
@@ -4755,6 +4757,7 @@ def _recover_uncovered_document_regions(
             merged_regions.append((column_index, box))
     regions = merged_regions
 
+    group_instruction_count = 0
     for recovered_index, (column_index, box) in enumerate(regions, start=1):
         padded = Box.from_points(
             max(0.0, box.left - pad),
@@ -4827,7 +4830,7 @@ def _recover_uncovered_document_regions(
             )
             # A page-wide rule just below the region separates the page
             # header (subject title, 홀수형/page boxes) from the columns.
-            rule_rows = ink_rows_full[int(box.bottom) : min(height, int(box.bottom) + 60)]
+            rule_rows = ink_rows_full[int(box.top) : min(height, int(box.bottom) + 60)]
             above_header_rule = bool(rule_rows.size) and bool((rule_rows >= width * 0.6).any())
             if (
                 best_key is None
@@ -4838,6 +4841,35 @@ def _recover_uncovered_document_regions(
                 or above_header_rule
             ):
                 continue
+        heading_target = None
+        if text_lines:
+            region_text = " ".join(
+                str(line.get("text") or "")
+                for line in text_lines
+                if isinstance(line, dict)
+                and (line_box := _marker_bbox(line)) is not None
+                and box.left - 4 <= (line_box.left + line_box.right) / 2.0 <= box.right + 4
+                and box.top - 4 <= (line_box.top + line_box.bottom) / 2.0 <= box.bottom + 4
+            )
+            if PDF_GROUP_INSTRUCTION_RE.match(region_text):
+                below = [
+                    block
+                    for block in result
+                    if not block.metadata.get("recovered_uncovered_region")
+                    and _column_of(block.bbox) == column_index
+                    and block.bbox.top >= box.bottom - 4
+                ]
+                if below:
+                    heading_target = min(below, key=lambda block: block.bbox.top)
+        if heading_target is not None:
+            # "[31~34] 다음 빈칸에 …" group instruction: it introduces the
+            # questions below it, so extend the next question's crop up to
+            # include it instead of gluing it to the previous column's last
+            # question.
+            heading_target.bbox = _merge_box_pair(heading_target.bbox, padded)
+            heading_target.metadata["group_instruction_included"] = True
+            group_instruction_count += 1
+            continue
         predecessor = result[insert_at - 1] if best_key is not None and insert_at > 0 else None
         predecessor_column = predecessor.metadata.get("column_index") if predecessor is not None else None
         predecessor_band = predecessor.metadata.get("question_band_index") if predecessor is not None else None
@@ -4868,7 +4900,7 @@ def _recover_uncovered_document_regions(
                 metadata=metadata,
             ),
         )
-    recovered_total = sum(1 for block in result if block.metadata.get("recovered_uncovered_region"))
+    recovered_total = sum(1 for block in result if block.metadata.get("recovered_uncovered_region")) + group_instruction_count
     if not recovered_total:
         return blocks, 0
     for order, block in enumerate(result):
@@ -4938,6 +4970,7 @@ def segment_page(
                 page_id,
                 blocks,
                 column_top_continuations_only=str(metadata.get("segmenter") or "") != "visual-problem-markers",
+                text_lines=usable_text_lines,
             )
             if recovered_count:
                 metadata = dict(metadata)

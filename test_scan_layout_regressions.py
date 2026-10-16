@@ -377,3 +377,77 @@ class TestTwoColumnReadingOrder(unittest.TestCase):
 
 def _is_full_width(model, box) -> bool:
     return box.width >= model.width_px * 0.7
+
+
+@unittest.skipIf(FONT is None, "Korean font required for synthetic exam pages")
+class TestRealExamLayoutRegressions(unittest.TestCase):
+    """Layouts seen in 2025학년도 3월 고1 국어/영어 (EBSi, 교육청 주관)."""
+
+    def _header(self, page):
+        # page header: subject title + page number above a page-wide rule
+        _t(page, 260, 40, "국어 영역")
+        _t(page, 540, 40, "7")
+        page.draw_line((40, 50), (555, 50), width=1.0)
+
+    def test_page_header_half_is_not_glued_to_previous_column_question(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc = fitz.open()
+            page = _page(doc, divider=True)
+            self._header(page)
+            y = 70
+            for number in (1, 2, 3, 4):
+                y = _q(page, 0, y, number)
+            y = 70
+            for number in (5, 6, 7):
+                y = _q(page, 1, y, number)
+            model = _first_page_model(doc, temp_dir, "header_rule.pdf")
+            self.assertFalse(any(b.metadata.get("recovered_uncovered_region") for b in model.blocks))
+            self._assert_columns(model, ["L"] * 4 + ["R"] * 3)
+
+    def test_group_instruction_at_column_top_belongs_to_next_question(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc = fitz.open()
+            page = _page(doc, divider=True)
+            y = 60
+            for number in (29, 30):
+                y = _q(page, 0, y, number)
+            _t(page, 310, 60, "[31 ~ 34] 다음 빈칸에 들어갈 말로 가장 적절한 것을 고르시오.")
+            y = 90
+            for number in (31, 32):
+                y = _q(page, 1, y, number)
+            model = _first_page_model(doc, temp_dir, "group_instruction.pdf")
+            question_31 = next(b for b in model.blocks if b.metadata.get("problem_number") == 31)
+            self.assertTrue(question_31.metadata.get("group_instruction_included"))
+            self.assertLess(question_31.bbox.top, 60 * 200 / 72)
+            question_30 = next(b for b in model.blocks if b.metadata.get("problem_number") == 30)
+            self.assertLess(question_30.bbox.right, model.width_px / 2)
+
+    def test_passage_header_without_material_noun_spans_left_bottom_to_right_column(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc = fitz.open()
+            page = _page(doc, divider=True)
+            y = 60
+            for number in (41, 42):
+                y = _q(page, 0, y, number)
+            _t(page, 40, y, "[43 ~ 45] 다음을 읽고 물음에 답하시오.")
+            line_y = y + 20
+            while line_y < 780:
+                _t(page, 44, line_y, LINE)
+                line_y += 14
+            line_y = 60
+            while line_y < 780:
+                _t(page, 314, line_y, LINE)
+                line_y += 14
+            model = _first_page_model(doc, temp_dir, "passage_next_page_children.pdf")
+            fragments = [b for b in model.blocks if b.metadata.get("segmenter") == "pdf-passage-range"]
+            sides = {"L" if (b.bbox.left + b.bbox.right) / 2 < model.width_px / 2 else "R" for b in fragments}
+            self.assertEqual({"L", "R"}, sides)
+            question_42 = next(b for b in model.blocks if b.metadata.get("problem_number") == 42)
+            left_fragment = min(fragments, key=lambda b: b.bbox.left)
+            self.assertLessEqual(question_42.bbox.bottom, left_fragment.bbox.top)
+
+    def _assert_columns(self, model, expected):
+        regions = _ordered_problem_regions(model)
+        self.assertEqual(expected, [r[0][0] for r in regions])
+        for problem_regions in regions:
+            self.assertEqual(1, len({side for side, _box in problem_regions}))
