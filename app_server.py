@@ -608,6 +608,23 @@ def _fsync_parent_directory(path: Path) -> None:
         os.close(directory_fd)
 
 
+def _is_windows_file_busy(exc: OSError) -> bool:
+    return getattr(exc, "winerror", None) in {5, 32, 33}
+
+
+def _replace_file_with_retry(source: Path, target: Path) -> None:
+    """Keep atomic replacement, allowing short-lived Windows scanner/sync locks."""
+    delays = (0.05, 0.1, 0.2, 0.4, 0.8)
+    for attempt in range(len(delays) + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            if not _is_windows_file_busy(exc) or attempt == len(delays):
+                raise
+            time.sleep(delays[attempt])
+
+
 def _atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> None:
     """Durably replace a text file without exposing a partially-written JSON file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -623,7 +640,7 @@ def _atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> 
             temporary_file.write(payload)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
-        os.replace(temporary_path, path)
+        _replace_file_with_retry(temporary_path, path)
         temporary_path = None
         # fsync the containing directory as well: the file contents and rename
         # are otherwise atomic but the new directory entry can still be lost
@@ -654,7 +671,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             temporary_file.write(payload)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
-        os.replace(temporary_path, path)
+        _replace_file_with_retry(temporary_path, path)
         temporary_path = None
         _fsync_parent_directory(path)
     finally:
@@ -684,7 +701,7 @@ def _write_zip_atomically(path: Path, *, compression: int, populate) -> None:
         # writable handle for os.fsync on every supported platform.
         with temporary_path.open("r+b") as archive_file:
             os.fsync(archive_file.fileno())
-        os.replace(temporary_path, path)
+        _replace_file_with_retry(temporary_path, path)
         temporary_path = None
         _fsync_parent_directory(path)
     finally:
@@ -2380,6 +2397,22 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         "error": message,
         "errorKind": "export_failed",
     }
+    if isinstance(exc, PermissionError) or (
+        isinstance(exc, OSError) and _is_windows_file_busy(exc)
+    ):
+        payload.update({
+            "code": "runtime_storage_access_denied",
+            "errorKind": "storage_access_denied",
+            "error": "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요.",
+            "detail": message,
+            "retryable": True,
+            "recoverySteps": [
+                "해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.",
+                "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.",
+                "계속 실패하면 쓰기 가능한 작업 폴더로 실행하거나 오류 내용을 복사해 신고해 주세요. 원본 파일과 대기열은 유지됩니다.",
+            ],
+        })
+        return payload
     if isinstance(exc, FileNotFoundError) and (
         "problem_crops" in message or "problem_cutouts" in message
     ):
@@ -11427,7 +11460,25 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # those files in place, but every new upload is materialized under a
         # SHA-256 identity so a chosen-prefix SHA-1 collision cannot alias it.
         target_path = UPLOAD_DIR / target_name
-        _atomic_write_bytes(target_path, file_bytes)
+        try:
+            _atomic_write_bytes(target_path, file_bytes)
+        except OSError as exc:
+            if not _is_windows_file_busy(exc):
+                raise
+            # Another request may have committed the exact content while the
+            # rename was waiting. Never return an unverified cache hit.
+            if _file_matches_digest(target_path, content_digest, len(file_bytes)):
+                return target_path
+            # A locked/read-only old cache must not be deleted or chmod'ed.
+            # A fresh, bounded filename keeps both the old session and upload
+            # intact. Directory-wide denial still fails normally on this write.
+            recovery_name = _managed_upload_target_name(
+                f"retry-{uuid.uuid4().hex[:8]}-{Path(target_name).name.split('_', 1)[-1]}",
+                content_digest,
+                upload_dir=UPLOAD_DIR,
+            )
+            target_path = UPLOAD_DIR / recovery_name
+            _atomic_write_bytes(target_path, file_bytes)
         return target_path
 
     def _resolve_source_paths(
