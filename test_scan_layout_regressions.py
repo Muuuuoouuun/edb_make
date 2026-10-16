@@ -451,3 +451,27 @@ class TestRealExamLayoutRegressions(unittest.TestCase):
         self.assertEqual(expected, [r[0][0] for r in regions])
         for problem_regions in regions:
             self.assertEqual(1, len({side for side, _box in problem_regions}))
+
+
+@unittest.skipIf(FONT is None, "Korean font required for synthetic exam pages")
+class TestIndentedListIsNotQuestionSequence(unittest.TestCase):
+    def test_indented_numbered_list_above_question_four_is_not_questions(self):
+        # 2025학년도 3월 고1 국어 2쪽: a 1./2./3. list inside the material
+        # sits right above question 4 and used to duplicate questions 1~3.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc = fitz.open()
+            page = _page(doc, divider=True)
+            y = 60
+            for line in range(10):
+                _t(page, 40, y, LINE)
+                y += 14
+            _t(page, 320, 70, "1. 진로를 찾는 과정이 어렵고 막막해요.")
+            _t(page, 320, 150, "2. 공부해도 제자리걸음인 것 같아 불안해요.")
+            _t(page, 320, 230, "3. 친했던 친구와 사이가 멀어져서 속상해요.")
+            _q(page, 1, 320, 4)
+            path = Path(temp_dir) / "indented_list.pdf"
+            doc.save(path)
+            pages = prepare_source_pages(path, pdf_dpi=200, detect_perspective=False, deskew=True, crop_margins=True)
+            model = build_page_model(pages[0], subject=Subject.KOREAN, ocr_mode="none", ai_config=build_ai_fallback_config(mode="off"))
+            numbers = [b.metadata.get("problem_number") for b in model.blocks if b.metadata.get("problem_number")]
+            self.assertEqual([4], numbers)

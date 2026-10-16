@@ -2624,6 +2624,27 @@ def _segment_pdf_problem_markers(
                 continue
         highest_number = max(highest_number, number)
 
+    # A printed list "1. … 2. … 3. …" inside a passage that sits directly
+    # above question 4 looks like the leading 1,2,3,4 run and was protected
+    # by it (2025 3월 고1 국어 2쪽: 1~3 duplicated).  Exam numbers share the
+    # column's left edge; a marker indented past a LATER marker of the same
+    # column is list content.
+    indent_tolerance = max(16.0, float(image.width) * 0.008)
+    for _column_index, column_markers, _bounds in column_entries:
+        boxed = [
+            (marker, box)
+            for marker in column_markers
+            if isinstance(marker.get("number"), int) and (box := _marker_bbox(marker)) is not None
+        ]
+        boxed.sort(key=lambda item: item[1].top)
+        for index, (marker, box) in enumerate(boxed):
+            if any(
+                box.left - later_box.left >= indent_tolerance
+                and int(later["number"]) > int(marker["number"])
+                for later, later_box in boxed[index + 1 :]
+            ):
+                nested_enumeration_marker_ids.add(id(marker))
+
     # The rule above only sees a list that the exam sequence resumes after.
     # A list printed inside the last question on a page has nothing after it,
     # so it is caught by its indentation instead.
