@@ -4731,6 +4731,7 @@ def _recover_uncovered_document_regions(
     # A row band split across columns at the top of the page (full-width
     # header / notice box) is one region read first, not a left half plus a
     # right half that continues the left column's last question (Z order).
+    original_regions = list(regions)
     merged_regions: list[tuple[int, Box]] = []
     consumed: set[int] = set()
     for index, (column_index, box) in enumerate(regions):
@@ -4809,11 +4810,26 @@ def _recover_uncovered_document_regions(
                 and block.bbox.top <= box.top
                 for block in result
             )
+            # Unclaimed ink at the same rows in the previous column means a
+            # band running across the gutter: the page header (subject
+            # title, page/수험번호 boxes), not a column-top continuation.
+            def _row_overlap(other: Box) -> float:
+                return max(0.0, min(other.bottom, box.bottom) - max(other.top, box.top))
+
+            header_band = any(
+                other_column == column_index - 1
+                and _row_overlap(other_box) >= box.height * 0.5
+                # a passage continuing down the previous column is tall; a
+                # header half is about as short as this region
+                and other_box.height <= max(box.height * 3.0, height * 0.1)
+                for other_column, other_box in original_regions
+            )
             if (
                 best_key is None
                 or best_key[0] == column_index
                 or same_column_above
                 or box.top > height * 0.4
+                or header_band
             ):
                 continue
         predecessor = result[insert_at - 1] if best_key is not None and insert_at > 0 else None
