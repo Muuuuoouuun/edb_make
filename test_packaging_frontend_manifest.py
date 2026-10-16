@@ -1123,17 +1123,32 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         self.assertIn("[InstallDelete]", source)
         self.assertIn(r'Type: filesandordirs; Name: "{app}\_internal"', source)
         for stale_path in (
-            r"{app}\.app_runtime",
             r"{app}\ui_prototype\app.js",
             r"{app}\scripts\vendor",
             r"{app}\assets\app_icon.svg",
-            r"{app}\_internal\.app_runtime",
-            r"{app}\_internal\ui_prototype\app.js",
-            r"{app}\_internal\scripts\vendor",
-            r"{app}\_internal\assets\app_icon.svg",
         ):
             with self.subTest(stale_path=stale_path):
                 self.assertIn(stale_path, source)
+
+        delete_entries = [line for line in source.splitlines() if line.startswith("Type:")]
+        for user_path in (
+            ".app_runtime", "uploads", "outputs", "exports", "publish_output",
+            "mutated_crops", "ai_retries", "ai_image_reconstructions",
+            "latest_session.json", "session_history.json", "app.log",
+        ):
+            self.assertNotIn(f'Type: filesandordirs; Name: "{{app}}\\{user_path}"', delete_entries)
+        self.assertNotIn('Type: filesandordirs; Name: "{app}"', delete_entries)
+
+    def test_ci_uploads_single_macos_installer_and_size_reports(self) -> None:
+        workflow = (PROJECT_ROOT / ".github/workflows/build-installers.yml").read_text(encoding="utf-8")
+        self.assertIn("args=(--clean --dmg ", workflow)
+        self.assertNotIn("dist/ClassInEDBMVP-macOS.zip", workflow)
+        self.assertEqual(2, workflow.count("dist/package-size.json"))
+        self.assertEqual(2, workflow.count("compression-level: 0"))
+        for source_name in ("package_macos_app.sh", "package_mvp.ps1"):
+            source = (PROJECT_ROOT / source_name).read_text(encoding="utf-8")
+            self.assertIn("report_package_size.py", source)
+        self.assertIn("-imagekey zlib-level=9", (PROJECT_ROOT / "package_macos_app.sh").read_text())
 
     def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")

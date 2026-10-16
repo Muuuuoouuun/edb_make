@@ -206,13 +206,12 @@ class TestWindowsInstallerUpgradePolicy(unittest.TestCase):
 
         self.assertIn("CloseApplications=yes", installer)
         self.assertIn(payload_delete, installer)
-        self.assertLess(
-            installer.index(payload_delete),
-            installer.index('Name: "{app}\\_internal\\.app_runtime"'),
-        )
         install_delete = installer.split("[InstallDelete]", 1)[1].split("[Icons]", 1)[0]
         self.assertNotIn("{userdocs}", install_delete)
         self.assertNotIn("{localappdata}", install_delete)
+        self.assertNotIn('Name: "{app}\\.app_runtime"', install_delete)
+        self.assertNotIn('Name: "{app}\\outputs"', install_delete)
+        self.assertNotIn('Name: "{app}\\exports"', install_delete)
 
         documentation = (PROJECT_ROOT / "PACKAGING_MVP.md").read_text(encoding="utf-8")
         self.assertIn("replacing the complete PyInstaller `_internal` payload", documentation)

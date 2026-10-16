@@ -346,7 +346,7 @@ jobs:
           NOTARY_KEY_PATH=""
           trap '[[ -n "$NOTARY_KEY_PATH" ]] && rm -f "$NOTARY_KEY_PATH"' EXIT
           chmod +x ./package_macos_app.sh
-          args=(--clean --dmg --zip \
+          args=(--clean --dmg \
             --version "$RELEASE_VERSION" \
             --update-feed-url "$UPDATE_FEED_URL" \
             --download-url "$MACOS_DOWNLOAD_URL" \
@@ -416,7 +416,6 @@ jobs:
             --git-commit "$GITHUB_SHA" \
             --metadata-root dist/release-metadata \
             --artifact dist/ClassInEDBMVP-macOS.dmg \
-            --artifact dist/ClassInEDBMVP-macOS.zip \
             --output dist/macos-release-evidence.json
           .venv/bin/python scripts/build_release_evidence.py verify dist/macos-release-evidence.json \
             --artifact-root dist \
@@ -428,10 +427,13 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-installer
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
           path: |
             dist/ClassInEDBMVP-macOS.dmg
-            dist/ClassInEDBMVP-macOS.zip
             dist/macos-release-evidence.json
+            dist/package-size.json
             dist/release-metadata
 
   windows:
@@ -653,6 +655,35 @@ jobs:
             .\.venv\Scripts\python.exe scripts\smoke_packaged_app.py $installedExe
             Assert-NativeCommandSucceeded "Installed package launch smoke"
 
+            # Simulate a previous payload plus legacy work data, then reinstall.
+            # This exercises Inno's real InstallDelete rules, not just their text.
+            $obsoleteLibrary = Join-Path $installDir "_internal\obsolete-upgrade-fixture.dll"
+            [System.IO.File]::WriteAllText($obsoleteLibrary, "obsolete library")
+            $preservedWorkFiles = @(
+              ".app_runtime\user_settings.json",
+              "outputs\keep-session.json",
+              "exports\keep-export.edb"
+            )
+            foreach ($relativePath in $preservedWorkFiles) {
+              $fixturePath = Join-Path $installDir $relativePath
+              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fixturePath) | Out-Null
+              [System.IO.File]::WriteAllText($fixturePath, "preserve legacy work")
+            }
+            Invoke-CheckedProcess `
+              -FilePath "dist\ClassInEDBMVP-Setup.exe" `
+              -Arguments @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=$installDir") `
+              -Description "Windows in-place upgrade smoke"
+            if (Test-Path -LiteralPath $obsoleteLibrary) {
+              throw "Upgrade left an obsolete library in the app payload."
+            }
+            foreach ($relativePath in $preservedWorkFiles) {
+              if ([System.IO.File]::ReadAllText((Join-Path $installDir $relativePath)) -cne "preserve legacy work") {
+                throw "Upgrade changed legacy user data: $relativePath"
+              }
+            }
+            .\.venv\Scripts\python.exe scripts\smoke_packaged_app.py $installedExe
+            Assert-NativeCommandSucceeded "Upgraded package launch smoke"
+
             $uninstallers = @(Get-ChildItem -LiteralPath $installDir -Filter "unins*.exe" -File)
             if ($uninstallers.Count -ne 1) {
               throw "Expected exactly one installed uninstaller, found $($uninstallers.Count)."
@@ -668,6 +699,11 @@ jobs:
             }
             if (Test-Path -LiteralPath $installedExe) {
               throw "Windows uninstaller left the installed executable behind: $installedExe"
+            }
+            foreach ($relativePath in $preservedWorkFiles) {
+              if ([System.IO.File]::ReadAllText((Join-Path $installDir $relativePath)) -cne "preserve legacy work") {
+                throw "Uninstall changed legacy user data: $relativePath"
+              }
             }
           } finally {
             if (Test-Path -LiteralPath $smokeRoot) {
@@ -725,9 +761,13 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-installer
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
           path: |
             dist/ClassInEDBMVP-Setup.exe
             dist/windows-release-evidence.json
+            dist/package-size.json
             dist/release-metadata
 
   update-feed:
