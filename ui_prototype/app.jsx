@@ -8279,7 +8279,7 @@ function HomeDashboard({
         <section className="home-start-intro" aria-labelledby="home-start-title">
         <div className="home-hero-head">
           <div className="home-hero-badge">ClassIn EDB · 수업 준비</div>
-          <h1 id="home-start-title" className="home-hero-title">수업 자료를<br />칠판으로</h1>
+          <h1 id="home-start-title" className="home-hero-title">수업 자료를{' '}<br />칠판으로</h1>
           <p className="home-hero-lead">
             시험지와 교재를 올리고, 문제를 확인하고,<br />나만의 수업 칠판을 완성하세요.
           </p>
@@ -9000,10 +9000,17 @@ function SidePanel({
     }
     const disclosure = updateDisclosureRef.current;
     if (!disclosure) return;
-    consumedUpdateRequestRef.current = updatePanelRequest;
     disclosure.open = true;
-    disclosure.scrollIntoView({ block: 'nearest' });
-    disclosure.querySelector('summary')?.focus({ preventScroll: true });
+    // Wait for the newly opened panel and disclosure to finish layout before
+    // scrolling; the home screen can otherwise leave the actions offscreen.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        consumedUpdateRequestRef.current = updatePanelRequest;
+        disclosure.scrollIntoView({ block: 'start' });
+        disclosure.querySelector('summary')?.focus({ preventScroll: true });
+      });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [updatePanelRequest, tab, setTab]);
   const panelTabRefs = useRef({});
   const panelBusy = Boolean(mutating || sessionEditState?.busy);

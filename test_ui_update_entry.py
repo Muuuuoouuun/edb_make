@@ -80,6 +80,44 @@ const passageButton = tree => nodes(tree).find(node => node.type === 'button' &&
 
 
 class TestUiUpdateEntry(unittest.TestCase):
+    def test_update_panel_retries_layout_when_render_cancels_pending_scroll(self) -> None:
+        run_node(NODE_SETUP + r"""
+        let effect;
+        let nextFrame = 0;
+        let scrolled = 0;
+        const frames = new Map();
+        const disclosure = {
+          open: false,
+          scrollIntoView: options => { assert.equal(options.block, 'start'); scrolled += 1; },
+          querySelector: () => ({ focus: options => assert.equal(options.preventScroll, true) }),
+        };
+        const sandbox = {
+          useEffect: callback => { effect = callback; },
+          updatePanelRequest: 1, tab: 'board', setTab: () => {},
+          updateDisclosureRef: { current: disclosure },
+          consumedUpdateRequestRef: { current: 0 },
+          requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; },
+          cancelAnimationFrame: id => frames.delete(id),
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(section('  useEffect(() => {\n    if (!updatePanelRequest', '  const panelTabRefs'), sandbox);
+        const cancelled = effect();
+        assert.equal(disclosure.open, true);
+        cancelled();
+        assert.equal(frames.size, 0);
+        assert.equal(sandbox.consumedUpdateRequestRef.current, 0, 'cancelled layout must not consume the request');
+        effect();
+        while (frames.size) {
+          const [id, callback] = frames.entries().next().value;
+          frames.delete(id);
+          callback();
+        }
+        assert.equal(scrolled, 1);
+        assert.equal(sandbox.consumedUpdateRequestRef.current, 1);
+        effect();
+        assert.equal(frames.size, 0, 'completed requests must not scroll again on ordinary renders');
+        """)
+
     def test_update_check_deduplicates_in_flight_and_reports_unconfigured_truthfully(self) -> None:
         run_node(UPDATE_SETUP + r"""
         (async () => {

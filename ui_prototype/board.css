@@ -7895,10 +7895,11 @@
     .topbar:has(.topbar-export-group) > .brand{ grid-column: 1; grid-row: 1; }
     .topbar:has(.topbar-export-group) > .crumb{ grid-column: 2; grid-row: 1; }
     .topbar:has(.topbar-export-group) > .crumb > span{ display: none; }
-    .topbar:has(.topbar-export-group) > .topbar-actions{ grid-column: 3; grid-row: 1; justify-self: end; }
-    .topbar:has(.topbar-export-group) > .topbar-save-state{ grid-column: 1 / 3; grid-row: 2; min-width: 0; }
-    .topbar:has(.topbar-export-group) > .topbar-export-group{ grid-column: 3; grid-row: 2; justify-self: end; }
-    .topbar:has(.topbar-export-group) > .progress{ grid-column: 1 / -1; grid-row: 3; }
+    .topbar:has(.topbar-export-group) > .topbar-actions{ grid-column: 2 / -1; grid-row: 1; justify-self: end; }
+    .topbar:has(.topbar-export-group) > .topbar-save-state{ grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+    .topbar:has(.topbar-export-group) > .topbar-export-group{ grid-column: 1 / -1; grid-row: 3; justify-self: end; }
+    .topbar:has(.topbar-export-group) > .progress{ grid-column: 1 / -1; grid-row: 4; }
+    .topbar:has(.topbar-export-group){ padding-inline: 8px; column-gap: 4px; }
     .stage-preview-controls{ gap: 4px; }
     .stage-preview-controls .btn:not(.icon){ padding-inline: 6px; }
     .topbar .progress{ order: 3; flex: 1 1 100%; }
