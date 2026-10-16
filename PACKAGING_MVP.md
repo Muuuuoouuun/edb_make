@@ -125,7 +125,7 @@ If the certificate is already installed in the Windows certificate store, you ca
 ```
 
 The script locates `signtool.exe` from `PATH` or the Windows SDK. It signs `.exe`, `.dll`, and `.pyd` files in the packaged app folder before building the installer, then signs and verifies `dist\ClassInEDBMVP-Setup.exe`.
-The installer build prints the final setup file size and SHA-256 hash. The Inno Setup definition uses high-compression LZMA2 and closes the running app before replacing the complete PyInstaller `_internal` payload, so DLLs and Python extensions removed in a newer release cannot survive an in-place upgrade. User settings, API keys, uploads, and outputs remain untouched in the separate runtime folder under the Windows Documents known folder. If `-SignTool` or `-InnoSetupCompiler` is supplied explicitly, a missing or non-file path fails the build instead of silently selecting a different installed tool.
+The installer build prints the final setup file size and SHA-256 hash. The Inno Setup definition uses high-compression LZMA2 and closes the running app before replacing the complete PyInstaller `_internal` payload, so DLLs and Python extensions removed in a newer release cannot survive an in-place upgrade. User settings, API keys, uploads, and outputs remain untouched in the separate runtime folder under the Windows Documents known folder. Legacy work folders at the install root (`.app_runtime`, `uploads`, `outputs`, `exports`, and other session files) are preserved as well; only the immutable `_internal` payload and named obsolete UI/build files are deleted. Do not remove the entire install directory to update an old version. If `-SignTool` or `-InnoSetupCompiler` is supplied explicitly, a missing or non-file path fails the build instead of silently selecting a different installed tool.
 
 Installer display metadata can be overridden without changing the packaged executable name:
 ```powershell
@@ -211,6 +211,25 @@ dist/ClassInEDBMVP-macOS.zip
 ```
 
 The macOS wrapper removes stale same-name app folders, `.app` bundles, zip archives, DMGs, notary-upload zips, and previous PyInstaller work files before each build. After verifying the `.app`, it removes PyInstaller's sibling collect folder and temporary work directory so the output directory does not expose an extra runnable-looking copy.
+
+### Package size and upgrades
+
+The installer workflow distributes only the macOS DMG; `--zip` remains available for local builds. The October 16 v0.2.3 sample contained a 99,491,757-byte DMG and a 90,067,648-byte app ZIP containing the same app. Omitting that ZIP saves about 85.9 MiB of distribution storage, without changing installed app size. DMGs use UDZO with zlib level 9. Already-compressed DMG/EXE artifacts are uploaded without a second compression pass and retained for 14 days.
+
+Both native packaging wrappers write `package-size.json` next to the app. It reports unique regular-file bytes, the largest files, component totals, and counts of symlinks/hardlink duplicates; macOS bundle links are not traversed. This measures payload bytes, not filesystem allocation. Generate or enforce a target-specific budget with:
+
+```sh
+python scripts/report_package_size.py dist/ClassInEDBMVP.app --output dist/package-size.json
+# Optional ceiling; choose a limit appropriate for the target architecture.
+python scripts/report_package_size.py dist/ClassInEDBMVP.app --output dist/package-size.json --max-bytes 314572800
+```
+
+The v0.2.3 macOS sample contains about 201 MiB of regular-file content, primarily OpenCV and MuPDF. Their native dependent libraries must stay bundled; removing video-codec libraries by filename can prevent OpenCV from loading even for still images. Use the report to measure dependency changes before claiming installed-size reductions. For Windows one-file builds, the report measures the executable rather than the expanded runtime.
+
+For manual macOS upgrades, quit EDB Maker, drag the stable `ClassInEDBMVP.app` into Applications, and choose Replace for the existing app. Avoid keeping version-numbered app copies. The automatic updater stages and verifies the new bundle before preserving the old one, restores the previous app if replacement fails, and removes the backup and downloaded installer after successful replacement. A failed verification leaves the existing app intact. User data under Documents is outside the app bundle and is preserved.
+
+Windows automatic updates wait for the app to exit before running Setup; a timeout stops installation. On either OS, failure to launch the update helper discards only that attempt's temporary download, rather than leaving a full installer for each retry. Once the helper has started, it also removes its downloaded installer after completion or failure; the small installation log remains for diagnosis. Other downloads, user settings, and session data are not included in this cleanup.
+
 The app bundle is re-verified after signing/stapling before archive creation. Generated zip archives and DMGs are checked for non-empty output; zip archives are inspected for the expected app entry, and DMGs are verified with `hdiutil verify` plus a mounted app-bundle contents check.
 Notarized builds additionally require the final app to report a Developer ID Application authority and hardened-runtime flag, then run `stapler validate` on the stapled app and DMG.
 The wrapper prints the final zip/DMG file size and SHA-256 hash after all signing/notarization steps that can mutate the artifact.

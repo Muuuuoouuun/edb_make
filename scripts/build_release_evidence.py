@@ -18,9 +18,11 @@ except ImportError:  # pragma: no cover - direct script execution
 
 
 EXPECTED_ARTIFACT_NAMES = {
-    "macos": {"ClassInEDBMVP-macOS.dmg", "ClassInEDBMVP-macOS.zip"},
+    "macos": {"ClassInEDBMVP-macOS.dmg"},
     "windows": {"ClassInEDBMVP-Setup.exe"},
 }
+# Keep validating historical dual-artifact releases and local opt-in ZIPs.
+OPTIONAL_ARTIFACT_NAMES = {"macos": {"ClassInEDBMVP-macOS.zip"}, "windows": set()}
 GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -53,9 +55,11 @@ def create_release_evidence(
         raise ValueError("\n".join(metadata_errors))
     resolved_artifacts = [path.expanduser().resolve() for path in artifacts]
     names = {path.name for path in resolved_artifacts}
-    if names != expected_names or len(resolved_artifacts) != len(expected_names):
+    allowed_names = expected_names | OPTIONAL_ARTIFACT_NAMES[platform_name]
+    if not expected_names <= names <= allowed_names or len(resolved_artifacts) != len(names):
         raise ValueError(
-            f"{platform_name} evidence requires exact artifacts {sorted(expected_names)}, found {sorted(names)}"
+            f"{platform_name} evidence requires artifacts {sorted(expected_names)} "
+            f"with only optional artifacts {sorted(allowed_names - expected_names)}, found {sorted(names)}"
         )
     entries = []
     for artifact in sorted(resolved_artifacts, key=lambda path: path.name):
@@ -124,9 +128,11 @@ def collect_release_evidence_errors(
             errors.append(f"release evidence size mismatch: {file_name}")
         if _sha256(artifact) != entry.get("sha256"):
             errors.append(f"release evidence SHA-256 mismatch: {file_name}")
-    if seen_names != expected_names:
+    allowed_names = expected_names | OPTIONAL_ARTIFACT_NAMES.get(platform_name, set())
+    if not expected_names <= seen_names <= allowed_names:
         errors.append(
-            f"release evidence artifact set mismatch: expected {sorted(expected_names)}, found {sorted(seen_names)}"
+            f"release evidence artifact set mismatch: required {sorted(expected_names)}, "
+            f"allowed {sorted(allowed_names)}, found {sorted(seen_names)}"
         )
     return errors
 

@@ -563,6 +563,11 @@ if ($BuiltWithPyInstaller -and $OneFile) {
     Write-EDBArtifactSummary -Path $PackageRoot -Label "PyInstaller one-file executable"
 }
 
+if ($BuiltWithPyInstaller) {
+    & $PythonExe (Join-Path $ProjectRoot "scripts\report_package_size.py") $PackageRoot --output (Join-Path $ResolvedOutputDir "package-size.json")
+    Assert-EDBNativeCommandSucceeded "Package size report"
+}
+
 Write-Host "Packaging complete."
 if (Test-Path -LiteralPath $PackageRoot -PathType Leaf) {
     Write-Host "Output file: $PackageRoot"

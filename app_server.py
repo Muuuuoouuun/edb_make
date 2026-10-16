@@ -1824,7 +1824,7 @@ def _current_macos_bundle_path(executable: Path | None = None) -> Path | None:
 
 
 MACOS_UPDATE_HELPER = r'''#!/bin/zsh
-set -u
+set -euo pipefail
 parent_pid="$1"
 artifact="$2"
 artifact_type="$3"
@@ -1845,6 +1845,7 @@ mounted=0
 cleanup() {
   if [[ "$mounted" == "1" ]]; then /usr/bin/hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true; fi
   /bin/rm -rf "$work_dir" "$staged_app"
+  /bin/rm -f "$artifact"
 }
 trap cleanup EXIT
 /bin/mkdir -p "$work_dir"
@@ -1869,14 +1870,15 @@ if [[ ! -d "$source_app" ]]; then
   exit 22
 fi
 /usr/bin/ditto "$source_app" "$staged_app"
-if command -v codesign >/dev/null 2>&1; then
-  /usr/bin/codesign --verify --deep --strict "$staged_app"
-fi
+/usr/bin/codesign --verify --deep --strict "$staged_app"
 if [[ ! -d "$target_app" ]]; then
   echo "installed app disappeared before replacement: $target_app"
   exit 23
 fi
-/bin/mv "$target_app" "$backup_app"
+if ! /bin/mv "$target_app" "$backup_app"; then
+  echo "could not preserve previous app; update cancelled"
+  exit 24
+fi
 if /bin/mv "$staged_app" "$target_app"; then
   /bin/rm -rf "$backup_app" "$artifact"
   /usr/bin/open "$target_app"
@@ -1897,16 +1899,22 @@ WINDOWS_UPDATE_HELPER = r'''param(
   [Parameter(Mandatory=$true)][string]$LogFile
 )
 $ErrorActionPreference = 'Stop'
-try { Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue } catch {}
-$arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $LogFile + '"'))
-$process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
-if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
-  throw "installer exited with code $($process.ExitCode)"
+try {
+  $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
+  if ($parent -and -not $parent.WaitForExit(120000)) {
+    throw "app did not exit within 120 seconds; update cancelled"
+  }
+  $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $LogFile + '"'))
+  $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
+  if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+    throw "installer exited with code $($process.ExitCode)"
+  }
+  if (Test-Path -LiteralPath $AppExecutable -PathType Leaf) {
+    Start-Process -FilePath $AppExecutable
+  }
+} finally {
+  Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
 }
-if (Test-Path -LiteralPath $AppExecutable -PathType Leaf) {
-  Start-Process -FilePath $AppExecutable
-}
-Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
 '''
 
 
@@ -2024,6 +2032,23 @@ def _launch_update_helper(artifact_path: Path, status: dict[str, Any], artifact_
     raise AppUpdateError("unsupported_update_platform", "이 운영체제의 자동 업데이트는 아직 지원하지 않습니다.")
 
 
+def _discard_update_download(artifact_path: Path) -> None:
+    """Discard only the temporary update directory owned by this runtime."""
+    download_dir = artifact_path.parent
+    update_root = RUNTIME_DIR / "updates"
+    try:
+        if (
+            update_root.is_symlink()
+            or download_dir.is_symlink()
+            or not download_dir.name.startswith("pending-")
+            or download_dir.parent.resolve() != update_root.resolve()
+        ):
+            return
+        shutil.rmtree(download_dir)
+    except OSError as exc:
+        _log_operation_exception("discard_failed_update_download", exc)
+
+
 def prepare_app_update(pin: Any) -> dict[str, Any]:
     status = build_app_update_status()
     if not status.get("updateAvailable"):
@@ -2041,7 +2066,11 @@ def prepare_app_update(pin: Any) -> dict[str, Any]:
     _authorize_update_pin(pin, verifier)
     _download_url, file_name, artifact_type, _expected_size, _expected_sha256 = _update_artifact_details(status)
     artifact_path = _download_update_artifact(status)
-    helper = _launch_update_helper(artifact_path, status, artifact_type)
+    try:
+        helper = _launch_update_helper(artifact_path, status, artifact_type)
+    except Exception:
+        _discard_update_download(artifact_path)
+        raise
     latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
     return {
         "ok": True,

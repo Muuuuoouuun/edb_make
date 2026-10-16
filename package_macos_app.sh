@@ -636,6 +636,9 @@ if [[ "$NOTARIZE" == "1" && -d "$APP_PATH" ]]; then
   rm -f "$APP_NOTARY_ZIP"
 fi
 
+"$PYTHON_EXE" "$PROJECT_ROOT/scripts/report_package_size.py" "$APP_PATH" \
+  --output "$RESOLVED_OUTPUT_DIR/package-size.json"
+
 if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
   rm -f "$ZIP_PATH"
   (cd "$RESOLVED_OUTPUT_DIR" && /usr/bin/ditto -c -k --keepParent --zlibCompressionLevel 9 "$APP_NAME.app" "$(basename "$ZIP_PATH")")
@@ -654,6 +657,7 @@ if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
     -srcfolder "$STAGING_DIR" \
     -ov \
     -format UDZO \
+    -imagekey zlib-level=9 \
     "$DMG_PATH" >/dev/null
   rm -rf "$STAGING_DIR"
   require_nonempty_file "$DMG_PATH" "DMG installer"

@@ -313,6 +313,9 @@ if ($Sign -and $SkipAppBuild) {
 }
 
 $InstallerPath = Join-Path $ResolvedOutputDir "$AppName-Setup.exe"
+& $PythonExe (Join-Path $ProjectRoot "scripts\report_package_size.py") $PackageRoot --output (Join-Path $ResolvedOutputDir "package-size.json")
+Assert-EDBNativeCommandSucceeded "Package size report"
+
 if (Test-Path -LiteralPath $InstallerPath -PathType Leaf) {
     Remove-Item -Force -LiteralPath $InstallerPath
 }
