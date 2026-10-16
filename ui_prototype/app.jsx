@@ -702,6 +702,26 @@ function manualSplitHasOverlaps(regions){
   return false;
 }
 
+function translateManualSplitBoxes(boxes, page, dx, dy){
+  if (!boxes.size) return boxes;
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const box of boxes.values()) {
+    left = Math.min(left, box.left);
+    top = Math.min(top, box.top);
+    right = Math.max(right, box.left + box.width);
+    bottom = Math.max(bottom, box.top + box.height);
+  }
+  // Clamp the translation of the whole selection, preserving crop sizes and
+  // spacing when a pointer or repeated arrow key reaches the page edge.
+  const shiftX = Math.max(-left, Math.min(page.width - right, finiteNumber(dx, 0)));
+  const shiftY = Math.max(-top, Math.min(page.height - bottom, finiteNumber(dy, 0)));
+  return new Map(Array.from(boxes, ([id, box]) => [id, {
+    ...box,
+    left: box.left + shiftX,
+    top: box.top + shiftY,
+  }]));
+}
+
 function replacementSourceIdFor(problem){
   const retry = problem?.aiRetry || problem?.ai_retry || {};
   return String(
@@ -1885,6 +1905,46 @@ function BoxEditPanel({
   );
 }
 
+function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange }){
+  const [draft, setDraft] = useState(String(value));
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(String(value));
+  }, [value]);
+  const commit = () => {
+    focusedRef.current = false;
+    const next = clampManualSplitStampDimension(draft, maxValue);
+    setDraft(String(next));
+    onChange?.(next);
+  };
+  return (
+    <input
+      type="number"
+      min={Math.min(24, maxValue)}
+      max={maxValue}
+      step="10"
+      value={draft}
+      disabled={disabled}
+      onFocus={() => { focusedRef.current = true; }}
+      onChange={event => {
+        const text = event.target.value;
+        setDraft(text);
+        const next = Number(text);
+        // Keep partial input such as "3" while typing "320". Valid sizes
+        // still update the preview immediately; clamp only when editing ends.
+        if (text && Number.isFinite(next) && next >= Math.min(24, maxValue) && next <= maxValue) onChange?.(Math.round(next));
+      }}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
 function ManualSplitEditor({
   page,
   regions,
@@ -2076,26 +2136,20 @@ function ManualSplitEditor({
             <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
               <label className="manual-stamp-field">
                 <span>가로</span>
-                <input
-                  type="number"
-                  min="24"
-                  max={pageWidth}
-                  step="10"
+                <ManualSplitStampDimensionInput
                   value={stampWidth}
+                  maxValue={pageWidth}
                   disabled={mutating}
-                  onChange={(evt) => onStampSizeChange?.({ width: evt.target.value })}
+                  onChange={width => onStampSizeChange?.({ width })}
                 />
               </label>
               <label className="manual-stamp-field">
                 <span>세로</span>
-                <input
-                  type="number"
-                  min="24"
-                  max={pageHeight}
-                  step="10"
+                <ManualSplitStampDimensionInput
                   value={stampHeight}
+                  maxValue={pageHeight}
                   disabled={mutating}
-                  onChange={(evt) => onStampSizeChange?.({ height: evt.target.value })}
+                  onChange={height => onStampSizeChange?.({ height })}
                 />
               </label>
             </div>
@@ -3645,18 +3699,15 @@ function ReviewStage({
     setManualSplit(prev => {
       const selected = new Set(prev?.selectedRegionIds || []);
       if (!prev || !selected.size) return prev;
+      const boxes = new Map((prev.regions || [])
+        .filter(region => selected.has(region.id))
+        .map(region => [region.id, region.bbox]));
+      const translated = translateManualSplitBoxes(boxes, manualSplitPage, dx, dy);
       return {
         ...prev,
         regions: (prev.regions || []).map(region => (
-          selected.has(region.id)
-            ? {
-                ...region,
-                bbox: clampReviewBox({
-                  ...region.bbox,
-                  left: finiteNumber(region.bbox?.left, 0) + dx,
-                  top: finiteNumber(region.bbox?.top, 0) + dy,
-                }, manualSplitPage),
-              }
+          translated.has(region.id)
+            ? { ...region, bbox: translated.get(region.id) }
             : region
         )),
       };
@@ -4417,21 +4468,14 @@ function ReviewStage({
       if (drag.mode === 'move') {
         const dx = (evt.clientX - drag.startX) * drag.scaleX;
         const dy = (evt.clientY - drag.startY) * drag.scaleY;
+        const translated = translateManualSplitBoxes(drag.initialBoxes, drag.page, dx, dy);
         setManualSplit(prev => {
           if (!prev) return prev;
           return {
             ...prev,
             regions: (prev.regions || []).map(region => {
-              const initialBox = drag.initialBoxes.get(region.id);
-              if (!initialBox) return region;
-              return {
-                ...region,
-                bbox: clampReviewBox({
-                  ...initialBox,
-                  left: finiteNumber(initialBox.left, 0) + dx,
-                  top: finiteNumber(initialBox.top, 0) + dy,
-                }, drag.page),
-              };
+              const box = translated.get(region.id);
+              return box ? { ...region, bbox: box } : region;
             }),
           };
         });
