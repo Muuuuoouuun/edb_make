@@ -3531,6 +3531,17 @@ def _dark_numeric_problem_marker_component_offsets(
         if not candidate_digits:
             continue
         digit = max(candidate_digits, key=lambda item: item["right"])
+        # Small "digits" (the bitmap-font regime, < 12px) next to a glyph
+        # twice their height are pieces of a scanned Hangul syllable.
+        if digit["height"] < 12 and any(
+            other["height"] >= digit["height"] * 1.8
+            and other["height"] <= 46
+            and digit["x"] <= other["x"] <= dot["right"] + 30
+            and other["y"] < digit["bottom"]
+            and other["bottom"] > digit["y"]
+            for other in components
+        ):
+            continue
         # A printed period is followed by a word space.  Jamo pieces of a
         # Hangul syllable or letters inside a word have ink right after the
         # "dot" and split prose pages at random line starts.
@@ -3563,6 +3574,8 @@ def _dark_numeric_problem_marker_component_offsets(
             leftmost = previous_digit
         if leftmost["x"] > 50:
             continue
+        if __import__("os").environ.get("EDB_MARKER_DEBUG"):
+            print("MARKER", top, digit, leftmost, dot)
         candidates.append((leftmost["x"], min(leftmost["y"], dot["y"])))
 
     if not candidates:
@@ -3987,9 +4000,14 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
         # First x with a real share of the column's ink; a centred page
         # header crossing the gutter must not drag the edge leftwards.
         projection = [int(crop.crop((x, 0, x + 1, crop.height)).histogram()[255]) for x in range(crop.width)]
-        peak = max(projection)
+        # Tall vertical rules (centre divider, box sides) dominated the peak:
+        # the 5% threshold then sat above body-text ink and the edge landed
+        # on the rule or inside the text.  Ignore them for the threshold.
+        rule_height = crop.height * 0.4
+        text_projection = [0 if value >= rule_height else value for value in projection]
+        peak = max(text_projection) or max(projection)
         threshold = max(2, int(peak * 0.05))
-        first_x = next((x for x, value in enumerate(projection) if value >= threshold), None)
+        first_x = next((x for x, value in enumerate(text_projection) if value >= threshold), None)
         # Skip a vertical divider rule at the column edge: a run of at most
         # 6px whose ink covers 85% of the column height (box borders are shorter), followed by a gap.
         # Only a column right of the split can start with the centre divider;
@@ -4055,6 +4073,8 @@ def _starts_after_white_space(ink_rows: Any, top: int, gap_px: int, ink_limit: i
         while row > 0 and ink_limit < int(ink_rows[row]) <= dense and sparse_steps < 4:
             row -= 1
             sparse_steps += 1
+        if int(ink_rows[row]) <= ink_limit:
+            continue  # only a descender/ascender sliver: scan the blank above
         if int(ink_rows[row]) <= dense:
             return False
         while row > 0 and int(ink_rows[row]) > dense:
@@ -4234,9 +4254,13 @@ def _segment_visual_problem_markers(
     options: SegmentOptions,
     *,
     min_markers: int = 2,
+    skip_above: float | None = None,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
     marker_mask, content_box, columns = _visual_marker_column_boxes(image, options)
     marker_tops_by_column = [_visual_problem_marker_tops(image, column_box) for column_box in columns]
+    if skip_above is not None:
+        # scanned exam: digits in the running header (제1교시, page box)
+        marker_tops_by_column = [[top for top in tops if top > skip_above] for tops in marker_tops_by_column]
     marker_count = sum(len(tops) for tops in marker_tops_by_column)
     if marker_count < min_markers:
         return None
@@ -4926,11 +4950,24 @@ def _scan_page_header_rule_bottom(image: Image.Image) -> float | None:
         return None
     ink = np.array(image.convert("L")) < UNCOVERED_REGION_DARK_THRESHOLD
     height, width = ink.shape
-    limit = int(height * 0.08)
+    # Korean exam headers (과목명 + 제1교시/쪽 상자) end around 12% of the
+    # page.  A bordered notice box near the top has a long horizontal edge
+    # too; it is content, recognised by vertical sides at the edge's ends.
+    limit = int(height * 0.13)
     rows = np.where(ink[:limit].sum(axis=1) >= width * 0.6)[0]
-    if rows.size == 0:
-        return None
-    return float(rows[-1] + 1)
+    for row in rows[::-1]:
+        xs = np.where(ink[row])[0]
+        left_end, right_end = int(xs[0]), int(xs[-1])
+        def _side(x: int) -> bool:
+            band = ink[max(0, row - 40) : max(0, row - 4), max(0, x - 2) : x + 3]
+            return band.size > 0 and bool((band.any(axis=1)).mean() >= 0.8)
+        if _side(left_end) and _side(right_end):
+            continue  # bottom edge of a box
+        below = ink[row + 4 : min(height, row + 40), max(0, left_end - 2) : left_end + 3]
+        if below.size and bool((below.any(axis=1)).mean() >= 0.8):
+            continue  # top edge of a box
+        return float(row + 1)
+    return None
 
 
 def _drop_scan_page_header_blocks(image: Image.Image, blocks: list[ContentBlock]) -> list[ContentBlock]:
@@ -5284,6 +5321,7 @@ def segment_page(
                 page_id,
                 resolved_options,
                 min_markers=1 if scanned_pdf_page else 2,
+                skip_above=_scan_page_header_rule_bottom(image) if scanned_pdf_page else None,
             )
             if (
                 marker_result is None
