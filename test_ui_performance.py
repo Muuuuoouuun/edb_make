@@ -99,36 +99,39 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("object-fit: contain", base_image_css)
         self.assertIn("object-position: center top", stage_image_css)
 
-    def test_board_estimate_bar_reserves_space_without_covering_the_board(self) -> None:
+    def test_board_toolbar_reserves_space_without_covering_the_board(self) -> None:
         board = board_stylesheet()
         stage_css = board.split("/* Stage (big board) */", 1)[1]
         stage_wrap_css = stage_css.split(".stage-wrap{", 1)[1].split("}", 1)[0]
         stage_board_css = stage_css.split(".stage-board{", 1)[1].split("}", 1)[0]
-        estimate_css = stage_css.split(".stage-estimate-bar{", 1)[1].split("}", 1)[0]
+        editor = (PROJECT_ROOT / "ui_prototype" / "editor-layout.css").read_text(encoding="utf-8")
+        toolbar_css = editor.split(".stage > .stage-unified-toolbar {", 1)[1].split("}", 1)[0]
 
         self.assertIn("display: flex", stage_wrap_css)
         self.assertIn("flex-direction: column", stage_wrap_css)
         self.assertIn("gap: 12px", stage_wrap_css)
-        self.assertIn("max-width: var(--stage-preview-max-width)", stage_board_css)
-        self.assertIn("max-width: var(--stage-preview-max-width)", estimate_css)
-        self.assertIn(".stage-wrap:has(.stage-estimate-bar)", board)
+        self.assertIn("flex: 1 1 0", stage_board_css)
+        self.assertIn("min-height: 0", stage_board_css)
+        self.assertNotIn("aspect-ratio:", stage_board_css)
+        self.assertIn("flex: 0 0 52px", toolbar_css)
+        self.assertIn("position: relative", toolbar_css)
+        self.assertNotIn(".stage-estimate-bar", board)
 
     def test_board_estimate_keeps_one_touch_sized_row_and_details_out_of_flow(self) -> None:
         board = board_stylesheet()
-        estimate_css = board.split(".stage-estimate-bar{", 1)[1].split("}", 1)[0]
+        editor = (PROJECT_ROOT / "ui_prototype" / "editor-layout.css").read_text(encoding="utf-8")
+        estimate_css = editor.split(".stage > .stage-unified-toolbar {", 1)[1].split("}", 1)[0]
         toggle_css = board.split(".stage-estimate-details-toggle{", 1)[1].split("}", 1)[0]
         details_css = board.split(".stage-estimate-details{", 1)[1].split("}", 1)[0]
-        compact_css = board.split("@container stage-estimate (max-width: 460px)", 1)[1].split("}", 1)[0]
 
-        self.assertIn("height: 48px", estimate_css)
+        self.assertIn("height: 52px", estimate_css)
         self.assertIn("flex-wrap: nowrap", estimate_css)
         self.assertIn("min-width: var(--control-touch)", toggle_css)
         self.assertIn("min-height: var(--control-touch)", toggle_css)
         self.assertIn("position: fixed", details_css)
         self.assertIn("overflow: auto", details_css)
         self.assertNotIn(".stage-wrap:has(.stage-estimate-details", board)
-        self.assertIn(".stage-estimate-selection", compact_css)
-        self.assertIn("display: none", compact_css)
+        self.assertIn("min-width: 0", estimate_css)
 
     def test_board_grid_and_active_slot_guides_are_visible_but_noninteractive(self) -> None:
         board = board_stylesheet()

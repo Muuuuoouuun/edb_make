@@ -95,15 +95,23 @@ class TestWorkspaceLayout(unittest.TestCase):
 
     def test_panel_shortcut_does_not_hide_an_active_review_editor(self) -> None:
         run_node(NODE_SETUP + r"""
-        let pane = 'stage';
+        let pane = 'stage', focusPanelCollapsed = true, homePanelOpen = false;
         const sandbox = { reviewEditorActive: false, useCallback: callback => callback,
-          setMobilePane: value => { pane = value; } };
+          setMobilePane: value => { pane = value; },
+          setFocusPanelCollapsed: value => { focusPanelCollapsed = value; },
+          setHomePanelOpen: value => { homePanelOpen = value; } };
         vm.createContext(sandbox);
         const callback = section('  const revealSidePanel = useCallback(', '  const [mutating, setMutating]');
         const invoke = () => vm.runInContext('(() => {' + callback + 'revealSidePanel(); })()', sandbox);
         invoke(); assert.equal(pane, 'panel');
+        assert.equal(focusPanelCollapsed, false, 'panel shortcut reopens the floating focus panel');
+        assert.equal(homePanelOpen, true, 'panel shortcut also reveals settings on the empty home');
         pane = 'stage'; sandbox.reviewEditorActive = true;
+        focusPanelCollapsed = true; homePanelOpen = false;
         invoke(); assert.equal(pane, 'stage');
+        assert.equal(focusPanelCollapsed, false);
+        assert.equal(homePanelOpen, true);
+        assert.equal(pane, 'stage', 'active review editing must retain the visible mobile stage');
         """)
 
     def test_all_review_and_board_stage_branches_expose_the_navigation_target(self) -> None:
@@ -146,8 +154,10 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
     def test_rail_header_no_longer_duplicates_upload_or_uses_the_ai_icon_for_preservation(self) -> None:
         rail = component("ItemsRail")
         header = rail.split('<div className="col-hd">', 1)[1].split("{hasSessionItems && (", 1)[0]
-        self.assertEqual(header.count("<button"), 1)
+        self.assertEqual(header.count("<button"), 2)
         self.assertIn('aria-label="자료 목록 접기"', header)
+        self.assertIn('aria-label="현재 원본에서 공통 지문 다시 추출"', header)
+        self.assertNotIn('aria-label="파일 추가"', header)
         primary = rail.split('className={`rail-primary-actions', 1)[1].split('        {!hasSessionItems && pendingFiles.length === 0 && (', 1)[0]
         self.assertIn("Icon.folderPlus", primary)
         self.assertIn("Icon.filesCheck", primary)

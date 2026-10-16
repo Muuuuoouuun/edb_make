@@ -71,6 +71,8 @@ class TestRecognitionAutoApply(unittest.TestCase):
           assert.equal(s.recognitionReview,null);
           assert.equal(s.recognitionApplyInFlightRef.current,false);
           assert.ok(events.some(e=>e[0]==='requestView' && e[1]==='board'));
+          assert.ok(events.filter(e=>['view','requestView'].includes(e[0])).every(e=>e[1]==='board'),
+            'recognition risks must not force an intermediate review screen');
         })().catch(e=>{console.error(e);process.exitCode=1;});
         """)
 

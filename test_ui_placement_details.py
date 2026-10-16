@@ -226,10 +226,10 @@ class TestUiPlacementSaveState(unittest.TestCase):
 
 ESTIMATE_RENDER_SETUP = NODE_SETUP + r"""
 const Babel = require('./scripts/vendor/babel.min.js');
-const fragment = section('          <div className="stage-estimate-bar"', '          <div className="stage-board"');
+const fragment = section('          <div className="stage-toolbar stage-unified-toolbar"', '        <div className="stage-wrap">');
 const portals = [], focusCalls = [], listeners = new Map();
 const panel = { style: { setProperty() {} }, focus: options => focusCalls.push(['panel', options]), contains: target => target === panel };
-const toggleElement = { focus: options => focusCalls.push(['toggle', options]), contains: target => target === toggleElement };
+const toggleElement = { getBoundingClientRect: () => ({ left: 100, right: 400, bottom: 120 }), focus: options => focusCalls.push(['toggle', options]), contains: target => target === toggleElement };
 const sandbox = placementSandbox();
 Object.assign(sandbox, {
   React: { createElement(type, props, ...children) {
@@ -237,6 +237,18 @@ Object.assign(sandbox, {
   } },
   ReactDOM: { createPortal(node, container) { portals.push({ node, container }); return null; } },
   Icon: { chevronUp: 'up', chevronDown: 'down', close: 'close' },
+  ToolbarActionMenu() {},
+  reviewAttentionCount: 0, interactionBusy: false, positioningId: null, focusMode: false,
+  panelCollapsed: false, panelReopenRef: { current: null }, onOpenPanel() {}, onOpenPendingReview() {},
+  previewZoom: 1, previewFitActive: false, activePlacement: null,
+  BOARD_PREVIEW_ZOOM_MIN: 0.2, BOARD_PREVIEW_ZOOM_MAX: 2, BOARD_PREVIEW_ZOOM_STEP: 0.1,
+  focusActiveTileAtPreviewZoom() {}, fitActiveTileInView() {},
+  smartMove: false, setSmartMove() {}, pageGuides: true, togglePageGuides() {},
+  activeId: 'p1', layout: { items: [] }, reducePlacementGap() {},
+  sourcePageCount: 0, onRecognizeSession: null, canRecognizeSession: false,
+  recognitionDisabledReason: '', sessionEditState: {},
+  activeContinuousFlow: false, columnCount: 1, processedCount: 1, items: [{id: 'p1'}],
+  rawCount: 0, s1Count: 0, aiCount: 1, reconstructCount: 0, ALTERNATE_MODIFIER_LABEL: 'Alt',
   estimateDetailsOpen: false,
   estimateBarRef: { current: { getBoundingClientRect: () => ({ right: 800, bottom: 120 }) } },
   estimateToggleRef: { current: toggleElement }, estimateDetailsRef: { current: panel },
@@ -284,7 +296,8 @@ class TestUiEstimateDisclosure(unittest.TestCase):
         assert.equal(toggle.props.type, 'button');
         assert.equal(toggle.props['aria-expanded'], false);
         assert.equal(toggle.props['aria-haspopup'], 'dialog');
-        assert.ok(text(toggle).includes('배치 정보'));
+        assert.equal(toggle.props['aria-label'], '배치 정보');
+        assert.ok(text(toggle).includes('전체 3쪽'));
         toggle.props.onClick();
         tree = renderEstimate();
         assert.equal(portals.length, 1);
@@ -312,7 +325,8 @@ class TestUiEstimateDisclosure(unittest.TestCase):
         assert.ok(text(summary).includes('ClassIn 전체 3쪽'));
         assert.ok(text(summary).includes('선택 1번 · 1쪽'));
         for (const label of ['다음', 'EDB', '사용률', 'p']) assert.ok(!text(summary).includes(label), label);
-        assert.equal(walk(tree).filter(node => node.type === 'button').length, 1);
+        assert.equal(walk(summary).filter(node => node.type === 'button').length, 1,
+          'page summary is itself the single details trigger');
         assert.equal(findClass(tree, 'stage-estimate-action'), undefined, 'gap action belongs in placement editing');
         sandbox.previewEstimate.active = null;
         const noSelection = findClass(renderEstimate(), 'stage-estimate-summary');

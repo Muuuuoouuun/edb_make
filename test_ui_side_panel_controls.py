@@ -41,7 +41,7 @@ class TestSidePanelControls(unittest.TestCase):
           panelSaveState: { dirty: true, label: '미저장 변경' }, panelBusy: false, session: {},
           ALTERNATE_MODIFIER_LABEL: 'Alt',
         });
-        const bar = section('      <div className="tab-bar" role="tablist"', '      <PublishPlanSummary');
+        const bar = section('      <div className="tab-bar" role="tablist"', '      <PublishResultPanel');
         const openings = source.match(/<section className="side-tab-panel"[^\n]+>/g);
         assert.equal(openings.length, 3);
         compile(sandbox, 'globalThis.renderNavigation = () => (<>' + bar
@@ -62,14 +62,30 @@ class TestSidePanelControls(unittest.TestCase):
             assert.equal(panel.props.hidden, !tab.props['aria-selected']);
             assert.equal(tab.props.tabIndex, tab.props['aria-selected'] ? 0 : -1);
           }
-          assert.ok(text(findClass(tree, 'panel-session-state')).includes('미저장 변경'),
-            'switching to app settings cannot hide unsaved lesson edits');
+          if (selected === 'placement') {
+            assert.equal(findClass(tree, 'panel-session-state'), undefined,
+              'placement uses its existing save footer instead of duplicating the state');
+          } else {
+            assert.ok(text(findClass(tree, 'panel-session-state')).includes('미저장 변경'),
+              'switching to app settings cannot hide unsaved lesson edits');
+          }
+          assert.equal(findClass(tabs.find(node => node.props.id === 'side-tab-item'), 'badge'), undefined,
+            'tab label must not repeat the selection counter');
           tabs.find(node => node.props.id === 'side-tab-board').props.onClick();
           assert.equal(sandbox.tab, 'board');
         }
         sandbox.panelSaveState = { dirty: false, label: '샘플 미리보기 · 저장 안 됨' };
         sandbox.session = null;
-        assert.ok(text(findClass(sandbox.renderNavigation(), 'panel-session-state')).includes('저장 안 됨'));
+        assert.equal(findClass(sandbox.renderNavigation(), 'panel-session-state'), undefined,
+          'idle saved/preview state must not occupy an extra row');
+        for (const selected of ['item', 'board']) {
+          sandbox.tab = selected; sandbox.panelBusy = true;
+          const state = findClass(sandbox.renderNavigation(), 'panel-session-state');
+          assert.equal(state.props.role, 'status');
+          assert.ok(text(state).includes('처리 중'));
+        }
+        sandbox.tab = 'placement';
+        assert.equal(findClass(sandbox.renderNavigation(), 'panel-session-state'), undefined);
         """)
 
     def test_ai_preference_and_key_readiness_are_separate_and_named(self) -> None:

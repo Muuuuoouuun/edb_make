@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 
 from scripts.verify_frontend_package import (
+    EXTRA_UI_STYLESHEETS,
     REQUIRED_RUNTIME_SOURCE_FILES,
     REQUIRED_UI_FILES,
     collect_deterministic_bundle_errors,
@@ -91,16 +92,25 @@ class TestPackagingFrontendManifest(unittest.TestCase):
 
     @staticmethod
     def _fixture_board_html(project_root: Path, bundle_digest: str) -> str:
-        """board.html markup with both cache busts the verifier expects."""
+        """board.html markup with every stylesheet cache bust the verifier expects."""
 
         css_path = project_root / "ui_prototype" / "board.css"
         css_path.parent.mkdir(parents=True, exist_ok=True)
         if not css_path.exists():
             css_path.write_bytes(b"placeholder")
         css_digest = hashlib.sha256(css_path.read_bytes()).hexdigest()
+        extra_style_links = []
+        for filename in EXTRA_UI_STYLESHEETS:
+            path = css_path.parent / filename
+            if not path.exists():
+                path.write_bytes(b".surface { display: block; }")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            extra_style_links.append(f'<link rel="stylesheet" href="{filename}?v={digest}" />')
         return (
             "<!doctype html>"
             f'<link rel="stylesheet" href="board.css?v=board-css-{css_digest}" />'
+            + "".join(extra_style_links)
+            +
             f'<script src="app.bundle.js?v=frontend-bundle-{bundle_digest}"></script>\n'
         )
 
@@ -248,6 +258,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             "ui_prototype/app.bundle.js",
             "ui_prototype/board.html",
             "ui_prototype/board.css",
+            *(f"ui_prototype/{filename}" for filename in EXTRA_UI_STYLESHEETS),
             "ui_prototype/publish_guard.js",
             "scripts/build_frontend_bundle.mjs",
             "scripts/vendor/babel.min.js",
@@ -266,6 +277,63 @@ class TestPackagingFrontendManifest(unittest.TestCase):
             errors = collect_deterministic_bundle_errors(project_root)
 
         self.assertTrue(any("deterministic frontend bundle check failed" in error for error in errors))
+
+    def test_surface_stylesheets_are_in_every_executable_and_source_package_allowlist(self) -> None:
+        spec = (PROJECT_ROOT / "ClassInEDBMVP.spec").read_text(encoding="utf-8")
+        windows = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")
+        macos = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        for filename in EXTRA_UI_STYLESHEETS:
+            with self.subTest(stylesheet=filename):
+                self.assertIn(f"ui_prototype/{filename}", REQUIRED_UI_FILES)
+                self.assertIn(f'("ui_prototype/{filename}", "ui_prototype")', spec)
+                self.assertIn(f'@("ui_prototype\\{filename}", "ui_prototype")', windows)
+                self.assertIn(f'        "ui_prototype\\{filename}",', windows)
+                self.assertIn(f'add_data "ui_prototype/{filename}" "ui_prototype"', macos)
+
+    def test_source_and_packaged_verifiers_reject_missing_surface_stylesheets(self) -> None:
+        for filename in EXTRA_UI_STYLESHEETS:
+            with self.subTest(stylesheet=filename), TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._write_frontend_project(root / "source")
+                resources = self._write_packaged_runtime(root / "portable")
+                for resource_root, verify in (
+                    (root / "source", lambda: collect_errors(root / "source")),
+                    (resources, lambda: collect_package_errors(root / "portable")),
+                ):
+                    (resource_root / "ui_prototype" / filename).unlink()
+                    self.assertTrue(any(filename in error and "missing" in error for error in verify()))
+
+    def test_source_and_packaged_verifiers_reject_changed_surface_stylesheet_bytes(self) -> None:
+        for filename in EXTRA_UI_STYLESHEETS:
+            with self.subTest(stylesheet=filename), TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._write_frontend_project(root / "source")
+                resources = self._write_packaged_runtime(root / "portable")
+                for resource_root, verify in (
+                    (root / "source", lambda: collect_errors(root / "source")),
+                    (resources, lambda: collect_package_errors(root / "portable")),
+                ):
+                    self.assertEqual([], verify())
+                    (resource_root / "ui_prototype" / filename).write_bytes(b".surface { display: grid; }")
+                    self.assertTrue(any(filename in error and "does not match" in error for error in verify()))
+
+    def test_surface_stylesheet_links_must_be_present_unique_and_digest_versioned(self) -> None:
+        for filename in EXTRA_UI_STYLESHEETS:
+            for fault in ("missing", "duplicate", "unversioned", "stale"):
+                with self.subTest(stylesheet=filename, fault=fault), TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self._write_frontend_project(root)
+                    board = root / "ui_prototype" / "board.html"
+                    digest = hashlib.sha256((board.parent / filename).read_bytes()).hexdigest()
+                    original = f'<link rel="stylesheet" href="{filename}?v={digest}" />'
+                    replacement = {
+                        "missing": "",
+                        "duplicate": original + original,
+                        "unversioned": f'<link rel="stylesheet" href="{filename}" />',
+                        "stale": f'<link rel="stylesheet" href="{filename}?v={"0" * 64}" />',
+                    }[fault]
+                    board.write_text(board.read_text(encoding="utf-8").replace(original, replacement), encoding="utf-8")
+                    self.assertTrue(any(filename in error for error in collect_errors(root)))
 
     def test_frontend_package_rejects_bundle_built_with_old_bundler(self) -> None:
         with TemporaryDirectory() as raw_tmp:

@@ -23,11 +23,16 @@ class TestPublishGuardCacheInvalidation(unittest.TestCase):
             for filename in ("art.jsx", "tweaks-panel.jsx", "app.jsx"):
                 (ui / filename).write_text("const fixture = <div />;\n", encoding="utf-8")
             (ui / "board.css").write_text("body { margin: 0; }\n", encoding="utf-8")
+            surfaces = ("editor-layout", "editor-focus", "home-redesign")
+            for name in surfaces:
+                (ui / f"{name}.css").write_text(".surface { display: block; }\n", encoding="utf-8")
             guard = ui / "publish_guard.js"
             guard.write_text("window.EDB_PUBLISH_GUARD = {};\n", encoding="utf-8")
             board = ui / "board.html"
             board.write_text(
                 '<link href="board.css?v=board-css-old">\n'
+                + ''.join(f'<link href="{name}.css?v=old">\n' for name in surfaces)
+                +
                 '<script src="app.bundle.js?v=frontend-bundle-old"></script>\n'
                 '<script src="publish_guard.js?v=preflight-layout-gap-old"></script>\n',
                 encoding="utf-8",
@@ -51,6 +56,13 @@ class TestPublishGuardCacheInvalidation(unittest.TestCase):
             self.assertEqual(rebuilt.returncode, 0, rebuilt.stderr)
             self.assertNotEqual(board.read_text(encoding="utf-8"), previous_html)
             self.assertEqual(build("--check").returncode, 0)
+            for name in surfaces:
+                previous_html = board.read_text(encoding="utf-8")
+                (ui / f"{name}.css").write_text(".surface { display: grid; }\n", encoding="utf-8")
+                self.assertNotEqual(build("--check").returncode, 0)
+                self.assertEqual(build().returncode, 0)
+                self.assertNotEqual(board.read_text(encoding="utf-8"), previous_html)
+                self.assertEqual(build("--check").returncode, 0)
 
 
 if __name__ == "__main__":

@@ -31,16 +31,22 @@ function controller() {
   const reflow = items => sandbox.reflowItemsForBoardOrder(items, 1.2, 1, 'compact');
   const session = sandbox.materializeSessionForItems(raw, reflow(raw.problems.map(sandbox.mapProblemToItem)),
     raw.session_name, 1, 'compact');
-  const state = { restores: [], mutations: [], errors: [], toasts: [], views: [] };
+  const state = { restores: [], mutations: [], errors: [], toasts: [], views: [], tweaks: [] };
   Object.assign(sandbox, {
     session, items: reflow(session.problems.map(sandbox.mapProblemToItem)),
     fileName: session.session_name, boardColumns: 1, layoutGapMode: 'compact', activeId: 'p2',
+    boardColumnsRef: { current: 1 },
     published: true, history: [], mutatingRef: { current: false }, UNDO_HISTORY_LIMIT: 20,
     useCallback: fn => fn, replacementSourceIdFor: () => null,
     appendBoundedHistory: require('./ui_prototype/reorder.js').appendBoundedHistory,
     setItems: value => { sandbox.items = typeof value === 'function' ? value(sandbox.items) : value; },
     setSession: value => { sandbox.session = value; },
     setPublished: value => { sandbox.published = value; },
+    setTweak: (key, value) => {
+      assert.equal(key, 'boardColumns', 'session adoption only restores the board column setting');
+      state.tweaks.push({ key, value });
+      sandbox.boardColumns = value;
+    },
     setLayoutGapModeState: value => { sandbox.layoutGapMode = value; },
     setActiveId: value => { sandbox.activeId = value; },
     setHistoryStack: value => { sandbox.history = value(sandbox.history); },
@@ -124,6 +130,9 @@ class TestUiProcessingStepConfirm(unittest.TestCase):
           assertEditorStatePreserved(before, state.restores[0]);
           assert.equal(sandbox.activeId, 'p2');
           assert.equal(sandbox.published, false);
+          assert.equal(sandbox.boardColumns, 1);
+          assert.equal(sandbox.boardColumnsRef.current, 1);
+          assert.deepEqual(state.tweaks.at(-1), { key: 'boardColumns', value: 1 });
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
@@ -137,6 +146,8 @@ class TestUiProcessingStepConfirm(unittest.TestCase):
             assert.equal(steps(state.restores[0]), 's2,s1', 'review bulk must not impose one processing step');
             assert.equal(steps(sandbox.session), 's2,s1');
             assert.equal(sandbox.items.map(item => item.step).join(','), 's2,s1');
+            assert.equal(sandbox.boardColumnsRef.current, sandbox.boardColumns);
+            assert.equal(sandbox.boardColumns, 1, 'confirmed one-column layout stays synchronized');
           }
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)

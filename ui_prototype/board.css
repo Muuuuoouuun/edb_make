@@ -583,6 +583,22 @@
     white-space: nowrap;
   }
   .stage-toolbar .spacer{ flex: 1; }
+  .stage-smart-move[aria-pressed="true"]{
+    color: var(--accent-ink); background: var(--surface-2); border-color: var(--accent);
+  }
+  .topbar-update{ white-space: nowrap; }
+  .topbar-update-badge{ font-size: var(--text-xs); color: var(--accent-ink); }
+  .editor-mode-control{
+    display: inline-flex; flex-shrink: 0; padding: 2px;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2);
+  }
+  .editor-mode-control .btn{ border-radius: 999px; padding-inline: 8px; font-size: var(--text-xs); }
+  .editor-mode-control [aria-pressed="true"]{ background: var(--surface); color: var(--accent-ink); }
+  .main.editor-basic-mode .home-settings-heading{
+    display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
+    border-bottom: 1px solid var(--line); font-size: var(--text-sm);
+  }
+  .home-settings-heading > div{ display: flex; gap: 8px; }
   .review-stage-toolbar{
     min-height: 48px;
     height: auto;
@@ -673,8 +689,11 @@
   .workspace-session-action-reason{ flex-basis: 100%; }
 
   .stage-wrap{
-    --stage-preview-max-width: min(100%, calc((100dvh - 56px - var(--panel-header-height) - 44px - 64px) * 16 / 9));
+    /* The viewport uses all available height. ClassIn page proportions belong
+       to the scrollable content, not to a single-page frame around it. */
     flex: 1;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -690,35 +709,6 @@
     background:
       radial-gradient(circle at 1px 1px, rgba(255,255,255,.05) 1px, transparent 0) 0 0 / 24px 24px,
       var(--bg);
-  }
-  .stage-wrap:has(.stage-estimate-bar){
-    --stage-preview-max-width: min(100%, calc((100dvh - 56px - var(--panel-header-height) - 44px - 112px) * 16 / 9));
-  }
-
-  /* Keep the summary in one fixed-height row. Details overlay the board and
-     never participate in the preview's size calculation. */
-  .stage-estimate-bar{
-    position: relative;
-    z-index: 6;
-    container: stage-estimate / inline-size;
-    width: 100%;
-    max-width: var(--stage-preview-max-width);
-    min-width: 0;
-    height: 48px;
-    min-height: 48px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 0 8px 0 12px;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius);
-    background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
-    box-shadow: var(--shadow-1);
-    color: var(--ink-2);
-    font-size: var(--text-sm);
-    line-height: 1.4;
-    flex-wrap: nowrap;
-    flex-shrink: 0;
   }
   .stage-estimate-summary{
     min-width: 0;
@@ -742,12 +732,6 @@
     color: var(--muted);
     text-overflow: ellipsis;
     font-variant-numeric: tabular-nums;
-  }
-  .stage-estimate-tools{
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    margin-left: auto;
   }
   .stage-estimate-details-toggle{
     min-width: var(--control-touch);
@@ -848,21 +832,10 @@
     margin-top: 8px;
     font-size: var(--text-xs);
   }
-  @container stage-estimate (max-width: 460px){
-    .stage-estimate-selection{
-      display: none;
-    }
-  }
-  @container stage-estimate (max-width: 300px){
-    .stage-estimate-brand{
-      display: none;
-    }
-  }
-
   .stage-board{
+    flex: 1 1 0;
+    min-height: 0;
     width: 100%;
-    max-width: var(--stage-preview-max-width);
-    aspect-ratio: 16 / 9;
     border-radius: 8px;
     background: var(--board);
     box-shadow: 0 12px 28px rgba(15,20,30,.12);
@@ -1017,16 +990,10 @@
   }
 
   @media (max-width: 700px){
-    .stage-wrap,
-    .stage-wrap:has(.stage-estimate-bar){
-      --stage-preview-max-width: 100%;
+    .stage-wrap{
       align-items: stretch;
       gap: 8px;
       padding: 12px;
-    }
-    .stage-estimate-bar{
-      gap: 8px;
-      padding-inline: 8px;
     }
     .stage-estimate-brand,
     .stage-estimate-selection{
@@ -1307,6 +1274,9 @@
     pointer-events: none;
   }
   .stage-tile.drop-before::before{ top: -2px; }
+  .stage-tile.drop-gap{
+    outline: 2px dashed var(--chalk-warm); outline-offset: 4px;
+  }
   .stage-tile.drop-after::after{ bottom: -2px; }
   .stage-tile.drop-target{
     border-color: var(--chalk-blue);
@@ -2734,6 +2704,7 @@
     gap: 10px;
     padding: 0 10px 10px;
   }
+  .detail-settings-body[hidden]{ display: none; }
   .subtle-toggle{
     min-height: 30px;
     display: flex;
@@ -5332,108 +5303,6 @@
     border-radius: 2px;
   }
 
-  /* Three-stage workflow navigation; processing is a state within preparation. */
-  .workflow-progress{
-    min-width: 0;
-    width: 328px;
-    max-width: 100%;
-    flex: 0 1 328px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1.4fr);
-    align-items: stretch;
-    padding: 4px;
-    border: 1px solid var(--line);
-    border-radius: var(--control-radius);
-    background: var(--surface-2);
-    box-shadow: var(--shadow-1);
-  }
-  .workflow-step{
-    position: relative;
-    min-width: 0;
-    min-height: var(--control-height);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-radius: 6px;
-    color: var(--muted);
-    font-size: var(--text-sm);
-    font-weight: 650;
-    line-height: 1.3;
-    white-space: normal;
-    text-align: center;
-    cursor: default;
-    transition: color var(--motion-base) ease, background-color var(--motion-base) ease, box-shadow var(--motion-base) ease;
-  }
-  button.workflow-step:not(:disabled):hover{
-    color: var(--ink);
-    background: color-mix(in srgb, var(--surface) 72%, transparent);
-    cursor: pointer;
-  }
-  .workflow-step + .workflow-step::after{
-    content: "";
-    position: absolute;
-    left: -2px;
-    top: 8px;
-    bottom: 8px;
-    width: 1px;
-    background: var(--line);
-  }
-  .workflow-step::before{
-    content: "";
-    width: 7px;
-    height: 7px;
-    flex: 0 0 7px;
-    border: 1.5px solid var(--muted-2);
-    border-radius: 50%;
-    background: transparent;
-  }
-  .workflow-step.active,
-  .workflow-step.is-active,
-  .workflow-step[aria-current="step"]{
-    z-index: 1;
-    background: var(--surface);
-    color: var(--accent-ink);
-    box-shadow: var(--shadow-1);
-    font-weight: 750;
-  }
-  .workflow-step.active::before,
-  .workflow-step.is-active::before,
-  .workflow-step[aria-current="step"]::before{
-    border-color: var(--accent-ink);
-    background: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
-  }
-  .workflow-step.done,
-  .workflow-step.is-done,
-  .workflow-step[data-state="done"]{
-    color: var(--ink-2);
-  }
-  .workflow-step.done::before,
-  .workflow-step.is-done::before,
-  .workflow-step[data-state="done"]::before{
-    border-color: var(--ok-ink);
-    background: var(--ok);
-    box-shadow: inset 0 0 0 1.5px var(--surface-2);
-  }
-  .workflow-step.disabled,
-  .workflow-step.is-disabled,
-  .workflow-step:disabled,
-  .workflow-step[aria-disabled="true"]{
-    color: var(--muted);
-    opacity: 1;
-    cursor: not-allowed;
-  }
-  .workflow-step.disabled::before,
-  .workflow-step.is-disabled::before,
-  .workflow-step:disabled::before,
-  .workflow-step[aria-disabled="true"]::before{
-    border-color: var(--line-strong);
-    background: var(--surface-2);
-    box-shadow: none;
-  }
-
   /* small icon system */
   .ic{ width: 16px; height: 16px; display: inline-block; flex: none; }
 
@@ -8005,24 +7874,7 @@
     from{ opacity: 0; transform: translate(-50%, 8px); }
     to{ opacity: 1; transform: translate(-50%, 0); }
   }
-  @media (max-width: 1280px){
-    .workflow-progress{
-      width: 304px;
-      flex-basis: 304px;
-    }
-    .workflow-step{
-      gap: 4px;
-      padding-right: 6px;
-      padding-left: 6px;
-      font-size: var(--text-sm);
-    }
-  }
   @media (max-width: 1100px){
-    .workflow-progress{
-      order: 2;
-      flex: 1 0 100%;
-      width: 100%;
-    }
     .operation-recovery-actionbar{
       align-items: flex-start;
       flex-direction: column;
@@ -8046,11 +7898,9 @@
     .topbar:has(.topbar-export-group) > .topbar-actions{ grid-column: 3; grid-row: 1; justify-self: end; }
     .topbar:has(.topbar-export-group) > .topbar-save-state{ grid-column: 1 / 3; grid-row: 2; min-width: 0; }
     .topbar:has(.topbar-export-group) > .topbar-export-group{ grid-column: 3; grid-row: 2; justify-self: end; }
-    .topbar:has(.topbar-export-group) > .workflow-progress{ grid-column: 1 / -1; grid-row: 3; }
-    .topbar:has(.topbar-export-group) > .progress{ grid-column: 1 / -1; grid-row: 4; }
+    .topbar:has(.topbar-export-group) > .progress{ grid-column: 1 / -1; grid-row: 3; }
     .stage-preview-controls{ gap: 4px; }
     .stage-preview-controls .btn:not(.icon){ padding-inline: 6px; }
-    .workflow-progress{ order: 2; flex: 1 0 100%; width: 100%; }
     .topbar .progress{ order: 3; flex: 1 1 100%; }
     .main.recognition-page-review-mode{
       grid-template-rows: minmax(0, 1fr);
@@ -8189,7 +8039,6 @@
     }
   }
   @media (prefers-reduced-motion: reduce){
-    .workflow-step,
     .view-transition-banner,
     .undo-toast,
     .operation-recovery-server-dot{
@@ -8982,21 +8831,25 @@
     .rail-mini-item{ width: 64px; }
   }
 
-  /* board pages: alternating bands + a line and header chip at each page start */
+  /* Page shading stays behind problems; boundaries are guides, not another bar. */
   .page-band{
     position: absolute;
     left: -26px; right: -26px;
     pointer-events: none;
     z-index: 0;
+    background: rgba(244,237,224,.018);
   }
   .page-band.is-even{
-    background: rgba(244,237,224,.035);
+    background: rgba(244,237,224,.075);
+  }
+  .page-band.is-current{
+    box-shadow: inset 3px 0 rgba(158,201,240,.4);
   }
   .page-head{
     position: absolute;
     left: -26px; right: -26px;
     height: 0;
-    border-top: 1px solid rgba(244,237,224,.32);
+    border-top: 1px dashed rgba(244,237,224,.36);
     pointer-events: none;
     z-index: 3;
   }
@@ -9006,14 +8859,13 @@
   .page-head-chip{
     position: absolute;
     right: 34px;
-    top: 6px;
+    top: 7px;
     display: inline-flex;
     align-items: baseline;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: rgba(8,14,11,.55);
-    border: 1px solid rgba(244,237,224,.16);
+    gap: 8px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(8,14,11,.46);
     color: var(--chalk);
     white-space: nowrap;
   }
@@ -9027,8 +8879,8 @@
     color: rgba(244,237,224,.72);
   }
   .page-head.is-current .page-head-chip{
-    border-color: rgba(158,201,240,.7);
-    box-shadow: 0 0 0 2px rgba(158,201,240,.16);
+    background: rgba(8,14,11,.66);
+    color: #eef6ff;
   }
   .stage-page-guide-btn{
     color: var(--muted);

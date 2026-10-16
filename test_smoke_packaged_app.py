@@ -1,12 +1,59 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from scripts.smoke_packaged_app import _ProcessTreeGuard
+from scripts.smoke_packaged_app import _ProcessTreeGuard, _smoke_ui_stylesheets, _validate_ui_stylesheet
+from scripts.verify_frontend_package import EXTRA_UI_STYLESHEETS
+
+
+class TestPackagedStylesheetSmoke(unittest.TestCase):
+    @staticmethod
+    def fixture() -> tuple[str, dict[str, bytes], dict[str, str]]:
+        links: list[str] = []
+        requests: dict[str, bytes] = {}
+        expected: dict[str, str] = {}
+        for filename in ("board.css", *EXTRA_UI_STYLESHEETS):
+            content = b":root{ --font-sans: system-ui; }" if filename == "board.css" else b".surface{ display: block; }"
+            digest = hashlib.sha256(content).hexdigest()
+            prefix = "board-css-" if filename == "board.css" else ""
+            href = f"{filename}?v={prefix}{digest}"
+            links.append(f'<link rel="stylesheet" href="{href}">')
+            requests[f"http://127.0.0.1:9000/{href}"] = content
+            expected[filename] = digest
+        return "\n".join(links), requests, expected
+
+    def test_http_smoke_requests_and_validates_every_surface_stylesheet(self) -> None:
+        board, requests, expected = self.fixture()
+        with patch("scripts.smoke_packaged_app._bytes_request", side_effect=requests.__getitem__) as request:
+            self.assertEqual(expected, _smoke_ui_stylesheets("http://127.0.0.1:9000", board))
+        self.assertEqual(len(expected), request.call_count)
+        self.assertEqual(set(requests), {call.args[0] for call in request.call_args_list})
+
+    def test_http_smoke_rejects_stale_or_non_utf8_surface_content(self) -> None:
+        for filename in EXTRA_UI_STYLESHEETS:
+            for content, message in ((b".surface{ display: grid; }", "does not match"), (b"\xff", "not valid UTF-8")):
+                with self.subTest(stylesheet=filename, message=message):
+                    board, requests, _ = self.fixture()
+                    key = next(url for url in requests if f"/{filename}?" in url)
+                    requests[key] = content
+                    with patch("scripts.smoke_packaged_app._bytes_request", side_effect=requests.__getitem__):
+                        with self.assertRaisesRegex(RuntimeError, message):
+                            _smoke_ui_stylesheets("http://127.0.0.1:9000", board)
+
+    def test_surface_smoke_rejects_missing_and_duplicate_links(self) -> None:
+        board, _, expected = self.fixture()
+        for filename in EXTRA_UI_STYLESHEETS:
+            with self.subTest(stylesheet=filename):
+                link = f'<link rel="stylesheet" href="{filename}?v={expected[filename]}">'
+                for invalid in (board.replace(link, ""), board + link):
+                    with self.assertRaisesRegex(RuntimeError, "exactly one"):
+                        _validate_ui_stylesheet(invalid, ".surface{ display: block; }", filename)
 
 
 class TestPackagedSmokeProcessTree(unittest.TestCase):

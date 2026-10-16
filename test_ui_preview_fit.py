@@ -16,7 +16,7 @@ Object.assign(sandbox, {
   pageH: 266 / 1.2, boardOrderSignature: 'p1|p2', contentW: 800,
   scrollRef: { current: { scrollTop: 0 } }, tileRefs: { current: { p1: { offsetTop: 84 }, p2: { offsetTop: 168 } } },
   layout: { positions: [{ top: 10 }, { top: 20 }] },
-  syncLock: { current: 0 }, previewFocusRequestRef: { current: null },
+  syncLock: { current: 0 }, syncLockOriginIdRef: { current: null }, previewFocusRequestRef: { current: null },
   setPreviewFitActive: value => { sandbox.previewFitActive = value; },
   setPreviewZoom: value => { sandbox.manualPreviewZoom = value; },
   smoothScrollTo: (container, top) => { container.scrollTop = top; },
@@ -43,7 +43,7 @@ Object.assign(sandbox, {
   layout: { positions: [{ top: 0 }, { top: 24.228814 * 250 }] },
   pageH: 250, boardOrderSignature: 'p1|p2', columnCount: 1,
   scrollRef: { current: { scrollTop: 0, scrollHeight: 8000, clientHeight: 400 } },
-  syncLock: { current: 0 }, positionDragRef: { current: null },
+  syncLock: { current: 0 }, syncLockOriginIdRef: { current: null }, positionDragRef: { current: null },
   currentPage: 1, previewEstimate: { classinPageCount: 22 },
   Date: { now: () => 1000 + clock }, performance: { now: () => clock },
   requestAnimationFrame: callback => { const id = nextFrame++; frames.set(id, callback); return id; },
@@ -163,7 +163,7 @@ class TestUiPreviewFit(unittest.TestCase):
         sandbox.focusActiveTileAtPreviewZoom(0.01);
         assert.equal(sandbox.previewFitActive, false);
         assert.equal(sandbox.manualPreviewZoom, 0.12);
-        assert.equal(derive().pageH, Math.max(24, sandbox.basePageH * 0.12));
+        assert.equal(derive().pageH, Math.max(24, sandbox.contentW * 590 / 1280 * 0.12));
         assert.equal(JSON.stringify(fixture), savedSignature);
         """)
 

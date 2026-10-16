@@ -58,7 +58,7 @@ class TestUiSidebarHierarchy(unittest.TestCase):
           + '\nglobalThis.updateCropDraft = updateCropDraft;', sandbox);
         compile(sandbox, 'globalThis.renderCropToggle = () => ('
           + section('                  <button\n                    className="detail-settings-toggle"',
-            '                  {advancedSettingsOpen && (') + ');');
+            '                  <div className="detail-settings-body"') + ');');
         sandbox.updateCropDraft('leftRatio', 0.18);
         const draft = JSON.stringify(sandbox.cropDraft);
         sandbox.renderCropToggle().props.onClick();
@@ -90,23 +90,21 @@ class TestUiSidebarHierarchy(unittest.TestCase):
         assert.equal(rerendered.props.open, undefined);
         """)
 
-    def test_legacy_columns_have_a_working_one_column_recovery_and_visible_gap_controls(self) -> None:
+    def test_legacy_columns_are_retained_and_gap_controls_remain_visible(self) -> None:
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
         for (const legacyColumns of [2, 3]) {
           const state = { columns: legacyColumns, gap: 'classin-grid', resets: 0 };
           const render = () => sandbox.BoardLayoutControls({ boardColumns: state.columns,
-            setBoardColumns: columns => { state.columns = columns; },
             layoutGapMode: state.gap, setLayoutGapMode: gap => { state.gap = gap; },
             manualGapCount: 1, resetPlacementGaps: () => { state.resets += 1; },
           });
           let tree = render();
           const warning = findClass(tree, 'placement-column-warning');
-          assert.ok(text(warning).includes(`${legacyColumns}열`));
-          walk(warning).find(node => node.type === 'button').props.onClick();
-          assert.equal(state.columns, 1);
-          tree = render();
-          assert.equal(findClass(tree, 'placement-column-warning'), undefined);
+          assert.ok(text(warning).includes(`기존 ${legacyColumns}칸 배치를 유지합니다`));
+          assert.equal(walk(warning).filter(node => node.type === 'button').length, 0,
+            'opening placement settings must not offer an implicit migration');
+          assert.equal(state.columns, legacyColumns);
           const gapControl = findClass(tree, 'layout-gap-mode-control');
           assert.ok(gapControl, 'the common spacing choice remains visible without opening details');
           walk(gapControl).find(node => node.type === 'button' && text(node).includes('빈틈 없이')).props.onClick();

@@ -91,10 +91,20 @@ if (publishGuardMatches.length !== 1) {
   throw new Error(`Expected exactly one cache-busted publish_guard.js reference in ${path.relative(projectRoot, boardFile)}`);
 }
 
-const expectedBoardHtml = boardHtml
+let expectedBoardHtml = boardHtml
   .replace(bundleCacheBustPattern, bundleSrc)
   .replace(styleCacheBustPattern, styleSrc)
   .replace(publishGuardCacheBustPattern, publishGuardSrc);
+
+// Editor modes and the home screen ship separately from the shared stylesheet.
+// Hash every linked surface so an in-place update cannot keep an old design.
+for (const stylesheet of ["editor-layout", "editor-focus", "home-redesign"]) {
+  const filename = `${stylesheet}.css`;
+  const digest = crypto.createHash("sha256").update(await fs.readFile(path.join(uiRoot, filename))).digest("hex");
+  const pattern = new RegExp(`${stylesheet}\\.css\\?v=[A-Za-z0-9._-]+`, "g");
+  if ((expectedBoardHtml.match(pattern) || []).length !== 1) throw new Error(`Expected one ${filename} link`);
+  expectedBoardHtml = expectedBoardHtml.replace(pattern, `${filename}?v=${digest}`);
+}
 
 if (checkOnly) {
   const currentBundle = await fs.readFile(outputFile, "utf8");

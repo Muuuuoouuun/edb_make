@@ -76,6 +76,7 @@ class TestUiUploadIntent(unittest.TestCase):
             assert.equal(request.intent, 'page-as-is');
             assert.equal(sandbox.applied.input_intent, 'page-as-is');
             assert.equal(sandbox.applied.problems[0].placement_mode, 'continuous-page-as-is');
+            assert.equal(sandbox.view, 'board', 'ordinary registration opens board without review');
           }
           const { sandbox, request } = await runQueue('manual-split', 'single-problem');
           assert.equal(request.intent, 'page-as-is');

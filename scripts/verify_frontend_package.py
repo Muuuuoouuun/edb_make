@@ -10,10 +10,17 @@ import sys
 from pathlib import Path
 
 
+EXTRA_UI_STYLESHEETS = (
+    "editor-layout.css",
+    "editor-focus.css",
+    "home-redesign.css",
+)
+
 REQUIRED_UI_FILES = (
     "ui_prototype/index.html",
     "ui_prototype/board.html",
     "ui_prototype/board.css",
+    *(f"ui_prototype/{filename}" for filename in EXTRA_UI_STYLESHEETS),
     "ui_prototype/favicon.png",
     "ui_prototype/reorder.js",
     "ui_prototype/review_filters.js",
@@ -117,6 +124,34 @@ def bundle_cache_bust_digest(script_src: str) -> str | None:
     return match.group(1)
 
 
+def extra_stylesheet_cache_bust_digest(link_href: str, filename: str) -> str | None:
+    if filename not in EXTRA_UI_STYLESHEETS:
+        return None
+    match = re.fullmatch(re.escape(filename) + r"\?v=([0-9a-f]{64})", link_href)
+    return match.group(1) if match else None
+
+
+def collect_extra_stylesheet_errors(resource_root: Path, board_html: str, *, packaged: bool = False) -> list[str]:
+    """Reject omitted, duplicated, unversioned or stale surface stylesheet links."""
+
+    errors: list[str] = []
+    prefix = "packaged " if packaged else ""
+    hrefs = re.findall(r'<link[^>]*href="([^"]+)"', board_html)
+    for filename in EXTRA_UI_STYLESHEETS:
+        links = [href for href in hrefs if href.split("?", 1)[0] == filename]
+        if len(links) != 1:
+            errors.append(f"{prefix}board.html must load exactly one cache-busted {filename}")
+            continue
+        digest = extra_stylesheet_cache_bust_digest(links[0], filename)
+        if digest is None:
+            errors.append(f"{prefix}board.html {filename} cache bust must use the 64-character stylesheet digest")
+            continue
+        path = resource_root / "ui_prototype" / filename
+        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            errors.append(f"{prefix}board.html {filename} cache bust does not match {prefix}{filename}; rebuild the frontend")
+    return errors
+
+
 def collect_deterministic_bundle_errors(project_root: Path) -> list[str]:
     """Rebuild in memory through Node and reject any tracked bundle drift."""
 
@@ -193,6 +228,7 @@ def collect_errors(project_root: Path) -> list[str]:
             errors.append("board.html board.css cache bust must use the 64-character source digest")
         elif expected_style_digest is not None and style_digest != expected_style_digest:
             errors.append("board.html board.css cache bust is stale; rebuild with scripts/build_frontend_bundle.mjs")
+        errors.extend(collect_extra_stylesheet_errors(root, board_html))
         if "<style>" in board_html:
             errors.append("board.html must keep its theme in board.css, not an inline <style> block")
 

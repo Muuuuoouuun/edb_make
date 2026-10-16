@@ -17,6 +17,7 @@ try:
         REQUIRED_UI_FILES,
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
+        collect_extra_stylesheet_errors,
         frontend_bundle_source_digest,
     )
     from .verify_release_licenses import (
@@ -31,6 +32,7 @@ except ImportError:  # pragma: no cover - direct script execution
         REQUIRED_UI_FILES,
         SOURCE_DIGEST_RE,
         bundle_cache_bust_digest,
+        collect_extra_stylesheet_errors,
         frontend_bundle_source_digest,
     )
     from verify_release_licenses import (
@@ -739,6 +741,7 @@ def collect_package_errors(
             packaged_style_digest = hashlib.sha256(style_path.read_bytes()).hexdigest()
             if match.group(1) != packaged_style_digest:
                 errors.append("packaged board.html board.css cache bust does not match packaged board.css")
+        errors.extend(collect_extra_stylesheet_errors(resource_root, board_html, packaged=True))
         for token in FORBIDDEN_BOARD_TOKENS:
             if token in board_html:
                 errors.append(f"packaged board.html still references legacy runtime token: {token}")

@@ -314,7 +314,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertNotIn("setView('review');", queue_branch)
         self.assertIn("칠판에 배치했어요", queue_branch)
         self.assertIn("sessionReviewSummary(incomingSession).actionableNeedsReviewCount", queue_branch)
-        self.assertIn("확인 필요 ${attentionCount}개는 검수 탭에서 확인", queue_branch)
+        self.assertIn("확인 필요 ${attentionCount}개는 칠판의 검수 버튼에서 확인", queue_branch)
         self.assertIn("appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT)", queue_branch)
         self.assertIn("reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition')", queue_branch)
         self.assertNotIn("openOutputFolder(", queue_branch)
@@ -331,7 +331,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const wantsReview = !initialViewConsumedRef.current && initialViewRef.current === 'review';", apply_session)
         self.assertNotIn("setView(", retry_branch)
         self.assertIn("reviewAttentionCount = 0", topbar)
-        self.assertIn('className="view-toggle-badge"', topbar)
+        self.assertIn("label: '문항 검수 열기'", topbar)
+        self.assertNotIn('className="workflow-progress"', topbar)
         self.assertIn("reviewAttentionCount={reviewAttentionCount}", source)
     def test_queue_recognition_uses_a_synchronous_single_flight_guard(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

@@ -72,21 +72,16 @@ class TestUiToolbarControls(unittest.TestCase):
         assert.equal(walk(empty).some(node => node.props.onClick === base.onPublish && text(node).includes('EDB 제작')), false);
         const busy = sandbox.TopBar({ ...base, operationBusy: true });
         assert.equal(walk(busy).find(node => node.type === 'input').props.disabled, true);
-        for (const label of ['검수', '칠판']) {
-          assert.equal(walk(busy).find(node => node.props['aria-label'] === label).props.disabled, true);
-        }
         const more = walk(busy).find(node => node.props.id === 'topbar-more');
+        assert.equal(more.props.items.find(item => item.id === 'review').disabled, true);
         assert.equal(more.props.items.find(item => item.id === 'reset').disabled, true);
         assert.equal(more.props.items.find(item => item.id === 'refresh').disabled, true);
         const resetBlocked = sandbox.TopBar({ ...base, resetBlocked: true });
         assert.equal(walk(resetBlocked).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'reset').disabled, true);
         const reviewingPages = sandbox.TopBar({ ...base, pageReviewActive: true });
-        for (const label of ['검수', '칠판']) {
-          assert.equal(walk(reviewingPages).find(node => node.props['aria-label'] === label).props.disabled, true);
-        }
-        const current = walk(reviewingPages).filter(node => node.props['aria-current'] === 'step');
-        assert.equal(current.length, 1);
-        assert.ok(text(current[0]).includes('자료 준비'));
+        assert.equal(walk(reviewingPages).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'review').disabled, true);
+        const reviewBusy = sandbox.TopBar({ ...base, view: 'review', operationBusy: true });
+        assert.equal(walk(reviewBusy).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'board').disabled, true);
         """)
 
     def test_primary_output_and_recognition_state_follow_the_current_work(self) -> None:
@@ -101,14 +96,37 @@ class TestUiToolbarControls(unittest.TestCase):
         const working = sandbox.TopBar({ ...base, recognitionBusy: true });
         assert.equal(text(working).includes('문항 인식 중'), true);
         const currentSteps = walk(working).filter(node => node.props['aria-current'] === 'step');
-        assert.equal(currentSteps.length, 1);
-        assert.ok(text(currentSteps[0]).includes('자료 준비'));
+        assert.equal(currentSteps.length, 0, 'background processing is not a mandatory workflow stage');
         assert.equal(sandbox.SessionRecognitionAction({ sourcePageCount: 0, onRecognizeSession() {} }), null);
         const recognition = sandbox.SessionRecognitionAction({ sourcePageCount: 3, canRecognizeSession: false,
           onRecognizeSession() {}, recognitionDisabledReason: '연결 설정 필요', sessionEditState: { dirty: true } });
         assert.equal(walk(recognition).find(node => node.type === 'button').props.disabled, true);
         assert.ok(text(recognition).includes('연결 설정 필요'));
         assert.ok(text(recognition).includes('변경한 수업 내용'));
+        """)
+
+    def test_topbar_removes_stepper_but_keeps_optional_review_and_return_actions(self) -> None:
+        run_node(r"""
+        const destinations = [];
+        const render = extra => sandbox.TopBar({ ...base, setView: view => destinations.push(view), ...extra });
+        const items = tree => walk(tree).find(node => node.props.id === 'topbar-more').props.items;
+        for (const view of ['board', 'review']) {
+          const tree = render({ view });
+          assert.equal(walk(tree).some(n => /workflow-(progress|step)/.test(n.props.className || '')), false);
+          assert.equal(walk(tree).some(n => n.props['aria-label'] === '자료 제작 진행 단계'), false);
+          assert.equal(text(tree).includes('칠판·내보내기'), false);
+        }
+        const review = items(render({ reviewAttentionCount: 3 })).find(item => item.id === 'review');
+        assert.equal(review.label, '문항 검수 열기');
+        assert.ok(review.description.includes('확인 필요 3개'));
+        review.onSelect();
+        const board = items(render({ view: 'review', total: 0 })).find(item => item.id === 'board');
+        assert.equal(board.label, '칠판으로 돌아가기');
+        board.onSelect();
+        assert.deepEqual(destinations, ['review', 'board']);
+        assert.equal(items(render({ reviewAvailable: false })).some(item => item.id === 'review'), false);
+        assert.ok(items(render({ reviewAttentionCount: 0 })).some(item => item.id === 'review'),
+          'manual review remains reachable even when there are no warnings');
         """)
 
     def test_action_menu_keyboard_focus_disabled_actions_and_dismissal(self) -> None:

@@ -12,6 +12,8 @@ import re
 import unittest
 from pathlib import Path
 
+from test_ui_placement_details import run_node
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -113,7 +115,8 @@ class TestPlacementOwnsSessionLayout(unittest.TestCase):
 
     def test_permanently_disabled_column_buttons_are_gone(self) -> None:
         self.assertNotIn("[1,2,3].map", LAYOUT_CONTROLS)
-        self.assertIn("제작 가능한 1열로 복원", LAYOUT_CONTROLS)
+        self.assertIn("기존 {columns}칸 배치를 유지합니다.", LAYOUT_CONTROLS)
+        self.assertNotIn("제작 가능한 1열로 복원", LAYOUT_CONTROLS)
         self.assertNotIn("side-by-side", PLACEMENT_TAB)
         self.assertNotIn("setBoardColumns?.(2)", PLACEMENT_TAB)
 
@@ -121,9 +124,47 @@ class TestPlacementOwnsSessionLayout(unittest.TestCase):
         self.assertIn("gapMode === LAYOUT_GAP_MODE_COMPACT ? (", LAYOUT_CONTROLS)
         self.assertIn('className="layout-gap-hint"', LAYOUT_CONTROLS)
 
-    def test_publish_guard_points_at_the_new_home(self) -> None:
-        self.assertIn("배치 탭에서 제작 가능한 1열로 복원을 누른 뒤", APP)
-        self.assertNotIn("설정에서 1열로 바꾼 뒤", APP)
+    def test_publish_guard_preserves_legacy_work_without_suggesting_conversion(self) -> None:
+        publish_guard = APP.split("  const onPublish = async () => {", 1)[1].split("    clearOperationRecovery();", 1)[0]
+        self.assertIn("normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN", publish_guard)
+        self.assertIn("기존 다중 칸 배치는 그대로 저장할 수 있습니다", publish_guard)
+        self.assertIn("현재 EDB 제작은 1칸 배치만 지원", publish_guard)
+        self.assertNotIn("setTweak", publish_guard)
+        self.assertNotIn("1열로 복원", publish_guard)
+
+    def test_legacy_publish_guard_stops_before_any_write_and_keeps_columns(self) -> None:
+        run_node(r"""
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+        const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+        const start = source.indexOf('  const onPublish = async () => {');
+        const end = source.indexOf('    clearOperationRecovery();', start);
+        assert.ok(start >= 0 && end > start);
+        (async () => {
+          for (const columns of [1, 2, 3]) {
+            const messages = [];
+            const state = { session: { problems: [{ id: 'legacy' }] },
+              boardColumns: columns, BOARD_COLUMN_MIN: 1,
+              publishInFlightRef: { current: false }, operationRecovery: null,
+              normalizeBoardColumns: value => value, showToast: message => messages.push(message),
+              proceeded: false };
+            const originalSession = JSON.stringify(state.session);
+            vm.createContext(state);
+            vm.runInContext(source.slice(start, end)
+              + 'proceeded = true; }; globalThis.publish = onPublish;', state);
+            await state.publish();
+            assert.equal(state.proceeded, columns === 1);
+            assert.equal(state.boardColumns, columns);
+            assert.equal(JSON.stringify(state.session), originalSession);
+            if (columns > 1) {
+              assert.equal(messages.length, 1);
+              assert.ok(messages[0].includes('그대로 저장할 수 있습니다'));
+              assert.ok(messages[0].includes('제작은 실행하지 않았습니다'));
+            }
+          }
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
 
 
 class TestItemTab(unittest.TestCase):

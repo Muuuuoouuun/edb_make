@@ -320,6 +320,7 @@ const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_FIT_WIDTH_SCALE_RATIO = 3.0;
 const EDB_CANVAS_WIDTH_PX = 1280;
 const EDB_CANVAS_PAGE_HEIGHT_PX = 590;
+// A displayed ClassIn page spans 1.2 internal EDB height units, not a guessed 16:9 frame.
 const EDB_LEFT_MARGIN_PX = 84;
 const EDB_RIGHT_PADDING_PX = 54;
 const EDB_V1_DISPLAY_WIDTH_PX = 540;
@@ -489,6 +490,14 @@ function normalizeBoardColumns(value){
   const n = Math.round(Number(value));
   if (!Number.isFinite(n)) return BOARD_COLUMN_MIN;
   return Math.max(BOARD_COLUMN_MIN, Math.min(BOARD_COLUMN_MAX, n));
+}
+
+function sessionBoardColumns(rawSession){
+  const explicit = rawSession?.boardColumns ?? rawSession?.board_columns;
+  if (Number(explicit) >= BOARD_COLUMN_MIN) return normalizeBoardColumns(explicit);
+  return (rawSession?.problems || []).reduce((maximum, problem) => Math.max(maximum,
+    normalizeBoardColumns(problem.boardColumnCount ?? problem.board_column_count ?? problem.boardColumns ?? problem.board_columns)
+  ), BOARD_COLUMN_MIN);
 }
 
 function normalizePlacementMagnetColumnIndex(value, columnCount){
@@ -892,6 +901,30 @@ function boardItemVisualBounds(item){
   return { start, bottom: start + height, rowNext };
 }
 
+// Hit-test the pointer against stationary cards, never the translated drag ghost.
+// A neighbouring card wins over its side gutter; distant blank space is a move.
+function resolveSmartBoardDropTarget(candidates, clientX, clientY, sourceId){
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+  const rows = candidates.filter(candidate => candidate?.rect?.height > 0);
+  const overlap = rows.find(({ id, rect }) => String(id) !== String(sourceId)
+    && clientX >= rect.left && clientX <= rect.right
+    && clientY >= rect.top && clientY <= rect.bottom);
+  if (overlap) return {
+    id: overlap.id, mode: 'reorder',
+    position: clientY < (overlap.rect.top + overlap.rect.bottom) / 2 ? 'before' : 'after',
+  };
+  // Do not interpret a click inside the source's original position as a gutter.
+  if (rows.some(({ rect }) => clientX >= rect.left && clientX <= rect.right
+    && clientY >= rect.top && clientY <= rect.bottom)) return null;
+  const neighbours = rows.filter(({ rect }) => clientY >= rect.top && clientY <= rect.bottom)
+    .map(candidate => ({ ...candidate, distance: Math.min(
+      Math.abs(clientX - candidate.rect.left), Math.abs(clientX - candidate.rect.right)
+    ) }))
+    .filter(candidate => candidate.distance <= 96)
+    .sort((a, b) => a.distance - b.distance);
+  return neighbours.length ? { id: neighbours[0].id, mode: 'gap', position: 'gap' } : null;
+}
+
 function derivePlacementGapActionFromLayout(layoutItems, activeId){
   const layout = Array.isArray(layoutItems) ? layoutItems : [];
   const selected = layout.find(item => String(item.id) === String(activeId));
@@ -901,16 +934,31 @@ function derivePlacementGapActionFromLayout(layoutItems, activeId){
     Math.abs(item.startYPages - selected.startYPages) < 0.000001
     && Math.abs(item.snappedNextStartYPages - selected.snappedNextStartYPages) < 0.000001
   ));
-  const compactEnd = selected.startYPages + Math.max(...row.map(itemFlowHeightPages));
-  const removableGapPages = Math.max(0, selected.snappedNextStartYPages - compactEnd);
+  const compactEnd = selected.startYPages + Math.max(...row.map(item =>
+    itemFlowHeightPages(item) + placementExtraSlots(item) * DEFAULT_SLOT_HEIGHT_PAGES));
+  const visualEnd = Math.max(...row.map(item => boardItemVisualBounds(item).bottom));
+  const nextRowStart = Math.max(compactEnd, visualEnd);
+  const removableGapPages = Math.max(0, selected.snappedNextStartYPages - nextRowStart);
   if (removableGapPages <= 0.000001) return empty;
+  const patches = row.map(item => {
+    const oldYRatio = normalizePlacementYRatio(item.placementYRatio);
+    const visualOffset = boardItemVisualBounds(item).start - item.startYPages;
+    const remainingRoom = Math.max(0, nextRowStart - item.startYPages - itemRenderedHeightPages(item));
+    const nextYRatio = remainingRoom > 0.000001 ? normalizePlacementYRatio(visualOffset / remainingRoom) : 0;
+    const yChanged = Math.abs(nextYRatio - oldYRatio) > 0.000001;
+    return {
+      apply: { id: item.id, patch: { gapAfterPages: Math.max(0, nextRowStart - compactEnd), ...(yChanged ? { yRatio: nextYRatio } : {}) } },
+      restore: { id: item.id, patch: {
+        gapAfterPages: normalizePlacementGapAfterPages(item.placementGapAfterPages ?? item.placement_gap_after_pages),
+        ...(yChanged ? { yRatio: oldYRatio } : {}),
+      } },
+    };
+  });
   return {
     ids: row.map(item => item.id),
     removableGapPages,
-    restoreUpdates: row.map(item => ({
-      id: item.id,
-      patch: { gapAfterPages: normalizePlacementGapAfterPages(item.placementGapAfterPages ?? item.placement_gap_after_pages) },
-    })),
+    applyUpdates: patches.map(patch => patch.apply),
+    restoreUpdates: patches.map(patch => patch.restore),
   };
 }
 
@@ -2488,12 +2536,14 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
 }
 
 function TopBar({
-  fileName, setFileName, progress, processed, total, onPublish, published, onReset,
-  onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewComplete,
+  fileName, setFileName, total, onPublish, published, onReset,
+  onRefresh, refreshing, canReset, view, setView, reviewAvailable,
   reviewAttentionCount = 0,
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
   canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
   editingActive = false, saveStateLabel = '', saveStateTone = '',
+  onOpenUpdateSettings, updateAvailable = false, updateBusy = false,
+  focusMode = false, onChangeFocusMode, canChangeFocusMode = false,
 }){
   const resetReason = pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
     : conflictBlocked ? '오류 안내에서 최신 상태를 먼저 선택해 주세요'
@@ -2523,39 +2573,21 @@ function TopBar({
       </div>
       {saveStateLabel && <span className={`topbar-save-state ${saveStateTone}`} role="status">{saveStateLabel}</span>}
       <div className="spacer" />
-      <div className="workflow-progress" aria-label="자료 제작 진행 단계">
-        <span
-          className={`workflow-step ${pageReviewActive || recognitionBusy || !total ? 'active' : 'done'}`}
-          aria-current={pageReviewActive || recognitionBusy || !total ? 'step' : undefined}
-        >
-          1 자료 준비
-        </span>
-        <button
-          className={`workflow-step ${reviewComplete ? 'done' : !pageReviewActive && !recognitionBusy && view === 'review' ? 'active' : ''}`}
-          type="button"
-          aria-label="검수"
-          data-tooltip={reviewAvailable ? 'AI 인식 박스와 문제 분할을 검수' : '먼저 자료를 업로드하세요'}
-          aria-current={!pageReviewActive && !recognitionBusy && view === 'review' ? 'step' : undefined}
-          onClick={() => reviewAvailable && setView?.('review')}
-          disabled={pageReviewActive || operationBusy || !reviewAvailable}
-        >
-          2 검수
-          {reviewAvailable && reviewAttentionCount > 0 && <span className="view-toggle-badge" aria-label={`확인 필요 ${reviewAttentionCount}개`}>{reviewAttentionCount}</span>}
-        </button>
-        <button
-          className={`workflow-step ${published ? 'done' : !pageReviewActive && !recognitionBusy && view === 'board' && total > 0 ? 'active' : ''}`}
-          type="button"
-          aria-label="칠판"
-          data-tooltip="보드 배치 화면으로 이동"
-          aria-current={!pageReviewActive && !recognitionBusy && view === 'board' && total > 0 ? 'step' : undefined}
-          onClick={() => total > 0 && setView?.('board')}
-          disabled={pageReviewActive || operationBusy || !total}
-        >
-          3 칠판·내보내기
-        </button>
-      </div>
       {recognitionBusy && <div className="progress is-working" role="status"><span className="spin-ic">{Icon.refresh}</span><span>문항 인식 중…</span></div>}
       <div className="topbar-actions" aria-label="보조 작업">
+        {canChangeFocusMode && <div className="editor-mode-control" role="group" aria-label="편집기 보기 모드">
+          <button className="btn ghost" type="button" aria-pressed={!focusMode}
+            disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(false)}>기본형</button>
+          <button className="btn ghost" type="button" aria-pressed={focusMode}
+            disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(true)}>집중 모드</button>
+        </div>}
+        <button className="btn ghost topbar-update" type="button"
+          onClick={onOpenUpdateSettings}
+          disabled={pageReviewActive || operationBusy}
+          title="앱 업데이트 확인 및 설치 설정 열기">
+          <span className={updateBusy ? 'spin-ic' : ''}>{Icon.refresh}</span>
+          업데이트{updateAvailable && <span className="topbar-update-badge">새 버전</span>}
+        </button>
         <button
           className="btn ghost icon"
           title={canUndo ? `되돌리기 (${PRIMARY_MODIFIER_LABEL}+Z)` : '되돌릴 변경이 없습니다'}
@@ -2568,6 +2600,12 @@ function TopBar({
           id="topbar-more"
           label="수업 작업 더보기"
           items={[
+            ...(view === 'review'
+              ? [{ id: 'board', icon: Icon.board, label: '칠판으로 돌아가기',
+                  disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('board') }]
+              : reviewAvailable ? [{ id: 'review', icon: Icon.check, label: '문항 검수 열기',
+                  description: reviewAttentionCount > 0 ? `확인 필요 ${reviewAttentionCount}개 · 필요할 때 검수합니다` : '원본과 분할 영역을 확인하거나 직접 수정합니다',
+                  disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
             { id: 'reset', icon: Icon.reset, label: '초기화', description: resetReason, danger: true, disabled: pageReviewActive || operationBusy || resetBlocked || !canReset, onSelect: onReset },
             { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
@@ -6171,14 +6209,16 @@ function ItemsRail({
     setSelectedItemIds(new Set(result.selectedIds));
     if (result.focusId && result.selectedIds.includes(result.focusId)) {
       setActive(result.focusId);
-      pendingKeyboardFocusRef.current = result.focusId;
+      // Selection keeps the same DOM order, so focus now; deferred focus is
+      // reserved for reorder operations whose rows must render first.
+      itemRefs.current[result.focusId]?.focus?.({ preventScroll: true });
     }
     setReorderAnnouncement(
       result.selectedIds.length
         ? `${result.selectedIds.length}개 문제를 선택했습니다.`
         : '문제 선택을 해제했습니다.'
     );
-    return nextSession;
+    return true;
   };
 
   const toggleRecentSessionsCollapsed = () => {
@@ -6280,6 +6320,17 @@ function ItemsRail({
         <h2>자료 목록</h2>
         <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
         <div className="spacer" />
+        {hasSessionItems && <button
+          className="icon-btn rail-reextract-action"
+          type="button"
+          aria-label="현재 원본에서 공통 지문 다시 추출"
+          title={canReextractSharedPassages
+            ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
+            : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
+          data-tooltip={reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '원본에서 공통 지문 다시 추출'}
+          onClick={onReextractSharedPassages}
+          disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
+        >{Icon.refresh}</button>}
       </div>
 
       {hasSessionItems && (
@@ -6309,19 +6360,6 @@ function ItemsRail({
               </button>
             ))}
           </div>
-          <button
-            className="btn rail-reextract-action"
-            type="button"
-            aria-label="현재 원본에서 공통 지문 다시 추출"
-            title={canReextractSharedPassages
-              ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
-              : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
-            onClick={onReextractSharedPassages}
-            disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
-          >
-            {Icon.refresh}
-            <span>{reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '공통 지문 재추출'}</span>
-          </button>
         </div>
       )}
 
@@ -6662,7 +6700,7 @@ function ItemsRail({
         {dragPreview && dragPreviewItem && ReactDOM.createPortal(
           <div
             ref={dragPreviewRef}
-            className="rail-drag-overlay"
+            className="rail-drag-overlay editor-basic-mode"
             style={{
               '--drag-preview-width': `${dragPreview.width}px`,
               '--drag-preview-height': `${dragPreview.height}px`,
@@ -6900,8 +6938,14 @@ function buildClassinPageBands(layout, pageH, classinPageCount){
   const covered = new Array(pageCount).fill(false);
   layout.positions.forEach((placement, index) => {
     if (!placement) return;
-    const startPage = Math.floor(placement.startPages / DEFAULT_SLOT_HEIGHT_PAGES + 0.001);
-    const endPage = Math.ceil((placement.startPages + placement.renderedHeightPages) / DEFAULT_SLOT_HEIGHT_PAGES - 0.001) - 1;
+    // Labels follow the visible problem, including a manual vertical move,
+    // rather than the beginning of its reserved row.
+    const rowStartPages = Math.max(0, Number(placement.startPages) || 0);
+    const renderedHeightPages = Math.max(0, Number(placement.renderedHeightPages) || 0);
+    const verticalRoomPages = Math.max(0, (Number(placement.rowHeightPages) || 0) - renderedHeightPages);
+    const visualStartPages = rowStartPages + normalizePlacementYRatio(placement.yRatio) * verticalRoomPages;
+    const startPage = Math.floor((visualStartPages + PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES);
+    const endPage = Math.ceil((visualStartPages + renderedHeightPages - PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES) - 1;
     if (startPage < pageCount) starts[startPage].push(String(index + 1).padStart(2, '0'));
     for (let page = startPage; page <= Math.min(endPage, pageCount - 1); page += 1) covered[page] = true;
   });
@@ -6918,6 +6962,9 @@ function buildClassinPageBands(layout, pageH, classinPageCount){
 function BoardStage({
   items, activeId, setActive, boardColor, boardColumns, layoutGapMode, fileName, addSample,
   setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
+  reducePlacementGap, interactionBusy = false,
+  focusMode = false, reviewAttentionCount = 0, onOpenPendingReview,
+  panelCollapsed = false, onOpenPanel, panelReopenRef,
   recentSessions = [], onRestoreRecentSession, restoringSessionId, recentSessionRestoreBlocked = false,
   handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
   aiEnabled = true, userSettings = null,
@@ -6929,6 +6976,7 @@ function BoardStage({
   const previousTileRects = useRef(new Map());
   const previousBoardOrder = useRef('');
   const syncLock = useRef(0);
+  const syncLockOriginIdRef = useRef(null);
   const positionDragRef = useRef(null);
   const positionDragFrameRef = useRef(null);
   const suppressClickRef = useRef(null);
@@ -6949,11 +6997,11 @@ function BoardStage({
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
   const [dragMagnet, setDragMagnet] = useState(null);
+  const [smartMove, setSmartMove] = useStoredPreference('edb.boardSmartMove', false, isStoredBoolean);
   const [basePageH, setBasePageH] = useState(400 / DEFAULT_SLOT_HEIGHT_PAGES);
   const [manualPreviewZoom, setPreviewZoom] = useState(1);
   const [previewFitActive, setPreviewFitActive] = useState(false);
   const [estimateDetailsOpen, setEstimateDetailsOpen] = useState(false);
-  const estimateBarRef = useRef(null);
   const estimateToggleRef = useRef(null);
   const estimateDetailsRef = useRef(null);
   const closeEstimateDetails = () => {
@@ -6964,9 +7012,9 @@ function BoardStage({
     if (!estimateDetailsOpen) return;
     const panel = estimateDetailsRef.current;
     const placeDetails = () => {
-      const rect = estimateBarRef.current?.getBoundingClientRect();
+      const rect = estimateToggleRef.current?.getBoundingClientRect();
       if (!rect || !panel) return;
-      panel.style.setProperty('--estimate-left', `${Math.max(12, Math.min(rect.right - 360, window.innerWidth - 372))}px`);
+      panel.style.setProperty('--estimate-left', `${Math.max(12, Math.min(rect.left, window.innerWidth - 372))}px`);
       panel.style.setProperty('--estimate-top', `${Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 240))}px`);
     };
     placeDetails();
@@ -7009,9 +7057,9 @@ function BoardStage({
     previousTileRects.current = nextRects;
   };
 
-  // One ClassIn page is 1.2 layout units. Base the preview unit on the usable
-  // board viewport so a normal ClassIn page is not taller than the board.
-  // Preview zoom is display-only and never reaches export data.
+  // One ClassIn page is 1.2 layout units. Measure usable viewport height only
+  // for explicit "fit selected item"; normal page proportions follow width.
+  // Both preview modes are display-only and never reach export data.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -7068,7 +7116,10 @@ function BoardStage({
   const previewZoom = previewFitActive && fitPreviewItem
     ? boardPreviewZoomForRenderedHeight(itemRenderedHeightPages(fitPreviewItem))
     : manualPreviewZoom;
-  const pageH = Math.max(previewFitActive ? Number.EPSILON : 24, basePageH * previewZoom);
+  const previewBasePageH = previewFitActive && fitPreviewItem
+    ? basePageH
+    : contentW * EDB_CANVAS_PAGE_HEIGHT_PX / EDB_CANVAS_WIDTH_PX;
+  const pageH = Math.max(previewFitActive ? Number.EPSILON : 24, previewBasePageH * previewZoom);
 
   // Compute pixel positions with row height shared by neighboring columns.
   const layout = useMemo(() => {
@@ -7129,6 +7180,7 @@ function BoardStage({
     if (restoredScrollRef.current || !scrollRef.current) return;
     restoredScrollRef.current = true;
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = activeId == null ? null : String(activeId);
     scrollRef.current.scrollTop = Math.max(0, boardScrollTopRef.current);
     setCurrentPage(Math.min(
       Math.max(1, previewEstimate.classinPageCount),
@@ -7214,7 +7266,11 @@ function BoardStage({
   // when activeId changes externally, scroll the board to it
   useEffect(() => {
     if (previewFitActive) return;
-    if (Date.now() - syncLock.current < 450) return;
+    // Suppress only the selection generated by this board's own scroll/click.
+    // A rail selection must still navigate immediately after restoring scroll.
+    if (Date.now() - syncLock.current < 450
+      && activeId != null && syncLockOriginIdRef.current === String(activeId)) return;
+    syncLockOriginIdRef.current = null;
     const container = scrollRef.current;
     const idx = items.findIndex(x => x.id === activeId);
     if (!container || idx < 0) return;
@@ -7239,6 +7295,7 @@ function BoardStage({
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
       syncLock.current = Date.now();
+      syncLockOriginIdRef.current = String(id);
       setActive(id);
     }
   };
@@ -7262,6 +7319,7 @@ function BoardStage({
   const onTileClick = (id, event = {}) => {
     if (suppressClickRef.current === id) return;
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(id);
     const orderedIds = items.map(item => String(item.id));
     const result = applySelectionClick(
       orderedIds,
@@ -7281,6 +7339,7 @@ function BoardStage({
     if (!container || idx < 0) return;
     const nextZoom = normalizeBoardPreviewZoom(value);
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(activeId);
     setPreviewFitActive(false);
     setPreviewZoom(nextZoom);
     previewFocusRequestRef.current = String(activeId);
@@ -7297,6 +7356,7 @@ function BoardStage({
     const container = scrollRef.current;
     if (!placement || !container) return;
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(activeId);
     previewFocusRequestRef.current = String(activeId);
     setPreviewFitActive(true);
     if (previewFitActive) {
@@ -7313,6 +7373,7 @@ function BoardStage({
     if (!placement) return;
     previewFocusRequestRef.current = null;
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = requestedId;
     const tileTop = tileRefs.current[requestedId]?.offsetTop ?? placement.top;
     smoothScrollTo(scrollRef.current, Math.max(0, tileTop - 8), 0);
   }, [pageH, boardOrderSignature, activeId, previewFitActive, layout.positions, contentW]);
@@ -7320,7 +7381,8 @@ function BoardStage({
   const setCurrentBoardDropTarget = (target) => {
     boardDropTargetRef.current = target;
     setBoardDropTarget(prev => (
-      prev?.id === target?.id && prev?.position === target?.position ? prev : target
+      prev?.id === target?.id && prev?.position === target?.position
+        && prev?.mode === target?.mode && prev?.removableGapPages === target?.removableGapPages ? prev : target
     ));
   };
 
@@ -7385,8 +7447,26 @@ function BoardStage({
     return { id: candidates[candidates.length - 1].id, position: 'after' };
   };
 
+  const findSmartBoardDropTarget = (clientX, clientY, drag) => {
+    const scrollDeltaY = (scrollRef.current?.scrollTop || 0) - drag.startScrollTop;
+    const candidates = layout.items.map(item => {
+      const rect = item.id === drag.id
+        ? { ...drag.sourceRect, top: drag.sourceRect.top - scrollDeltaY, bottom: drag.sourceRect.bottom - scrollDeltaY }
+        : tileRefs.current[item.id]?.getBoundingClientRect?.();
+      return { id: item.id, rect };
+    });
+    const target = resolveSmartBoardDropTarget(candidates, clientX, clientY, drag.id);
+    if (target?.mode !== 'gap') return target;
+    return { ...target, removableGapPages: derivePlacementGapActionFromLayout(layout.items, target.id).removableGapPages };
+  };
+
   const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
     const drag = positionDragRef.current;
+    if (drag?.smartMode) {
+      const target = drag.moved ? findSmartBoardDropTarget(clientX, clientY, drag) : null;
+      setCurrentBoardDropTarget(target);
+      return target;
+    }
     if (drag && !drag.reorderMode) {
       setCurrentBoardDropTarget(null);
       return null;
@@ -7433,17 +7513,17 @@ function BoardStage({
     drag.contentDy = contentDy;
     const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
     const nextXRatio = magnet.ratio;
-    const visualDx = drag.reorderMode ? rawVisualDx : nextXRatio * drag.maxLeft - drag.startLeft;
+    const visualDx = drag.reorderMode || drag.smartMode ? rawVisualDx : nextXRatio * drag.maxLeft - drag.startLeft;
     drag.pendingPlacement = {
       xRatio: nextXRatio,
       yRatio: vertical.yRatio,
       extraSlots: vertical.extraSlots,
       magnetColumnIndex: magnet.snapped ? magnet.index : null,
     };
-    const visualDy = drag.reorderMode ? contentDy : vertical.offsetPages * drag.pageH - drag.startTopOffset;
+    const visualDy = drag.reorderMode || drag.smartMode ? contentDy : vertical.offsetPages * drag.pageH - drag.startTopOffset;
     drag.tile.style.transform = `translate3d(${visualDx}px, ${visualDy}px, 0)`;
     drag.tile.style.zIndex = '12';
-    const magnetKey = magnet.snapped ? `${magnet.index}:${magnet.ratio}` : '';
+    const magnetKey = !drag.smartMode && magnet.snapped ? `${magnet.index}:${magnet.ratio}` : '';
     if (magnetKey !== drag.lastMagnetKey) {
       drag.lastMagnetKey = magnetKey;
       setDragMagnet(magnet.snapped ? {
@@ -7549,7 +7629,7 @@ function BoardStage({
   useEffect(() => () => removePositionDragWindowListeners(), []);
 
   const beginPositionDrag = (evt, item, placement) => {
-    if (evt.button !== 0 || !contentRef.current || positionDragRef.current) return;
+    if (evt.button !== 0 || interactionBusy || !contentRef.current || positionDragRef.current) return;
     const tile = tileRefs.current[item.id];
     if (!tile) return;
     evt.preventDefault();
@@ -7581,6 +7661,8 @@ function BoardStage({
       rowSpanPages,
       contentWidth: contentRef.current.clientWidth,
       reorderMode: evt.altKey,
+      smartMode: smartMove && !evt.altKey,
+      sourceRect: { left: tileRect.left, right: tileRect.right, top: tileRect.top, bottom: tileRect.bottom, width: tileRect.width, height: tileRect.height },
       contentHeight: contentRef.current.style.height,
       extendedContentHeight: `${layout.totalH + Math.max(0, maximumOffset * pageH - maxTopOffset)}px`,
       startX: evt.clientX,
@@ -7617,6 +7699,7 @@ function BoardStage({
     setPositioningId(item.id);
     setCurrentBoardDropTarget(null);
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(item.id);
     setActive(item.id);
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
     evt.currentTarget.addEventListener('lostpointercapture', drag.windowPointerCancelCapture);
@@ -7634,7 +7717,7 @@ function BoardStage({
     const dy = evt.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     evt.preventDefault();
-    if (!drag.moved && !drag.reorderMode && contentRef.current) {
+    if (!drag.moved && !drag.reorderMode && !drag.smartMode && contentRef.current) {
       contentRef.current.style.height = drag.extendedContentHeight;
     }
     drag.moved = true;
@@ -7654,17 +7737,17 @@ function BoardStage({
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
     const viewport = scrollRef.current?.getBoundingClientRect();
-    if (viewport && (evt.clientX < viewport.left || evt.clientX > viewport.right || evt.clientY < viewport.top || evt.clientY > viewport.bottom)) {
+    if (interactionBusy || (viewport && (evt.clientX < viewport.left || evt.clientX > viewport.right || evt.clientY < viewport.top || evt.clientY > viewport.bottom))) {
       cancelPositionDrag(evt);
       return;
     }
     const finalScrollTop = scrollRef.current?.scrollTop || 0;
     updatePositionDragVisual(drag, evt.clientX, evt.clientY);
     const canReorder = drag.reorderMode && drag.moved && Math.abs(drag.contentDy) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
-    const target = canReorder
-      ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id)
-      : null;
-    const reorderedPreview = target?.id
+    const target = drag.smartMode && drag.moved
+      ? findSmartBoardDropTarget(evt.clientX, evt.clientY, drag)
+      : canReorder ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id) : null;
+    const reorderedPreview = target?.id && target.mode !== 'gap'
       ? reorderItemsForDrop(items, drag.id, target.id, target.position)
       : items;
     const orderChanged = reorderedPreview !== items
@@ -7674,9 +7757,11 @@ function BoardStage({
       window.setTimeout(() => {
         if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
       }, 0);
-      if (orderChanged) {
+      if (target?.mode === 'gap') {
+        if (target.removableGapPages > PLACEMENT_EPSILON_PAGES) reducePlacementGap?.(target.id);
+      } else if (orderChanged) {
         reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
-      } else if (!drag.reorderMode && drag.pendingPlacement) {
+      } else if (!drag.reorderMode && !target && drag.pendingPlacement) {
         setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
@@ -7719,6 +7804,12 @@ function BoardStage({
     stopBoardAutoScroll();
     window.requestAnimationFrame(captureBoardTileRects);
   };
+
+  useEffect(() => {
+    // Window pointer listeners close over the start render. If a background
+    // result or save replaces the items, cancel instead of committing old data.
+    if (positionDragRef.current) cancelPositionDrag({ pointerId: positionDragRef.current.pointerId });
+  }, [interactionBusy, items]);
 
   let processedCount = 0;
   let aiCount = 0;
@@ -7775,61 +7866,6 @@ function BoardStage({
   return (
     <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="칠판 미리보기">
       <div className="stage">
-        <div className="stage-toolbar">
-          <span className="name">{items.length ? '실시간 칠판 미리보기' : '칠판 자료 홈'}</span>
-          <span className="pill" title={fileName}><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
-          <div className="spacer" />
-          {items.length > 0 && <div className="stage-preview-controls" role="group" aria-label="미리보기 배율">
-            <button
-              className="btn icon ghost"
-              type="button"
-              title="미리보기 축소"
-              aria-label="미리보기 축소"
-              disabled={!items.length || previewZoom <= BOARD_PREVIEW_ZOOM_MIN + 0.001}
-              onClick={() => focusActiveTileAtPreviewZoom(previewZoom - BOARD_PREVIEW_ZOOM_STEP)}
-            >{Icon.zoomOut}</button>
-            <button
-              className="btn ghost stage-preview-zoom-value"
-              type="button"
-              title="미리보기 배율만 100%로 복원"
-              disabled={!items.length}
-              onClick={() => focusActiveTileAtPreviewZoom(1)}
-            >보기 {Math.round(previewZoom * 100)}%</button>
-            <button
-              className="btn icon ghost"
-              type="button"
-              title="미리보기 확대"
-              aria-label="미리보기 확대"
-              disabled={!items.length || previewZoom >= BOARD_PREVIEW_ZOOM_MAX - 0.001}
-              onClick={() => focusActiveTileAtPreviewZoom(previewZoom + BOARD_PREVIEW_ZOOM_STEP)}
-            >{Icon.zoomIn}</button>
-            <button
-              className="btn ghost stage-fit-btn"
-              type="button"
-              title="선택 문항 전체 보기"
-              aria-pressed={previewFitActive}
-              data-tooltip="선택 문항의 위·아래가 한 화면에 보이도록 미리보기만 맞춥니다"
-              disabled={!activePlacement}
-              onClick={fitActiveTileInView}
-            >선택 문항 맞춤</button>
-          </div>}
-          <button
-            className={`btn ghost stage-page-guide-btn ${pageGuides ? 'on' : ''}`}
-            type="button"
-            aria-pressed={pageGuides}
-            data-tooltip={pageGuides ? '페이지 구분 숨기기 · 실제 칠판처럼 보기' : '페이지 구분 보이기'}
-            onClick={togglePageGuides}
-          >{Icon.rows3} 페이지 구분</button>
-        </div>
-
-        <SessionRecognitionAction
-          onRecognizeSession={onRecognizeSession}
-          canRecognizeSession={canRecognizeSession}
-          recognitionDisabledReason={recognitionDisabledReason}
-          sourcePageCount={sourcePageCount}
-          sessionEditState={sessionEditState}
-        />
-
         {items.length === 0 ? (
           <HomeDashboard
             onUpload={triggerUpload || addSample}
@@ -7846,9 +7882,15 @@ function BoardStage({
           />
         ) : (
           <>
-        <div className="stage-wrap">
-          <div className="stage-estimate-bar" ref={estimateBarRef}>
-            <div className="stage-estimate-summary">
+          <div className="stage-toolbar stage-unified-toolbar" role="group" aria-label="칠판 도구">
+            <button className="stage-estimate-summary stage-estimate-details-toggle" type="button"
+              ref={estimateToggleRef} aria-label="배치 정보"
+              title="페이지 정보 · 자세한 배치 정보 열기"
+              aria-expanded={estimateDetailsOpen}
+              aria-controls={estimateDetailsOpen ? 'stage-estimate-details' : undefined}
+              aria-haspopup="dialog"
+              onClick={() => estimateDetailsOpen ? closeEstimateDetails() : setEstimateDetailsOpen(true)}>
+              <span className="stage-estimate-copy">
               <span className="stage-estimate-primary" title="현재 배치 기준 예상 분량입니다. 내보내기 결과와 다를 수 있습니다.">
                 <span className="stage-estimate-brand">ClassIn </span>전체 {previewEstimate.classinPageCount}쪽
               </span>
@@ -7860,17 +7902,47 @@ function BoardStage({
                   {selectedIds?.size > 1 ? ` · ${selectedIds.size}개 선택 중` : ''}
                 </span>
               )}
-            </div>
-            <div className="stage-estimate-tools">
-              <button
-                className="btn ghost stage-estimate-details-toggle"
-                type="button"
-                ref={estimateToggleRef}
-                aria-expanded={estimateDetailsOpen}
-                aria-controls={estimateDetailsOpen ? 'stage-estimate-details' : undefined}
-                aria-haspopup="dialog"
-                onClick={() => estimateDetailsOpen ? closeEstimateDetails() : setEstimateDetailsOpen(true)}
-              >배치 정보 {estimateDetailsOpen ? Icon.chevronUp : Icon.chevronDown}</button>
+              </span>
+              {estimateDetailsOpen ? Icon.chevronUp : Icon.chevronDown}
+            </button>
+            <div className="stage-unified-actions">
+              {reviewAttentionCount > 0 && <button className="btn ghost stage-review-shortcut" type="button"
+                disabled={interactionBusy} onClick={onOpenPendingReview}>검수 {reviewAttentionCount}</button>}
+              <div className="stage-preview-controls" role="group" aria-label="미리보기 배율">
+                <button className="btn icon ghost" type="button" title="미리보기 축소" aria-label="미리보기 축소"
+                  disabled={previewZoom <= BOARD_PREVIEW_ZOOM_MIN + 0.001}
+                  onClick={() => focusActiveTileAtPreviewZoom(previewZoom - BOARD_PREVIEW_ZOOM_STEP)}>{Icon.zoomOut}</button>
+                <button className="btn ghost stage-preview-zoom-value" type="button" title="미리보기 배율만 100%로 복원"
+                  onClick={() => focusActiveTileAtPreviewZoom(1)}>{Math.round(previewZoom * 100)}%</button>
+                <button className="btn icon ghost" type="button" title="미리보기 확대" aria-label="미리보기 확대"
+                  disabled={previewZoom >= BOARD_PREVIEW_ZOOM_MAX - 0.001}
+                  onClick={() => focusActiveTileAtPreviewZoom(previewZoom + BOARD_PREVIEW_ZOOM_STEP)}>{Icon.zoomIn}</button>
+                <button className="btn ghost stage-fit-btn" type="button" title="선택 문항 전체 보기"
+                  aria-label="선택 문항 맞춤" aria-pressed={previewFitActive}
+                  disabled={!activePlacement} onClick={fitActiveTileInView}>맞춤</button>
+              </div>
+              <button className={`btn ghost stage-smart-move ${smartMove ? 'on' : ''}`} type="button"
+                aria-pressed={smartMove} disabled={interactionBusy || Boolean(positioningId)}
+                aria-describedby="smart-move-help" title="스마트 이동: 문제 위는 순서 변경, 문제 옆은 뒤 여백 당기기"
+                onClick={() => setSmartMove(previous => !previous)}>
+                {Icon.grip}<span>스마트 이동</span><span className="stage-smart-state">{smartMove ? 'ON' : 'OFF'}</span>
+              </button>
+              <ToolbarActionMenu id="board-tools" label="칠판 도구 더보기" items={[
+                { id: 'guides', icon: Icon.rows3, label: pageGuides ? '페이지 구분 숨기기' : '페이지 구분 보이기',
+                  description: '점선에 ClassIn 쪽수와 내부 높이를 표시합니다', onSelect: togglePageGuides },
+                { id: 'gap', icon: Icon.arrowUp, label: '선택 줄 여백 당기기',
+                  description: smartMove ? '선택 줄 뒤의 빈공간을 줄이고 아래 문제를 위로 당깁니다' : '스마트 이동을 켜면 사용할 수 있습니다',
+                  disabled: !smartMove || interactionBusy || Boolean(positioningId) || !activeId || !derivePlacementGapActionFromLayout(layout.items, activeId).ids.length,
+                  onSelect: () => reducePlacementGap?.(activeId) },
+                ...(sourcePageCount && onRecognizeSession ? [{ id: 'recognize', icon: Icon.aiBatch,
+                  label: '원본 전체에서 문항 다시 찾기', disabled: !canRecognizeSession,
+                  description: !canRecognizeSession && recognitionDisabledReason ? recognitionDisabledReason
+                    : `원본 ${sourcePageCount}페이지 전체 · ${sessionEditState?.dirty ? '변경한 수업을 먼저 저장합니다' : '현재 수업을 저장한 뒤 인식 결과를 확인합니다'}`,
+                  onSelect: onRecognizeSession }] : []),
+              ]} />
+              {focusMode && panelCollapsed && <button ref={panelReopenRef} className="btn ghost focus-panel-reopen"
+                type="button" aria-controls="workspace-panel" aria-expanded="false" aria-label="편집·설정 펼치기"
+                onClick={onOpenPanel}>{Icon.align}<span>편집·설정</span></button>}
             </div>
             {estimateDetailsOpen && ReactDOM.createPortal(
               <div
@@ -7895,6 +7967,11 @@ function BoardStage({
                   {selectedIds?.size > 1 && <div><dt>선택 범위</dt><dd>{selectedIds.size}개 · 현재 문항 기준</dd></div>}
                   <div><dt>전체 여백</dt><dd>{formatClassinPageAmount(previewEstimate.blankHeightPages)}</dd></div>
                   <div><dt>간격 방식</dt><dd>{normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : 'ClassIn 쪽 맞춤'}</dd></div>
+                  <div><dt>배치</dt><dd>{activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}</dd></div>
+                  <div><dt>처리 상태</dt><dd>{processedCount}/{items.length}개 처리됨 · 미처리 {rawCount}개</dd></div>
+                  <div><dt>처리 방식</dt><dd>그대로 {s1Count} · 원문 보존 {aiCount} · 고화질 {reconstructCount}</dd></div>
+                  {activePlacement && <div><dt>선택 행 높이</dt><dd>{formatClassinPageAmount(activePlacement.rowHeightPages)}</dd></div>}
+                  {previewEstimate.autoScaleAdjustedCount > 0 && <div><dt>경계 공백 방지</dt><dd>{previewEstimate.autoScaleAdjustedCount}개</dd></div>}
                   {previewEstimate.active && <div><dt>자동 축소</dt><dd>{previewEstimate.active.autoScaleAdjusted
                     ? `적용 · ${(previewEstimate.active.autoScaleReductionRatio * 100).toFixed(1)}% 줄임`
                     : '미적용'}</dd></div>}
@@ -7909,11 +7986,20 @@ function BoardStage({
                   </dl>
                   <p className="stage-estimate-note">내부 높이 1.2p가 ClassIn 1쪽입니다.</p>
                 </details>
+                <p className="stage-estimate-note">스마트 이동 ON: 누른 채 문제 위로 놓으면 순서 변경, 옆으로 놓으면 뒤 여백 당기기. {ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소.</p>
               </div>, document.body
             )}
           </div>
-
+        <div className="stage-wrap">
           <div className="stage-board" style={{ background: boardColor }}>
+            <span className="sr-only" id="smart-move-help">누른 채 이동 · 문제 위: 순서 변경 · 문제 옆: 뒤 여백 당기기 · {ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소</span>
+            {smartMove && boardDropTarget && <div className="stage-drag-feedback" role="status" aria-live="polite">
+              {boardDropTarget.mode === 'gap'
+                ? boardDropTarget.removableGapPages > PLACEMENT_EPSILON_PAGES
+                  ? `${items.findIndex(item => item.id === boardDropTarget.id) + 1}번 뒤 여백 ${formatClassinPageAmount(boardDropTarget.removableGapPages)} 줄이기 · 아래 문제를 위로 당깁니다`
+                  : '이 줄은 더 줄일 뒤 여백이 없습니다'
+                : `${items.findIndex(item => item.id === boardDropTarget.id) + 1}번 ${boardDropTarget.position === 'before' ? '앞' : '뒤'}에 넣기 · 순서 변경`}
+            </div>}
 
             <div
               className="stage-scroll"
@@ -7931,7 +8017,8 @@ function BoardStage({
                 {pageGuides && pageBands.map(band => (
                   <div
                     key={`band-${band.page}`}
-                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''}`}
+                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''} ${band.page === visibleCurrentPage ? 'is-current' : ''}`}
+                    data-classin-page={band.page}
                     style={{ top: band.top, height: DEFAULT_SLOT_HEIGHT_PAGES * pageH }}
                     aria-hidden="true"
                   />
@@ -8042,17 +8129,17 @@ function BoardStage({
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''}`}
                       onClick={event => onTileClick(it.id, event)}
                       onPointerDown={e => beginPositionDrag(e, it, p)}
                       title={problemDisplayName(it, i)}
-                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. 제목 줄 드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}
+                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. ${smartMove ? '문제 위로 드래그하면 순서 변경, 옆에 놓으면 뒤 여백 당기기' : `드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}`}
                       aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
                       style={tileStyle}
                     >
                       <div
                         className="tile-hd"
-                        title={`드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}
+                        title={smartMove ? '문제 위: 순서 변경 · 옆: 뒤 여백 당기기 · Esc: 취소' : `드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}
                       >
                         <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
@@ -8136,49 +8223,6 @@ function BoardStage({
           </div>
         </div>
 
-        <div className="stage-status" aria-label="미리보기 상태">
-          <div className="stage-status-track">
-            <span className="chip">{layout.usesPlacement ? 'EDB 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
-            <span className="chip">
-              <span className="pip" />
-              {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
-            </span>
-            {previewEstimate.autoScaleAdjustedCount > 0 && !previewEstimate.active?.autoScaleAdjusted && (
-              <span className="chip" title="경계에 조금 넘친 문항만 최대 6% 범위에서 자동으로 맞췄습니다">
-                공백 방지 {previewEstimate.autoScaleAdjustedCount}개
-              </span>
-            )}
-            {activePlacement && (
-              <span className="chip">
-                행 높이 {formatClassinPageAmount(activePlacement.rowHeightPages)}
-              </span>
-            )}
-            <span className="chip">
-              <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
-              1단계 {s1Count}
-            </span>
-            <span className="chip">
-              <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
-              원문 보존 {aiCount}
-            </span>
-            <span className="chip">
-              <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
-              고화질 {reconstructCount}
-            </span>
-            {rawCount > 0 && (
-              <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
-                미처리 {rawCount}
-              </span>
-            )}
-          </div>
-          <span
-            className="stage-status-summary"
-            aria-label={`${processedCount}/${items.length} 처리됨 · ClassIn ${previewEstimate.classinPageCount}페이지`}
-            title={`${processedCount}/${items.length} 처리됨 · ClassIn 전체 ${previewEstimate.classinPageCount}쪽`}
-          >
-            {processedCount}/{items.length} · C{previewEstimate.classinPageCount}
-          </span>
-        </div>
         </>
         )}
       </div>
@@ -8192,6 +8236,7 @@ function HomeDashboard({
   recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey,
 }){
   const [dropActive, setDropActive] = useState(false);
+  const [recentLimit, setRecentLimit] = useState(6);
   const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
   const hangulMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
 
@@ -8217,172 +8262,187 @@ function HomeDashboard({
     if (files.length && onFilesDropped) onFilesDropped(files);
   };
 
-  const sessionsToShow = Array.isArray(recentSessions) ? recentSessions.slice(0, 6) : [];
+  const savedSessions = Array.isArray(recentSessions) ? recentSessions : [];
+  const sessionsToShow = savedSessions.slice(0, recentLimit);
+  const restoreBusy = Boolean(recentSessionRestoreBlocked || restoringSessionId);
 
   return (
     <div
-      className="home-dashboard"
+      className="home-dashboard home-start-screen"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       <div className="home-dashboard-inner">
+        <div className="home-start-layout">
+        <section className="home-start-intro" aria-labelledby="home-start-title">
         <div className="home-hero-head">
-          <div className="home-hero-badge">ClassIn EDB 제작기</div>
-          <h1 className="home-hero-title">수업용 칠판 자료 만들기</h1>
+          <div className="home-hero-badge">ClassIn EDB · 수업 준비</div>
+          <h1 id="home-start-title" className="home-hero-title">수업 자료를<br />칠판으로</h1>
           <p className="home-hero-lead">
-            시험지 PDF, 한글(HWP), 문제 이미지를 넣으면 1문제=1.2페이지로 자동 분할하고 우측 판서 공간을 유지한 ClassIn 보드로 배치합니다.
+            시험지와 교재를 올리고, 문제를 확인하고,<br />나만의 수업 칠판을 완성하세요.
           </p>
         </div>
 
-        <div
-          className={`home-hero-dropzone ${dropActive ? 'is-active' : ''}`}
-          onClick={onUpload}
-        >
-          <div className="home-dropzone-icon" aria-hidden="true">
-            {Icon.upload}
-          </div>
-          <div className="home-dropzone-text">
-            <strong>자료 파일을 여기에 끌어다 놓으세요</strong>
-            <span>또는 클릭하여 컴퓨터에서 파일 선택</span>
-          </div>
-          <button
-            type="button"
-            className="btn primary home-upload-btn"
-            onClick={e => {
-              e.stopPropagation();
-              onUpload?.();
-            }}
-          >
-            {Icon.plus} 자료 추가
-          </button>
-          <div className="home-format-badges" aria-label="지원 형식">
-            <span className="home-format-badge badge-pdf">{Icon.fileText} PDF (시험지·모의고사)</span>
-            <span className="home-format-badge badge-hwp">{Icon.pen} HWP / HWPX (한글 시험지)</span>
-            <span className="home-format-badge badge-img">{Icon.photo} PNG / JPG (교재 스캔본)</span>
-          </div>
+        <div className="home-section home-workflow-section" aria-label="자료 제작 3단계 가이드">
+          <h2 className="home-workflow-title">세 단계로 준비하는 수업</h2>
+          <ol className="home-workflow-steps">
+            <li className="home-step-card">
+              <span className="home-step-num" aria-hidden="true">1</span>
+              <div className="home-step-content">
+                <strong>자료 올리기</strong>
+                <p>파일을 대기열에 담고 넣는 방식을 선택합니다.</p>
+              </div>
+            </li>
+            <li className="home-step-card">
+              <span className="home-step-num" aria-hidden="true">2</span>
+              <div className="home-step-content">
+                <strong>확인하고 배치하기</strong>
+                <p>문항을 검수하고, 한 행에 한 문제씩 순서를 정합니다.</p>
+              </div>
+            </li>
+            <li className="home-step-card">
+              <span className="home-step-num" aria-hidden="true">3</span>
+              <div className="home-step-content">
+                <strong>EDB 제작하기</strong>
+                <p>오른쪽 판서 공간과 함께 ClassIn에서 엽니다.</p>
+              </div>
+            </li>
+          </ol>
         </div>
 
         <div className="home-quick-cards" role="group" aria-label="빠른 시작">
           {canAddDummy && (
-            <div
-              className="home-quick-card accent"
-              role="button"
-              tabIndex={0}
-              onClick={onAddMockSample}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAddMockSample?.(); } }}
-            >
-              <div className="home-card-icon accent">{Icon.sparkle}</div>
-              <div className="home-card-info">
-                <strong>샘플로 둘러보기</strong>
-                <p>샘플 문항 1개로 편집과 칠판 배치를 바로 체험합니다.</p>
-              </div>
-            </div>
+            <button type="button" className="home-quick-card accent" onClick={onAddMockSample}>
+              <span className="home-card-icon accent" aria-hidden="true">{Icon.board}</span>
+              <span className="home-card-info">
+                <strong>샘플로 먼저 둘러보기</strong>
+                <span className="home-card-description">파일 없이 편집과 칠판 배치를 체험하세요.</span>
+              </span>
+              <span className="home-sample-arrow" aria-hidden="true">{Icon.arrowRight}</span>
+            </button>
           )}
-          <div className="home-quick-card feature">
-            <div className="home-card-icon">{Icon.board}</div>
-            <div className="home-card-info">
-              <strong>1.2페이지 자동 배치</strong>
-              <p>우측 판서 공간을 유지한 ClassIn 규격으로 제작됩니다.</p>
-            </div>
-          </div>
+        </div>
+        </section>
+
+        <section className="home-start-launch" aria-labelledby="home-launch-title">
+        <div className="home-launch-heading">
+          <span className="home-launch-step">01 · 새 작업</span>
+          <h2 id="home-launch-title">어떤 자료로 시작할까요?</h2>
+        </div>
+
+        <button
+          type="button"
+          className={`home-hero-dropzone ${dropActive ? 'is-active' : ''}`}
+          onClick={onUpload}
+          aria-label="자료 파일 선택"
+          aria-describedby="home-upload-help"
+        >
+          <span className="home-dropzone-icon" aria-hidden="true">
+            {Icon.upload}
+          </span>
+          <span className="home-dropzone-text">
+            <strong>{dropActive ? '여기에 놓으면 자료가 담겨요' : '끌어다 놓거나 클릭하세요'}</strong>
+            <span>시험지·교재 파일을 여러 개 함께 넣을 수 있어요.</span>
+          </span>
+          <span className="btn primary home-upload-btn" aria-hidden="true">
+            {Icon.plus} 파일 선택
+          </span>
+          <span className="home-format-badges" aria-label="지원 형식">
+            <span className="home-format-badge badge-pdf">PDF</span>
+            <span className="home-format-badge badge-hwp">HWP · HWPX</span>
+            <span className="home-format-badge badge-img">PNG · JPG</span>
+          </span>
+        </button>
+        <p id="home-upload-help" className="home-upload-help">
+          파일은 먼저 대기열에 담깁니다. 올린 뒤 페이지 전체 넣기, 문항별 분할, 수동 쪼개기 중에서 선택하세요.
+        </p>
+
+        <div className="home-methods" aria-labelledby="home-methods-title">
+          <h3 id="home-methods-title">파일을 올린 뒤, 이렇게 넣을 수 있어요</h3>
+          <ul className="home-method-cards">
+            <li className="home-method-card">
+              <span className="home-method-icon recognize" aria-hidden="true">{Icon.sparkle}</span>
+              <strong>문항 인식</strong>
+              <span>문제별로 자동 분리</span>
+            </li>
+            <li className="home-method-card">
+              <span className="home-method-icon pages" aria-hidden="true">{Icon.fileText}</span>
+              <strong>페이지 전체</strong>
+              <span>한 페이지를 그대로</span>
+            </li>
+            <li className="home-method-card">
+              <span className="home-method-icon manual" aria-hidden="true">
+                <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="6" cy="6" r="3" /><path d="M8.12 8.12 12 12M20 4 8.12 15.88" />
+                  <circle cx="6" cy="18" r="3" /><path d="M14.8 14.8 20 20" />
+                </svg>
+              </span>
+              <strong>수동 쪼개기</strong>
+              <span>필요한 영역만 직접</span>
+            </li>
+          </ul>
+        </div>
+        </section>
         </div>
 
         {sessionsToShow.length > 0 && (
           <div className="home-section home-recent-section" aria-label="최근 작업 이어하기">
             <div className="home-section-head">
               <h2>{Icon.clock} 최근 작업 이어하기</h2>
-              <span className="home-section-count">{recentSessions.length}개 저장됨</span>
+              <span className="home-section-count">{savedSessions.length}개 저장됨</span>
             </div>
             <div className="home-recent-grid">
               {sessionsToShow.map(entry => {
                 const isRestoring = restoringSessionId === entry.id;
                 const problemCount = entry.problemCount ?? entry.problem_count;
+                const sessionName = entry.sessionName || entry.session_name || '이름 없는 작업';
+                const updatedAt = entry.updatedAt || entry.updated_at;
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={entry.id}
                     className={`home-recent-card ${isRestoring ? 'is-restoring' : ''}`}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`${entry.sessionName || '이름 없는 작업'} 열기`}
+                    disabled={restoreBusy}
+                    aria-busy={isRestoring}
+                    aria-label={`${sessionName} ${isRestoring ? '여는 중' : '열기'}`}
                     onClick={() => {
-                      if (!recentSessionRestoreBlocked && !isRestoring) {
+                      if (!restoreBusy) {
                         onRestoreRecentSession?.(entry.id);
-                      }
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        if (!recentSessionRestoreBlocked && !isRestoring) {
-                          onRestoreRecentSession?.(entry.id);
-                        }
                       }
                     }}
                   >
-                    <div className="home-recent-card-body">
-                      <div className="home-recent-card-title" title={entry.sessionName}>
-                        {entry.sessionName || '이름 없는 작업'}
-                      </div>
-                      <div className="home-recent-card-meta">
+                    <span className="home-recent-card-body">
+                      <span className="home-recent-card-title" title={sessionName}>
+                        {sessionName}
+                      </span>
+                      <span className="home-recent-card-meta">
                         <span className="home-recent-count">
                           {recentSessionCountLabel(entry) || (problemCount ? `${problemCount}개 문항` : '저장된 작업')}
                         </span>
-                        {entry.updatedAt && (
+                        {updatedAt && (
                           <span className="home-recent-date">
-                            {formatPublishTime(entry.updatedAt)}
+                            {formatPublishTime(updatedAt)}
                           </span>
                         )}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn home-recent-open-btn"
-                      disabled={recentSessionRestoreBlocked || isRestoring}
-                      onClick={e => {
-                        e.stopPropagation();
-                        onRestoreRecentSession?.(entry.id);
-                      }}
-                    >
+                      </span>
+                    </span>
+                    <span className="home-recent-open-btn" aria-hidden="true">
                       {isRestoring ? '여는 중…' : '열기'}
-                    </button>
-                  </div>
+                    </span>
+                  </button>
                 );
               })}
             </div>
+            {savedSessions.length > sessionsToShow.length && (
+              <button type="button" className="btn ghost home-recent-more"
+                onClick={() => setRecentLimit(limit => limit + 6)}>
+                최근 작업 더 보기 ({savedSessions.length - sessionsToShow.length}개)
+              </button>
+            )}
           </div>
         )}
-
-        <div className="home-section home-workflow-section" aria-label="자료 제작 3단계 가이드">
-          <div className="home-section-head">
-            <h2>자료 제작 3단계</h2>
-          </div>
-          <div className="home-workflow-steps">
-            <div className="home-step-card">
-              <div className="home-step-num">1</div>
-              <div className="home-step-content">
-                <strong>자료 준비</strong>
-                <p>PDF, 한글, 이미지 파일을 대기열에 담고 페이지 그대로 또는 문항별 분할을 선택합니다.</p>
-              </div>
-            </div>
-            <div className="home-step-arrow" aria-hidden="true">{Icon.arrowRight}</div>
-            <div className="home-step-card">
-              <div className="home-step-num">2</div>
-              <div className="home-step-content">
-                <strong>검수</strong>
-                <p>문항 번호와 지문을 자동 분리하고 필요 시 영역 자르기 및 순서를 조정합니다.</p>
-              </div>
-            </div>
-            <div className="home-step-arrow" aria-hidden="true">{Icon.arrowRight}</div>
-            <div className="home-step-card">
-              <div className="home-step-num">3</div>
-              <div className="home-step-content">
-                <strong>칠판·내보내기</strong>
-                <p>우측 판서 공간을 유지한 ClassIn 칠판에 배치하고 .edb 파일로 바로 내보냅니다.</p>
-              </div>
-            </div>
-          </div>
-        </div>
 
         <div className="home-dashboard-footer">
           <div className="home-status-pills">
@@ -8757,7 +8817,6 @@ function SidebarDisclosure({ title, summary, badge, tone = 'neutral', className 
 
 function BoardLayoutControls({
   boardColumns,
-  setBoardColumns,
   layoutGapMode,
   setLayoutGapMode,
   manualGapCount,
@@ -8767,19 +8826,21 @@ function BoardLayoutControls({
   const gapMode = normalizeLayoutGapMode(layoutGapMode);
   const columns = normalizeBoardColumns(boardColumns);
   const summary = [
-    `${columns}열`,
+    columns === BOARD_COLUMN_MIN ? '한 행 · 문제 1개' : `기존 ${columns}칸 배치 유지`,
     gapMode === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : '1.2 맞춤',
     manualGapCount ? `개별 여백 ${manualGapCount}곳` : '',
   ].filter(Boolean).join(' · ');
   return (
     <section className="board-layout-controls" aria-label="칠판 레이아웃">
+      <p className="single-row-layout-note">
+        <strong>{columns === BOARD_COLUMN_MIN ? '한 행에 문제 하나' : `기존 ${columns}칸 배치`}</strong>
+        <span>{columns === BOARD_COLUMN_MIN ? '기본은 ClassIn 한 페이지에 문제 하나, 오른쪽은 판서 공간입니다.' : '불러온 자료의 배치와 순서를 그대로 유지합니다.'}</span>
+      </p>
       {columns !== BOARD_COLUMN_MIN && (
         <div className="placement-column-warning" role="status">
-          <strong>{columns}열 배치는 EDB 제작을 지원하지 않습니다.</strong>
-          <small>저장된 자료를 1열로 되돌리면 제작할 수 있어요.</small>
-          <button className="btn" type="button" disabled={disabled} onClick={() => setBoardColumns?.(BOARD_COLUMN_MIN)}>
-            제작 가능한 1열로 복원
-          </button>
+          <strong>기존 {columns}칸 배치를 유지합니다.</strong>
+          <small>새 작업은 한 행에 문제 하나로 시작합니다.</small>
+          <small>기존 배치 그대로 저장할 수 있습니다. 2·3칸 배치의 EDB 제작은 아직 지원하지 않습니다.</small>
         </div>
       )}
       <div className="row-control layout-gap-mode-control">
@@ -8813,8 +8874,8 @@ function BoardLayoutControls({
             </div>
           ) : (
             <p className="layout-gap-hint">
-              <strong>경계 공백 방지</strong>
-              각 1.2 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 사용자가 조절한 배율은 유지합니다.
+              <strong>가능하면 한 페이지에 문제 하나</strong>
+              1.2p는 ClassIn 한 페이지입니다. 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 긴 문제와 원본 페이지는 자르지 않고 이어서 표시하며, 사용자가 조절한 배율은 유지합니다.
             </p>
           )}
 
@@ -8885,11 +8946,12 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate,
+  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, updatePanelRequest = 0,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
+  focusMode = false, onToggleFocusPanel, homeSettingsOpen = false, onCloseHomeSettings,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
@@ -8901,7 +8963,7 @@ function SidePanel({
     });
   };
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
-  const [previewExpanded, setPreviewExpanded] = useState(true);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [compareX, setCompareX] = useState(50);
   const [keyDraft, setKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -8928,6 +8990,21 @@ function SidePanel({
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
   const bugReportDisclosureRef = useRef(null);
+  const updateDisclosureRef = useRef(null);
+  const consumedUpdateRequestRef = useRef(0);
+  useEffect(() => {
+    if (!updatePanelRequest || consumedUpdateRequestRef.current === updatePanelRequest) return;
+    if (tab !== 'board') {
+      setTab('board');
+      return;
+    }
+    const disclosure = updateDisclosureRef.current;
+    if (!disclosure) return;
+    consumedUpdateRequestRef.current = updatePanelRequest;
+    disclosure.open = true;
+    disclosure.scrollIntoView({ block: 'nearest' });
+    disclosure.querySelector('summary')?.focus({ preventScroll: true });
+  }, [updatePanelRequest, tab, setTab]);
   const panelTabRefs = useRef({});
   const panelBusy = Boolean(mutating || sessionEditState?.busy);
   const handlePanelTabKeyDown = (event) => {
@@ -9389,6 +9466,21 @@ function SidePanel({
 
   return (
     <div className={`col right ${view === 'review' ? 'review-context' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정">
+      {(focusMode || homeSettingsOpen) && (
+        <div className={`focus-panel-heading ${homeSettingsOpen ? 'home-settings-heading' : ''}`}>
+          <div>
+            <strong>{homeSettingsOpen ? '앱 설정' : '편집 도구'}</strong>
+          </div>
+          <button
+            className="icon-btn focus-panel-toggle"
+            type="button"
+            aria-label={homeSettingsOpen ? '시작화면 설정 닫기' : '편집 패널 접기'}
+            aria-expanded="true"
+            aria-controls="workspace-panel"
+            onClick={homeSettingsOpen ? onCloseHomeSettings : onToggleFocusPanel}
+          >{Icon.chevronDown}</button>
+        </div>
+      )}
       <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
         <button
           type="button"
@@ -9405,7 +9497,7 @@ function SidePanel({
           aria-controls="side-panel-item"
           tabIndex={tab === 'item' ? 0 : -1}
         >
-          {Icon.fileText} 자료 편집 <span className="badge">{itemPosLabel}</span>
+          {Icon.fileText} 자료 편집
         </button>
         <button
           type="button"
@@ -9443,12 +9535,11 @@ function SidePanel({
         </button>
       </div>
 
-      <div className={`panel-session-state ${panelSaveState.dirty ? 'is-dirty' : ''} ${panelBusy ? 'is-busy' : ''}`} role="status" aria-live="polite" aria-atomic="true">
+      {tab !== 'placement' && (panelBusy || panelSaveState.dirty) && <div className={`panel-session-state ${panelSaveState.dirty ? 'is-dirty' : ''} ${panelBusy ? 'is-busy' : ''}`} role="status" aria-live="polite" aria-atomic="true">
         <strong>{panelBusy ? '수업 변경 처리 중…' : panelSaveState.label}</strong>
         {session && panelSaveState.dirty && <small>수업 이름·처리 방식·배치 변경 포함</small>}
-      </div>
+      </div>}
 
-      <PublishPlanSummary plan={publishPlan} busy={publishPlanBusy} failed={publishPlanFailed} />
       <PublishResultPanel
         session={session}
         visible={published}
@@ -9499,8 +9590,6 @@ function SidePanel({
                   </div>
                 </div>
 
-                <OriginalProblemNumberEditor key={item.id} item={item} disabled={panelBusy || !session} onSave={mutateSession} />
-
                 <div className="panel-section-hd">
                   처리 방식 선택 <span className="line" />
                   {!showItemConfirmBar && items.length > 1 && (
@@ -9513,11 +9602,6 @@ function SidePanel({
                     >전체에 선택</button>
                   )}
                 </div>
-                <p className="panel-scope-note">
-                  편집 대상: 선택 1개 · 처리 방식은 적용할 때 저장합니다.
-                  {session && <> 분류·자르기·처리 적용 시 현재 수업의 미저장 변경도 함께 저장됩니다.</>}
-                </p>
-
                 <div className="steps" role="group" aria-label="자료 처리 방식">
                   <button
                     className={`step-row ${item.step === 's1' ? 'on' : ''}`}
@@ -9560,6 +9644,20 @@ function SidePanel({
                       <div className="t">고화질</div>
                       <div className="d">보존형 2K · 선택적 AI 1K</div>
                     </div>
+                  </button>
+                </div>
+
+                <p className="panel-scope-note">
+                  선택 1개 · 처리 방식은 아래 적용 버튼으로 저장합니다.
+                  {session && <> 적용 시 수업의 미저장 변경도 함께 저장됩니다.</>}
+                </p>
+
+                <div className="inspector-quick-actions" role="group" aria-label="선택 자료 빠른 편집">
+                  <button className="btn" type="button" disabled={panelBusy} onClick={focusManualCrop}>
+                    {Icon.crop} 여백 자르기
+                  </button>
+                  <button className="btn" type="button" onClick={() => setTab('placement')}>
+                    {Icon.align} 크기·간격
                   </button>
                 </div>
 
@@ -9628,8 +9726,8 @@ function SidePanel({
                     onClick={() => setAdvancedSettingsOpen(open => !open)}
                   >
                     <span>
-                      <strong>자료 분류 및 상세 편집</strong>
-                      <small>선택 1개 · 분류 · 자르기 · 고화질</small>
+                      <strong>자료 상세</strong>
+                      <small>분류 · 번호 정정 · 추가 고화질</small>
                     </span>
                     <span className="detail-settings-state">
                       {savedCropActive && <em>자르기 적용됨</em>}
@@ -9637,8 +9735,7 @@ function SidePanel({
                     </span>
                   </button>
 
-                  {advancedSettingsOpen && (
-                    <div className="detail-settings-body">
+                    <div className="detail-settings-body" hidden={!advancedSettingsOpen}>
                       <div className="item-classification">
                         <div>
                           <strong>자료 분류</strong>
@@ -9663,6 +9760,10 @@ function SidePanel({
                           >독립 지문 이미지</button>
                         </div>
                       </div>
+
+                      <SidebarDisclosure title="원문 번호 수정" summary="인식된 번호가 잘못된 경우만 수정" className="original-number-details">
+                        <OriginalProblemNumberEditor key={item.id} item={item} disabled={panelBusy || !session} onSave={mutateSession} />
+                      </SidebarDisclosure>
 
                       <div className="panel-section-hd">
                         빠른 편집 <span className="line" />
@@ -9815,7 +9916,6 @@ function SidePanel({
                         수식·문자·선지가 있는 자료는 글자 보존형이 기본입니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
                       </div>
                     </div>
-                  )}
                 </div>
               </>
             ) : pendingFile ? (
@@ -9982,6 +10082,15 @@ function SidePanel({
               )}
             </section>
 
+            <BoardLayoutControls
+              boardColumns={boardColumns}
+              layoutGapMode={layoutGapMode}
+              setLayoutGapMode={setLayoutGapMode}
+              manualGapCount={manualGapCount}
+              resetPlacementGaps={resetPlacementGaps}
+              disabled={panelBusy}
+            />
+
             <SidebarDisclosure
               title="위치 미세 조절"
               summary={`좌우 ${Math.round(placementX * 100)}% · 상하 ${Math.round((hasVerticalRoom ? placementY : 0) * 100)}%`}
@@ -10032,30 +10141,21 @@ function SidePanel({
                   ? `${formatClassinPageAmount(placementGapAction.removableGapPages)} 줄일 수 있어요. 뒤 여백을 줄이고 이후 문항을 위로 당깁니다.${placementGapAction.ids.length > 1 ? ' 같은 행의 모든 문항에 적용됩니다.' : ''}`
                   : '더 줄일 수 있는 배치 여백이 없습니다.'}
               </p>
-              <p className="placement-control-note">이미지 안의 흰 배경은 유지됩니다. 상하 위치를 조절한 문항도 위로 이동할 수 있어요.</p>
+              <p className="placement-control-note">이미지 안의 흰 배경과 선택한 줄의 문항 위치는 유지하고, 뒤따르는 줄을 위로 당깁니다.</p>
               <button className="btn" type="button" aria-describedby="placement-gap-hint" disabled={!item || panelBusy || !placementGapAction.ids.length} onClick={() => reducePlacementGap?.(item.id)}>뒤 여백 줄이기</button>
               {canUndoPlacementGap && <button className="btn ghost" type="button" disabled={panelBusy} onClick={() => undoPlacementGap?.()}>마지막 여백 변경 되돌리기</button>}
             </section>
-
-            <BoardLayoutControls
-              boardColumns={boardColumns}
-              setBoardColumns={setBoardColumns}
-              layoutGapMode={layoutGapMode}
-              setLayoutGapMode={setLayoutGapMode}
-              manualGapCount={manualGapCount}
-              resetPlacementGaps={resetPlacementGaps}
-              disabled={panelBusy}
-            />
 
             <SidebarDisclosure
               title="연결 및 배치 안내"
               summary={activePlacementPreview
                 ? `선택 ${activePlacementPreview.classinStartPage}–${activePlacementPreview.classinEndPage}쪽${activePlacementPreview.classinNextPage === null ? '' : ` · 다음 ${activePlacementPreview.classinNextPage}쪽`}`
                 : '연결 방식 · 자동 배치 동작'}
-              badge={placementHasOverlap ? '겹침 확인' : selectedPassageGroupId ? '지문 묶음' : ''}
-              tone={placementHasOverlap ? 'warn' : 'neutral'}
+              badge={placementHasOverlap ? '겹침 확인' : publishPlanFailed ? '제작 확인 필요' : selectedPassageGroupId ? '지문 묶음' : ''}
+              tone={placementHasOverlap || publishPlanFailed ? 'warn' : 'neutral'}
               className="placement-advanced-details"
             >
+            <PublishPlanSummary plan={publishPlan} busy={publishPlanBusy} failed={publishPlanFailed} />
             <section className="placement-section">
               <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
               <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
@@ -10411,7 +10511,11 @@ function SidePanel({
               badge={updateStatusLabel}
               tone={updateStatusTone}
               className="settings-update-disclosure"
+              disclosureRef={updateDisclosureRef}
             >
+            {updateInfo?.channelStatus === 'not_configured' && <div className="runtime-note warn" role="status">
+              업데이트 배포 주소가 아직 설정되지 않았습니다. 현재 버전이 최신인지 확인하거나 새 버전을 설치할 수 없습니다. 관리자에게 업데이트가 설정된 배포본을 요청해 주세요.
+            </div>}
             {updateArchitectureBlocked ? (
               <div className="runtime-note warn update-architecture-note" role="status">
                 <strong>이 기기용 업데이트 파일 없음</strong>
@@ -11139,6 +11243,10 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
     if (queueBusy) return;
     processQueuedFiles?.(normalizeSplitMode(splitMode));
   };
+  const runPassageExtraction = () => {
+    if (queueBusy) return;
+    processQueuedFiles?.('passage-only', fileQueueKey(file));
+  };
   const metaParts = [
     sourceFileKindLabel(file),
     formatBytes(file.size),
@@ -11215,7 +11323,7 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
         <button
           className="btn"
           type="button"
-          onClick={() => runQueueAction('passage-only')}
+          onClick={runPassageExtraction}
           disabled={queueBusy}
           title="여러 문항이 함께 쓰는 공통 지문만 추출"
         >
@@ -12197,7 +12305,7 @@ function mapProblemToItem(problem, idx, rawSession = null){
     placementGapAfterPages: normalizePlacementGapAfterPages(
       problem.placementGapAfterPages ?? problem.placement_gap_after_pages
     ),
-    boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
+    boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.board_column_count ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
     boardColumnIndex: Number.isFinite(Number(problem.boardColumnIndex ?? problem.board_column_index))
       ? Math.max(0, Math.round(Number(problem.boardColumnIndex ?? problem.board_column_index)))
       : 0,
@@ -15258,6 +15366,11 @@ function App(){
   }, [t.dark, t.accent, t.boardColor]);
 
   const [items, setItems] = useState([]);
+  const [focusMode, setFocusMode] = useStoredPreference('edb.editorFocusMode', false, isStoredBoolean);
+  const [focusPanelCollapsed, setFocusPanelCollapsed] = useState(false);
+  const [focusRailExpanded, setFocusRailExpanded] = useState(true);
+  const [homePanelOpen, setHomePanelOpen] = useState(false);
+  const focusPanelReopenRef = useRef(null);
   const [activeId, setActiveId] = useState(null);
   const [moveFeedback, setMoveFeedback] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
@@ -15291,6 +15404,8 @@ function App(){
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const updateCheckInFlightRef = useRef(false);
+  const [updatePanelRequest, setUpdatePanelRequest] = useState(0);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
@@ -15330,10 +15445,14 @@ function App(){
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
   const [view, setView] = useState(initialViewRef.current);
+  const focusEditorActive = focusMode && view === 'board' && items.length > 0;
+  const effectiveRailCollapsed = focusEditorActive ? !focusRailExpanded : leftRailCollapsed;
   const [mobilePane, setMobilePane] = useState('stage');
   const [reviewFocus, setReviewFocus] = useState(null);
   const [reviewEditorActive, setReviewEditorActive] = useState(false);
   const revealSidePanel = useCallback(() => {
+    setFocusPanelCollapsed(false);
+    setHomePanelOpen(true);
     if (!reviewEditorActive) setMobilePane('panel');
   }, [reviewEditorActive]);
   const [mutating, setMutating] = useState(false);
@@ -15352,7 +15471,12 @@ function App(){
   const placementGapHistoryRef = useRef([]);
   const undoPlacementGapRef = useRef(null);
   const [placementGapUndoCount, setPlacementGapUndoCount] = useState(0);
+  // A legacy session keeps its own column count. Empty/new work always starts
+  // with one column; viewing either editor mode never rewrites a saved layout.
   const boardColumns = normalizeBoardColumns(t.boardColumns);
+  useEffect(() => {
+    if (!session) setTweak('boardColumns', BOARD_COLUMN_MIN);
+  }, [session, setTweak]);
   // Gap undo belongs to this server baseline and layout mode. Selection and
   // local position/scale edits deliberately do not clear it.
   useEffect(() => {
@@ -15384,10 +15508,6 @@ function App(){
   useEffect(() => {
     setMobilePane(!items.length && pendingFiles.length ? 'rail' : 'stage');
   }, [items.length, pendingFiles.length]);
-  const reviewComplete = useMemo(
-    () => Boolean(session && reviewFlowState(sessionReviewSummary(session)).complete),
-    [session]
-  );
   const reviewAttentionCount = useMemo(
     () => (session ? Math.max(0, Number(sessionReviewSummary(session).actionableNeedsReviewCount) || 0) : 0),
     [session]
@@ -15457,8 +15577,6 @@ function App(){
     () => publishPlanRequestSignature(publishRequestDraft),
     [publishRequestDraft]
   );
-  const processed = items.filter(i => i.step !== 'raw').length;
-  const progress = items.length ? processed / items.length : 0;
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
   const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
@@ -15754,6 +15872,8 @@ function App(){
   };
 
   const checkForUpdates = useCallback(async (options = {}) => {
+    if (updateCheckInFlightRef.current) return null;
+    updateCheckInFlightRef.current = true;
     setUpdateBusy(true);
     try {
       const info = await fetchAppUpdateStatus();
@@ -15765,9 +15885,16 @@ function App(){
       console.warn('[board] update check skipped:', e.message);
       return null;
     } finally {
+      updateCheckInFlightRef.current = false;
       setUpdateBusy(false);
     }
   }, [showSimpleErrorToast, showToast]);
+
+  const openUpdateSettings = useCallback(() => {
+    revealSidePanel();
+    setUpdatePanelRequest(previous => previous + 1);
+    void checkForUpdates({ silent: true });
+  }, [revealSidePanel, checkForUpdates]);
 
   const openUpdatePage = useCallback(async () => {
     if (updateBusy) {
@@ -15962,10 +16089,13 @@ function App(){
       return false;
     }
     const restoredGapMode = normalizeLayoutGapMode(rawSession.layoutGapMode ?? rawSession.layout_gap_mode);
+    const restoredColumns = sessionBoardColumns(rawSession);
+    boardColumnsRef.current = restoredColumns;
+    setTweak('boardColumns', restoredColumns);
     const mapped = reflowItemsForBoardOrder(
       rawSession.problems.map((p, idx) => mapProblemToItem(p, idx, rawSession)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumnsRef.current,
+      restoredColumns,
       restoredGapMode
     );
     setItems(mapped);
@@ -15976,7 +16106,7 @@ function App(){
     setPublished(!!sessionPublishSummary(rawSession));
     if (rawSession.session_name) setFileName(rawSession.session_name);
     // Only an explicit ?view=review opens the review stage on load; every
-    // other result lands on the board and the 검수 tab badge flags risks.
+    // other result lands on the board; optional review actions flag risks.
     const wantsReview = !initialViewConsumedRef.current && initialViewRef.current === 'review';
     if (hasReviewPages(rawSession) && wantsReview) {
       setView('review');
@@ -16035,10 +16165,13 @@ function App(){
     );
     nextSession.layoutGapMode = restoredGapMode;
     nextSession.layout_gap_mode = restoredGapMode;
+    const restoredColumns = sessionBoardColumns(nextSession);
+    boardColumnsRef.current = restoredColumns;
+    setTweak('boardColumns', restoredColumns);
     const mapped = reflowItemsForBoardOrder(
       orderedProblems.map((p, idx) => mapProblemToItem(p, idx, nextSession)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumns,
+      restoredColumns,
       restoredGapMode
     );
     setItems(mapped);
@@ -17110,12 +17243,12 @@ function App(){
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
-        // Same count as the 검수 tab badge and the EDB 제작 warning.
+        // Same count as the optional review shortcut and EDB 제작 warning.
         const attentionCount = Math.max(0, Number(sessionReviewSummary(incomingSession).actionableNeedsReviewCount) || 0);
         showToast([
           review.fallbackMessage,
           `분할 완료 · ${summary.problemLabel} 칠판에 배치했어요`,
-          attentionCount ? `확인 필요 ${attentionCount}개는 검수 탭에서 확인` : '',
+          attentionCount ? `확인 필요 ${attentionCount}개는 칠판의 검수 버튼에서 확인` : '',
           currentSnapshot ? 'Ctrl+Z로 되돌리기' : '',
         ].filter(Boolean).join(' · '), { duration: 4500 });
       } else if (review.kind === 'retry-ai') {
@@ -17271,7 +17404,7 @@ function App(){
     if (!action.ids.length) return;
     placementGapHistoryRef.current.push(action.restoreUpdates);
     setPlacementGapUndoCount(placementGapHistoryRef.current.length);
-    setPlacements(action.ids.map(targetId => ({ id: targetId, patch: { gapAfterPages: 0 } })));
+    setPlacements(action.applyUpdates);
     showActionToast('뒤 여백을 줄였어요', '되돌리기', () => undoPlacementGapRef.current?.());
   };
   const updateLayoutGapMode = (value) => {
@@ -17654,7 +17787,7 @@ function App(){
       return;
     }
     if (normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN) {
-      showToast('2·3열은 EDB 제작을 지원하지 않습니다. 배치 탭에서 제작 가능한 1열로 복원을 누른 뒤 제작해 주세요');
+      showToast('기존 다중 칸 배치는 그대로 저장할 수 있습니다. 현재 EDB 제작은 1칸 배치만 지원하므로 이 자료의 제작은 실행하지 않았습니다.');
       return;
     }
     clearOperationRecovery();
@@ -18147,12 +18280,10 @@ function App(){
   };
 
   return (
-    <div className="app">
+    <div className="app editor-basic-mode">
       <TopBar
         fileName={fileName}
         setFileName={setFileName}
-        progress={progress}
-        processed={processed}
         total={items.length}
         onPublish={onPublish}
         published={published && !sessionEditState.dirty}
@@ -18163,7 +18294,6 @@ function App(){
         view={view}
         setView={nextView => { setMobilePane('stage'); return requestViewChange(nextView); }}
         reviewAvailable={reviewAvailable}
-        reviewComplete={reviewComplete}
         recognitionBusy={Boolean(runningRecognitionJob)}
         pageReviewActive={Boolean(recognitionReview)}
         operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
@@ -18179,6 +18309,12 @@ function App(){
         editingActive={view === 'review' || reviewEditorActive || sessionEditState.dirty}
         saveStateLabel={items.length ? sessionEditState.label : ''}
         saveStateTone={sessionEditState.tone}
+        onOpenUpdateSettings={openUpdateSettings}
+        updateAvailable={Boolean(updateInfo?.updateAvailable)}
+        updateBusy={updateBusy || updateInstallBusy}
+        focusMode={focusMode}
+        onChangeFocusMode={setFocusMode}
+        canChangeFocusMode={view === 'board' && items.length > 0}
       />
       {initialSessionError && (
         <div className="initial-session-notice" role="alert">
@@ -18248,7 +18384,8 @@ function App(){
         }}
       />
       <div
-        className={`main ${leftRailCollapsed ? 'left-collapsed' : ''} ${!items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
+        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? `home-mode ${homePanelOpen ? 'home-settings-open' : ''}` : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
+        style={{ '--focus-board-color': t.boardColor }}
         data-mobile-pane={mobilePane}
         inert={hasPendingSessionConflict ? '' : undefined}
       >
@@ -18272,8 +18409,8 @@ function App(){
           </nav>
         )}
         <ItemsRail
-          collapsed={leftRailCollapsed}
-          onToggleCollapsed={toggleLeftRailCollapsed}
+          collapsed={effectiveRailCollapsed}
+          onToggleCollapsed={focusEditorActive ? () => setFocusRailExpanded(previous => !previous) : toggleLeftRailCollapsed}
           session={session}
           items={items}
           activeId={activeId}
@@ -18360,6 +18497,23 @@ function App(){
             addSample={addSample}
             setPlacement={setPlacement}
             reorder={reorder}
+            reducePlacementGap={reducePlacementGap}
+            interactionBusy={mutating || sessionEditState.busy || Boolean(loading) || hasPendingSessionConflict}
+            focusMode={focusEditorActive}
+            panelCollapsed={focusPanelCollapsed}
+            panelReopenRef={focusPanelReopenRef}
+            onOpenPanel={() => { setFocusPanelCollapsed(false); window.requestAnimationFrame(() => document.querySelector('#workspace-panel [role="tab"][aria-selected="true"]')?.focus()); }}
+            reviewAttentionCount={reviewAttentionCount}
+            onOpenPendingReview={() => requestViewChange('review', { beforeCommit: () => {
+              const pending = sessionReviewSummary(session).reviewTargets.filter(target => target.status !== 'normal');
+              setMobilePane('stage');
+              setReviewFocus({ filter: 'all', source: 'focus-pending-review',
+                scopeProblemIds: pending.filter(target => target.type === 'problem').flatMap(target => target.problemIds),
+                scopePageIds: pending.filter(target => target.type === 'page').map(target => target.pageId),
+                problemIds: pending.find(target => target.type === 'problem')?.problemIds || [],
+              });
+              setReviewUi(previous => ({ ...previous, filter: 'all', riskFilter: null, scrollTop: 0 }));
+            } })}
             moveFeedback={moveFeedback}
             selectedIds={selectedProblemIds}
             setSelectedIds={setSelectedProblemIds}
@@ -18385,6 +18539,10 @@ function App(){
         )}
             <SidePanel
           onRevealPanel={revealSidePanel}
+          focusMode={focusEditorActive}
+          onToggleFocusPanel={() => { setFocusPanelCollapsed(true); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}
+          homeSettingsOpen={homePanelOpen && view === 'board' && !items.length && !pendingFiles.length}
+          onCloseHomeSettings={() => { setHomePanelOpen(false); document.querySelector('.topbar-update')?.focus(); }}
           item={active}
           items={items}
           activeIndex={activeIndex}
@@ -18434,6 +18592,7 @@ function App(){
           exportingImages={exportingImages}
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
           updateInfo={updateInfo}
+          updatePanelRequest={updatePanelRequest}
           updateBusy={updateBusy}
           updateInstallBusy={updateInstallBusy}
           onCheckUpdate={checkForUpdates}
@@ -18545,7 +18704,6 @@ function App(){
         <TweakColor label="강조색" value={t.accent} options={ACCENTS} onChange={v => setTweak('accent', v)} />
         <TweakSection label="칠판" />
         <TweakColor label="칠판 색" value={t.boardColor} options={BOARD_COLORS} onChange={v => setTweak('boardColor', v)} />
-        <TweakRadio label="한 줄 자료 수" value={String(t.boardColumns)} options={['1','2','3']} onChange={v => setTweak('boardColumns', parseInt(v))} />
       </TweaksPanel>
     </div>
   );

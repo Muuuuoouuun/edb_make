@@ -20,6 +20,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    from .verify_frontend_package import EXTRA_UI_STYLESHEETS
+except ImportError:  # pragma: no cover - direct script execution
+    from verify_frontend_package import EXTRA_UI_STYLESHEETS
+
 
 _WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _WINDOWS_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
@@ -306,17 +311,40 @@ def _bytes_request(url: str, *, timeout: float = 3.0) -> bytes:
         return response.read()
 
 
-def _validate_ui_stylesheet(board_html: str, stylesheet: str) -> str:
-    references = re.findall(r"board\.css\?v=board-css-([0-9a-f]{64})", board_html)
+def _validate_ui_stylesheet(board_html: str, stylesheet: str, filename: str = "board.css") -> str:
+    if filename not in ("board.css", *EXTRA_UI_STYLESHEETS):
+        raise RuntimeError(f"unknown packaged stylesheet: {filename}")
+    prefix = "board-css-" if filename == "board.css" else ""
+    references = re.findall(re.escape(filename) + r"\?v=" + prefix + r"([0-9a-f]{64})", board_html)
     if len(references) != 1:
-        raise RuntimeError("packaged board.html must reference exactly one cache-busted board.css")
+        raise RuntimeError(f"packaged board.html must reference exactly one cache-busted {filename}")
     digest = references[0]
     served_digest = hashlib.sha256(stylesheet.encode("utf-8")).hexdigest()
     if served_digest != digest:
-        raise RuntimeError("packaged board.html cache bust does not match the served board.css digest")
-    if "--font-sans" not in stylesheet or ":root{" not in stylesheet:
+        raise RuntimeError(f"packaged board.html cache bust does not match the served {filename} digest")
+    if filename == "board.css" and ("--font-sans" not in stylesheet or ":root{" not in stylesheet):
         raise RuntimeError("served board.css is missing the editor design tokens")
+    if not stylesheet.strip():
+        raise RuntimeError(f"served {filename} is empty")
     return digest
+
+
+def _smoke_ui_stylesheets(base_url: str, board_html: str) -> dict[str, str]:
+    """Fetch every shipped surface, not just the shared theme, over real HTTP."""
+
+    digests: dict[str, str] = {}
+    for filename in ("board.css", *EXTRA_UI_STYLESHEETS):
+        prefix = "board-css-" if filename == "board.css" else ""
+        match = re.search(re.escape(filename) + r"\?v=" + prefix + r"[0-9a-f]{64}", board_html)
+        if match is None:
+            raise RuntimeError(f"packaged board.html does not contain a valid {filename} reference")
+        data = _bytes_request(f"{base_url}/{match.group(0)}")
+        try:
+            stylesheet = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"served {filename} is not valid UTF-8") from exc
+        digests[filename] = _validate_ui_stylesheet(board_html, stylesheet, filename)
+    return digests
 
 
 def _validate_ui_assets(board_html: str, bundle: str) -> str:
@@ -501,15 +529,7 @@ def smoke_packaged_executable(
                     raise RuntimeError("served app.bundle.js is not valid UTF-8") from exc
                 frontend_digest = _validate_ui_assets(board_html, bundle)
 
-                style_match = re.search(r"board\.css\?v=board-css-[0-9a-f]{64}", board_html)
-                if style_match is None:
-                    raise RuntimeError("packaged board.html does not contain a valid stylesheet reference")
-                style_bytes = _bytes_request(f"{base_url}/{style_match.group(0)}")
-                try:
-                    stylesheet = style_bytes.decode("utf-8")
-                except UnicodeDecodeError as exc:
-                    raise RuntimeError("served board.css is not valid UTF-8") from exc
-                _validate_ui_stylesheet(board_html, stylesheet)
+                stylesheet_digests = _smoke_ui_stylesheets(base_url, board_html)
 
                 update_metadata = _json_request(f"{base_url}/api/app/update", timeout=8.0)
                 _validate_update_metadata(update_metadata, expected_app_id=expected_app_id)
@@ -555,6 +575,7 @@ def smoke_packaged_executable(
                     "health": health,
                     "diagnosticsStatus": "ok",
                     "frontendDigest": frontend_digest,
+                    "stylesheetDigests": stylesheet_digests,
                     "updateChannelStatus": update_metadata["channelStatus"],
                     "frontendAssets": "ok",
                     "isolatedUnicodeAppHome": True,

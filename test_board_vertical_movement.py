@@ -136,6 +136,7 @@ const setPositioningId = () => {}, setCurrentBoardDropTarget = () => {}, setActi
 const updateBoardDropTarget = () => {}, findBoardDropTarget = () => null;
 const setPlacement = (id, patch) => saved.push({id, ...patch});
 const positionDragRef = {current:null}, positionDragFrameRef = {current:null}, autoScrollRef = {current:{}}, suppressClickRef = {current:null}, syncLock = {current:0};
+const syncLockOriginIdRef = {current:null};
 const scroll = {scrollTop:0, scrollHeight:1200, clientHeight:400,
   getBoundingClientRect: () => ({left:100,right:1100,top:100,bottom:500})};
 const scrollRef = {current:scroll};
@@ -147,6 +148,7 @@ const captureTarget = {setPointerCapture: () => { captured = true; },hasPointerC
   releasePointerCapture: () => { captured = false; },
   addEventListener: (name, fn) => captureListeners.set(name, fn),removeEventListener: name => captureListeners.delete(name)};
 const pageH = 400, contentW = 1000, columnCount = 1;
+const smartMove = false, interactionBusy = false;
 const items = [{id:'a',heightFrac:0.8,startYPages:0}], boardOrderSignature = 'a';
 const layout = {items,totalH:1200};
 const placement = {snappedNext:1.2,startPages:0,top:0,xRatio:0,yRatio:0,columnCount:1};

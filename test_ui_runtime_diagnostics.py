@@ -193,10 +193,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         )
         self.assertIn("setAdvancedSettingsOpen(true)", side_panel)
         self.assertIn("aria-expanded={advancedSettingsOpen}", side_panel)
-        self.assertIn("자료 분류 및 상세 편집", side_panel)
+        self.assertIn("자료 상세", side_panel)
         self.assertNotIn("className=\"ptools\"", preview_block)
         self.assertIn("className=\"ptools detail-tools\"", detail_block)
-        self.assertIn("선택 1개 · 분류 · 자르기 · 고화질", detail_block)
+        self.assertIn("분류 · 번호 정정 · 추가 고화질", detail_block)
         self.assertIn("tab === 'placement'", side_panel)
         self.assertIn("placement-position-control", side_panel)
         self.assertIn("const [cropPresetsOpen, setCropPresetsOpen] = useState(false)", side_panel)
@@ -204,13 +204,13 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("showItemConfirmBar", side_panel)
         self.assertIn("view === 'review'", side_panel)
 
-    def test_side_panel_image_preview_is_visible_by_default_and_accessible(self) -> None:
+    def test_side_panel_image_preview_is_optional_by_default_and_accessible(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
-        self.assertIn("const [previewExpanded, setPreviewExpanded] = useState(true)", side_panel)
+        self.assertIn("const [previewExpanded, setPreviewExpanded] = useState(false)", side_panel)
         self.assertIn('className="item-preview-toggle"', side_panel)
         self.assertIn("aria-expanded={previewExpanded}", side_panel)
         self.assertIn('aria-controls="item-image-preview-content"', side_panel)
@@ -228,7 +228,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
         self.assertIn('role="tablist"', side_panel)
         self.assertEqual(side_panel.count('role="tab"'), 3)
-        self.assertIn("자료 편집 <span", side_panel)
+        self.assertIn('title="자료 편집"', side_panel)
+        self.assertNotIn('자료 편집 <span className="badge"', side_panel)
         self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
         self.assertIn("AI, 칠판 배경, 문서 변환, 앱 정보", side_panel)
         rules = side_panel.split('className="placement-section placement-rules"', 1)[1]
@@ -272,7 +273,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         board_stage = source.split("function BoardStage", 1)[1].split("function downloadPublishSummary", 1)[0]
 
         self.assertIn("LEFT_RAIL_COLLAPSED_KEY", source)
-        self.assertIn("className={`main ${leftRailCollapsed ? 'left-collapsed' : ''}", source)
+        self.assertIn("${effectiveRailCollapsed ? 'left-collapsed' : ''}", source)
+        self.assertIn("collapsed={effectiveRailCollapsed}", source)
+        self.assertIn("const effectiveRailCollapsed = focusEditorActive ? !focusRailExpanded : leftRailCollapsed;", source)
         self.assertIn("if (collapsed) {", rail)
         self.assertIn("rail-mini-item", rail)
         self.assertIn("<TileImage item={it} forceMode=\"raw\" />", rail.split("if (collapsed) {", 1)[1])
@@ -307,7 +310,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("hasSessionItems ? 'is-compact'", rail)
         self.assertIn("stage-fit-btn", board_stage)
         self.assertIn("stage-preview-controls", board_stage)
-        self.assertIn("보기 {Math.round(previewZoom * 100)}%", board_stage)
+        self.assertIn("{Math.round(previewZoom * 100)}%", board_stage)
         self.assertIn("선택 문항 맞춤", board_stage)
         self.assertIn("boardPreviewZoomForRenderedHeight", board_stage)
         self.assertIn("aria-pressed={previewFitActive}", board_stage)
@@ -320,14 +323,14 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("연속 이어붙임", board_stage)
         self.assertIn("칸 {p.columnIndex + 1}", board_stage)
         self.assertIn('className="placement-column-warning"', layout_controls)
-        self.assertIn("제작 가능한 1열로 복원", layout_controls)
-        # Multi-column export is not verified yet: show the fixed value instead of
-        # two permanently disabled buttons, and keep a way back if a stored
-        # session still carries 2 or 3 columns.
+        self.assertIn("기존 {columns}칸 배치를 유지합니다.", layout_controls)
+        # Existing multi-column work remains editable/saveable, but the sequential
+        # export engine cannot preserve its geometry. Do not suggest migration.
         self.assertNotIn("[1,2,3].map", layout_controls)
-        self.assertIn("열 배치는 EDB 제작을 지원하지 않습니다", layout_controls)
-        self.assertIn("setBoardColumns?.(BOARD_COLUMN_MIN)", layout_controls)
-        self.assertIn("2·3열은 EDB 제작을 지원하지 않습니다", source)
+        self.assertIn("2·3칸 배치의 EDB 제작은 아직 지원하지 않습니다", layout_controls)
+        self.assertNotIn("setBoardColumns?.(BOARD_COLUMN_MIN)", layout_controls)
+        self.assertIn("기존 다중 칸 배치는 그대로 저장할 수 있습니다", source)
+        self.assertIn("현재 EDB 제작은 1칸 배치만 지원", source)
         # The drag magnet is always on; it lives in the board stage code, not
         # as a hard-coded "ON" badge dressed up as a setting.
         self.assertIn("function resolveBoardDragMagnet", source)
@@ -336,6 +339,35 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertNotIn("열 가이드 자동 정렬", side_panel)
         self.assertIn(".drop-zone.is-compact", html)
         self.assertIn(".topbar-more-menu", html)
+
+    def test_focus_rail_toggle_does_not_overwrite_basic_mode_preference(self) -> None:
+        run_node(r"""
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+        const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+        const expression = source.match(/const effectiveRailCollapsed = ([^;]+);/)[1];
+        const toggle = source.match(/onToggleCollapsed=\{(focusEditorActive[^\n]+)\}/)[1];
+        for (const focusEditorActive of [false, true]) {
+          for (const initiallyCollapsed of [false, true]) {
+            const state = { focusEditorActive,
+              leftRailCollapsed: initiallyCollapsed, focusRailExpanded: !initiallyCollapsed };
+            state.setFocusRailExpanded = update => { state.focusRailExpanded = update(state.focusRailExpanded); };
+            state.toggleLeftRailCollapsed = () => { state.leftRailCollapsed = !state.leftRailCollapsed; };
+            vm.createContext(state);
+            const readCollapsed = () => vm.runInContext(expression, state);
+            const basicBefore = state.leftRailCollapsed;
+            const focusBefore = state.focusRailExpanded;
+            assert.equal(readCollapsed(), initiallyCollapsed);
+            vm.runInContext(`(${toggle})()`, state);
+            assert.equal(readCollapsed(), !initiallyCollapsed);
+            if (focusEditorActive) assert.equal(state.leftRailCollapsed, basicBefore,
+              'focus mode must preserve the saved basic-mode rail state');
+            else assert.equal(state.focusRailExpanded, focusBefore,
+              'basic mode must not change the separate focus-mode rail state');
+          }
+        }
+        """)
 
     def test_board_preview_zoom_uses_usable_classin_page_height(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -384,7 +416,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("document.addEventListener('pointermove'", source)
         self.assertIn("document.addEventListener('focusin'", source)
         self.assertIn("data-tooltip", topbar)
-        self.assertIn("보드 배치 화면으로 이동", topbar)
+        self.assertIn("칠판으로 돌아가기", topbar)
         self.assertIn("현재 배치로 EDB 파일 제작", topbar)
         self.assertIn("선택한 자료의 처리 방식과 세부 편집", side_panel)
         self.assertIn("지문 분류, 여백 자르기, 추가 고화질 처리", side_panel)
@@ -537,8 +569,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
 
-        estimate = board_stage.split('className="stage-estimate-bar"', 1)[1].split('className="stage-board"', 1)[0]
-        summary = estimate.split('className="stage-estimate-summary"', 1)[1].split('className="stage-estimate-tools"', 1)[0]
+        estimate = board_stage.split('className="stage-toolbar stage-unified-toolbar"', 1)[1].split('className="stage-board"', 1)[0]
+        summary = estimate.split('className="stage-estimate-summary stage-estimate-details-toggle"', 1)[1].split('className="stage-unified-actions"', 1)[0]
         self.assertNotIn('role="status"', summary)
         self.assertNotIn('aria-live=', summary)
         self.assertIn("전체 {previewEstimate.classinPageCount}쪽", summary)
@@ -555,7 +587,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn('className="placement-gap-control"', side_panel)
         self.assertIn("reducePlacementGap?.(item.id)", side_panel)
         self.assertIn("undoPlacementGap?.()", side_panel)
-        self.assertIn("이미지 안의 흰 배경은 유지됩니다", side_panel)
+        self.assertIn("이미지 안의 흰 배경과 선택한 줄의 문항 위치는 유지하고", side_panel)
+        self.assertIn("뒤따르는 줄을 위로 당깁니다", side_panel)
 
     def test_board_settings_supports_compact_layout_and_gap_override_reset(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -574,7 +607,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("문항 사이 여백", layout_controls)
         self.assertIn("1.2 맞춤", layout_controls)
         self.assertIn("빈틈 없이", layout_controls)
-        self.assertIn("경계 공백 방지", layout_controls)
+        self.assertIn("1.2p는 ClassIn 한 페이지입니다", layout_controls)
         self.assertIn("최대 6% 이내", layout_controls)
         self.assertIn("사용자가 조절한 배율은 유지", layout_controls)
         self.assertIn("ClassIn 화면 경계를 걸칠 수", layout_controls)
@@ -674,7 +707,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("pressedItemId === itemId ? 'is-pressed' : ''", items_rail)
         self.assertIn(".item.is-pressed:not(.dragging)", board)
         self.assertIn("ReactDOM.createPortal(", items_rail)
-        self.assertIn("className=\"rail-drag-overlay\"", items_rail)
+        self.assertIn("className=\"rail-drag-overlay editor-basic-mode\"", items_rail)
         self.assertIn("{dragPreview.count}개 이동", items_rail)
         self.assertIn("displayedItemRows.map", items_rail)
         self.assertIn("rail.setPointerCapture?.(event.pointerId)", items_rail)

@@ -302,7 +302,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
     def test_edb_plan_requests_remain_available_while_board_summary_stays_focused(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
-        estimate = board_stage.split('className="stage-estimate-bar"', 1)[1].split('className="stage-board"', 1)[0]
+        estimate = board_stage.split('className="stage-toolbar stage-unified-toolbar"', 1)[1].split('className="stage-board"', 1)[0]
         publish_result = source.split("function PublishResultPanel", 1)[1].split("function SidebarDisclosure", 1)[0]
 
         self.assertIn("fetch('/api/session/publish-plan'", source)

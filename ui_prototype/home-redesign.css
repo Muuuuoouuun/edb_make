@@ -1,0 +1,456 @@
+/* Home-only refinements; colours follow the shared light/dark theme tokens. */
+.home-dashboard .home-hero-dropzone,
+.home-dashboard button.home-quick-card,
+.home-dashboard button.home-recent-card {
+  width: 100%;
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+
+.home-dashboard .home-hero-dropzone:focus-visible,
+.home-dashboard button.home-quick-card:focus-visible,
+.home-dashboard button.home-recent-card:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 4px;
+}
+
+.home-dashboard .home-hero-dropzone:hover,
+.home-dashboard .home-hero-dropzone.is-active,
+.home-dashboard .home-quick-card:hover {
+  transform: none;
+}
+
+.home-dashboard .home-card-description {
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.home-dashboard .home-upload-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  text-align: center;
+  word-break: keep-all;
+}
+
+.home-dashboard .home-recent-card {
+  text-align: left;
+}
+
+.home-dashboard .home-recent-card-title {
+  display: block;
+}
+
+.home-dashboard .home-recent-open-btn {
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
+.home-dashboard .home-recent-card:disabled {
+  cursor: not-allowed;
+  opacity: .65;
+  box-shadow: none;
+}
+
+/* 1c composition: a short reading column beside a single upload action. */
+.home-dashboard.home-start-screen {
+  padding: 32px 36px 24px;
+  background: var(--bg);
+}
+
+.home-start-screen .home-dashboard-inner {
+  max-width: 1120px;
+  gap: 28px;
+  margin-block: auto;
+}
+
+.home-start-layout {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  align-items: stretch;
+  gap: 40px;
+}
+
+.home-start-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 28px;
+  padding: 12px 0;
+  min-width: 0;
+}
+
+.home-start-screen .home-hero-head {
+  align-items: flex-start;
+  text-align: left;
+  gap: 16px;
+}
+
+.home-start-screen .home-hero-badge {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: .04em;
+}
+
+.home-start-screen .home-hero-title {
+  font-size: calc(var(--text-3xl) + var(--text-lg));
+  font-weight: 750;
+  letter-spacing: -.04em;
+  line-height: 1.18;
+  word-break: keep-all;
+}
+
+.home-start-screen .home-hero-lead {
+  font-size: var(--text-md);
+  line-height: 1.7;
+}
+
+.home-start-screen .home-workflow-section {
+  gap: 16px;
+}
+
+.home-workflow-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.home-start-screen .home-workflow-steps {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 20px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  list-style: none;
+}
+
+.home-start-screen .home-step-card {
+  align-items: center;
+  gap: 14px;
+}
+
+.home-start-screen .home-step-num {
+  flex-basis: 36px;
+  height: 36px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+
+.home-start-screen .home-step-card:first-child .home-step-num {
+  background: var(--accent-soft);
+  border-color: var(--accent-ink);
+  color: var(--accent-ink);
+}
+
+.home-start-screen .home-step-content strong {
+  margin-bottom: 4px;
+  font-size: var(--text-md);
+}
+
+.home-start-screen .home-step-content p {
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.home-start-screen .home-quick-cards {
+  display: flex;
+  margin-top: auto;
+}
+
+.home-start-screen .home-quick-cards:empty {
+  display: none;
+}
+
+.home-start-screen .home-quick-card {
+  align-items: center;
+  padding: 14px 16px;
+  gap: 12px;
+  background: transparent;
+  border-radius: 16px;
+  box-shadow: none;
+}
+
+.home-start-screen .home-quick-card:hover {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: none;
+}
+
+.home-start-screen .home-card-icon {
+  border: 0;
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  border-radius: 12px;
+}
+
+.home-sample-arrow {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.home-start-launch {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 28px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+}
+
+.home-launch-heading {
+  display: grid;
+  gap: 8px;
+}
+
+.home-launch-step {
+  color: var(--accent-ink);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.home-launch-heading h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.home-start-screen .home-hero-dropzone {
+  flex: 1;
+  min-height: 252px;
+  padding: 24px 20px;
+  gap: 16px;
+  background: var(--surface);
+  border-color: var(--line-strong);
+  border-radius: 22px;
+  box-shadow: none;
+}
+
+.home-start-screen .home-hero-dropzone:hover,
+.home-start-screen .home-hero-dropzone.is-active {
+  border-color: var(--accent-ink);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.home-start-screen .home-dropzone-icon {
+  width: 56px;
+  height: 56px;
+  background: var(--accent-soft);
+}
+
+.home-start-screen .home-dropzone-icon .ic {
+  width: 26px;
+  height: 26px;
+}
+
+.home-start-screen .home-dropzone-text strong {
+  font-size: var(--text-lg);
+  margin-bottom: 8px;
+}
+
+.home-start-screen .home-dropzone-text span {
+  line-height: 1.6;
+  word-break: keep-all;
+}
+
+.home-start-screen .home-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin-top: 0;
+  padding: 10px 24px;
+  border-radius: 12px;
+  font-size: var(--text-md);
+}
+
+.home-start-screen .home-format-badges {
+  margin-top: 0;
+  gap: 6px;
+}
+
+.home-start-screen .home-format-badge {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.home-start-screen .home-upload-help {
+  text-align: left;
+}
+
+.home-methods {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.home-methods h3 {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.home-method-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.home-method-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 12px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.home-method-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.home-method-icon.pages {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.home-method-icon.manual {
+  background: var(--surface-2);
+  color: var(--ok-ink);
+}
+
+.home-method-icon .ic {
+  width: 20px;
+  height: 20px;
+}
+
+.home-method-card strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  word-break: keep-all;
+}
+
+.home-method-card > span:last-child {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
+.home-start-screen .home-recent-section {
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  gap: 16px;
+}
+
+.home-start-screen .home-section-head h2 {
+  font-size: var(--text-lg);
+}
+
+.home-start-screen .home-recent-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-start-screen .home-recent-card {
+  min-height: 80px;
+  padding: 16px;
+  border-radius: 16px;
+  box-shadow: none;
+}
+
+.home-start-screen .home-recent-more {
+  align-self: center;
+  min-height: 36px;
+}
+
+.home-start-screen .home-dashboard-footer {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  gap: 12px 20px;
+}
+
+.home-start-screen .home-status-pill {
+  padding: 4px 10px;
+}
+
+/* Keep a resized desktop window usable without a separate mobile design. */
+@media (max-width: 1100px) {
+  .home-dashboard.home-start-screen {
+    padding: 24px;
+  }
+
+  .home-start-layout {
+    gap: 24px;
+  }
+
+  .home-start-launch {
+    padding: 20px;
+  }
+
+  .home-start-screen .home-hero-title {
+    font-size: calc(var(--text-3xl) + var(--text-xs));
+  }
+
+  .home-method-card {
+    padding: 12px 8px;
+  }
+}
+
+@media (max-width: 820px) {
+  .home-start-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .home-start-screen .home-recent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .home-start-screen .home-hero-title br {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-dashboard .home-hero-dropzone,
+  .home-dashboard .home-quick-card,
+  .home-dashboard .home-recent-card {
+    transition: none;
+  }
+}
