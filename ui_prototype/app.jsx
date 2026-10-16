@@ -2797,7 +2797,7 @@ function TopBar({
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
   canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
   editingActive = false, saveStateLabel = '', saveStateTone = '',
-  onOpenUpdateSettings, onOpenBugReport, updateAvailable = false, updateBusy = false,
+  onOpenUpdateSettings, onOpenBugReport, onOpenSettings, updateAvailable = false, updateBusy = false,
   focusMode = false, onChangeFocusMode, canChangeFocusMode = false,
 }){
   const resetReason = pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
@@ -2863,6 +2863,7 @@ function TopBar({
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
             { id: 'reset', icon: Icon.reset, label: '초기화', description: resetReason, danger: true, disabled: pageReviewActive || operationBusy || resetBlocked || !canReset, onSelect: onReset },
+            { id: 'settings', icon: Icon.rows3, label: '설정', description: 'AI·API 키, 화면, 한글 변환, 업데이트', disabled: !onOpenSettings, onSelect: onOpenSettings },
             { id: 'support', icon: Icon.fileText, label: '문제 신고', description: '오류나 불편한 점을 알려 주세요', onSelect: onOpenBugReport },
             { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
           ]}
@@ -9316,7 +9317,7 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings,
+  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
@@ -9353,6 +9354,32 @@ function SidePanel({
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
   const panelTabRefs = useRef({});
+  const consumedSettingsRequestRef = useRef(settingsRequest);
+  useEffect(() => {
+    if (!settingsRequest || consumedSettingsRequestRef.current === settingsRequest) return;
+    consumedSettingsRequestRef.current = settingsRequest;
+    setTab('board');
+  }, [settingsRequest, setTab]);
+  const settingsDialogOpen = tab === 'board';
+  const closeSettingsDialog = () => setTab('item');
+  useEffect(() => {
+    if (!settingsDialogOpen) return undefined;
+    const dialog = document.getElementById('side-panel-board');
+    dialog?.focus({ preventScroll: true });
+    const onDialogKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      setTab('item');
+    };
+    document.addEventListener('keydown', onDialogKeyDown, true);
+    return () => document.removeEventListener('keydown', onDialogKeyDown, true);
+  }, [settingsDialogOpen, setTab]);
+  const selectedPanelItems = (items || []).filter(candidate => selectedIds?.has?.(String(candidate.id)));
+  const multiSelectionCount = selectedPanelItems.length > 1 ? selectedPanelItems.length : 0;
+  const multiSelectionSteps = Array.from(new Set(selectedPanelItems.map(candidate => candidate.step)));
+  const itemNeedsCheck = Boolean(item) && (item.reviewStatus === 'check_needed' || item.reviewStatus === 'failed');
+  const nextNeedsCheckItem = item ? (items || []).find((candidate, index) => index > activeIndex
+    && (candidate.reviewStatus === 'check_needed' || candidate.reviewStatus === 'failed')) : null;
   const panelBusy = Boolean(mutating || sessionEditState?.busy);
   const handlePanelTabKeyDown = (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -9896,59 +9923,7 @@ function SidePanel({
           >{Icon.chevronDown}</button>
         </div>
       )}
-      <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
-        <button
-          type="button"
-          id="side-tab-item"
-          ref={node => { panelTabRefs.current.item = node; }}
-          className={tab==='item' ? 'on' : ''}
-          onClick={() => setTab('item')}
-          onKeyDown={handlePanelTabKeyDown}
-          title="자료 편집"
-          data-tooltip={`선택한 자료의 처리 방식과 세부 편집 · ${ALTERNATE_MODIFIER_LABEL}+1`}
-          role="tab"
-          aria-keyshortcuts="Alt+1"
-          aria-selected={tab === 'item'}
-          aria-controls="side-panel-item"
-          tabIndex={tab === 'item' ? 0 : -1}
-        >
-          {Icon.fileText} 자료 편집
-        </button>
-        <button
-          type="button"
-          id="side-tab-placement"
-          ref={node => { panelTabRefs.current.placement = node; }}
-          className={tab==='placement' ? 'on' : ''}
-          onClick={() => setTab('placement')}
-          onKeyDown={handlePanelTabKeyDown}
-          title="칠판 배치"
-          data-tooltip={`자료 위치, 크기, 지문 묶음 배치 · 전체 레이아웃 · ${ALTERNATE_MODIFIER_LABEL}+2`}
-          role="tab"
-          aria-keyshortcuts="Alt+2"
-          aria-selected={tab === 'placement'}
-          aria-controls="side-panel-placement"
-          tabIndex={tab === 'placement' ? 0 : -1}
-        >
-          {Icon.align} 칠판 배치
-        </button>
-        <button
-          type="button"
-          id="side-tab-board"
-          ref={node => { panelTabRefs.current.board = node; }}
-          className={tab==='board' ? 'on' : ''}
-          onClick={() => setTab('board')}
-          onKeyDown={handlePanelTabKeyDown}
-          title="앱 설정"
-          data-tooltip={`AI, 칠판 배경, 문서 변환, 앱 정보 · ${ALTERNATE_MODIFIER_LABEL}+3`}
-          role="tab"
-          aria-keyshortcuts="Alt+3"
-          aria-selected={tab === 'board'}
-          aria-controls="side-panel-board"
-          tabIndex={tab === 'board' ? 0 : -1}
-        >
-          {Icon.rows3} 앱 설정
-        </button>
-      </div>
+      <div className="inspector-heading"><strong>{multiSelectionCount ? `${multiSelectionCount}개 선택` : item ? '선택한 자료' : '수업'}</strong></div>
 
       {tab !== 'placement' && (panelBusy || panelSaveState.dirty) && <div className={`panel-session-state ${panelSaveState.dirty ? 'is-dirty' : ''} ${panelBusy ? 'is-busy' : ''}`} role="status" aria-live="polite" aria-atomic="true">
         <strong>{panelBusy ? '수업 변경 처리 중…' : panelSaveState.label}</strong>
@@ -9966,10 +9941,30 @@ function SidePanel({
         publishDownloadBusy={publishDownloadBusy}
       />
 
-      <section className="side-tab-panel" id="side-panel-item" role="tabpanel" aria-labelledby="side-tab-item" hidden={tab !== 'item'} tabIndex={0}>
-      {tab === 'item' && (
+      <section className="side-tab-panel" id="side-panel-item" role="region" aria-label="선택한 자료" aria-keyshortcuts="Alt+1" hidden={false} tabIndex={0}>
+      {(
         <>
           <div className="tab-body">
+            {multiSelectionCount > 0 && (
+              <section className="inspector-multi" aria-label="여러 자료 선택">
+                <div className="inspector-multi-hd">
+                  <strong>{multiSelectionCount}개 선택</strong>
+                  <small>{multiSelectionSteps.length === 1 ? stepLabel(multiSelectionSteps[0]) : '처리 방식 여러 값'}</small>
+                </div>
+                <div className="inspector-multi-steps" role="group" aria-label="선택한 자료 처리 방식">
+                  {['s1', 's2', 's3'].map(stepValue => (
+                    <button
+                      key={stepValue}
+                      type="button"
+                      className={`btn ${multiSelectionSteps.length === 1 && multiSelectionSteps[0] === stepValue ? 'on' : ''}`}
+                      disabled={panelBusy}
+                      onClick={() => selectedPanelItems.forEach(candidate => setStep?.(candidate.id, stepValue))}
+                    >{stepValue === 's1' ? '그대로' : stepValue === 's2' ? '원문 보존' : '고화질'}</button>
+                  ))}
+                </div>
+                <small className="inspector-multi-note">순서 이동·삭제는 왼쪽 목록 · 저장은 아래 적용 버튼</small>
+              </section>
+            )}
             {item ? (
               <>
                 <div className="item-meta">
@@ -10004,6 +9999,17 @@ function SidePanel({
                     >{Icon.arrowRight}</button>
                   </div>
                 </div>
+
+                {itemNeedsCheck && (
+                  <section className="inspector-check-card" role="status" aria-label="확인 필요">
+                    <strong>{item.statusLabel || '확인 필요'}</strong>
+                    <p>{item.statusReason || '인식 결과를 원본과 비교해 확인해 주세요.'}</p>
+                    <div className="inspector-check-actions">
+                      <button type="button" className="btn" onClick={() => setAdvancedSettingsOpen(true)}>번호·분류 수정</button>
+                      <button type="button" className="btn" disabled={!nextNeedsCheckItem} onClick={() => nextNeedsCheckItem && setActive?.(nextNeedsCheckItem.id)}>다음 확인 항목</button>
+                    </div>
+                  </section>
+                )}
 
                 <div className="panel-section-hd">
                   처리 방식 선택 <span className="line" />
@@ -10343,6 +10349,7 @@ function SidePanel({
                 onPreviewError={onPendingPreviewError}
                 splitMode={splitMode}
                 setSplitMode={setSplitMode}
+                showActions={false}
               />
             ) : items.length === 0 ? (
               <div className="side-panel-home-empty">
@@ -10393,8 +10400,9 @@ function SidePanel({
       )}
       </section>
 
-      <section className="side-tab-panel" id="side-panel-placement" role="tabpanel" aria-labelledby="side-tab-placement" hidden={tab !== 'placement'} tabIndex={0}>
-      {tab === 'placement' && (
+      <section className="side-tab-panel inspector-placement" id="side-panel-placement" role="region" aria-label="크기·배치" aria-keyshortcuts="Alt+2" hidden={!item} tabIndex={-1}>
+      {item && <div className="panel-section-hd inspector-placement-hd">크기·배치 <span className="line" /></div>}
+      {item && (
         <>
           <div className="tab-body placement-tab-body">
             {items.length === 0 ? (
@@ -10659,8 +10667,10 @@ function SidePanel({
       )}
       </section>
 
-      <section className="side-tab-panel" id="side-panel-board" role="tabpanel" aria-labelledby="side-tab-board" hidden={tab !== 'board'} tabIndex={0}>
-      {tab === 'board' && (
+      <div className="settings-dialog-backdrop" hidden={!settingsDialogOpen} onMouseDown={event => { if (event.target === event.currentTarget) closeSettingsDialog(); }} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeSettingsDialog(); } }}>
+      <section className="side-tab-panel settings-dialog" id="side-panel-board" role="dialog" aria-modal="true" aria-label="설정" aria-keyshortcuts="Alt+3" hidden={!settingsDialogOpen} tabIndex={-1}>
+      <div className="settings-dialog-hd"><strong>설정</strong><button type="button" className="icon-btn" aria-label="설정 닫기" onClick={closeSettingsDialog}>{Icon.close}</button></div>
+      {settingsDialogOpen && (
         <>
           <div className="tab-body settings-tab-body">
             <SettingsSection id="upload" title="분할 방식" summary={splitModeMeta(splitMode).label} open={settingsOpen.upload} onToggle={toggleSettingsSection}>
@@ -10844,6 +10854,7 @@ function SidePanel({
         </>
       )}
       </section>
+      </div>
     </div>
     </>
   );
@@ -11540,7 +11551,7 @@ function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, i
   );
 }
 
-function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false }){
+function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false, showActions = true }){
   const [objectUrl, setObjectUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const isImagePreview = canPreviewImageFile(file);
@@ -11638,6 +11649,7 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
         )}
       </div>
 
+      {showActions && <>
       <SplitModePicker
         splitMode={splitMode}
         setSplitMode={setSplitMode}
@@ -11665,6 +11677,8 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
           {Icon.fileText}<span>지문만 추출</span>
         </button>
       </div>
+      </>}
+      {!showActions && <p className="pending-preview-hint">분할은 왼쪽 업로드 대기열에서 실행합니다.</p>}
     </div>
   );
 }
@@ -15744,6 +15758,7 @@ function App(){
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const updateCheckInFlightRef = useRef(false);
+  const [settingsRequest, setSettingsRequest] = useState(0);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
@@ -18657,6 +18672,7 @@ function App(){
         saveStateTone={sessionEditState.tone}
         onOpenUpdateSettings={openUpdateSettings}
         onOpenBugReport={openBugReport}
+        onOpenSettings={() => setSettingsRequest(previous => previous + 1)}
         updateAvailable={Boolean(updateInfo?.updateAvailable)}
         updateBusy={updateBusy || updateInstallBusy}
         focusMode={focusMode}
@@ -18944,6 +18960,8 @@ function App(){
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
           updateInfo={updateInfo}
           onOpenUpdateSettings={openUpdateSettings}
+          settingsRequest={settingsRequest}
+          selectedIds={selectedProblemIds}
           updateBusy={updateBusy}
           updateInstallBusy={updateInstallBusy}
           onCheckUpdate={checkForUpdates}

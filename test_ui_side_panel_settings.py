@@ -28,9 +28,11 @@ def component(name: str) -> str:
 
 SIDE_PANEL = component("SidePanel")
 LAYOUT_CONTROLS = component("BoardLayoutControls")
-ITEM_TAB = SIDE_PANEL.split("{tab === 'item' && (", 1)[1].split("{tab === 'placement' && (", 1)[0]
-PLACEMENT_TAB = SIDE_PANEL.split("{tab === 'placement' && (", 1)[1].split("{tab === 'board' && (", 1)[0]
-SETTINGS_TAB = SIDE_PANEL.split("{tab === 'board' && (", 1)[1]
+# The right panel is now a state-driven inspector (item + placement sections)
+# and app settings live in a dialog opened from the top-bar menu.
+ITEM_TAB = SIDE_PANEL.split('id="side-panel-item"', 1)[1].split('id="side-panel-placement"', 1)[0]
+PLACEMENT_TAB = SIDE_PANEL.split('id="side-panel-placement"', 1)[1].split('id="side-panel-board"', 1)[0]
+SETTINGS_TAB = SIDE_PANEL.split("{settingsDialogOpen && (", 1)[1]
 
 
 class TestSettingsTabHoldsRealSettings(unittest.TestCase):
