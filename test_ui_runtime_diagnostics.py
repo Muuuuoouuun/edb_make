@@ -64,6 +64,27 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("공간 부족 시 다음 칠판", side_panel)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", html)
 
+    def test_side_panel_tabs_support_keyboard_and_collapsible_settings(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+
+        self.assertIn("SIDE_PANEL_TAB_KEY", side_panel)
+        self.assertIn("event.key === 'ArrowRight'", side_panel)
+        self.assertIn("'aria-controls': `side-tabpanel-${value}`", side_panel)
+        self.assertIn('role="tabpanel"', side_panel)
+        self.assertIn("function SettingsSection", source)
+        self.assertEqual(side_panel.count("<SettingsSection"), 6)
+        self.assertIn("항상 켜짐", side_panel)
+        self.assertIn("aria-label={BOARD_COLOR_LABELS[c] || c}", side_panel)
+        self.assertIn("onClick={() => goToItem(1)}", side_panel)
+        self.assertIn("setActive={selectBoardItem}", source.split("<SidePanel", 1)[1])
+        self.assertIn('className="queue-row-actions"', rail)
+        self.assertIn(".settings-section-hd", html)
+        self.assertIn(".queue-row-actions", html)
+
     def test_main_controls_are_compact_by_default(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")

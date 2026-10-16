@@ -78,6 +78,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const BOARD_COLORS = ['#1d3a2c', '#101418', '#264653', '#3a2f24'];
 const ACCENTS = ['#2f6fed', '#6d3df0', '#1f7a4a', '#d97757'];
+const BOARD_COLOR_LABELS = { '#1d3a2c': '초록 칠판', '#101418': '검정 칠판', '#264653': '청록 칠판', '#3a2f24': '갈색 칠판' };
+const ACCENT_LABELS = { '#2f6fed': '파랑', '#6d3df0': '보라', '#1f7a4a': '초록', '#d97757': '주황' };
 
 const SAMPLE_NAMES = [
   '원과 접선의 성질', '근의 공식 유도', '삼각비 특수각 표', '이차함수 그래프', '닮음 도형 예제',
@@ -183,6 +185,10 @@ const REVIEW_ZOOM_MIN = 0.72;
 const REVIEW_ZOOM_MAX = 1.65;
 const REVIEW_ZOOM_STEP = 0.08;
 const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
+const SIDE_PANEL_TAB_KEY = 'edb.sidePanelTab';
+const SIDE_PANEL_TABS = ['item', 'placement', 'board'];
+const SETTINGS_SECTIONS_OPEN_KEY = 'edb.settingsSectionsOpen';
+const SETTINGS_SECTIONS_DEFAULT_OPEN = { layout: true, color: true, batch: true, upload: false, keys: false, update: false };
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
   rightRatio: 0,
@@ -3641,44 +3647,50 @@ function ItemsRail({
                 >
                   <span className="idx">{String(index + 1).padStart(2, '0')}</span>
                   <div className="file">
-                    <div className="name">{file.name || '이름 없는 파일'}</div>
+                    <div className="name" title={file.name || '이름 없는 파일'}>{file.name || '이름 없는 파일'}</div>
                     <div className="meta">{sourceFileKindLabel(file)} · {formatBytes(file.size)}</div>
                   </div>
                   <button
-                    className="icon-btn queue-row-action"
-                    title="이 파일을 문제 파싱 없이 페이지 PNG로 등록"
-                    aria-label="이 파일 페이지 PNG 등록"
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.pagePng}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
-                    aria-label="이 파일 수동 쪼개기"
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.pen}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                    aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.aiBatch}
-                  </button>
-                  <button
-                    className="icon-btn"
+                    className="icon-btn queue-row-remove"
                     title="대기열에서 제거"
+                    aria-label="대기열에서 제거"
                     onClick={e => { e.stopPropagation(); removePendingFile(key); }}
                     disabled={queueBusy}
                   >
                     {Icon.trash}
                   </button>
+                  <div className="queue-row-actions">
+                    <button
+                      className="queue-row-action"
+                      type="button"
+                      title="이 파일을 문제 파싱 없이 페이지 PNG로 등록"
+                      aria-label="이 파일 페이지 PNG 등록"
+                      onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
+                      disabled={queueBusy}
+                    >
+                      {Icon.pagePng}<span>PNG</span>
+                    </button>
+                    <button
+                      className="queue-row-action"
+                      type="button"
+                      title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
+                      aria-label="이 파일 수동 쪼개기"
+                      onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
+                      disabled={queueBusy}
+                    >
+                      {Icon.pen}<span>수동</span>
+                    </button>
+                    <button
+                      className="queue-row-action"
+                      type="button"
+                      title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
+                      aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
+                      onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
+                      disabled={queueBusy}
+                    >
+                      {Icon.aiBatch}<span>{fastImage ? '분할' : 'AI'}</span>
+                    </button>
+                  </div>
                 </div>
               );})}
             </div>
@@ -4479,6 +4491,36 @@ function openClassinHandoff(target){
   window.open(url, '_blank', 'noopener');
 }
 
+function readSettingsSectionsOpen(){
+  try {
+    const stored = JSON.parse(window.localStorage?.getItem(SETTINGS_SECTIONS_OPEN_KEY) || 'null');
+    if (stored && typeof stored === 'object') return { ...SETTINGS_SECTIONS_DEFAULT_OPEN, ...stored };
+  } catch (_err) {
+    // Storage can be unavailable or hold stale JSON; fall back to defaults.
+  }
+  return { ...SETTINGS_SECTIONS_DEFAULT_OPEN };
+}
+
+function SettingsSection({ id, title, summary, tone, open, onToggle, children }){
+  const bodyId = `settings-section-${id}`;
+  return (
+    <section className={`settings-section ${open ? 'open' : ''}`}>
+      <button
+        type="button"
+        className="settings-section-hd"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => onToggle(id)}
+      >
+        <span className="settings-section-title">{title}</span>
+        {summary && <span className={`settings-section-summary ${tone || ''}`}>{summary}</span>}
+        <span className="settings-section-chevron" aria-hidden="true">{open ? Icon.arrowUp : Icon.arrowDown}</span>
+      </button>
+      {open && <div className="settings-section-body" id={bodyId}>{children}</div>}
+    </section>
+  );
+}
+
 function PublishResultPanel({ session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages }){
   const summary = useMemo(() => visible ? sessionPublishSummary(session) : null, [session, visible]);
   const history = useMemo(() => visible ? sessionPublishHistory(session) : [], [session, visible]);
@@ -4629,7 +4671,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
 
 // ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
 function SidePanel({
-  item, items, activeIndex,
+  item, items, activeIndex, setActive,
   setStep, applyToAll, bulk, setBulk,
   setPlacement, mutateSession, mutating,
   boardColumns, setBoardColumns,
@@ -4648,7 +4690,51 @@ function SidePanel({
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
 }){
-  const [tab, setTab] = useState('item');
+  const [tab, setTabState] = useState(() => {
+    try {
+      const stored = window.localStorage?.getItem(SIDE_PANEL_TAB_KEY);
+      return SIDE_PANEL_TABS.includes(stored) ? stored : 'item';
+    } catch (_err) {
+      return 'item';
+    }
+  });
+  const setTab = (nextTab) => {
+    setTabState(nextTab);
+    try { window.localStorage?.setItem(SIDE_PANEL_TAB_KEY, nextTab); } catch (_err) { /* storage optional */ }
+  };
+  const tabRefs = useRef({});
+  const onTabKeyDown = (event) => {
+    const index = SIDE_PANEL_TABS.indexOf(tab);
+    let nextIndex = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % SIDE_PANEL_TABS.length;
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + SIDE_PANEL_TABS.length) % SIDE_PANEL_TABS.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = SIDE_PANEL_TABS.length - 1;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    const nextTab = SIDE_PANEL_TABS[nextIndex];
+    setTab(nextTab);
+    tabRefs.current[nextTab]?.focus();
+  };
+  const tabProps = (value) => ({
+    ref: el => { tabRefs.current[value] = el; },
+    id: `side-tab-${value}`,
+    className: tab === value ? 'on' : '',
+    onClick: () => setTab(value),
+    onKeyDown: onTabKeyDown,
+    role: 'tab',
+    'aria-selected': tab === value,
+    'aria-controls': `side-tabpanel-${value}`,
+    tabIndex: tab === value ? 0 : -1,
+  });
+  const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
+  const toggleSettingsSection = (id) => {
+    setSettingsOpen(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      try { window.localStorage?.setItem(SETTINGS_SECTIONS_OPEN_KEY, JSON.stringify(next)); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  };
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
   const [compareX, setCompareX] = useState(50);
   const [keyDraft, setKeyDraft] = useState('');
@@ -4812,6 +4898,12 @@ function SidePanel({
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
   const showItemConfirmBar = !!item && (bulk || item.step !== 'raw');
+  const hasPrevItem = !!item && activeIndex > 0;
+  const hasNextItem = !!item && activeIndex >= 0 && activeIndex < items.length - 1;
+  const goToItem = (delta) => {
+    const target = items[activeIndex + delta];
+    if (target?.id) setActive?.(target.id);
+  };
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
@@ -4905,33 +4997,30 @@ function SidePanel({
     <div className={`col right ${view === 'review' ? 'review-context' : ''}`}>
       <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
         <button
-          className={tab==='item' ? 'on' : ''}
-          onClick={() => setTab('item')}
+          {...tabProps('item')}
           title="선택 자료"
           data-tooltip="선택한 자료의 처리 방식과 세부 편집"
           role="tab"
-          aria-selected={tab === 'item'}
         >
+          {Icon.fileText}
           자료 <span className="badge">{itemPosLabel}</span>
         </button>
         <button
-          className={tab==='placement' ? 'on' : ''}
-          onClick={() => setTab('placement')}
+          {...tabProps('placement')}
           title="배치"
           data-tooltip="자료 위치, 크기, 지문 묶음 배치"
           role="tab"
-          aria-selected={tab === 'placement'}
         >
+          {Icon.align}
           배치
         </button>
         <button
-          className={tab==='board' ? 'on' : ''}
-          onClick={() => setTab('board')}
+          {...tabProps('board')}
           title="설정"
           data-tooltip="레이아웃, 색상, AI 인식 설정"
           role="tab"
-          aria-selected={tab === 'board'}
         >
+          {Icon.rows3}
           설정
         </button>
       </div>
@@ -4947,7 +5036,7 @@ function SidePanel({
 
       {tab === 'item' && (
         <>
-          <div className="tab-body">
+          <div className="tab-body" role="tabpanel" id="side-tabpanel-item" aria-labelledby="side-tab-item">
             {item ? (
               <>
                 <div className="item-meta">
@@ -4962,7 +5051,25 @@ function SidePanel({
                       {problemSourceLabel(item)} · {item.type.toUpperCase()}
                     </div>
                   </div>
-                  <div className="pos-tag">{itemPosLabel}</div>
+                  <div className="item-nav" role="group" aria-label="자료 이동">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="이전 자료"
+                      aria-label="이전 자료"
+                      disabled={!hasPrevItem}
+                      onClick={() => goToItem(-1)}
+                    >{Icon.arrowLeft}</button>
+                    <div className="pos-tag">{itemPosLabel}</div>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="다음 자료"
+                      aria-label="다음 자료"
+                      disabled={!hasNextItem}
+                      onClick={() => goToItem(1)}
+                    >{Icon.arrowRight}</button>
+                  </div>
                 </div>
 
                 <div className="item-preview" ref={wrapRef}>
@@ -5063,7 +5170,7 @@ function SidePanel({
                       </div>
 
                       <div className="ptools detail-tools">
-                        <button className="icon-btn" title="회전">{Icon.rotate}</button>
+                        <button className="icon-btn" type="button" title="회전" data-tooltip="회전은 아직 지원하지 않습니다" disabled>{Icon.rotate}</button>
                         <button
                           className={`icon-btn ${savedCropActive ? 'on' : ''}`}
                           type="button"
@@ -5231,7 +5338,13 @@ function SidePanel({
               전체 적용
             </label>
             <div className="spacer" />
-            <button className="btn" disabled={!item}>건너뛰기</button>
+            <button
+              className="btn"
+              type="button"
+              disabled={!hasNextItem}
+              data-tooltip="확인하지 않고 다음 자료로 이동"
+              onClick={() => goToItem(1)}
+            >건너뛰기</button>
             <button
               className="btn primary"
               disabled={!item || item.step === 'raw'}
@@ -5250,7 +5363,7 @@ function SidePanel({
 
       {tab === 'placement' && (
         <>
-          <div className="tab-body placement-tab-body">
+          <div className="tab-body placement-tab-body" role="tabpanel" id="side-tabpanel-placement" aria-labelledby="side-tab-placement">
             <section className="placement-context" aria-label="선택 배치 대상">
               <div>
                 <strong>{placementGroupTitle}</strong>
@@ -5420,327 +5533,391 @@ function SidePanel({
 
       {tab === 'board' && (
         <>
-          <div className="tab-body">
-            <div className="panel-section-hd">레이아웃 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">한 줄 자료 수<small>너비 맞춤 아님 · 한 줄 배치 개수</small></div>
-              <div className="seg-mini">
-                {[1,2,3].map(n => (
-                  <button key={n} className={boardColumns===n ? 'on' : ''} onClick={() => setBoardColumns(n)}>{n}개</button>
-                ))}
-              </div>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">드래그 마그넷<small>배치 칸 가이드에 자동 정렬</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">주변 사진 높이<small>같은 행의 가장 큰 자료 기준</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>칠판 색상 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">칠판 배경<small>실제 교실 칠판과 맞추기</small></div>
-              <div className="swatches">
-                {BOARD_COLORS.map(c => (
-                  <div key={c}
-                       className={`sw ${boardColor === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setBoardColor(c)}
-                       title={c} />
-                ))}
-              </div>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
-              <div className="swatches">
-                {ACCENTS.map(c => (
-                  <div key={c}
-                       className={`sw ${accent === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setAccent(c)}
-                       title={c} />
-                ))}
-              </div>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
-
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
-            </button>
-            <button
-              className="btn primary"
-              style={{justifyContent:'space-between'}}
-              onClick={onRecognizeSession}
-              disabled={!canRecognizeSession}
-              title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
+          <div className="tab-body settings-tab-body" role="tabpanel" id="side-tabpanel-board" aria-labelledby="side-tab-board">
+            <SettingsSection
+              id="layout"
+              title="레이아웃"
+              summary={`한 줄 ${boardColumns}개`}
+              open={settingsOpen.layout}
+              onToggle={toggleSettingsSection}
             >
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
-            </button>
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
-            </button>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">
-                HWP/HWPX
-                <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
+              <div className="row-control">
+                <div className="lbl">한 줄 자료 수<small>너비 맞춤 아님 · 한 줄 배치 개수</small></div>
+                <div className="seg-mini" role="group" aria-label="한 줄 자료 수">
+                  {[1,2,3].map(n => (
+                    <button key={n} type="button" className={boardColumns===n ? 'on' : ''} aria-pressed={boardColumns===n} onClick={() => setBoardColumns(n)}>{n}개</button>
+                  ))}
+                </div>
               </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: hangulStatusMeta.tone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-                title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
-              >
-                {hangulStatusMeta.label}
-              </span>
-            </div>
 
-            {hangulDiagnostics && (
-              <div className={`runtime-details ${hangulDetailsExpanded ? 'open' : ''}`}>
-                <button
-                  className="runtime-details-summary"
-                  type="button"
-                  aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}
-                  onClick={() => setHangulDetailsExpanded(open => !open)}
-                >
-                  변환 환경
+              <ul className="always-on-list" aria-label="항상 켜진 배치 기능">
+                {[
+                  ['스크롤 모드', '밑으로 무한 스크롤'],
+                  ['드래그 마그넷', '배치 칸 가이드에 자동 정렬'],
+                  ['주변 사진 높이', '같은 행의 가장 큰 자료 기준'],
+                ].map(([label, hint]) => (
+                  <li key={label}>
+                    <span className="always-on-check" aria-hidden="true">{Icon.check}</span>
+                    <span className="always-on-copy"><strong>{label}</strong><small>{hint}</small></span>
+                    <span className="always-on-tag">항상 켜짐</span>
+                  </li>
+                ))}
+              </ul>
+            </SettingsSection>
+
+            <SettingsSection
+              id="color"
+              title="칠판 색상"
+              summary={<span className="settings-color-summary"><i style={{ background: boardColor }} /><i style={{ background: accent }} /></span>}
+              open={settingsOpen.color}
+              onToggle={toggleSettingsSection}
+            >
+              <div className="row-control">
+                <div className="lbl">칠판 배경<small>실제 교실 칠판과 맞추기</small></div>
+                <div className="swatches" role="group" aria-label="칠판 배경">
+                  {BOARD_COLORS.map(c => (
+                    <button key={c}
+                         type="button"
+                         className={`sw ${boardColor === c ? 'on' : ''}`}
+                         style={{ background: c }}
+                         onClick={() => setBoardColor(c)}
+                         aria-pressed={boardColor === c}
+                         aria-label={BOARD_COLOR_LABELS[c] || c}
+                         title={BOARD_COLOR_LABELS[c] || c} />
+                  ))}
+                </div>
+              </div>
+
+              <div className="row-control">
+                <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
+                <div className="swatches" role="group" aria-label="강조색">
+                  {ACCENTS.map(c => (
+                    <button key={c}
+                         type="button"
+                         className={`sw ${accent === c ? 'on' : ''}`}
+                         style={{ background: c }}
+                         onClick={() => setAccent(c)}
+                         aria-pressed={accent === c}
+                         aria-label={ACCENT_LABELS[c] || c}
+                         title={ACCENT_LABELS[c] || c} />
+                  ))}
+                </div>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              id="batch"
+              title="일괄 작업"
+              summary={`자료 ${items.length}개`}
+              open={settingsOpen.batch}
+              onToggle={toggleSettingsSection}
+            >
+              <div className="settings-action-list">
+                <button className="btn" type="button" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')} disabled={!items.length}>
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
+                  <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
                 </button>
-                {hangulDetailsExpanded && (
-                  <>
-                    <div className="runtime-tool-grid">
-                      {hangulToolRows.map(row => (
-                        <div key={row.label} className="runtime-tool-row">
-                          <span>{row.label}</span>
-                          <strong>{row.count}</strong>
-                          <small>{row.names || '없음'}</small>
-                        </div>
-                      ))}
-                    </div>
-                    {Array.isArray(hangulDiagnostics?.warnings) && hangulDiagnostics.warnings.length > 0 && (
-                      <div className="runtime-note warn">
-                        {hangulDiagnostics.warnings[0]}
-                      </div>
-                    )}
-                    {Array.isArray(hangulDiagnostics?.recommendedActions) && hangulDiagnostics.recommendedActions.length > 0 && (
-                      <div className="runtime-note">
-                        {hangulDiagnostics.recommendedActions[0]}
-                      </div>
-                    )}
-                  </>
+                <button className="btn" type="button" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')} disabled={!items.length}>
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
+                  <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
+                </button>
+                <button
+                  className="btn primary"
+                  type="button"
+                  style={{justifyContent:'space-between'}}
+                  onClick={onRecognizeSession}
+                  disabled={!canRecognizeSession}
+                  title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
+                >
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
+                  <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
+                </button>
+                {!canRecognizeSession && (
+                  <div className="settings-hint">
+                    {!userSettings?.hasGeminiApiKey
+                      ? 'AI 문제 인식은 아래 “AI · API 키”에서 Gemini 키를 저장하면 사용할 수 있습니다.'
+                      : !session
+                        ? 'AI 문제 인식은 자료를 불러온 뒤 사용할 수 있습니다.'
+                        : 'AI 문제 인식은 대기열과 진행 중인 작업이 끝난 뒤 사용할 수 있습니다.'}
+                  </div>
                 )}
               </div>
-            )}
+            </SettingsSection>
 
-            <div className="intent-control">
-              {INPUT_INTENT_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  className={`intent-choice ${normalizeInputIntent(inputIntent) === option.value ? 'on' : ''}`}
-                  type="button"
-                  onClick={() => setInputIntent?.(option.value)}
-                  title={option.description}
+            <SettingsSection
+              id="upload"
+              title="업로드 옵션"
+              summary={(INPUT_INTENT_OPTIONS.find(option => option.value === normalizeInputIntent(inputIntent)) || {}).label}
+              open={settingsOpen.upload}
+              onToggle={toggleSettingsSection}
+            >
+              <div className="intent-control">
+                {INPUT_INTENT_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    className={`intent-choice ${normalizeInputIntent(inputIntent) === option.value ? 'on' : ''}`}
+                    type="button"
+                    aria-pressed={normalizeInputIntent(inputIntent) === option.value}
+                    onClick={() => setInputIntent?.(option.value)}
+                    title={option.description}
+                  >
+                    <span className="intent-choice-head">
+                      <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
+                      <strong>{option.label}</strong>
+                    </span>
+                    <small>{option.description}</small>
+                    {Array.isArray(option.pills) && option.pills.length > 0 && (
+                      <em className="intent-choice-pills">
+                        {option.pills.map(pill => <b key={pill}>{pill}</b>)}
+                      </em>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <div className="row-control">
+                <div className="lbl">
+                  HWP/HWPX
+                  <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
+                </div>
+                <span
+                  className="pos-tag"
+                  style={{
+                    background: hangulStatusMeta.tone,
+                    minWidth: 58,
+                    textAlign: 'center',
+                  }}
+                  title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
                 >
-                  <span className="intent-choice-head">
-                    <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
-                    <strong>{option.label}</strong>
-                  </span>
-                  <small>{option.description}</small>
-                  {Array.isArray(option.pills) && option.pills.length > 0 && (
-                    <em className="intent-choice-pills">
-                      {option.pills.map(pill => <b key={pill}>{pill}</b>)}
-                    </em>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">
-                AI 보정 사용
-                <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
+                  {hangulStatusMeta.label}
+                </span>
               </div>
-              <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
+
+              {hangulDiagnostics && (
+                <div className={`runtime-details ${hangulDetailsExpanded ? 'open' : ''}`}>
+                  <button
+                    className="runtime-details-summary"
+                    type="button"
+                    aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}
+                    onClick={() => setHangulDetailsExpanded(open => !open)}
+                  >
+                    변환 환경
+                  </button>
+                  {hangulDetailsExpanded && (
+                    <>
+                      <div className="runtime-tool-grid">
+                        {hangulToolRows.map(row => (
+                          <div key={row.label} className="runtime-tool-row">
+                            <span>{row.label}</span>
+                            <strong>{row.count}</strong>
+                            <small>{row.names || '없음'}</small>
+                          </div>
+                        ))}
+                      </div>
+                      {Array.isArray(hangulDiagnostics?.warnings) && hangulDiagnostics.warnings.length > 0 && (
+                        <div className="runtime-note warn">
+                          {hangulDiagnostics.warnings[0]}
+                        </div>
+                      )}
+                      {Array.isArray(hangulDiagnostics?.recommendedActions) && hangulDiagnostics.recommendedActions.length > 0 && (
+                        <div className="runtime-note">
+                          {hangulDiagnostics.recommendedActions[0]}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </SettingsSection>
+
+            <SettingsSection
+              id="keys"
+              title="AI · API 키"
+              summary={userSettings?.hasGeminiApiKey ? (aiEnabled ? 'AI 보정 켜짐' : 'AI 보정 꺼짐') : 'Gemini 키 없음'}
+              tone={userSettings?.hasGeminiApiKey ? 'ok' : 'warn'}
+              open={settingsOpen.keys}
+              onToggle={toggleSettingsSection}
+            >
+              <div className="row-control">
+                <div className="lbl">
+                  AI 보정 사용
+                  <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
+                </div>
+                <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
+                  <input
+                    type="checkbox"
+                    checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
+                    disabled={!userSettings?.hasGeminiApiKey}
+                    onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
+                  />
+                  <span style={{fontSize: 12, color: 'var(--muted)'}}>
+                    {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
+                  </span>
+                </label>
+              </div>
+
+              <div className="settings-subhead">Gemini API 키</div>
+
+              <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
+                <div className="lbl">
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>
+                    <span className={`pos-tag`} style={{background: userSettings?.hasGeminiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
+                      {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
+                    </span>
+                    {userSettings?.hasGeminiApiKey && (
+                      <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
+                        {userSettings.geminiApiKeyPreview}
+                      </span>
+                    )}
+                  </span>
+                  <small>
+                    {userSettings?.geminiApiKeySource === 'env'
+                      ? '환경변수의 GEMINI_API_KEY 사용 중. 저장하면 그 값이 우선.'
+                      : 'GEMINI_API_KEY로 자동 적용. .app_runtime/user_settings.json에 저장.'}
+                  </small>
+                </div>
+              </div>
+              <div className="key-input-row">
                 <input
-                  type="checkbox"
-                  checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
-                  disabled={!userSettings?.hasGeminiApiKey}
-                  onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
+                  type={showKey ? 'text' : 'password'}
+                  className="key-input"
+                  aria-label="Gemini API 키"
+                  placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
+                  value={keyDraft}
+                  onChange={e => setKeyDraft(e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
                 />
-                <span style={{fontSize: 12, color: 'var(--muted)'}}>
-                  {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
-                </span>
-              </label>
-            </div>
+                <button className="btn key-visibility" type="button" onClick={() => setShowKey(s => !s)} aria-pressed={showKey} title={showKey ? '키 숨기기' : '키 보기'}>
+                  {showKey ? '숨기기' : '보기'}
+                </button>
+              </div>
+              <div style={{display: 'flex', gap: 6}}>
+                <button
+                  className="btn primary"
+                  type="button"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  onClick={() => { onSaveGeminiKey?.(keyDraft.trim()); setKeyDraft(''); }}
+                  disabled={!keyDraft.trim()}
+                >
+                  키 저장
+                </button>
+                <button
+                  className="btn"
+                  type="button"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
+                  disabled={!userSettings?.hasStoredGeminiApiKey}
+                >
+                  저장된 키 삭제
+                </button>
+              </div>
 
-            <div className="panel-section-hd" style={{marginTop:4}}>Gemini API 키 <span className="line" /></div>
+              <div className="settings-subhead">OpenAI API 키</div>
 
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasGeminiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
-                  </span>
-                  {userSettings?.hasGeminiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.geminiApiKeyPreview}
+              <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
+                <div className="lbl">
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>
+                    <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
+                      {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
                     </span>
-                  )}
-                </span>
-                <small>
-                  {userSettings?.geminiApiKeySource === 'env'
-                    ? '환경변수의 GEMINI_API_KEY 사용 중. 저장하면 그 값이 우선.'
-                    : 'GEMINI_API_KEY로 자동 적용. .app_runtime/user_settings.json에 저장.'}
-                </small>
-              </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
-                value={keyDraft}
-                onChange={e => setKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowKey(s => !s)} title={showKey ? '숨기기' : '보기'}>
-                {showKey ? '🙈' : '👁'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveGeminiKey?.(keyDraft.trim()); setKeyDraft(''); }}
-                disabled={!keyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
-                disabled={!userSettings?.hasStoredGeminiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>OpenAI API 키 <span className="line" /></div>
-
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
+                    {userSettings?.hasOpenAiApiKey && (
+                      <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
+                        {userSettings.openAiApiKeyPreview}
+                      </span>
+                    )}
                   </span>
-                  {userSettings?.hasOpenAiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.openAiApiKeyPreview}
-                    </span>
-                  )}
+                  <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
+                </div>
+              </div>
+              <div className="key-input-row">
+                <input
+                  type={showOpenAiKey ? 'text' : 'password'}
+                  className="key-input"
+                  aria-label="OpenAI API 키"
+                  placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
+                  value={openAiKeyDraft}
+                  onChange={e => setOpenAiKeyDraft(e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button className="btn key-visibility" type="button" onClick={() => setShowOpenAiKey(s => !s)} aria-pressed={showOpenAiKey} title={showOpenAiKey ? '키 숨기기' : '키 보기'}>
+                  {showOpenAiKey ? '숨기기' : '보기'}
+                </button>
+              </div>
+              <div style={{display: 'flex', gap: 6}}>
+                <button
+                  className="btn primary"
+                  type="button"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
+                  disabled={!openAiKeyDraft.trim()}
+                >
+                  키 저장
+                </button>
+                <button
+                  className="btn"
+                  type="button"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
+                  disabled={!userSettings?.hasStoredOpenAiApiKey}
+                >
+                  저장된 키 삭제
+                </button>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              id="update"
+              title="앱 업데이트"
+              summary={updateStatusLabel}
+              tone={updateInfo?.updateAvailable ? 'accent' : updateStatus === 'error' || updateStatus === 'invalid_feed' ? 'warn' : ''}
+              open={settingsOpen.update}
+              onToggle={toggleSettingsSection}
+            >
+              <div className="row-control">
+                <div className="lbl">
+                  현재 버전
+                  <small>{updateVersionLine}</small>
+                </div>
+                <span
+                  className="pos-tag"
+                  style={{
+                    background: updateStatusTone,
+                    minWidth: 58,
+                    textAlign: 'center',
+                  }}
+                >
+                  {updateStatusLabel}
                 </span>
-                <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
               </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showOpenAiKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
-                value={openAiKeyDraft}
-                onChange={e => setOpenAiKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowOpenAiKey(s => !s)} title={showOpenAiKey ? '숨기기' : '보기'}>
-                {showOpenAiKey ? '숨' : '보기'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
-                disabled={!openAiKeyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
-                disabled={!userSettings?.hasStoredOpenAiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>앱 업데이트 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">
-                현재 버전
-                <small>{updateVersionLine}</small>
+              {updateInfo?.error && (
+                <div className="runtime-note warn">
+                  {updateInfo.error}
+                </div>
+              )}
+              <div style={{display: 'flex', gap: 6}}>
+                <button
+                  className="btn"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  type="button"
+                  onClick={() => onCheckUpdate?.()}
+                  disabled={updateBusy}
+                >
+                  {updateBusy ? '확인 중...' : '업데이트 확인'}
+                </button>
+                <button
+                  className="btn primary"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  type="button"
+                  onClick={() => onOpenUpdate?.()}
+                  disabled={updateBusy || !updateDownloadUrl}
+                  title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
+                >
+                  {Icon.download} 다운로드 열기
+                </button>
               </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: updateStatusTone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-              >
-                {updateStatusLabel}
-              </span>
-            </div>
-            {updateInfo?.error && (
-              <div className="runtime-note warn">
-                {updateInfo.error}
-              </div>
-            )}
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                type="button"
-                onClick={() => onCheckUpdate?.()}
-                disabled={updateBusy}
-              >
-                {updateBusy ? '확인 중...' : '업데이트 확인'}
-              </button>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                type="button"
-                onClick={() => onOpenUpdate?.()}
-                disabled={updateBusy || !updateDownloadUrl}
-                title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
-              >
-                {Icon.download} 다운로드 열기
-              </button>
-            </div>
+            </SettingsSection>
           </div>
         </>
       )}
@@ -10294,6 +10471,7 @@ function App(){
           item={active}
           items={items}
           activeIndex={activeIndex}
+          setActive={selectBoardItem}
           setStep={setStep}
           applyToAll={applyToAll}
           bulk={bulk}
