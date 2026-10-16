@@ -4033,9 +4033,24 @@ def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[flo
         column_box,
         max_digit_left=VISUAL_MARKER_MAX_DIGIT_LEFT_PX,
     )
+    # A question starts after white space (column top, or a gap after the
+    # previous question's choices).  Prose lines are packed at line pitch,
+    # so a "number" at a prose line start has ink right above it.
+    ink_rows = None
+    if np is not None:
+        crop = np.array(
+            image.crop((int(column_box.left), 0, int(column_box.right), image.height)).convert("L")
+        ) < 160
+        ink_rows = crop.sum(axis=1)
+    gap_px = max(14, int(image.height * 0.011))
     tops: list[float] = []
     for offset in offsets:
         top = column_box.top + float(offset)
+        # just under the page header an instruction line may sit tight above
+        if ink_rows is not None and top > float(image.height) * 0.1:
+            above = ink_rows[max(0, int(top) - gap_px) : max(0, int(top) - 3)]
+            if above.size and int(above.max()) > max(3, int(column_box.width * 0.01)):
+                continue
         if top < column_box.top - 1.0 or top > column_box.bottom + 1.0:
             continue
         # running header page number / footer page box ("5 / 16")
