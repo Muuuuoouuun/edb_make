@@ -3831,6 +3831,41 @@ def _restore_hwp_text_fallback_problems(pages: list[PageModel]) -> None:
                 page.metadata["restored_hwp_text_problem_numbers"] = restored_numbers
 
 
+def _drop_recovered_regions_inside(page: PageModel, region: Box) -> None:
+    """Remove segment-stage recovered blocks that a text-based stage explains.
+
+    ``segment._recover_uncovered_document_regions`` keeps unclaimed ink so it
+    is never lost.  When a later stage materialises the same ink as a typed
+    block (e.g. a pre-question passage continuation), the recovered copy must
+    go, or the passage would be exported twice.
+    """
+    removed: set[str] = set()
+    for block in page.blocks:
+        if not block.metadata.get("recovered_uncovered_region"):
+            continue
+        box = block.bbox
+        overlap_w = max(0.0, min(box.right, region.right) - max(box.left, region.left))
+        overlap_h = max(0.0, min(box.bottom, region.bottom) - max(box.top, region.top))
+        if box.area > 0 and (overlap_w * overlap_h) / box.area >= 0.6:
+            removed.add(block.block_id)
+    if not removed:
+        return
+    page.blocks = [block for block in page.blocks if block.block_id not in removed]
+    kept_problems = []
+    for problem in page.problems:
+        touched = False
+        has_blocks = False
+        for field_name in ("stem_block_ids", "choice_block_ids", "explanation_block_ids", "figure_block_ids"):
+            ids = getattr(problem, field_name)
+            if any(block_id in removed for block_id in ids):
+                touched = True
+                ids[:] = [block_id for block_id in ids if block_id not in removed]
+            has_blocks = has_blocks or bool(ids)
+        if has_blocks or not touched:
+            kept_problems.append(problem)
+    page.problems = kept_problems
+
+
 def _passage_range_tuple(metadata: dict[str, Any]) -> tuple[int, int] | None:
     value = metadata.get("passage_range")
     if not isinstance(value, dict):
@@ -4161,6 +4196,8 @@ def _infer_pdf_cross_page_passage_continuation(
             "cross_page_passage_inferred": True,
         },
     )
+    for continuation_block in continuation_blocks:
+        _drop_recovered_regions_inside(page, continuation_block.bbox)
     page.problems.append(continuation)
     page.metadata["pdf_cross_page_passage_continuation_count"] = (
         (_coerce_int(page.metadata.get("pdf_cross_page_passage_continuation_count")) or 0)
@@ -4689,6 +4726,8 @@ def _materialize_pdf_pre_question_passage_continuations(
 
             source_page_ids = _metadata_string_list(first_child.metadata, "passage_source_page_ids")
             child_numbers = _passage_child_numbers(first_child.metadata, start, end)
+            _drop_recovered_regions_inside(page, box)
+            block_by_id = {block.block_id: block for block in page.blocks}
             page.blocks.append(
                 ContentBlock(
                     block_id=block_id,
