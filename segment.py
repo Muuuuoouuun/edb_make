@@ -4656,6 +4656,7 @@ def _recover_uncovered_document_regions(
     gray = np.array(image.convert("L"))
     ink = gray < UNCOVERED_REGION_DARK_THRESHOLD
     height, width = ink.shape
+    ink_rows_full = ink.sum(axis=1)
     # Drop full-height vertical rules (column dividers / page frame).
     tall_columns = ink.sum(axis=0) >= height * 0.42
     ink[:, tall_columns] = False
@@ -4824,12 +4825,17 @@ def _recover_uncovered_document_regions(
                 and other_box.height <= max(box.height * 3.0, height * 0.1)
                 for other_column, other_box in original_regions
             )
+            # A page-wide rule just below the region separates the page
+            # header (subject title, 홀수형/page boxes) from the columns.
+            rule_rows = ink_rows_full[int(box.bottom) : min(height, int(box.bottom) + 60)]
+            above_header_rule = bool(rule_rows.size) and bool((rule_rows >= width * 0.6).any())
             if (
                 best_key is None
                 or best_key[0] == column_index
                 or same_column_above
                 or box.top > height * 0.4
                 or header_band
+                or above_header_rule
             ):
                 continue
         predecessor = result[insert_at - 1] if best_key is not None and insert_at > 0 else None

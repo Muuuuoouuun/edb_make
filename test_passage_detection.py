@@ -22,6 +22,9 @@ class TestPassageDetection(unittest.TestCase):
             "[4~6] 다음은 수업 중 진행한 모의 협상이다. 물음에 답하시오.": (4, 6),
             "[28~30] 다음은 작문 상황과 이를 바탕으로 작성한 초고이다. 물음에 답하시오.": (28, 30),
             "[31-34] Read the following passage and answer the questions.": (31, 34),
+            # 2025학년도 3월 고1 국어 15쪽: no material noun after 다음
+            "[43 ~ 45] 다음을 읽고 물음에 답하시오.": (43, 45),
+            "[16~19] (가)와 (나)를 읽고 물음에 답하시오.": (16, 19),
         }
         for text, expected in cases.items():
             with self.subTest(text=text):
