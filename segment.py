@@ -3937,7 +3937,7 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
     # number fell outside the strip; the whole right column then became an
     # unnumbered tail of the left column's last question.
     tightened: list[Box] = []
-    for column in columns:
+    for column_index, column in enumerate(columns):
         crop = marker_mask.crop((int(column.left), int(column.top), int(column.right), int(column.bottom)))
         if crop.width <= 1 or crop.height <= 1:
             tightened.append(column)
@@ -3948,6 +3948,21 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
         peak = max(projection)
         threshold = max(2, int(peak * 0.05))
         first_x = next((x for x, value in enumerate(projection) if value >= threshold), None)
+        # Skip a vertical divider rule at the column edge: a run of at most
+        # 6px whose ink covers 85% of the column height (box borders are shorter), followed by a gap.
+        # Only a column right of the split can start with the centre divider;
+        # the first column's leading rule is a passage box border.
+        for _ in range(1 if column_index > 0 else 0):
+            if first_x is None:
+                break
+            run_end = first_x
+            while run_end < crop.width and projection[run_end] >= threshold:
+                run_end += 1
+            is_rule = run_end - first_x <= 6 and max(projection[first_x:run_end]) >= crop.height * 0.85
+            gap_end = min(crop.width, run_end + 6)
+            if not is_rule or any(value >= threshold for value in projection[run_end:gap_end]):
+                break
+            first_x = next((x for x in range(run_end, crop.width) if projection[x] >= threshold), None)
         if first_x is None:
             tightened.append(column)
             continue
