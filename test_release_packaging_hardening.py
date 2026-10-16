@@ -144,6 +144,24 @@ class TestReleaseLicensePolicy(unittest.TestCase):
             archive = root / "ClassInEDBMVP-macOS.zip"
             dmg.write_bytes(b"dmg")
             archive.write_bytes(b"zip")
+            for artifacts in ([dmg], [dmg, archive]):
+                with self.subTest(artifacts=[path.name for path in artifacts]):
+                    payload = create_release_evidence(
+                        platform_name="macos", version="1.3.0", git_commit=commit,
+                        metadata_root=metadata, artifacts=artifacts,
+                    )
+                    evidence_path = root / "evidence.json"
+                    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+                    self.assertEqual([], collect_release_evidence_errors(evidence_path, root))
+            unexpected = root / "unexpected.zip"
+            unexpected.write_bytes(b"zip")
+            for artifacts in ([archive], [dmg, dmg], [dmg, unexpected]):
+                with self.subTest(rejected=[path.name for path in artifacts]):
+                    with self.assertRaises(ValueError):
+                        create_release_evidence(
+                            platform_name="macos", version="1.3.0", git_commit=commit,
+                            metadata_root=metadata, artifacts=artifacts,
+                        )
             evidence = create_release_evidence(
                 platform_name="macos",
                 version="1.3.0",
