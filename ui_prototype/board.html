@@ -1521,14 +1521,15 @@
   }
   .pending-preview-actions{
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     gap: 6px;
   }
   .pending-preview-actions .btn{
     min-width: 0;
     justify-content: center;
-    padding: 8px 6px;
-    font-size: 11.5px;
+    padding: 10px 8px;
+    font-size: 13px;
+    font-weight: 700;
   }
   .pending-preview-actions .btn span{
     min-width: 0;
@@ -2341,71 +2342,21 @@
     color: var(--muted);
     font-family: 'JetBrains Mono', monospace;
   }
-  .source-queue-row .queue-row-action{
-    color: var(--accent);
-  }
   .source-queue-actions{
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     gap: 6px;
   }
-  .source-queue-actions .btn{
-    justify-content: flex-start;
-    min-width: 0;
-    padding: 7px;
-    font-size: 12px;
-    line-height: 1.15;
-    text-align: left;
-  }
-  .source-queue-actions .btn span{
-    min-width: 0;
-  }
-  .source-queue-actions .queue-action-card{
-    min-height: 44px;
-    gap: 7px;
-    align-items: center;
-  }
-  .queue-action-icon{
-    width: 24px;
-    height: 24px;
-    flex: 0 0 24px;
-    display: inline-flex;
-    align-items: center;
+  .source-queue-actions .queue-split-action{
     justify-content: center;
-    border-radius: 7px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-  }
-  .queue-action-card.primary .queue-action-icon{
-    background: rgba(255,255,255,.1);
-    border-color: rgba(255,255,255,.14);
-  }
-  .queue-action-copy{
-    display: grid;
-    gap: 2px;
     min-width: 0;
+    min-height: 36px;
+    padding: 8px;
+    font-size: 12.5px;
+    font-weight: 700;
   }
-  .queue-action-copy strong{
-    font-size: 11.5px;
-    line-height: 1.05;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .queue-action-copy small{
-    color: var(--muted);
-    font-size: 10px;
-    font-weight: 600;
-    line-height: 1.05;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .queue-action-card.primary .queue-action-copy small{
-    color: rgba(255,255,255,.72);
-  }
-  .source-queue-actions .queue-action-manual{
-    grid-column: 1 / -1;
+  .source-queue-actions .queue-split-action span{
+    min-width: 0;
   }
   .source-queue-actions .full{
     grid-column: 1 / -1;
@@ -2926,6 +2877,33 @@
   }
   .intent-choice:hover{
     background: var(--surface-2);
+  }
+  .intent-choice:disabled{
+    cursor: not-allowed;
+    opacity: .6;
+  }
+  .split-mode-control{
+    margin-bottom: 8px;
+  }
+  .split-mode-control.compact{
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    margin-bottom: 0;
+  }
+  .split-mode-control.compact .intent-choice{
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 6px 4px;
+    text-align: center;
+  }
+  .split-mode-control.compact .intent-choice-head{
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 2px;
+  }
+  .split-mode-control.compact strong{
+    font-size: 11px;
+    text-align: center;
   }
   .intent-choice.on{
     border-color: rgba(47,111,237,.5);
@@ -4125,6 +4103,24 @@
     color: var(--ink);
     box-shadow: var(--shadow-1);
   }
+  .view-toggle button{
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .view-toggle-badge{
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--warning, #b45309);
+    color: #fff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+  }
 
   /* Background AI jobs */
   .bg-jobs{
@@ -4294,191 +4290,6 @@
     }
   }
 
-  /* AI recognition review modal */
-  .recognition-modal-shell{
-    position: fixed;
-    inset: 0;
-    z-index: 998;
-    display: grid;
-    place-items: center;
-    padding: 22px;
-  }
-  .recognition-modal-backdrop{
-    position: absolute;
-    inset: 0;
-    background: rgba(15,20,30,.46);
-    backdrop-filter: blur(5px);
-  }
-  .recognition-modal{
-    position: relative;
-    width: min(1080px, calc(100vw - 44px));
-    max-height: calc(100vh - 44px);
-    display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-    overflow: hidden;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--surface);
-    box-shadow: 0 28px 70px rgba(15,20,30,.28);
-  }
-  .recognition-modal-hd{
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 18px 20px 14px;
-    border-bottom: 1px solid var(--line);
-  }
-  .recognition-modal-hd > div{ min-width: 0; flex: 1; }
-  .recognition-eyebrow{
-    display: inline-flex;
-    margin-bottom: 5px;
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: .04em;
-  }
-  .recognition-modal h2{
-    margin: 0;
-    font-size: 20px;
-    letter-spacing: 0;
-  }
-  .recognition-modal p{
-    margin: 6px 0 0;
-    color: var(--muted);
-    font-size: 13px;
-    line-height: 1.45;
-  }
-  .modal-x{
-    flex: none;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--surface-2);
-    color: var(--muted);
-    font-size: 20px;
-    line-height: 1;
-  }
-  .modal-x:hover{
-    background: var(--surface);
-    color: var(--ink);
-  }
-  .modal-x:disabled{ opacity: .45; cursor: not-allowed; }
-  .recognition-summary{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--line);
-    background: var(--surface-2);
-  }
-  .recognition-summary span{
-    display: inline-flex;
-    align-items: center;
-    min-height: 26px;
-    padding: 0 9px;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--surface);
-    color: var(--ink-2);
-    font-size: 11.5px;
-    font-weight: 700;
-  }
-  .recognition-summary span.warn{
-    color: #aa6516;
-    border-color: rgba(217,119,87,.35);
-    background: rgba(217,119,87,.12);
-  }
-  .recognition-preview{
-    overflow: auto;
-    padding: 18px 20px 22px;
-    background: var(--bg);
-  }
-  .recognition-page{
-    overflow: hidden;
-    max-width: 980px;
-    margin: 0 auto 16px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: var(--surface);
-    box-shadow: var(--shadow-1);
-  }
-  .recognition-page-hd{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
-    color: var(--muted);
-    font-size: 11.5px;
-  }
-  .recognition-page-hd strong{
-    color: var(--ink);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-  }
-  .recognition-page-canvas{
-    position: relative;
-    background: #fafbfc;
-  }
-  body.dark .recognition-page-canvas{ background: #14171d; }
-  .recognition-page-canvas img{
-    display: block;
-    width: 100%;
-    height: auto;
-    user-select: none;
-    -webkit-user-drag: none;
-  }
-  .recognition-page-empty,
-  .recognition-empty{
-    padding: 44px 20px;
-    text-align: center;
-    color: var(--muted);
-    font-size: 13px;
-  }
-  .recognition-box{
-    position: absolute;
-    border: 2px solid rgba(47,111,237,.78);
-    border-radius: 3px;
-    background: rgba(47,111,237,.08);
-    box-shadow: 0 0 0 1px rgba(255,255,255,.5);
-  }
-  .recognition-box.status-check-needed{
-    border-color: #d97757;
-    background: rgba(217,119,87,.12);
-  }
-  .recognition-box.status-failed{
-    border-color: var(--danger);
-    background: rgba(213,72,72,.14);
-  }
-  .recognition-box span{
-    position: absolute;
-    top: -1px;
-    left: -1px;
-    padding: 2px 7px;
-    border-radius: 0 0 4px 0;
-    background: var(--accent);
-    color: white;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10.5px;
-    font-weight: 800;
-  }
-  .recognition-box.status-check-needed span{ background: #d97757; }
-  .recognition-box.status-failed span{ background: var(--danger); }
-  .recognition-modal-foot{
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 14px 20px;
-    border-top: 1px solid var(--line);
-    background: var(--surface);
-  }
-  .recognition-modal-foot .btn.primary{
-    background: var(--accent);
-    color: white;
-    border-color: var(--accent);
-  }
-
   /* Toast */
   .toast{
     position: fixed;
@@ -4541,6 +4352,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-scaled-reflow-20260702"></script>
-<script src="app.bundle.js?v=frontend-bundle-9bb1f1f5b3d277048e85b39da875980a030a8823ff6d4345164ae176069f6f26"></script>
+<script src="app.bundle.js?v=frontend-bundle-81c00f8575db59339843ae549abf1802715ea187109df81da44e9d6f8c3f83a5"></script>
 </body>
 </html>

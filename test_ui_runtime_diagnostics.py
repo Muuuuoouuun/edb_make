@@ -172,7 +172,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
     def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
         session_helper = source.split("function fitWidthPageAsIsSession", 1)[1]
         session_helper = session_helper.split("function mergeSessions", 1)[0]
 
