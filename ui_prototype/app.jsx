@@ -186,6 +186,11 @@ const REVIEW_ZOOM_MAX = 1.65;
 const REVIEW_ZOOM_STEP = 0.08;
 const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
 const SIDE_PANEL_TAB_KEY = 'edb.sidePanelTab';
+const LEFT_RAIL_COLLAPSED_KEY = 'edb.leftRailCollapsed';
+const BOARD_PAGE_GUIDES_KEY = 'edb.boardPageGuides';
+// .stage-scroll has 26px top padding; keep ~8px of the previous page visible.
+const BOARD_PAGE_SCROLL_OFFSET_PX = 18;
+const BOARD_PAGE_PROBE_PX = 48;
 const SIDE_PANEL_TABS = ['item', 'placement', 'board'];
 const SETTINGS_SECTIONS_OPEN_KEY = 'edb.settingsSectionsOpen';
 const SETTINGS_SECTIONS_DEFAULT_OPEN = { layout: true, color: true, batch: true, upload: false, keys: false, update: false };
@@ -3234,6 +3239,7 @@ function ItemsRail({
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
   onDownloadItemImage, downloadingItemId,
+  collapsed, onToggleCollapsed,
 }){
   const dragId = useRef(null);
   const [draggingId, setDraggingId] = useState(null);
@@ -3461,9 +3467,72 @@ function ItemsRail({
     }
   }, [activeId]);
 
+  if (collapsed) {
+    return (
+      <div className="col left is-collapsed">
+        <div className="col-hd rail-mini-hd">
+          <button
+            className="icon-btn"
+            type="button"
+            title="자료 목록 펼치기"
+            data-tooltip="자료 목록 펼치기"
+            aria-label="자료 목록 펼치기"
+            aria-expanded="false"
+            onClick={onToggleCollapsed}
+          >{Icon.arrowRight}</button>
+        </div>
+        <div className="rail-mini-tools">
+          <button className="icon-btn" type="button" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" aria-label="파일 추가" onClick={addSample}>{Icon.upload}</button>
+          {!!pendingFiles?.length && (
+            <button
+              className="rail-mini-queue"
+              type="button"
+              title={`업로드 대기열 ${pendingFiles.length}개 · 펼쳐서 처리`}
+              data-tooltip={`업로드 대기열 ${pendingFiles.length}개 · 펼쳐서 처리`}
+              onClick={onToggleCollapsed}
+            >대기 {pendingFiles.length}</button>
+          )}
+          <span className="rail-mini-count" title={`자료 ${items.length}개`}>{items.length}</span>
+        </div>
+        <div className="items rail-mini-list" ref={railRef}>
+          {items.map((it, i) => (
+            <button
+              key={it.id}
+              type="button"
+              ref={el => {
+                if (el) itemRefs.current[it.id] = el;
+                else delete itemRefs.current[it.id];
+              }}
+              className={`rail-mini-item ${activeId === it.id ? 'active' : ''} ${hasPageChromeArtifactFlag(it) ? 'page-chrome-artifact' : ''}`}
+              aria-current={activeId === it.id ? 'true' : undefined}
+              aria-label={`${String(i + 1).padStart(2, '0')} ${problemDisplayName(it, i)}`}
+              data-tooltip={`${String(i + 1).padStart(2, '0')} · ${problemDisplayName(it, i)}`}
+              onClick={() => setActive(it.id)}
+            >
+              <span className="thumb"><TileImage item={it} forceMode="raw" /></span>
+              <span className="idx">
+                <span className={`status-dot ${reviewStatusClass(it.reviewStatus)}`} />
+                {String(i + 1).padStart(2, '0')}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="col left">
       <div className="col-hd">
+        <button
+          className="icon-btn rail-collapse-btn"
+          type="button"
+          title="자료 목록 접기"
+          data-tooltip="자료 목록 접기 · 썸네일만 표시"
+          aria-label="자료 목록 접기"
+          aria-expanded="true"
+          onClick={onToggleCollapsed}
+        >{Icon.arrowLeft}</button>
         <h2>자료</h2>
         <span className="count">{items.length}</span>
         <div className="spacer" />
@@ -3952,6 +4021,48 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
   const [currentPage, setCurrentPage] = useState(1);
   const visibleCurrentPage = Math.min(currentPage, layout.totalPages);
+  const [pageGuides, setPageGuides] = useState(() => {
+    try {
+      return window.localStorage?.getItem(BOARD_PAGE_GUIDES_KEY) !== '0';
+    } catch (_err) {
+      return true;
+    }
+  });
+  const togglePageGuides = () => {
+    setPageGuides(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem(BOARD_PAGE_GUIDES_KEY, next ? '1' : '0'); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  };
+  // One band per board page, labelled with the problems that start on it.
+  const pageBands = useMemo(() => {
+    const pageCount = Math.min(layout.totalPages, 200);
+    const starts = Array.from({ length: pageCount }, () => []);
+    const covered = new Array(pageCount).fill(false);
+    layout.positions.forEach((placement, index) => {
+      if (!placement) return;
+      const startPage = Math.floor(placement.startPages + 0.001);
+      const endPage = Math.ceil(placement.startPages + placement.renderedHeightPages - 0.001) - 1;
+      if (startPage < pageCount) starts[startPage].push(String(index + 1).padStart(2, '0'));
+      for (let page = startPage; page <= Math.min(endPage, pageCount - 1); page += 1) covered[page] = true;
+    });
+    return starts.map((numbers, index) => ({
+      page: index + 1,
+      top: index * pageH,
+      label: numbers.length
+        ? `${numbers.slice(0, 3).join('·')}${numbers.length > 3 ? ` +${numbers.length - 3}` : ''}번`
+        : covered[index] ? '앞 문항 이어짐' : '판서 공간',
+    }));
+  }, [layout, pageH]);
+  const goToPage = (pageNumber) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const nextPage = Math.max(1, Math.min(layout.totalPages, pageNumber));
+    setCurrentPage(nextPage);
+    // Land just above the page line so its header chip stays in view.
+    smoothScrollTo(container, Math.max(0, (nextPage - 1) * pageH + BOARD_PAGE_SCROLL_OFFSET_PX));
+  };
 
   useLayoutEffect(() => {
     const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== boardOrderSignature);
@@ -4004,7 +4115,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
   const onScroll = () => {
     const c = scrollRef.current;
     if (!c) return;
-    const nextPage = Math.min(layout.totalPages, Math.floor(c.scrollTop / pageH) + 1);
+    const nextPage = Math.min(layout.totalPages, Math.floor((c.scrollTop + BOARD_PAGE_PROBE_PX) / pageH) + 1);
     setCurrentPage(prev => prev === nextPage ? prev : nextPage);
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
@@ -4256,12 +4367,6 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       }))
     : [];
 
-  // page-boundary divider lines (between page N and N+1)
-  const dividers = [];
-  for (let i = 1; i < Math.min(layout.totalPages, 200); i++){
-    dividers.push(i * pageH);
-  }
-
   return (
     <div className="col center">
       <div className="stage">
@@ -4269,6 +4374,13 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
           <span className="name">실시간 칠판 미리보기</span>
           <span className="pill"><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
           <div className="spacer" />
+          <button
+            className={`btn ghost stage-page-guide-btn ${pageGuides ? 'on' : ''}`}
+            type="button"
+            aria-pressed={pageGuides}
+            data-tooltip={pageGuides ? '페이지 구분 숨기기 · 실제 칠판처럼 보기' : '페이지 구분 보이기'}
+            onClick={togglePageGuides}
+          >{Icon.rows3} 페이지 구분</button>
           <button
             className="btn ghost stage-fit-btn"
             type="button"
@@ -4288,10 +4400,26 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                 ref={contentRef}
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
-                {/* page boundary dividers — scroll with content */}
-                {dividers.map((top, i) => (
-                  <div key={i} className="page-divider" style={{ top }}>
-                    <span className="label">— {i + 2} 페이지 —</span>
+                {/* page bands — scroll with content, one per ClassIn board page */}
+                {pageGuides && pageBands.map(band => (
+                  <div
+                    key={`band-${band.page}`}
+                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''}`}
+                    style={{ top: band.top, height: pageH }}
+                    aria-hidden="true"
+                  />
+                ))}
+                {pageGuides && pageBands.map(band => (
+                  <div
+                    key={`head-${band.page}`}
+                    className={`page-head ${band.page === visibleCurrentPage ? 'is-current' : ''} ${band.page === 1 ? 'is-first' : ''}`}
+                    style={{ top: band.top }}
+                    aria-hidden="true"
+                  >
+                    <span className="page-head-chip">
+                      <strong>{band.page}p</strong>
+                      <small>{band.label}</small>
+                    </span>
                   </div>
                 ))}
 
@@ -4398,11 +4526,29 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
               </div>
             </div>
 
-            <div className="board-pageind">
-              <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
-              <span className="sep">/</span>
-              <span className="total">{String(layout.totalPages).padStart(2,'0')}</span>
-              <span style={{marginLeft:6, opacity:.6}}>p</span>
+            <div className="board-pageind" role="group" aria-label="칠판 페이지 이동">
+              <button
+                type="button"
+                className="pageind-btn"
+                aria-label="이전 페이지"
+                title="이전 페이지"
+                disabled={visibleCurrentPage <= 1}
+                onClick={() => goToPage(visibleCurrentPage - 1)}
+              >{Icon.arrowUp}</button>
+              <span className="pageind-count">
+                <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
+                <span className="sep">/</span>
+                <span className="total">{String(layout.totalPages).padStart(2,'0')}</span>
+                <span style={{marginLeft:6, opacity:.6}}>p</span>
+              </span>
+              <button
+                type="button"
+                className="pageind-btn"
+                aria-label="다음 페이지"
+                title="다음 페이지"
+                disabled={visibleCurrentPage >= layout.totalPages}
+                onClick={() => goToPage(visibleCurrentPage + 1)}
+              >{Icon.arrowDown}</button>
             </div>
 
             <div className="vignette" />
@@ -8981,6 +9127,20 @@ function App(){
   const [activeId, setActiveId] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
   const [bulk, setBulk] = useState(false);
+  const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
+    try {
+      return window.localStorage?.getItem(LEFT_RAIL_COLLAPSED_KEY) === '1';
+    } catch (_err) {
+      return false;
+    }
+  });
+  const toggleLeftRailCollapsed = useCallback(() => {
+    setLeftRailCollapsed(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem(LEFT_RAIL_COLLAPSED_KEY, next ? '1' : '0'); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  }, []);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
@@ -10412,8 +10572,10 @@ function App(){
         exportingImages={exportingImages}
         canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
       />
-      <div className="main">
+      <div className={`main ${leftRailCollapsed ? 'left-collapsed' : ''}`}>
         <ItemsRail
+          collapsed={leftRailCollapsed}
+          onToggleCollapsed={toggleLeftRailCollapsed}
           items={items}
           activeId={activeId}
           setActive={selectBoardItem}

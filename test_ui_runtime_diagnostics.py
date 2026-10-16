@@ -85,6 +85,26 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".settings-section-hd", html)
         self.assertIn(".queue-row-actions", html)
 
+    def test_left_rail_collapses_to_thumbnails_and_board_shows_page_bands(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+        board_stage = source.split("function BoardStage", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn("LEFT_RAIL_COLLAPSED_KEY", source)
+        self.assertIn("className={`main ${leftRailCollapsed ? 'left-collapsed' : ''}`}", source)
+        self.assertIn("if (collapsed) {", rail)
+        self.assertIn("rail-mini-item", rail)
+        self.assertIn("<TileImage item={it} forceMode=\"raw\" />", rail.split("if (collapsed) {", 1)[1])
+        self.assertIn("자료 목록 접기", rail)
+        self.assertIn("pageBands", board_stage)
+        self.assertIn("className={`page-head", board_stage)
+        self.assertIn("goToPage(visibleCurrentPage + 1)", board_stage)
+        self.assertIn("페이지 구분", board_stage)
+        self.assertNotIn("page-divider", board_stage)
+        self.assertIn(".main.left-collapsed", html)
+        self.assertIn(".page-head-chip", html)
+
     def test_main_controls_are_compact_by_default(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
