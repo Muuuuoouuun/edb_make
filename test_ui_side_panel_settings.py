@@ -47,7 +47,7 @@ class TestSettingsTabHoldsRealSettings(unittest.TestCase):
 
     def test_sections_are_ordered_by_how_often_they_matter(self) -> None:
         order = (
-            "AI 사용·연결 <span", "미리보기 <span", 'title="도움말 및 문제 신고"',
+            'title="분할 방식"', 'title="AI 사용·연결"', 'title="미리보기"', 'title="도움말 및 문제 신고"',
             "앱 관리 <span", 'title="한글 문서 변환 환경"', 'title="앱 업데이트"',
         )
         positions = [SETTINGS_TAB.index(label) for label in order]
@@ -55,7 +55,7 @@ class TestSettingsTabHoldsRealSettings(unittest.TestCase):
         self.assertEqual(sorted(positions), positions)
 
     def test_ai_preferences_stay_in_settings_and_session_recognition_does_not(self) -> None:
-        ai_section = SETTINGS_TAB.split("AI 사용·연결 <span", 1)[1].split('미리보기 <span', 1)[0]
+        ai_section = SETTINGS_TAB.split('title="AI 사용·연결"', 1)[1].split('title="미리보기"', 1)[0]
 
         self.assertIn("AI 기능 사용 허용", ai_section)
         self.assertIn("Gemini API 키", ai_section)

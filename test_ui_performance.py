@@ -144,15 +144,12 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("outline: 2px solid", active_tile_css)
         self.assertIn(".stage-tile.paper.active", board)
 
-    def test_recognition_preview_scrolls_all_pages_but_lazily_loads_later_images(self) -> None:
-        stage = self.source.split("function RecognitionPageReviewStage", 1)[1]
-        stage = stage.split("function TileImage", 1)[0]
+    def test_review_preview_lazily_loads_later_images_without_duplicate_recognition_stage(self) -> None:
+        self.assertNotIn("function RecognitionPageReviewStage", self.source)
+        stage = self.source.split("function ReviewStage", 1)[1].split("// ─── LEFT:", 1)[0]
 
-        self.assertIn("pageRows.map((row, pageIndex) =>", stage)
-        self.assertIn("pageRows.map(({ page, problems: pageProblems }, pageIndex)", stage)
-        self.assertIn('data-recognition-page-index={pageIndex}', stage)
         self.assertIn("loading={pageIndex < 2 ? 'eager' : 'lazy'}", stage)
-        self.assertEqual(stage.count("filePreviewUrl(page.sourceImageUri)"), 1)
+        self.assertIn("filePreviewUrl(page.sourceImageUri)", stage)
         self.assertIn('decoding="async"', stage)
         self.assertIn("fetchPriority={pageIndex < 2 ? 'high' : 'auto'}", stage)
 
@@ -160,7 +157,7 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024", self.source)
         self.assertGreaterEqual(
             self.source.count("filePreviewUrl(page.sourceImageUri)"),
-            4,
+            3,
         )
         self.assertIn(
             "<TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />",

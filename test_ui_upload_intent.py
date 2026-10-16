@@ -11,6 +11,7 @@ async function runQueue(mode, selectedIntent) {
   const requests = [], failures = [];
   Object.assign(sandbox, {
     useCallback: fn => fn, initialSessionLoaded: true, operationRecovery: null,
+    listUnique: values => [...new Set(values)],
     pendingFiles: [{ name: '수학.pdf', size: 10, lastModified: 1 }],
     inputIntent: selectedIntent, aiEnabled: false, userSettings: {}, session: null, usingMock: false,
     items: [], fileName: '수학 수업', boardColumns: 1, layoutGapMode: 'classin-grid',
@@ -42,7 +43,7 @@ async function runQueue(mode, selectedIntent) {
   });
   vm.runInContext(section('function fileQueueKey(', 'function sourceFileExtension(')
     + section('function fitWidthPageAsIsSession(', 'function mergeSessions(')
-    + section('  const processQueuedFiles = useCallback(', '  const cancelRecognitionReview =')
+    + section('  const processQueuedFiles = useCallback(', '  const applyRecognitionResult =')
     + '\nglobalThis.processQueuedFiles = processQueuedFiles;', sandbox);
   await sandbox.processQueuedFiles(mode);
   assert.deepEqual(failures, [], 'the queue handler should complete its actual success path');
@@ -55,15 +56,15 @@ async function runQueue(mode, selectedIntent) {
 
 
 class TestUiUploadIntent(unittest.TestCase):
-    def test_register_honours_single_problem_selection_in_request_and_applied_session(self) -> None:
+    def test_register_ignores_legacy_single_problem_intent_and_keeps_full_page(self) -> None:
         run_node(QUEUE_SETUP + r"""
         (async () => {
           const { sandbox, request } = await runQueue('register', 'single-problem');
-          assert.equal(request.intent, 'single-problem');
+          assert.equal(request.intent, 'page-as-is');
           assert.equal(request.options.exportEdb, false);
-          assert.equal(sandbox.applied.input_intent, 'single-problem');
-          assert.equal(sandbox.applied.problems[0].input_intent, 'single-problem');
-          assert.notEqual(sandbox.applied.problems[0].placement_mode, 'continuous-page-as-is');
+          assert.equal(sandbox.applied.input_intent, 'page-as-is');
+          assert.equal(sandbox.applied.problems[0].input_intent, 'page-as-is');
+          assert.equal(sandbox.applied.problems[0].placement_mode, 'continuous-page-as-is');
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
@@ -84,7 +85,7 @@ class TestUiUploadIntent(unittest.TestCase):
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
-    def test_recognition_modes_ignore_single_selection_and_wait_for_review(self) -> None:
+    def test_recognition_modes_ignore_legacy_intent_and_queue_transactional_auto_apply(self) -> None:
         run_node(QUEUE_SETUP + r"""
         (async () => {
           for (const mode of ['recognize', 'passage-only']) {
@@ -92,7 +93,7 @@ class TestUiUploadIntent(unittest.TestCase):
             assert.equal(request.intent, 'multi-problem');
             assert.equal(request.options.contentTarget, mode === 'passage-only' ? 'shared-passages' : 'all');
             assert.equal(sandbox.review.incomingSession.input_intent, 'multi-problem');
-            assert.equal(sandbox.applied, undefined, 'recognition results require review before replacing the saved session');
+            assert.equal(sandbox.applied, undefined, 'the auto-apply effect must persist the candidate before replacing the session');
           }
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)

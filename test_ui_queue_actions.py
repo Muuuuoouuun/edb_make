@@ -47,22 +47,29 @@ def media_rules(css: str, query: str) -> str:
 
 
 class TestUiQueueActions(unittest.TestCase):
-    def test_upload_queue_exposes_full_page_and_recognize_actions(self) -> None:
+    def test_upload_queue_uses_one_split_choice_and_one_split_button(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+        split_options = source.split("const SPLIT_MODE_OPTIONS = [", 1)[1].split("];", 1)[0]
 
-        self.assertIn("페이지 전체 넣기", source)
-        self.assertIn("한 페이지를 그대로 칠판에 배치", source)
-        self.assertIn("수동 쪼개기", source)
-        self.assertIn("가운데 미리보기에서 {PRIMARY_MODIFIER_LABEL}+휠 확대", source)
-        self.assertIn("문항 AI 인식", source)
-        self.assertIn("문제별 자동 분리", source)
-        self.assertIn("onClick={() => processQueuedFiles('register')}", source)
-        self.assertIn("onClick={() => processQueuedFiles('manual-split')}", source)
-        self.assertIn("onClick={() => processQueuedFiles('recognize')}", source)
-        queue = source.split("const processQueuedFiles = useCallback(", 1)[1].split("const cancelRecognitionReview =", 1)[0]
-        self.assertIn("normalizeInputIntent(inputIntent) === 'single-problem'", queue)
-        self.assertIn("layoutGapMode, inputIntent, applySession", queue)
-
+        self.assertIn("value: 'recognize',", split_options)
+        self.assertIn("label: '자동 분할',", split_options)
+        self.assertIn("value: 'register',", split_options)
+        self.assertIn("label: '페이지 그대로',", split_options)
+        self.assertIn("value: 'manual-split',", split_options)
+        self.assertIn("label: '직접 자르기',", split_options)
+        self.assertIn("const SPLIT_MODE_STORAGE_KEY = 'edb.splitMode';", source)
+        self.assertIn("useState(readStoredSplitMode)", source)
+        self.assertIn("function SplitModePicker", source)
+        self.assertIn("<SplitModePicker", rail)
+        self.assertEqual(1, rail.count("processQueuedFiles("))
+        self.assertIn("onClick={() => processQueuedFiles(normalizeSplitMode(splitMode))}", rail)
+        self.assertIn("splitActionLabel(pendingFiles.length)", rail)
+        self.assertNotIn("processQueuedFiles('register')", source)
+        self.assertNotIn("processQueuedFiles('manual-split')", source)
+        self.assertNotIn("processQueuedFiles('recognize')", source)
+        self.assertNotIn("queue-action-card", source)
+        self.assertIn("const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';", source)
     def test_page_as_is_upload_preserves_the_200_dpi_master(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         export_request = source.split("async function postExport(files", 1)[1]
@@ -81,10 +88,20 @@ class TestUiQueueActions(unittest.TestCase):
             export_request,
         )
 
+    def test_side_panel_split_choice_is_the_same_state_the_queue_runs(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
+
+        self.assertNotIn("setInputIntent", source)
+        self.assertNotIn("INPUT_INTENT_OPTIONS.map", side_panel)
+        self.assertIn("splitMode, setSplitMode,", side_panel)
+        self.assertIn("업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다", side_panel)
+        self.assertEqual(2, side_panel.count("<SplitModePicker") + side_panel.count("<PendingFilePreview"))
+
     def test_image_only_recognition_uses_fast_non_ai_path(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
 
         self.assertIn("function isImageOnlyFileBatch(files)", source)
         self.assertIn(
@@ -109,7 +126,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("problem?.passageQuality || problem?.passage_quality", summary_source)
         self.assertIn("passageQualityScore", summary_source)
         self.assertIn("passageQualityReviewCount", summary_source)
-        self.assertIn("텍스트·화질", source)
+        self.assertIn("passageQualityReviewCount", summary_source)
+        self.assertNotIn("function RecognitionPageReviewStage", source)
 
     def test_passage_only_uses_deterministic_fast_path_without_ai_page_repair(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -134,16 +152,19 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("aria-pressed={selected ? 'true' : 'false'}", rail)
         self.assertIn("onClick={() => onSelectPendingFile?.(key)}", rail)
         self.assertIn("onKeyDown={e =>", rail)
-        self.assertIn("onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}", rail)
-        self.assertIn("onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}", rail)
-        self.assertIn("onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}", rail)
+        self.assertNotIn("queue-row-action", rail)
+        self.assertIn("onClick={e => { e.stopPropagation(); removePendingFile(key); }}", rail)
         self.assertIn("<PendingFilePreview", source)
         self.assertIn("pendingFile={selectedPendingFile}", source)
+        preview = source.split("function PendingFilePreview", 1)[1].split("// ─── backend helpers", 1)[0]
+        self.assertIn("processQueuedFiles?.(normalizeSplitMode(splitMode));", preview)
+        self.assertIn("{splitActionLabel(pendingCount)}", preview)
+        self.assertEqual(1, preview.count("className=\"btn primary split-run-action\""))
 
     def test_queue_errors_use_persistent_recovery_and_preview_keeps_short_toast(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
 
         self.assertIn("function simpleToastErrorMessage", source)
         self.assertIn("const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {", source)
@@ -184,16 +205,42 @@ class TestUiQueueActions(unittest.TestCase):
     def test_manual_split_queue_registers_without_recognition_and_opens_editor(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("const centerReviewZoomScrollers", 1)[0]
 
         self.assertIn("const isManualSplit = mode === 'manual-split';", queue_source)
         self.assertIn("isManualSplit ? 'queue-manual-split' : 'queue-register'", queue_source)
         self.assertIn("manualSplitPageId,", queue_source)
+        self.assertIn("manualSplitPageIds,", queue_source)
         self.assertIn("setView('review');", queue_source)
         self.assertIn("const pageId = String(reviewFocus?.manualSplitPageId || '').trim();", review_stage)
-        self.assertIn("beginManualPageSplit(page, replacementIds);", review_stage)
+        self.assertIn("setGuidedSplitPageIds(guidedIds);", review_stage)
+        self.assertIn("beginManualPageSplit(page, guidedSplitReplacementIds(page), { guided: true });", review_stage)
+
+    def test_queue_manual_split_cuts_each_page_then_returns_to_board(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        review_stage = source.split("function ReviewStage", 1)[1].split("function ItemsRail", 1)[0]
+        next_page_effect = review_stage.split("// After each applied page, open the next queued page;", 1)[1]
+        next_page_effect = next_page_effect.split("const centerReviewZoomScrollers", 1)[0]
+        apply_split = review_stage.split("const applyManualPageSplit = useCallback(async () => {", 1)[1]
+        apply_split = apply_split.split("const stampManualSplitRegion", 1)[0]
+        cancel_split = review_stage.split("const cancelManualPageSplit = () => {", 1)[1]
+        cancel_split = cancel_split.split("const setManualSplitMode", 1)[0]
+
+        self.assertIn("guidedSplitCommitRef.current", next_page_effect)
+        self.assertIn("if (!rest.length) onManualSplitFlowDone?.();", next_page_effect)
+        self.assertIn("guidedSplitCommitRef.current = !!manualSplit.guided;", apply_split)
+        self.assertIn("if (manualSplit.guided) {", apply_split)
+        self.assertIn("if (!rest.length) onManualSplitFlowDone?.();", apply_split)
+        self.assertIn("guidedSplitCommitRef.current = false;", apply_split)
+        self.assertIn("if (wasGuided) {", cancel_split)
+        self.assertIn("onManualSplitFlowDone?.();", cancel_split)
+        self.assertIn("onManualSplitFlowDone={finishManualSplitFlow}", source)
+        finish = source.split("const finishManualSplitFlow = useCallback(() => {", 1)[1].split("}, []);", 1)[0]
+        self.assertIn("setView('board');", finish)
+        strip = source.split("// A queued 직접 자르기 request is one-shot", 1)[1].split("const finishManualSplitFlow", 1)[0]
+        self.assertIn("const { manualSplitPageId, manualSplitPageIds, ...rest } = prev;", strip)
 
     def test_review_crop_editors_expand_the_workspace_and_restore_the_side_panel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -258,61 +305,34 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
 
-    def test_ai_recognition_application_opens_review_stage(self) -> None:
+    def test_ai_recognition_result_lands_on_board_with_undo(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_branch = source.split("if (review.kind === 'queue-recognition') {", 1)[1]
         queue_branch = queue_branch.split("} else if (review.kind === 'retry-ai') {", 1)[0]
 
-        self.assertIn("destinationView = 'review';", queue_branch)
-        confirm_branch = source.split("const confirmRecognitionReview = useCallback", 1)[1]
-        confirm_branch = confirm_branch.split("  const setStep =", 1)[0]
-        self.assertIn("requestViewChange(destinationView", confirm_branch)
-        self.assertIn("beforeCommit: () => setRecognitionReview(null)", confirm_branch)
-        self.assertIn("검수로 이동", queue_branch)
+        self.assertIn("setView('board');", queue_branch)
+        self.assertNotIn("setView('review');", queue_branch)
+        self.assertIn("칠판에 배치했어요", queue_branch)
+        self.assertIn("sessionReviewSummary(incomingSession).actionableNeedsReviewCount", queue_branch)
+        self.assertIn("확인 필요 ${attentionCount}개는 검수 탭에서 확인", queue_branch)
+        self.assertIn("appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT)", queue_branch)
         self.assertIn("reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition')", queue_branch)
         self.assertNotIn("openOutputFolder(", queue_branch)
 
-    def test_page_first_recognition_review_stays_visible_and_avoids_empty_filter(self) -> None:
+    def test_processing_never_auto_opens_review_stage(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = board_document()
-        stage = source.split("function RecognitionPageReviewStage", 1)[1]
-        stage = stage.split("function TileImage", 1)[0]
-        confirm = source.split("const confirmRecognitionReview = useCallback", 1)[1]
-        confirm = confirm.split("const setStep =", 1)[0]
-        stage_css = html.split(".recognition-page-review-stage{", 1)[1].split("}", 1)[0]
-        workspace_css = html.split(".recognition-page-workspace{", 1)[1].split("}", 1)[0]
+        apply_session = source.split("const applySession = useCallback((rawSession) => {", 1)[1]
+        apply_session = apply_session.split("const adoptMutatedSession", 1)[0]
+        retry_branch = source.split("} else if (review.kind === 'retry-ai') {", 1)[1]
+        retry_branch = retry_branch.split("setRecognitionReview(null);", 1)[0]
+        topbar = source.split("function TopBar", 1)[1].split("function ReviewStage", 1)[0]
 
-        self.assertIn(
-            "grid-template-rows: auto auto minmax(0, 1fr) auto",
-            stage_css,
-        )
-        self.assertIn("grid-template-columns: 220px minmax(0, 1fr)", workspace_css)
-        short_viewport_css = html.split("@media (max-height: 520px){", 1)[1]
-        short_viewport_css = short_viewport_css.split("@media (max-width: 420px){", 1)[0]
-        self.assertIn(".recognition-summary", short_viewport_css)
-        self.assertIn("display: none", short_viewport_css)
-        self.assertIn("recognition-page-review-foot", stage)
-        footer_source = stage.split('className="recognition-page-review-foot"', 1)[1]
-        preview_source = stage.split('className="recognition-preview"', 1)[1].split(
-            'className="recognition-page-review-foot"', 1
-        )[0]
-        self.assertIn("recognition-transition-actions", footer_source)
-        self.assertIn("recognition-page-stepper", footer_source)
-        self.assertNotIn("recognition-page-stepper", preview_source)
-        self.assertIn("hasActionableReview &&", stage)
-        self.assertIn("hasActionableReview ? '' : 'primary'", stage)
-        self.assertNotIn('role="dialog"', stage)
-        self.assertIn("scrollRecognitionPageToIndex(pageIndex)", stage)
-        self.assertIn("pageRows.map(({ page, problems: pageProblems }, pageIndex)", stage)
-        self.assertIn("syncRecognitionPageIndex(event.currentTarget)", stage)
-        self.assertIn("onWheel={handleRecognitionWheel}", stage)
-        self.assertIn("--recognition-zoom", stage)
-        self.assertIn("resolveRecognitionReviewDestination(", confirm)
-        self.assertIn(
-            "filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all'",
-            confirm,
-        )
-
+        self.assertNotIn("shouldOpenReview", source)
+        self.assertIn("const wantsReview = !initialViewConsumedRef.current && initialViewRef.current === 'review';", apply_session)
+        self.assertNotIn("setView(", retry_branch)
+        self.assertIn("reviewAttentionCount = 0", topbar)
+        self.assertIn('className="view-toggle-badge"', topbar)
+        self.assertIn("reviewAttentionCount={reviewAttentionCount}", source)
     def test_queue_recognition_uses_a_synchronous_single_flight_guard(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_action = source.split("const processQueuedFiles = useCallback", 1)[1]
@@ -332,10 +352,11 @@ class TestUiQueueActions(unittest.TestCase):
         register_branch = source.split("const s = await postExport(files, aiFallback, resolvedInputIntent,", 1)[1]
         register_branch = register_branch.split("} catch (e) {", 1)[0]
 
-        self.assertIn("페이지 PNG 등록", register_branch)
+        self.assertIn("페이지 그대로 넣기", register_branch)
         self.assertIn("const nextReviewFocus = reviewFocusForNewSession", register_branch)
         self.assertIn("isManualSplit ? 'queue-manual-split' : 'queue-register'", register_branch)
-        self.assertIn("setReviewFocus(nextReviewFocus);", register_branch)
+        self.assertIn("setReviewFocus(nextReviewFocus);\n        setView('board');", register_branch)
+        self.assertIn("appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT)", register_branch)
         self.assertIn("preview: true,", register_branch)
         self.assertIn("exportEdb: false,", register_branch)
         self.assertNotIn("openOutputFolder(", register_branch)
@@ -442,27 +463,22 @@ class TestUiQueueActions(unittest.TestCase):
         )
         self.assertIn("recognitionInFlightRef.current || queueRegistrationInFlightRef.current", reset_source)
 
-    def test_queue_recognition_review_copy_points_to_review_stage(self) -> None:
+    def test_recognition_results_apply_without_confirm_popup(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        queue_review_setup = source.split("kind: 'queue-recognition',", 1)[1]
-        queue_review_setup = queue_review_setup.split("session: incomingSession,", 1)[0]
-        stage_source = source.split("function RecognitionPageReviewStage", 1)[1]
-        stage_source = stage_source.split("function TileImage", 1)[0]
-        app_render = source.split("className={`main ", 1)[1]
-        app_render = app_render.split("<BackgroundJobsPanel", 1)[0]
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        apply_result = source.split("const applyRecognitionResult = useCallback(async () => {", 1)[1]
+        apply_result = apply_result.split("const setStep = ", 1)[0]
+        catch_branch = apply_result.split("} catch (e) {", 1)[1].split("} finally {", 1)[0]
 
-        self.assertIn("문제 목록에 적용하기 전에", queue_review_setup)
-        self.assertNotIn("칠판에", queue_review_setup)
-        self.assertIn("review?.kind === 'queue-recognition'", stage_source)
-        self.assertIn("페이지별 원본 확인", stage_source)
-        self.assertIn("문제는 이미 파싱되어 있습니다", stage_source)
-        self.assertIn("recognition-page-review-mode", source)
-        self.assertIn("pageReviewActive={Boolean(recognitionReview)}", source)
-        self.assertNotIn("<small>{row.page.id}</small>", stage_source)
-        self.assertNotIn("<span>{page.id}</span>", stage_source)
-        self.assertLess(app_render.index("<RecognitionPageReviewStage"), app_render.index("<ItemsRail"))
-        self.assertIn(") : (", app_render.split("<RecognitionPageReviewStage", 1)[1].split("<ItemsRail", 1)[0])
-
+        self.assertNotIn("function RecognitionReviewModal", source)
+        self.assertNotIn("<RecognitionReviewModal", source)
+        self.assertNotIn("cancelRecognitionReview", source)
+        self.assertNotIn("맞아요", source)
+        self.assertNotIn("확인 팝업", source)
+        self.assertIn("if (!recognitionReview || confirmingRecognition || mutating || loading || hasPendingSessionConflict) return;", apply_result)
+        self.assertIn("void applyRecognitionResult();", apply_result)
+        self.assertIn("setRecognitionReview(null);", catch_branch)
+        self.assertIn("app.bundle.js?v=frontend-bundle-", html)
     def test_queue_registration_and_recognition_share_a_synchronous_single_flight_boundary(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback", 1)[1]
@@ -561,8 +577,8 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("mode={boxEdit.mode}", review_stage)
         self.assertIn("onModeChange={setBoxEditMode}", review_stage)
         self.assertIn("여러 후보가 나와도 하나의 경계로 합치며 번호와 순서를 유지합니다.", source)
-        self.assertIn("이 영역으로 적용", source)
-        self.assertIn("영역 재인식 적용 · 번호와 순서를 유지했어요", source)
+        self.assertIn("AI 인식 적용 · ${summary.problemLabel}", source)
+        self.assertIn("mergeRetryCandidateIntoCurrent(currentSnapshot", source)
         self.assertNotIn("onManualCropOutsideMouseDown", review_stage)
         self.assertNotIn("continueWithProblemId", review_stage)
         self.assertNotIn("const [splitTarget", review_stage)
@@ -603,7 +619,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const pageStatus = pageReviewTarget?.status", review_stage)
         self.assertIn("|| (passageOnlyReview && !pageRiskFlags.length", review_stage)
         self.assertIn("boxEdit?.multi || !reviewScopeActive", review_stage)
-        self.assertIn("pageProblems.flatMap", source)
+        self.assertIn("pageProblems", review_stage)
         self.assertIn(".multi-crop-segment-list", html)
         self.assertIn(".box-edit-stitched-preview", html)
         self.assertIn(".passage-segment-draft", html)
@@ -664,22 +680,14 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("스탬프", bundle)
 
     def test_upload_method_is_chosen_beside_the_drop_zone(self) -> None:
-        # The method decides how the next upload is parsed, so it sits where
-        # files go in rather than two screens down the settings tab.
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = board_document()
         rail = source.split("function ItemsRail({", 1)[1].split("\nfunction ", 1)[0]
-        side_panel = source.split("function SidePanel({", 1)[1].split("\nfunction ", 1)[0]
-        select_css = html.split(".upload-intent select{", 1)[1].split("}", 1)[0]
-
-        self.assertIn('<label className="upload-intent"', rail)
-        self.assertIn("<span>업로드 방식</span>", rail)
-        self.assertIn("INPUT_INTENT_OPTIONS.map(option =>", rail)
-        self.assertIn("onChange={e => setInputIntent?.(e.target.value)}", rail)
-        self.assertLess(rail.index("className={`drop-zone"), rail.index('className="upload-intent"'))
-        self.assertNotIn("INPUT_INTENT_OPTIONS", side_panel)
-        self.assertIn("min-width: 0", select_css)
-        self.assertNotIn(".intent-choice", html)
+        self.assertIn("<SplitModePicker", rail)
+        self.assertEqual(1, rail.count("processQueuedFiles("))
+        self.assertNotIn('<label className="upload-intent"', rail)
+        self.assertIn(".split-mode-control.compact", html)
+        self.assertIn("normalizeSplitMode(splitMode)", rail)
 
     def test_undo_restores_server_snapshot_order_directly(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

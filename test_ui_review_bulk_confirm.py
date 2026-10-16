@@ -78,14 +78,11 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
     def test_completed_restored_session_opens_on_board_preview(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        should_open_review = source.split("function shouldOpenReview(session){", 1)[1]
-        should_open_review = should_open_review.split("\n}", 1)[0]
-
-        self.assertIn(
-            "return reviewFlowState(sessionReviewSummary(session)).remaining > 0;",
-            should_open_review,
-        )
-        self.assertNotIn("problemCount > 1", should_open_review)
+        apply_session = source.split("const applySession = useCallback", 1)[1]
+        apply_session = apply_session.split("const adoptMutatedSession", 1)[0]
+        self.assertIn("initialViewRef.current === 'review'", apply_session)
+        self.assertIn("if (hasReviewPages(rawSession) && wantsReview)", apply_session)
+        self.assertNotIn("shouldOpenReview", source)
 
     def test_board_image_columns_default_to_one_in_source_and_bundle(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

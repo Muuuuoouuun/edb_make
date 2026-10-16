@@ -246,33 +246,33 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_side_panel_tabs_support_keyboard_and_collapsible_settings(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
         rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
 
-        self.assertIn("SIDE_PANEL_TAB_KEY", side_panel)
+        self.assertIn("RIGHT_PANEL_TAB_KEY", side_panel)
         self.assertIn("event.key === 'ArrowRight'", side_panel)
-        self.assertIn("'aria-controls': `side-tabpanel-${value}`", side_panel)
+        self.assertIn('aria-controls="side-panel-placement"', side_panel)
         self.assertIn('role="tabpanel"', side_panel)
         self.assertIn("function SettingsSection", source)
-        self.assertEqual(side_panel.count("<SettingsSection"), 6)
-        self.assertIn("항상 켜짐", side_panel)
+        self.assertEqual(side_panel.count("<SettingsSection"), 3)
+        self.assertIn('<SidebarDisclosure', side_panel)
         self.assertIn("aria-label={BOARD_COLOR_LABELS[c] || c}", side_panel)
         self.assertIn("onClick={() => goToItem(1)}", side_panel)
         self.assertIn("setActive={selectBoardItem}", source.split("<SidePanel", 1)[1])
-        self.assertIn('className="queue-row-actions"', rail)
+        self.assertIn('<SplitModePicker', rail)
         self.assertIn(".settings-section-hd", html)
-        self.assertIn(".queue-row-actions", html)
+        self.assertIn(".split-mode-control", html)
 
     def test_left_rail_collapses_to_thumbnails_and_board_shows_page_bands(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
         board_stage = source.split("function BoardStage", 1)[1].split("function downloadPublishSummary", 1)[0]
 
         self.assertIn("LEFT_RAIL_COLLAPSED_KEY", source)
-        self.assertIn("className={`main ${leftRailCollapsed ? 'left-collapsed' : ''}`}", source)
+        self.assertIn("className={`main ${leftRailCollapsed ? 'left-collapsed' : ''}", source)
         self.assertIn("if (collapsed) {", rail)
         self.assertIn("rail-mini-item", rail)
         self.assertIn("<TileImage item={it} forceMode=\"raw\" />", rail.split("if (collapsed) {", 1)[1])
@@ -523,10 +523,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
 
         self.assertIn("function classinBoardPageNumberAtOffset(offsetPages)", source)
-        self.assertIn("const offsetPages = i * DEFAULT_SLOT_HEIGHT_PAGES", board_stage)
-        self.assertIn("top: offsetPages * pageH", board_stage)
-        self.assertIn("className={`page-divider is-classin-grid", board_stage)
-        self.assertIn("ClassIn {divider.classinPage}쪽", board_stage)
+        self.assertIn("offsetPages: index * DEFAULT_SLOT_HEIGHT_PAGES", source)
+        self.assertIn("top: index * DEFAULT_SLOT_HEIGHT_PAGES * pageH", source)
+        self.assertIn("className={`page-head", board_stage)
+        self.assertIn("ClassIn {band.page}쪽", board_stage)
         self.assertIn("Math.max(1, previewEstimate.classinPageCount)", board_stage)
         self.assertIn(">ClassIn</span>", board_stage)
         self.assertIn("C{tileClassinStartPage}–C{tileClassinEndPage}", board_stage)
@@ -629,16 +629,15 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("contentTarget: resolvedContentTarget", export_request)
         self.assertIn("content_target: resolvedContentTarget", export_request)
         self.assertIn("contentTarget: DEFAULT_CONTENT_TARGET", queue_source)
-        self.assertIn("processQueuedFiles('passage-only', key)", items_rail)
-        self.assertIn("onClick={() => processQueuedFiles('passage-only')}", items_rail)
-        self.assertIn("<strong>지문만 추출</strong>", items_rail)
+        self.assertEqual(1, items_rail.count("processQueuedFiles("))
+        self.assertIn("normalizeSplitMode(splitMode)", items_rail)
         self.assertIn("const isPassageOnly = mode === 'passage-only';", queue_source)
         self.assertIn("const isRecognition = mode === 'recognize' || isPassageOnly;", queue_source)
         self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", queue_source)
         self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", source)
         self.assertIn("const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);", source)
         self.assertIn("return CONTENT_TARGETS.has(normalized) ? normalized : DEFAULT_CONTENT_TARGET;", source)
-        self.assertIn("normalizeContentTarget(review?.contentTarget) === 'shared-passages'", source)
+        self.assertIn("review.kind === 'session-passage-reextract'", source)
         self.assertIn("공통 지문 ${summary.problems}개", source)
         self.assertIn(".material-filter", board)
 
@@ -713,7 +712,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
     def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
         session_helper = source.split("function fitWidthPageAsIsSession", 1)[1]
         session_helper = session_helper.split("function mergeSessions", 1)[0]
 

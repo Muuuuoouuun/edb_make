@@ -78,8 +78,8 @@ class TestSidePanelControls(unittest.TestCase):
         const choices = [];
         Object.assign(sandbox, { aiEnabled: true, userSettings: {}, aiToggleBusy: false, panelBusy: false,
           aiSaveError: '', onToggleAi() {}, persistAiPreference: value => choices.push(value) });
-        const ai = section('            <div className="panel-section-hd settings-group-label">AI 사용·연결',
-          '            <div className="row-control api-key-status">');
+        const ai = section('            <SettingsSection id="keys"',
+          '            <div className="row-control api-key-status">').split('onToggle={toggleSettingsSection}>')[1];
         compile(sandbox, 'globalThis.renderAi = () => (<' + '>' + ai + '</>);');
         const render = () => {
           Object.assign(sandbox, vm.runInContext('(() => {'

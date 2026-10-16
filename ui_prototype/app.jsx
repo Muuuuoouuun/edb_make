@@ -2490,6 +2490,7 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
 function TopBar({
   fileName, setFileName, progress, processed, total, onPublish, published, onReset,
   onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewComplete,
+  reviewAttentionCount = 0,
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
   canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
   editingActive = false, saveStateLabel = '', saveStateTone = '',
@@ -2539,6 +2540,7 @@ function TopBar({
           disabled={pageReviewActive || operationBusy || !reviewAvailable}
         >
           2 검수
+          {reviewAvailable && reviewAttentionCount > 0 && <span className="view-toggle-badge" aria-label={`확인 필요 ${reviewAttentionCount}개`}>{reviewAttentionCount}</span>}
         </button>
         <button
           className={`workflow-step ${published ? 'done' : !pageReviewActive && !recognitionBusy && view === 'board' && total > 0 ? 'active' : ''}`}
@@ -2687,6 +2689,7 @@ function ReviewStage({
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
   onEditorModeChange, onOpenBoard, selectedIds, setSelectedIds, reviewUi, setReviewUi,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
+  onManualSplitFlowDone,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const sourcePageHeading = (page, pageIndex) => {
@@ -2764,6 +2767,7 @@ function ReviewStage({
   const [pendingReviewNavigation, setPendingReviewNavigation] = useState(null);
   const reviewFilter = reviewUi?.filter || 'all';
   const reviewRiskFilter = reviewUi?.riskFilter || null;
+  const [guidedSplitPageIds, setGuidedSplitPageIds] = useState([]);
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
   const [reviewScopePageIds, setReviewScopePageIds] = useState([]);
   const reviewZoom = clampReviewZoom(reviewUi?.zoom || 1);
@@ -2787,6 +2791,10 @@ function ReviewStage({
   const pendingReviewSelectionProblemIdRef = useRef('');
   const reviewNavigationSeqRef = useRef(0);
   const reviewSelectionAnchorRef = useRef(null);
+  // Set while a guided page is being committed so the next-page effect does
+  // not reopen the page that is mid-save (the session reset clears other refs).
+  const guidedSplitCommitRef = useRef(false);
+  const pendingBoxEditProblemIdRef = useRef('');
   const reviewWrapRef = useRef(null);
   const reviewScrollSyncFrameRef = useRef(null);
   const reviewZoomCenterFrameRef = useRef(null);
@@ -3278,7 +3286,7 @@ function ReviewStage({
     }, page);
   };
 
-  const beginManualPageSplit = (page, replaceProblemIds = []) => {
+  const beginManualPageSplit = (page, replaceProblemIds = [], options = {}) => {
     if (!page?.id || !page?.sourceImageUri || !page.width || !page.height) return;
     const replacementIds = listUnique((replaceProblemIds || []).filter(Boolean));
     const stampBox = manualSplitDefaultStampBox(page, replacementIds);
@@ -3296,12 +3304,18 @@ function ReviewStage({
       stampBox,
       regions: [],
       selectedRegionIds: [],
+      guided: !!options.guided,
     });
   };
 
   const beginManualSplitForSelection = () => {
     if (!selectedCanManualSplit || !selectedSourcePage) return;
     beginManualPageSplit(selectedSourcePage, selectedList);
+  };
+
+  const guidedSplitReplacementIds = (page) => {
+    const scopedIds = new Set((reviewFocus?.scopeProblemIds || []).map(id => String(id || '').trim()).filter(Boolean));
+    return (page?.problemIds || []).filter(id => !scopedIds.size || scopedIds.has(String(id)));
   };
 
   useEffect(() => {
@@ -3317,10 +3331,26 @@ function ReviewStage({
     const page = pages.find(item => item.id === pageId);
     if (!page?.sourceImageUri || !page.width || !page.height) return;
     manualSplitFocusRef.current = focusKey;
-    const scopedIds = new Set((reviewFocus?.scopeProblemIds || []).map(id => String(id || '').trim()).filter(Boolean));
-    const replacementIds = (page.problemIds || []).filter(id => !scopedIds.size || scopedIds.has(String(id)));
-    beginManualPageSplit(page, replacementIds);
+    const guidedIds = listUnique([pageId, ...(reviewFocus?.manualSplitPageIds || [])]
+      .map(id => String(id || '').trim())
+      .filter(Boolean));
+    setGuidedSplitPageIds(guidedIds);
+    beginManualPageSplit(page, guidedSplitReplacementIds(page), { guided: true });
   }, [reviewFocus, pages]);
+
+  // After each applied page, open the next queued page; when none are left
+  // the guided flow hands control back to the board.
+  useEffect(() => {
+    if (manualSplit || mutating || guidedSplitCommitRef.current || !guidedSplitPageIds.length) return;
+    const [nextPageId, ...rest] = guidedSplitPageIds;
+    const page = pages.find(item => item.id === nextPageId);
+    if (!page?.sourceImageUri || !page.width || !page.height) {
+      setGuidedSplitPageIds(rest);
+      if (!rest.length) onManualSplitFlowDone?.();
+      return;
+    }
+    beginManualPageSplit(page, guidedSplitReplacementIds(page), { guided: true });
+  }, [manualSplit, mutating, guidedSplitPageIds, pages]);
 
   const centerReviewZoomScrollers = useCallback(() => {
     if (reviewZoomCenterFrameRef.current != null) {
@@ -3384,11 +3414,17 @@ function ReviewStage({
   }, [adjustReviewZoom]);
 
   const cancelManualPageSplit = () => {
+    const wasGuided = !!manualSplit?.guided;
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
     setManualSplitDraftBox(null);
     setManualSplit(null);
     setManualSplitShortcutHelpOpen(false);
+    if (wasGuided) {
+      // Cancelling ends the whole queue flow; uncut pages stay whole.
+      setGuidedSplitPageIds([]);
+      onManualSplitFlowDone?.();
+    }
   };
 
   const setManualSplitMode = (mode) => {
@@ -3591,6 +3627,7 @@ function ReviewStage({
   const applyManualPageSplit = useCallback(async () => {
     if (!manualSplit?.pageId || !(manualSplit.regions || []).length || manualSplitCommitRef.current) return;
     manualSplitCommitRef.current = true;
+    guidedSplitCommitRef.current = !!manualSplit.guided;
     try {
       const payload = {
         pageId: manualSplit.pageId,
@@ -3603,10 +3640,16 @@ function ReviewStage({
       setManualSplitDraftBox(null);
       setManualSplitShortcutHelpOpen(false);
       manualSplitDragRef.current = null;
+      if (manualSplit.guided) {
+        const rest = guidedSplitPageIds.filter(id => id !== manualSplit.pageId);
+        setGuidedSplitPageIds(rest);
+        if (!rest.length) onManualSplitFlowDone?.();
+      }
     } finally {
       manualSplitCommitRef.current = false;
+      guidedSplitCommitRef.current = false;
     }
-  }, [manualSplit, mutateSession]);
+  }, [manualSplit, mutateSession, guidedSplitPageIds, onManualSplitFlowDone]);
 
   const stampManualSplitRegion = (evt, page) => {
     if (!manualSplit || manualSplit.pageId !== page?.id || evt.button !== 0) return;
@@ -5536,16 +5579,13 @@ function ItemsRail({
   selectedItemIds, setSelectedItemIds,
   onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
   onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
-  inputIntent, setInputIntent,
   collapsed, onToggleCollapsed,
+  splitMode, setSplitMode,
 }){
   const dragId = useRef(null);
   const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
-  const uploadIntentOption = INPUT_INTENT_OPTIONS.find(option => option.value === normalizeInputIntent(inputIntent))
-    || INPUT_INTENT_OPTIONS[0];
-  const registerAsSingleProblem = uploadIntentOption.value === 'single-problem';
   const [materialFilter, setMaterialFilter] = useState('all');
   const [dragPreview, setDragPreview] = useState(null);
   const [pressedItemId, setPressedItemId] = useState(null);
@@ -6349,21 +6389,6 @@ function ItemsRail({
         >{Icon.filesCheck}<span>전체 보존</span></button>}
         </div>}
 
-        <label className="upload-intent" title={uploadIntentOption.description}>
-          <span>업로드 방식</span>
-          <select
-            value={uploadIntentOption.value}
-            onChange={e => setInputIntent?.(e.target.value)}
-            disabled={!setInputIntent}
-          >
-            {INPUT_INTENT_OPTIONS.map(option => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        {!hasSessionItems && (
-          <p className="upload-intent-hint">{uploadIntentOption.description}</p>
-        )}
         {!hasSessionItems && pendingFiles.length === 0 && (
           <div className="rail-empty-state">
             {Icon.fileText}
@@ -6521,7 +6546,6 @@ function ItemsRail({
               {pendingFiles.map((file, index) => {
                 const key = fileQueueKey(file);
                 const selected = selectedPendingFileKey === key;
-                const fastImage = !isDocumentLikeFile(file);
                 return (
                 <div
                   className={`source-queue-row ${selected ? 'is-selected' : ''}`}
@@ -6552,97 +6576,30 @@ function ItemsRail({
                   >
                     {Icon.trash}
                   </button>
-                  <div className="queue-row-actions">
-                    <button
-                      className="queue-row-action"
-                      type="button"
-                      title="이 파일을 문제 파싱 없이 페이지 PNG로 등록"
-                      aria-label="이 파일 페이지 PNG 등록"
-                      onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
-                      disabled={queueBusy}
-                    >
-                      {Icon.pagePng}<span>PNG</span>
-                    </button>
-                    <button
-                      className="queue-row-action"
-                      type="button"
-                      title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
-                      aria-label="이 파일 수동 쪼개기"
-                      onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
-                      disabled={queueBusy}
-                    >
-                      {Icon.pen}<span>수동</span>
-                    </button>
-                    <button
-                      className="queue-row-action"
-                      type="button"
-                      title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                      aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                      onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
-                      disabled={queueBusy}
-                    >
-                      {Icon.aiBatch}<span>{fastImage ? '분할' : 'AI'}</span>
-                    </button>
-                  </div>
                 </div>
               );})}
             </div>
             <div className="source-queue-actions">
+              <SplitModePicker
+                splitMode={splitMode}
+                setSplitMode={setSplitMode}
+                disabled={queueBusy}
+                compact
+                imageOnly={isImageOnlyFileBatch(pendingFiles)}
+              />
               <button
-                className="btn queue-action-card queue-action-page"
+                className="btn primary queue-split-action"
                 type="button"
-                title={registerAsSingleProblem ? '대기열의 각 페이지를 한 문제로 등록' : '대기열 전체를 문제 파싱 없이 페이지 PNG 자료로 등록'}
-                onClick={() => processQueuedFiles('register')}
+                title={`${splitModeMeta(splitMode).description} · 끝나면 바로 칠판에 배치합니다`}
+                onClick={() => processQueuedFiles(normalizeSplitMode(splitMode))}
                 disabled={queueBusy}
               >
-                <span className="queue-action-icon">{Icon.pagePng}</span>
-                <span className="queue-action-copy">
-                  <strong>{registerAsSingleProblem ? '한 페이지를 한 문제로' : '페이지 전체 넣기'}</strong>
-                  <small>{registerAsSingleProblem ? '한 페이지를 한 문제 칸에 배치' : '한 페이지를 그대로 칠판에 배치'}</small>
-                </span>
-              </button>
-              <button
-                className="btn primary queue-action-card queue-action-ai"
-                type="button"
-                title={isImageOnlyFileBatch(pendingFiles) ? '이미지는 AI 보정 없이 빠르게 문항을 나눕니다' : '대기열 전체를 문제별로 문항 AI 인식'}
-                onClick={() => processQueuedFiles('recognize')}
-                disabled={queueBusy}
-              >
-                <span className="queue-action-icon">{Icon.aiBatch}</span>
-                <span className="queue-action-copy">
-                  <strong>{isImageOnlyFileBatch(pendingFiles) ? '빠른 문항 인식' : '문항 AI 인식'}</strong>
-                  <small>{isImageOnlyFileBatch(pendingFiles) ? '이미지 빠른 분할' : '문제별 자동 분리'}</small>
-                </span>
-              </button>
-              <button
-                className="btn queue-action-card queue-action-passage"
-                type="button"
-                title="대기열 전체에서 여러 문항이 함께 쓰는 공통 지문만 추출"
-                onClick={() => processQueuedFiles('passage-only')}
-                disabled={queueBusy}
-              >
-                <span className="queue-action-icon">{Icon.fileText}</span>
-                <span className="queue-action-copy">
-                  <strong>지문만 추출</strong>
-                  <small>공통 긴 지문만</small>
-                </span>
-              </button>
-              <button
-                className="btn queue-action-card queue-action-manual"
-                type="button"
-                title="대기열 전체를 인식 없이 열고 수동으로 문제 영역을 나누기"
-                onClick={() => processQueuedFiles('manual-split')}
-                disabled={queueBusy}
-              >
-                <span className="queue-action-icon">{Icon.pen}</span>
-                <span className="queue-action-copy">
-                  <strong>수동 쪼개기</strong>
-                  <small>가운데 미리보기에서 {PRIMARY_MODIFIER_LABEL}+휠 확대</small>
-                </span>
+                {Icon[splitModeMeta(splitMode).icon] || Icon.check}
+                <span>{splitActionLabel(pendingFiles.length)}</span>
               </button>
               {!aiAvailable && (
                 <div className="source-queue-note full">
-                  Gemini 키 없음 · 기본 인식으로 실행
+                  AI 사용 꺼짐 또는 키 미설정 · 기본 인식으로 실행
                 </div>
               )}
             </div>
@@ -6937,6 +6894,27 @@ function ItemsRail({
 }
 
 // ─── CENTER: big scrollable board stage ──
+function buildClassinPageBands(layout, pageH, classinPageCount){
+  const pageCount = Math.min(Math.max(1, classinPageCount), 200);
+  const starts = Array.from({ length: pageCount }, () => []);
+  const covered = new Array(pageCount).fill(false);
+  layout.positions.forEach((placement, index) => {
+    if (!placement) return;
+    const startPage = Math.floor(placement.startPages / DEFAULT_SLOT_HEIGHT_PAGES + 0.001);
+    const endPage = Math.ceil((placement.startPages + placement.renderedHeightPages) / DEFAULT_SLOT_HEIGHT_PAGES - 0.001) - 1;
+    if (startPage < pageCount) starts[startPage].push(String(index + 1).padStart(2, '0'));
+    for (let page = startPage; page <= Math.min(endPage, pageCount - 1); page += 1) covered[page] = true;
+  });
+  return starts.map((numbers, index) => ({
+    page: index + 1,
+    top: index * DEFAULT_SLOT_HEIGHT_PAGES * pageH,
+    offsetPages: index * DEFAULT_SLOT_HEIGHT_PAGES,
+    label: numbers.length
+      ? `${numbers.slice(0, 3).join('·')}${numbers.length > 3 ? ` +${numbers.length - 3}` : ''}번`
+      : covered[index] ? '앞 문항 이어짐' : '판서 공간',
+  }));
+}
+
 function BoardStage({
   items, activeId, setActive, boardColor, boardColumns, layoutGapMode, fileName, addSample,
   setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
@@ -7176,26 +7154,7 @@ function BoardStage({
     });
   };
   // One band per board page, labelled with the problems that start on it.
-  const pageBands = useMemo(() => {
-    const pageCount = Math.min(Math.max(1, previewEstimate.classinPageCount), 200);
-    const starts = Array.from({ length: pageCount }, () => []);
-    const covered = new Array(pageCount).fill(false);
-    layout.positions.forEach((placement, index) => {
-      if (!placement) return;
-      const startPage = Math.floor(placement.startPages / DEFAULT_SLOT_HEIGHT_PAGES + 0.001);
-      const endPage = Math.ceil((placement.startPages + placement.renderedHeightPages) / DEFAULT_SLOT_HEIGHT_PAGES - 0.001) - 1;
-      if (startPage < pageCount) starts[startPage].push(String(index + 1).padStart(2, '0'));
-      for (let page = startPage; page <= Math.min(endPage, pageCount - 1); page += 1) covered[page] = true;
-    });
-    return starts.map((numbers, index) => ({
-      page: index + 1,
-      top: index * DEFAULT_SLOT_HEIGHT_PAGES * pageH,
-      offsetPages: index * DEFAULT_SLOT_HEIGHT_PAGES,
-      label: numbers.length
-        ? `${numbers.slice(0, 3).join('·')}${numbers.length > 3 ? ` +${numbers.length - 3}` : ''}번`
-        : covered[index] ? '앞 문항 이어짐' : '판서 공간',
-    }));
-  }, [layout, pageH, previewEstimate.classinPageCount]);
+  const pageBands = useMemo(() => buildClassinPageBands(layout, pageH, previewEstimate.classinPageCount), [layout, pageH, previewEstimate.classinPageCount]);
   const goToPage = (pageNumber) => {
     const container = scrollRef.current;
     if (!container) return;
@@ -8920,7 +8879,7 @@ function SidePanel({
   userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
   onEnhanceImage, imageEnhanceBusy,
   aiEnabled, onToggleAi, aiToggleBusy,
-  inputIntent, setInputIntent,
+  inputIntent,
   session, published, sessionEditState,
   publishPlan, publishPlanBusy, publishPlanFailed,
   onClassinReviewComplete,
@@ -8930,6 +8889,7 @@ function SidePanel({
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel,
+  pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
@@ -9158,7 +9118,7 @@ function SidePanel({
     : item
       ? `자료 1개 · EDB 높이 ${placementGroupHeightPages.toFixed(1)}p`
       : '왼쪽 목록 또는 칠판에서 자료를 선택하세요';
-  const currentInputIntent = normalizeInputIntent(session?.inputIntent || session?.input_intent || inputIntent);
+  const currentInputIntent = normalizeInputIntent(session?.inputIntent || session?.input_intent || DEFAULT_INPUT_INTENT);
   const itemInputIntent = normalizeInputIntent(item?.inputIntent || currentInputIntent);
   const itemIntentMeta = inputIntentMeta(itemInputIntent);
   const showFitWidth = !!item && itemInputIntent === 'page-as-is';
@@ -9861,10 +9821,13 @@ function SidePanel({
             ) : pendingFile ? (
               <PendingFilePreview
                 file={pendingFile}
-                fileKey={pendingFileKey}
+                pendingCount={pendingFileCount}
+                imageOnly={pendingImageOnly}
                 queueBusy={queueBusy}
                 processQueuedFiles={processQueuedFiles}
                 onPreviewError={onPendingPreviewError}
+                splitMode={splitMode}
+                setSplitMode={setSplitMode}
               />
             ) : items.length === 0 ? (
               <div className="side-panel-home-empty">
@@ -10185,6 +10148,10 @@ function SidePanel({
       {tab === 'board' && (
         <>
           <div className="tab-body settings-tab-body">
+            <SettingsSection id="upload" title="분할 방식" summary={splitModeMeta(splitMode).label} open={settingsOpen.upload} onToggle={toggleSettingsSection}>
+              <p className="settings-hint">업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다</p>
+              <SplitModePicker splitMode={splitMode} setSplitMode={setSplitMode} disabled={queueBusy} />
+            </SettingsSection>
             <SettingsSection id="keys" title="AI 사용·연결" summary={aiConnectionLabel} open={settingsOpen.keys} onToggle={toggleSettingsSection}>
 
             <div className="row-control">
@@ -11054,299 +11021,6 @@ function RecognitionCancelBanner({ job, onCancel }){
   );
 }
 
-function RecognitionPageReviewStage({ review, confirming, onConfirm, onCancel }){
-  const previewSession = review?.session;
-  const targetPageIds = review?.pageIds || null;
-  const [activePageIndex, setActivePageIndex] = useState(0);
-  const [recognitionZoom, setRecognitionZoom] = useState(1);
-  const previewRef = useRef(null);
-  const pages = useMemo(() => {
-    const allPages = Array.isArray(previewSession?.pages) ? previewSession.pages : [];
-    if (!targetPageIds?.length) return allPages;
-    const allowed = new Set(targetPageIds);
-    return allPages.filter(page => allowed.has(page.id));
-  }, [previewSession, targetPageIds]);
-  const problemsById = useMemo(() => {
-    const map = new Map();
-    (previewSession?.problems || []).forEach(problem => {
-      if (problem?.id) map.set(problem.id, problem);
-    });
-    return map;
-  }, [previewSession]);
-  const summary = useMemo(
-    () => summarizeRecognitionSession(previewSession, targetPageIds),
-    [previewSession, targetPageIds]
-  );
-  const hasActionableReview = useMemo(
-    () => recognitionReviewNeedsAttention(previewSession),
-    [previewSession]
-  );
-  const passageOnly = normalizeContentTarget(review?.contentTarget) === 'shared-passages';
-  const resultLabel = passageOnly ? `공통 지문 ${summary.problems}개` : summary.problemLabel;
-
-  useEffect(() => {
-    setActivePageIndex(0);
-    setRecognitionZoom(1);
-    if (previewRef.current) previewRef.current.scrollTop = 0;
-  }, [review?.id]);
-
-  const safePageIndex = pages.length
-    ? Math.max(0, Math.min(activePageIndex, pages.length - 1))
-    : 0;
-  const pageRows = useMemo(() => pages.map(page => {
-    const problems = (page.problemIds || page.problem_ids || [])
-      .map(id => problemsById.get(id))
-      .filter(Boolean);
-    return {
-      page,
-      problems,
-      riskCount: problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length,
-    };
-  }), [pages, problemsById]);
-  const scrollRecognitionPageToIndex = useCallback((pageIndex) => {
-    const preview = previewRef.current;
-    if (!preview || !pageRows.length) return;
-    const nextIndex = Math.max(0, Math.min(pageRows.length - 1, pageIndex));
-    const node = preview.querySelector(`[data-recognition-page-index="${nextIndex}"]`);
-    if (!node) return;
-    const previewRect = preview.getBoundingClientRect();
-    const nodeRect = node.getBoundingClientRect();
-    setActivePageIndex(nextIndex);
-    smoothScrollTo(preview, Math.max(0, preview.scrollTop + nodeRect.top - previewRect.top - 12), 220);
-  }, [pageRows.length]);
-
-  const syncRecognitionPageIndex = useCallback((preview) => {
-    const pageNodes = Array.from(preview?.querySelectorAll?.('.recognition-page') || []);
-    if (!pageNodes.length) return;
-    const markerTop = preview.getBoundingClientRect().top + 28;
-    const visibleIndex = pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop);
-    const nextIndex = visibleIndex < 0 ? pageNodes.length - 1 : visibleIndex;
-    setActivePageIndex(previous => previous === nextIndex ? previous : nextIndex);
-  }, []);
-
-  const handleRecognitionWheel = useCallback((evt) => {
-    if (!evt.ctrlKey && !evt.metaKey) return;
-    evt.preventDefault();
-    const delta = evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP;
-    setRecognitionZoom(previous => clampReviewZoom(previous + delta));
-  }, []);
-
-  if (!review) return null;
-  const title = review.title || (passageOnly ? '공통 지문 페이지 확인' : '인식된 원본 페이지 확인');
-  const partialRetry = review?.kind === 'retry-ai' && !!review?.partial;
-  const passageReextract = review?.kind === 'session-passage-reextract';
-  const movesToReview = review?.kind === 'queue-recognition' || passageReextract || partialRetry;
-  const subtitle = review.subtitle || (
-    movesToReview
-      ? `${resultLabel}로 미리 분할했습니다. 문제 목록에 적용하기 전에 원본 페이지를 한 장씩 확인하세요.`
-      : `${resultLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
-  );
-  const confirmLabel = partialRetry
-    ? '이 영역으로 적용'
-    : movesToReview
-      ? (passageOnly ? '지문 검수로 이동' : '맞아요, 검수로 이동')
-      : '맞아요, 칠판에 붙이기';
-  const confirmingLabel = partialRetry
-    ? '영역 적용 중...'
-    : movesToReview
-      ? (passageOnly ? '지문 검수로 이동 중...' : '검수로 이동 중...')
-      : '붙이는 중...';
-  const cancelLabel = movesToReview ? '적용 안 함' : '취소';
-
-  return (
-    <section className="recognition-page-review-stage" aria-labelledby="recognition-page-review-title">
-      <header className="recognition-page-review-hd">
-        <div>
-          <div className="recognition-page-review-title-row">
-            <span className="recognition-eyebrow">페이지별 원본 확인</span>
-            <h2 id="recognition-page-review-title">{title}</h2>
-          </div>
-          <p>
-            {subtitle}
-            <span className="recognition-page-review-note"> · 문제는 이미 파싱되어 있습니다. 원본과 분할 경계만 확인하세요.</span>
-          </p>
-        </div>
-        <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
-      </header>
-
-      <div className="recognition-summary">
-        {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
-        <span>{summary.pages} 페이지</span>
-        <span>{resultLabel}</span>
-        {passageOnly && Number.isFinite(summary.passageQualityScore) && (
-          <span className={summary.passageQualityReviewCount ? 'warn' : ''}>
-            텍스트·화질 {summary.passageQualityScore.toFixed(1)}/10
-            {summary.passageQualityReviewCount ? ` · 확인 ${summary.passageQualityReviewCount}` : ''}
-          </span>
-        )}
-        <span className={summary.riskCount ? 'warn' : ''}>
-          {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
-        </span>
-        <div className="recognition-zoom-controls review-zoom-controls" role="group" aria-label="원본 페이지 배율">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="원본 페이지 축소"
-            onClick={() => setRecognitionZoom(previous => clampReviewZoom(previous - REVIEW_ZOOM_STEP))}
-            disabled={recognitionZoom <= REVIEW_ZOOM_MIN}
-          >
-            {Icon.zoomOut}
-          </button>
-          <button
-            type="button"
-            className="review-zoom-reset"
-            title="100%로 되돌리기"
-            onClick={() => setRecognitionZoom(1)}
-            disabled={Math.abs(recognitionZoom - 1) < 0.001}
-          >
-            {reviewZoomPercent(recognitionZoom)}%
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="원본 페이지 확대"
-            onClick={() => setRecognitionZoom(previous => clampReviewZoom(previous + REVIEW_ZOOM_STEP))}
-            disabled={recognitionZoom >= REVIEW_ZOOM_MAX}
-          >
-            {Icon.zoomIn}
-          </button>
-          <small>⌘+휠</small>
-        </div>
-      </div>
-
-      <div className="recognition-page-workspace">
-        <nav className="recognition-page-nav" aria-label="인식 원본 페이지">
-          {pageRows.map((row, pageIndex) => (
-            <button
-              key={row.page.id}
-              className={`recognition-page-nav-item ${pageIndex === safePageIndex ? 'active' : ''}`}
-              type="button"
-              onClick={() => scrollRecognitionPageToIndex(pageIndex)}
-              aria-current={pageIndex === safePageIndex ? 'page' : undefined}
-            >
-              <span><b>{pageIndex + 1}페이지</b></span>
-              <span>{formatProblemCount(countSessionProblems(row.problems))}</span>
-              {row.riskCount ? <em>{row.riskCount} 확인</em> : null}
-            </button>
-          ))}
-        </nav>
-
-        <div
-          className="recognition-preview"
-          ref={previewRef}
-          style={{ '--recognition-zoom': String(recognitionZoom) }}
-          onWheel={handleRecognitionWheel}
-          onScroll={event => syncRecognitionPageIndex(event.currentTarget)}
-        >
-          {pageRows.length ? pageRows.map(({ page, problems: pageProblems }, pageIndex) => {
-            return (
-              <div key={page.id} className="recognition-page" data-recognition-page-index={pageIndex}>
-                <div className="recognition-page-hd">
-                  <strong>{pageIndex + 1} / {pages.length} 페이지</strong>
-                  <span>{formatProblemCount(countSessionProblems(pageProblems))}</span>
-                  <span>{page.width}×{page.height}</span>
-                </div>
-                <div className="recognition-page-canvas">
-                  {page.sourceImageUri ? (
-                    <img
-                      src={filePreviewUrl(page.sourceImageUri)}
-                      alt={`${pageIndex + 1}페이지 원본`}
-                      loading={pageIndex < 2 ? 'eager' : 'lazy'}
-                      decoding="async"
-                      fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
-                      draggable={false}
-                    />
-                  ) : (
-                    <div className="recognition-page-empty">페이지 이미지를 불러올 수 없어요.</div>
-                  )}
-                  {pageProblems.flatMap((problem, index) => {
-                    const w = page.width || 1;
-                    const h = page.height || 1;
-                    const sourceSegments = Array.isArray(problem.sourceSegments || problem.source_segments)
-                      ? (problem.sourceSegments || problem.source_segments)
-                      : [];
-                    const pageSegments = sourceSegments.filter(segment => (
-                      String(segment?.sourcePageId || segment?.source_page_id || '') === String(page.id)
-                      && Number(segment?.bbox?.width || 0) > 0
-                      && Number(segment?.bbox?.height || 0) > 0
-                    ));
-                    const boxes = pageSegments.length
-                      ? pageSegments.map(segment => segment.bbox)
-                      : String(problem.sourcePageId || '') === String(page.id)
-                        ? [problem.bbox || {}]
-                        : [];
-                    const status = deriveProblemStatus(problem);
-                    return boxes.filter(bbox => bbox.width && bbox.height).map((bbox, segmentIndex) => (
-                      <div
-                        key={`${problem.id}-${segmentIndex}`}
-                        className={`recognition-box ${reviewStatusClass(status)}`}
-                        style={{
-                          left: `${(bbox.left / w) * 100}%`,
-                          top: `${(bbox.top / h) * 100}%`,
-                          width: `${(bbox.width / w) * 100}%`,
-                          height: `${(bbox.height / h) * 100}%`,
-                        }}
-                        title={problem.title || problem.id}
-                      >
-                        <span>
-                          {String(index + 1).padStart(2, '0')}
-                          {boxes.length > 1 ? `.${segmentIndex + 1}` : ''}
-                        </span>
-                      </div>
-                    ));
-                  })}
-                </div>
-              </div>
-            );
-          }) : (
-            <div className="recognition-empty">확인할 페이지가 없습니다.</div>
-          )}
-        </div>
-      </div>
-
-      <footer className="recognition-page-review-foot">
-        {pages.length > 1 && (
-          <div className="recognition-page-stepper" role="group" aria-label="페이지 이동">
-            <button className="btn" type="button" onClick={() => scrollRecognitionPageToIndex(safePageIndex - 1)} disabled={safePageIndex === 0}>
-              이전 페이지
-            </button>
-            <span>{safePageIndex + 1} / {pages.length}</span>
-            <button className="btn" type="button" onClick={() => scrollRecognitionPageToIndex(safePageIndex + 1)} disabled={safePageIndex === pages.length - 1}>
-              다음 페이지
-            </button>
-          </div>
-        )}
-        <span className="recognition-page-review-foot-copy">
-          {confirming
-            ? confirmingLabel
-            : `페이지 확인 후 적용할 화면을 선택하세요${passageReextract ? ' · 기존 문항은 유지됩니다' : ''}.`}
-        </span>
-        <div className="recognition-transition-actions" role="group" aria-label="인식 결과 적용 후 이동">
-          {partialRetry ? (
-            <button className="btn primary" type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
-              {confirming ? confirmingLabel : confirmLabel}
-            </button>
-          ) : (
-            <>
-              {hasActionableReview && (
-                <button className="btn primary" type="button" onClick={() => onConfirm('review-needed')} disabled={confirming || !summary.problems}>
-                  확인 필요만 검수
-                </button>
-              )}
-              <button className={`btn ${hasActionableReview ? '' : 'primary'}`} type="button" onClick={() => onConfirm('review-all')} disabled={confirming || !summary.problems}>
-                전체 검수
-              </button>
-              <button className="btn" type="button" onClick={() => onConfirm('board')} disabled={confirming || !summary.problems}>
-                바로 칠판
-              </button>
-            </>
-          )}
-        </div>
-      </footer>
-    </section>
-  );
-}
-
 // renders a real image when the item came from the backend; falls back to
 // the SVG ItemArt for mock data. forceMode overrides the step→variant mapping
 // (useful for side-panel preview tabs).
@@ -11396,7 +11070,38 @@ function pendingFilePreviewLabel(file){
   return '파일 미리보기';
 }
 
-function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPreviewError }){
+function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, imageOnly = false }){
+  const current = normalizeSplitMode(splitMode);
+  return (
+    <div className={`intent-control split-mode-control ${compact ? 'compact' : ''}`} role="radiogroup" aria-label="분할 방식">
+      {SPLIT_MODE_OPTIONS.map(option => {
+        const description = option.value === 'recognize' && imageOnly
+          ? '이미지는 AI 보정 없이 빠르게 문항을 나눕니다'
+          : option.description;
+        return (
+          <button
+            key={option.value}
+            className={`intent-choice ${current === option.value ? 'on' : ''}`}
+            type="button"
+            role="radio"
+            aria-checked={current === option.value ? 'true' : 'false'}
+            onClick={() => setSplitMode?.(option.value)}
+            disabled={disabled}
+            title={description}
+          >
+            <span className="intent-choice-head">
+              <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
+              <strong>{option.label}</strong>
+            </span>
+            {!compact && <small>{description}</small>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false }){
   const [objectUrl, setObjectUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const isImagePreview = canPreviewImageFile(file);
@@ -11430,9 +11135,9 @@ function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPr
 
   if (!file) return null;
 
-  const runQueueAction = (mode) => {
-    if (!fileKey || queueBusy) return;
-    processQueuedFiles?.(mode, fileKey);
+  const runSplit = () => {
+    if (queueBusy) return;
+    processQueuedFiles?.(normalizeSplitMode(splitMode));
   };
   const metaParts = [
     sourceFileKindLabel(file),
@@ -11490,33 +11195,22 @@ function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPr
         )}
       </div>
 
+      <SplitModePicker
+        splitMode={splitMode}
+        setSplitMode={setSplitMode}
+        disabled={queueBusy}
+        imageOnly={imageOnly}
+      />
+
       <div className="pending-preview-actions">
         <button
-          className="btn"
+          className="btn primary split-run-action"
           type="button"
-          onClick={() => runQueueAction('manual-split')}
+          onClick={runSplit}
           disabled={queueBusy}
-          title="인식 없이 열고 검수 화면에서 직접 문제 영역을 나눕니다"
+          title={`${splitModeMeta(splitMode).label} · 끝나면 바로 칠판에 배치합니다`}
         >
-          {Icon.pen}<span>직접 쪼개기</span>
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={() => runQueueAction('register')}
-          disabled={queueBusy}
-          title="문제 파싱 없이 페이지 PNG 자료로 등록"
-        >
-          {Icon.pagePng}<span>페이지 PNG</span>
-        </button>
-        <button
-          className="btn primary"
-          type="button"
-          onClick={() => runQueueAction('recognize')}
-          disabled={queueBusy}
-          title="이 파일만 문항 AI 인식"
-        >
-          {Icon.aiBatch}<span>AI 인식</span>
+          {Icon[splitModeMeta(splitMode).icon] || Icon.check}<span>{splitActionLabel(pendingCount)}</span>
         </button>
         <button
           className="btn"
@@ -12728,6 +12422,62 @@ const INPUT_INTENT_OPTIONS = [
     exportMode: 'question',
   },
 ];
+// One split choice + one 분할하기 button drive the upload queue. The value is
+// the processQueuedFiles mode, so the selection is exactly what runs.
+const SPLIT_MODE_STORAGE_KEY = 'edb.splitMode';
+const DEFAULT_SPLIT_MODE = 'recognize';
+const SPLIT_MODE_OPTIONS = [
+  {
+    value: 'recognize',
+    label: '자동 분할',
+    description: '문항을 찾아 각각 잘라 칠판에 배치',
+    icon: 'aiBatch',
+  },
+  {
+    value: 'register',
+    label: '페이지 그대로',
+    description: '페이지 전체를 그대로 칠판에 배치',
+    icon: 'pagePng',
+  },
+  {
+    value: 'manual-split',
+    label: '직접 자르기',
+    description: '원본 위에 영역을 그려 자른 뒤 칠판으로',
+    icon: 'pen',
+  },
+];
+
+function normalizeSplitMode(value){
+  const normalized = String(value || '').trim();
+  return SPLIT_MODE_OPTIONS.some(option => option.value === normalized) ? normalized : DEFAULT_SPLIT_MODE;
+}
+
+function splitModeMeta(value){
+  const mode = normalizeSplitMode(value);
+  return SPLIT_MODE_OPTIONS.find(option => option.value === mode) || SPLIT_MODE_OPTIONS[0];
+}
+
+function readStoredSplitMode(){
+  try {
+    return normalizeSplitMode(window.localStorage?.getItem(SPLIT_MODE_STORAGE_KEY));
+  } catch (_err) {
+    return DEFAULT_SPLIT_MODE;
+  }
+}
+
+function storeSplitMode(value){
+  try {
+    window.localStorage?.setItem(SPLIT_MODE_STORAGE_KEY, normalizeSplitMode(value));
+  } catch (_err) {
+    // Local storage is optional; the in-memory choice still works.
+  }
+}
+
+function splitActionLabel(fileCount){
+  return fileCount > 1 ? `${fileCount}개 파일 분할하기` : '분할하기';
+}
+
+
 const INPUT_INTENT_BY_VALUE = Object.freeze(
   INPUT_INTENT_OPTIONS.reduce((acc, option) => {
     acc[option.value] = option;
@@ -14622,11 +14372,6 @@ function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
 }
 
-function shouldOpenReview(session){
-  if (!hasReviewPages(session)) return false;
-  return reviewFlowState(sessionReviewSummary(session)).remaining > 0;
-}
-
 function summarizeRecognitionSession(session, pageIds){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const targetIds = Array.isArray(pageIds) && pageIds.length ? new Set(pageIds) : null;
@@ -15551,7 +15296,13 @@ function App(){
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiToggleBusy, setAiToggleBusy] = useState(false);
-  const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
+  const [splitMode, setSplitModeState] = useState(readStoredSplitMode);
+  const inputIntent = normalizeSplitMode(splitMode) === 'recognize' ? 'multi-problem' : 'page-as-is';
+  const setSplitMode = useCallback((value) => {
+    const next = normalizeSplitMode(value);
+    setSplitModeState(next);
+    storeSplitMode(next);
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedProblemIds, setSelectedProblemIds] = useState(() => new Set());
   const [reviewUi, setReviewUi] = useState({
@@ -15624,6 +15375,7 @@ function App(){
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
   const recognitionInFlightRef = useRef(false);
+  const recognitionApplyInFlightRef = useRef(false);
   const queueRegistrationInFlightRef = useRef(false);
   const sessionRecognitionInFlightRef = useRef(false);
   const sessionRecognitionGuardUntilRef = useRef(0);
@@ -15636,10 +15388,27 @@ function App(){
     () => Boolean(session && reviewFlowState(sessionReviewSummary(session)).complete),
     [session]
   );
+  const reviewAttentionCount = useMemo(
+    () => (session ? Math.max(0, Number(sessionReviewSummary(session).actionableNeedsReviewCount) || 0) : 0),
+    [session]
+  );
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
   }, [view, reviewAvailable]);
+  // A queued 직접 자르기 request is one-shot: once the user is back on the
+  // board, reopening 검수 must not restart the editor on the same page.
+  useEffect(() => {
+    if (view === 'review') return;
+    setReviewFocus(prev => {
+      if (!prev || (!prev.manualSplitPageId && !prev.manualSplitPageIds)) return prev;
+      const { manualSplitPageId, manualSplitPageIds, ...rest } = prev;
+      return rest;
+    });
+  }, [view]);
+  const finishManualSplitFlow = useCallback(() => {
+    setView('board');
+  }, []);
   useEffect(() => {
     if (view !== 'review') setReviewEditorActive(false);
   }, [view]);
@@ -15784,6 +15553,8 @@ function App(){
   ]);
 
   const showToast = useCallback((msg, type = 'info') => {
+    const options = typeof type === 'object' && type !== null ? type : {};
+    const tone = typeof type === 'string' ? type : 'info';
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     if (actionToastTimerRef.current) {
       window.clearTimeout(actionToastTimerRef.current);
@@ -15791,10 +15562,10 @@ function App(){
     }
     setActionToast(null);
     const toastObj = typeof msg === 'object' && msg !== null && 'message' in msg
-      ? { message: String(msg.message || ''), type: msg.type || type }
-      : { message: String(msg || ''), type };
+      ? { message: String(msg.message || ''), type: msg.type || tone }
+      : { message: String(msg || ''), type: tone };
     setToast(toastObj);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2500);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), options.duration || 2500);
   }, []);
 
   const showActionToast = useCallback((message, actionLabel, onAction) => {
@@ -16204,7 +15975,9 @@ function App(){
     setUsingMock(false);
     setPublished(!!sessionPublishSummary(rawSession));
     if (rawSession.session_name) setFileName(rawSession.session_name);
-    const wantsReview = (!initialViewConsumedRef.current && initialViewRef.current === 'review') || shouldOpenReview(rawSession);
+    // Only an explicit ?view=review opens the review stage on load; every
+    // other result lands on the board and the 검수 tab badge flags risks.
+    const wantsReview = !initialViewConsumedRef.current && initialViewRef.current === 'review';
     if (hasReviewPages(rawSession) && wantsReview) {
       setView('review');
       initialViewConsumedRef.current = true;
@@ -16392,32 +16165,24 @@ function App(){
         ? (problemIds.length === 1 ? '부분 경계 보정 중' : `${problemIds.length}개 부분 경계 보정 중`)
         : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
       hint: isPartialRetry
-        ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 확인 팝업이 열립니다.'
-        : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
+        ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 바로 반영합니다.'
+        : '보드 작업은 계속할 수 있습니다. 완료되면 바로 반영합니다.',
     });
     try {
       await postRestore(snapshotBefore);
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
       if (job.controller.signal.aborted) return;
       const next = result.session;
-      const fallbackMessage = aiModelFallbackToast(next);
-      if (fallbackMessage) showToast(fallbackMessage);
-      const applied = (result.retry || []).filter(row => row.status === 'applied').length;
       settleBackgroundJob(job.id, {
         status: 'done',
         label: 'AI 인식 완료',
-        hint: '페이지별 원본 확인 화면에서 문제 경계를 확인하세요.',
+        hint: '인식 결과를 바로 반영합니다.',
       });
       setRecognitionReview({
         id: `review-${job.id}`,
         kind: 'retry-ai',
         partial: isPartialRetry,
-        title: isPartialRetry
-          ? (applied ? `${applied}개 부분 경계를 보정했어요` : '부분 경계 보정 결과를 확인해 주세요')
-          : (applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요'),
-        subtitle: isPartialRetry
-          ? '선택한 원본 영역에서 다시 찾은 문제 경계입니다. 맞으면 기존 자리만 바꿔 반영합니다.'
-          : '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
+        fallbackMessage: aiModelFallbackToast(next),
         session: next,
         pageIds: targetPageIds,
         problemIds,
@@ -17072,11 +16837,7 @@ function App(){
     const isPassageOnly = mode === 'passage-only';
     const isRecognition = mode === 'recognize' || isPassageOnly;
     const isManualSplit = mode === 'manual-split';
-    const resolvedInputIntent = isRecognition
-      ? 'multi-problem'
-      : mode === 'register' && normalizeInputIntent(inputIntent) === 'single-problem'
-        ? 'single-problem'
-        : 'page-as-is';
+    const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
     const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);
     const aiFallback = isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
@@ -17126,25 +16887,17 @@ function App(){
           }, 2200);
           return;
         }
-        const fallbackMessage = aiModelFallbackToast(incomingSession);
-        if (fallbackMessage) showToast(fallbackMessage);
         const summary = summarizeRecognitionSession(incomingSession);
         settleBackgroundJob(job.id, {
           status: 'done',
           label: isPassageOnly ? '공통 지문 추출 완료' : '문제 인식 완료',
-          hint: isPassageOnly ? `공통 지문 ${summary.problems}개를 찾았습니다.` : `${summary.problemLabel}을 찾았습니다.`,
+          hint: isPassageOnly ? `공통 지문 ${summary.problems}개를 찾았습니다.` : `${summary.problemLabel}을 찾았습니다. 바로 칠판에 배치합니다.`,
         });
+        // Applied by the effect below as soon as the app is idle; no popup.
         setRecognitionReview({
           id: `review-${job.id}`,
           kind: 'queue-recognition',
-          title: isPassageOnly
-            ? `${files.length === 1 ? files[0].name || '파일' : `${files.length}개 파일`} · 공통 지문 ${summary.problems}개를 찾았어요`
-            : files.length === 1
-              ? `${files[0].name || '파일'} · ${summary.problemLabel}로 인식했어요`
-              : `${summary.problemLabel}로 인식했어요`,
-          subtitle: isPassageOnly
-            ? '문제 목록에 적용하기 전에 긴 지문 경계와 여러 열·페이지 연결 순서를 페이지별로 확인합니다.'
-            : '문제는 미리 분할했습니다. 문제 목록에 적용하기 전에 원본 페이지를 한 장씩 확인하세요.',
+          fallbackMessage: aiModelFallbackToast(incomingSession),
           contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
           session: incomingSession,
           incomingSession,
@@ -17192,8 +16945,8 @@ function App(){
       label: isRecognition
         ? `${files.length}개 파일에서 문제 인식 중...`
         : isManualSplit
-          ? (files.length === 1 ? '1개 파일을 수동 쪼개기용으로 여는 중...' : `${files.length}개 파일을 수동 쪼개기용으로 여는 중...`)
-          : files.length === 1 ? '1개 파일을 페이지 PNG로 등록 중...' : `${files.length}개 파일을 페이지 PNG로 등록 중...`,
+          ? (files.length === 1 ? '1개 파일을 직접 자르기용으로 여는 중...' : `${files.length}개 파일을 직접 자르기용으로 여는 중...`)
+          : files.length === 1 ? '1개 파일을 페이지 그대로 넣는 중...' : `${files.length}개 파일을 페이지 그대로 넣는 중...`,
       hint: isRecognition
         ? (fastImageRecognition
             ? '이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다.'
@@ -17201,8 +16954,8 @@ function App(){
             ? 'Gemini AI 보정으로 문항 경계를 다시 확인합니다.'
             : 'Gemini 키가 없어 기본 문항 인식만 실행합니다.')
         : isManualSplit
-          ? '인식 없이 원본 페이지를 열고 검수 화면에서 직접 영역을 그립니다.'
-          : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 하나의 PNG 자료로 등록합니다.',
+          ? '인식 없이 원본 페이지를 열고 직접 영역을 그립니다. 다 자르면 칠판으로 돌아갑니다.'
+          : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 그대로 칠판에 배치합니다.',
       startedAt: Date.now(),
     });
     const previousItemIds = new Set(items.map(item => item.id).filter(Boolean));
@@ -17223,6 +16976,9 @@ function App(){
         baseSnapshotForReviewScope = currentSnapshot;
         const merged = mergeSessions(currentSnapshot, registeredSession, fileName, boardColumns);
         sessionToApply = await postRestore(merged);
+        if (currentSnapshot) {
+          setHistoryStack(prev => appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT));
+        }
       } else if (!isManualSplit && sessionToApply !== s) {
         sessionToApply = await postRestore(sessionToApply);
       }
@@ -17240,19 +16996,27 @@ function App(){
           || (sessionToApply?.pages || []).find(page => (page.problemIds || []).some(id => !previousItemIds.has(id)))?.id
           || sessionToApply?.pages?.[0]?.id
           || null;
+        // Every newly added page is cut in turn; the editor returns to the
+        // board after the last one (see ReviewStage guided split).
+        const manualSplitPageIds = listUnique([
+          manualSplitPageId,
+          ...(nextReviewFocus?.scopePageIds || []),
+        ].filter(Boolean));
         setReviewFocus({
           ...(nextReviewFocus || { source: 'queue-manual-split' }),
           filter: 'all',
           manualSplitPageId,
+          manualSplitPageIds,
         });
         setView('review');
       } else {
         setReviewFocus(nextReviewFocus);
+        setView('board');
       }
       refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
       setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
-      const intentLabel = isPassageOnly ? '공통 지문 추출' : isRecognition ? '문항 AI 인식' : isManualSplit ? '수동 쪼개기 준비' : '페이지 PNG 등록';
+      const intentLabel = isPassageOnly ? '공통 지문 추출' : isRecognition ? '문항 AI 인식' : isManualSplit ? '직접 자르기 준비' : '페이지 그대로 넣기';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
     } catch (e) {
       const failure = await classifyNetworkRequestError(e, 'registration_connection_failed');
@@ -17275,19 +17039,12 @@ function App(){
     }
   }, [initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
 
-  const cancelRecognitionReview = useCallback(() => {
-    if (confirmingRecognition) return;
-    setRecognitionReview(null);
-    showToast('인식 결과를 적용하지 않았어요');
-  }, [confirmingRecognition]);
-
-  const confirmRecognitionReview = useCallback(async (destination = 'review-needed') => {
+  // Recognition results are applied as soon as they arrive (no confirm
+  // popup). Ctrl+Z restores the previous board when one existed.
+  const applyRecognitionResult = useCallback(async () => {
     const review = recognitionReview;
-    if (!review) return;
-    const resolvedDestination = resolveRecognitionReviewDestination(
-      review.incomingSession || review.session,
-      destination
-    );
+    if (!review || recognitionApplyInFlightRef.current) return;
+    recognitionApplyInFlightRef.current = true;
     let destinationView = null;
     setConfirmingRecognition(true);
     try {
@@ -17295,6 +17052,7 @@ function App(){
         const incomingSession = review.incomingSession || review.session;
         const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
         if (!incomingFragments.length) {
+          setRecognitionReview(null);
           showToast('적용할 공통 지문이 없습니다');
           return;
         }
@@ -17323,23 +17081,9 @@ function App(){
           ))
           .map(problem => problem.id)
           .filter(Boolean);
-        if (resolvedDestination === 'board') {
-          setReviewFocus(null);
-          destinationView = 'board';
-        } else {
-          setReviewFocus({
-            filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
-            problemIds: reextractedIds,
-            source: 'session-passage-reextract',
-          });
-          destinationView = 'review';
-        }
+        setReviewFocus({ filter: 'all', problemIds: reextractedIds, source: 'session-passage-reextract' });
         refreshSessionHistory();
-        showToast(
-          resolvedDestination === 'board'
-            ? `공통 지문 ${incomingFragments.length}개 교체 · 기존 문항 유지`
-            : `공통 지문 ${incomingFragments.length}개 검수 · 기존 문항 crop 유지·오분류 문항 복원`
-        );
+        showToast(`공통 지문 ${incomingFragments.length}개 교체 · 기존 문항 유지`);
       } else if (review.kind === 'queue-recognition') {
         if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
           setRecognitionReview(null);
@@ -17354,30 +17098,26 @@ function App(){
           ? mergeSessions(currentSnapshot, incomingSession, fileName, boardColumns)
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
+        if (currentSnapshot) {
+          setHistoryStack(prev => appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT));
+        }
         applySession(restored);
         const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
-        if (resolvedDestination === 'board') {
-          setReviewFocus(null);
-          destinationView = 'board';
-        } else {
-          setReviewFocus({
-            ...(nextScope || {}),
-            filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
-            source: 'queue-recognition',
-          });
-          destinationView = 'review';
-        }
+        setReviewFocus(nextScope);
+        destinationView = 'board';
         refreshSessionHistory();
+        setView('board');
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
-        showToast(
-          resolvedDestination === 'board'
-            ? `칠판으로 이동 · ${summary.problemLabel} 적용`
-            : resolvedDestination === 'review-needed'
-              ? `확인 필요 항목 검수 · ${summary.problemLabel}`
-              : `전체 검수로 이동 · ${summary.problemLabel}`
-        );
+        // Same count as the 검수 tab badge and the EDB 제작 warning.
+        const attentionCount = Math.max(0, Number(sessionReviewSummary(incomingSession).actionableNeedsReviewCount) || 0);
+        showToast([
+          review.fallbackMessage,
+          `분할 완료 · ${summary.problemLabel} 칠판에 배치했어요`,
+          attentionCount ? `확인 필요 ${attentionCount}개는 검수 탭에서 확인` : '',
+          currentSnapshot ? 'Ctrl+Z로 되돌리기' : '',
+        ].filter(Boolean).join(' · '), { duration: 4500 });
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
           ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session))
@@ -17398,45 +17138,22 @@ function App(){
           applySession(restored);
         }
         refreshSessionHistory();
-        if (review.partial) {
-          setReviewFocus({
-            filter: 'all',
-            problemIds: review.problemIds || [],
-            source: 'partial-retry',
-          });
-          destinationView = 'review';
-          showToast('영역 재인식 적용 · 번호와 순서를 유지했어요');
-        } else {
-          if (resolvedDestination === 'board') {
-            setReviewFocus(null);
-            destinationView = 'board';
-          } else {
-            setReviewFocus({
-              filter: resolvedDestination === 'review-needed' ? 'check_needed' : 'all',
-              problemIds: review.problemIds || [],
-              source: 'retry-ai',
-            });
-            destinationView = 'review';
-          }
-          const summary = summarizeRecognitionSession(restored, review.pageIds);
-          showToast(
-            resolvedDestination === 'board'
-              ? `AI 인식 적용 · ${summary.problemLabel}`
-              : `${resolvedDestination === 'review-needed' ? '확인 필요 항목' : '전체'} 검수 · ${summary.problemLabel}`
-          );
-        }
+        const summary = summarizeRecognitionSession(restored, review.pageIds);
+        showToast([
+          review.fallbackMessage,
+          `AI 인식 적용 · ${summary.problemLabel}`,
+          'Ctrl+Z로 되돌리기',
+        ].filter(Boolean).join(' · '), { duration: 4500 });
       }
-      if (destinationView) {
-        requestViewChange(destinationView, {
-          force: true,
-          beforeCommit: () => setRecognitionReview(null),
-        });
-      } else {
-        setRecognitionReview(null);
-      }
+      if (destinationView) requestViewChange(destinationView, { force: true });
+      setRecognitionReview(null);
     } catch (e) {
+      // Drop the result so the auto-apply effect does not retry forever;
+      // queued files stay in the queue and can be split again.
+      setRecognitionReview(null);
       showSimpleErrorToast(e, '적용 실패');
     } finally {
+      recognitionApplyInFlightRef.current = false;
       setConfirmingRecognition(false);
     }
   }, [
@@ -17455,6 +17172,11 @@ function App(){
     setPendingFilesTracked,
     showSimpleErrorToast,
   ]);
+
+  useEffect(() => {
+    if (!recognitionReview || confirmingRecognition || mutating || loading || hasPendingSessionConflict) return;
+    void applyRecognitionResult();
+  }, [recognitionReview, confirmingRecognition, mutating, loading, hasPendingSessionConflict, applyRecognitionResult]);
 
   const setStep = (id, step) => {
     const nextStep = normalizeProcessingStep(step);
@@ -18447,6 +18169,7 @@ function App(){
         operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
         resetBlocked={hasRunningBackgroundJobs}
         conflictBlocked={hasPendingSessionConflict}
+        reviewAttentionCount={reviewAttentionCount}
         onUndo={undoMutation}
         canUndo={canUndo}
         onShutdown={shutdownApp}
@@ -18525,11 +18248,11 @@ function App(){
         }}
       />
       <div
-        className={`main ${leftRailCollapsed ? 'left-collapsed' : ''} ${!items.length && !pendingFiles.length && !recognitionReview ? 'home-mode' : ''} ${recognitionReview ? 'recognition-page-review-mode' : (view === 'review' && reviewEditorActive ? 'review-editor-focus' : '')}`}
+        className={`main ${leftRailCollapsed ? 'left-collapsed' : ''} ${!items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
         data-mobile-pane={mobilePane}
         inert={hasPendingSessionConflict ? '' : undefined}
       >
-        {!recognitionReview && (items.length > 0 || pendingFiles.length > 0) && (
+        {(items.length > 0 || pendingFiles.length > 0) && (
           <nav className="mobile-workspace-nav" aria-label="작업 영역 선택">
             {[
               ['rail', `자료 목록 ${items.length + pendingFiles.length}`],
@@ -18548,15 +18271,6 @@ function App(){
             ))}
           </nav>
         )}
-        {recognitionReview ? (
-          <RecognitionPageReviewStage
-            review={recognitionReview}
-            confirming={confirmingRecognition}
-            onConfirm={confirmRecognitionReview}
-            onCancel={cancelRecognitionReview}
-          />
-        ) : (
-          <>
         <ItemsRail
           collapsed={leftRailCollapsed}
           onToggleCollapsed={toggleLeftRailCollapsed}
@@ -18568,8 +18282,6 @@ function App(){
           removeItem={removeItem}
           addSample={addSample}
           bulkApply={applyToAll}
-          inputIntent={inputIntent}
-          setInputIntent={setInputIntent}
           handleFiles={handleFiles}
           pendingFiles={pendingFiles}
           selectedPendingFileKey={selectedPendingFileKey}
@@ -18579,6 +18291,8 @@ function App(){
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
+          splitMode={splitMode}
+          setSplitMode={setSplitMode}
           addMockSample={addMockSample}
           canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0 && !hasPendingSessionConflict}
           recentSessions={recentSessions}
@@ -18632,6 +18346,7 @@ function App(){
             recognitionDisabledReason={recognitionDisabledReason}
             sourcePageCount={sourcePageCount}
             sessionEditState={sessionEditState}
+            onManualSplitFlowDone={finishManualSplitFlow}
           />
         ) : (
           <BoardStage
@@ -18706,7 +18421,6 @@ function App(){
           onToggleAi={onToggleAi}
           aiToggleBusy={aiToggleBusy}
           inputIntent={inputIntent}
-          setInputIntent={setInputIntent}
           session={session}
           sessionEditState={sessionEditState}
           published={published}
@@ -18727,15 +18441,16 @@ function App(){
           onInstallUpdate={installUpdateVersion}
           view={view}
           pendingFile={selectedPendingFile}
-          pendingFileKey={selectedPendingFileKey}
+          pendingFileCount={pendingFiles.length}
+          pendingImageOnly={isImageOnlyFileBatch(pendingFiles)}
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           onPendingPreviewError={showPendingPreviewError}
+          splitMode={splitMode}
+          setSplitMode={setSplitMode}
           triggerUpload={triggerUpload}
           addSample={addSample}
             />
-          </>
-        )}
       </div>
 
       <BackgroundJobsPanel

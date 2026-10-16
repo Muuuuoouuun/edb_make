@@ -43,7 +43,7 @@ class TestWorkspaceLayout(unittest.TestCase):
           view: 'board', reviewEditorActive: false,
           setMobilePane: pane => { sandbox.mobilePane = pane; } });
         compile(sandbox, 'globalThis.navigation = () => ('
-          + section('          <nav className="mobile-workspace-nav"', '        {recognitionReview ? (')
+          + section('          <nav className="mobile-workspace-nav"', '        <ItemsRail')
             .split('</nav>')[0] + '</nav>);');
         for (const pane of ['rail', 'stage', 'panel']) {
           const tree = sandbox.navigation();
@@ -121,7 +121,7 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
           setDropZoneActive() {}, handleFiles: files => { dropped = files; } });
         compile(sandbox, 'globalThis.actions = () => (<>'
           + section('        {(hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions',
-            '        <label className="upload-intent"') + '</>);');
+            '        {!hasSessionItems && pendingFiles.length === 0 && (') + '</>);');
         let tree = sandbox.actions();
         const buttons = walk(tree).filter(node => node.type === 'button');
         assert.equal(buttons.length, 2);
@@ -146,8 +146,9 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
     def test_rail_header_no_longer_duplicates_upload_or_uses_the_ai_icon_for_preservation(self) -> None:
         rail = component("ItemsRail")
         header = rail.split('<div className="col-hd">', 1)[1].split("{hasSessionItems && (", 1)[0]
-        self.assertNotIn("<button", header)
-        primary = rail.split('className={`rail-primary-actions', 1)[1].split('<label className="upload-intent"', 1)[0]
+        self.assertEqual(header.count("<button"), 1)
+        self.assertIn('aria-label="자료 목록 접기"', header)
+        primary = rail.split('className={`rail-primary-actions', 1)[1].split('        {!hasSessionItems && pendingFiles.length === 0 && (', 1)[0]
         self.assertIn("Icon.folderPlus", primary)
         self.assertIn("Icon.filesCheck", primary)
         self.assertNotIn("Icon.aiBatch", primary)
@@ -163,25 +164,24 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
     def test_divider_labels_pair_classin_start_page_with_exact_internal_height(self) -> None:
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
-        compile(sandbox, 'globalThis.boundaries = count => { const previewEstimate = { classinPageCount: count };'
-          + 'const pageH = 240;'
-          + section('  const dividers = [];', '  return (\n    <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="칠판 미리보기">')
-          + 'return (<>'
-          + section('                {dividers.map(divider => (', '                {activePlacement && activeTrailingGapPages')
-          + '</>); };');
-        for (const count of [0, 1]) assert.equal(walk(sandbox.boundaries(count))
-          .filter(node => String(node.props.className || '').includes('page-divider')).length, 0);
-        const tree = sandbox.boundaries(7);
-        const lines = walk(tree).filter(node => String(node.props.className || '').includes('page-divider'));
-        const labels = walk(tree).filter(node => node.props.className === 'label');
-        assert.equal(lines.length, 6);
-        labels.forEach((label, index) => {
-          const offset = ((index + 1) * 1.2).toFixed(1);
-          assert.equal(text(label), `ClassIn ${index + 2}쪽 · ${offset}p`);
-          assert.ok(label.props.title.includes(`누적 높이 ${offset}페이지`));
-          assert.ok(Math.abs(lines[index].props.style.top - (index + 1) * 1.2 * 240) < 1e-8);
+        compile(sandbox, section('function buildClassinPageBands(', 'function BoardStage(')
+          + 'globalThis.bands = buildClassinPageBands;');
+        const layout = { positions: [
+          { startPages: 0, renderedHeightPages: 2.4 },
+          { startPages: 2.4, renderedHeightPages: 0.8 },
+        ] };
+        const bands = sandbox.bands(layout, 240, 7);
+        assert.equal(bands.length, 7);
+        bands.forEach((band, index) => {
+          assert.equal(band.page, index + 1);
+          assert.ok(Math.abs(band.top - index * 1.2 * 240) < 1e-8);
+          assert.equal(band.offsetPages.toFixed(1), (index * 1.2).toFixed(1));
         });
-        assert.equal(text(labels[4]), 'ClassIn 6쪽 · 6.0p', 'one decimal avoids floating-point noise');
+        assert.equal(bands[1].label, '앞 문항 이어짐');
+        assert.equal(bands[2].label, '02번');
+        assert.equal(bands[3].label, '판서 공간');
+        assert.ok(source.includes('ClassIn {band.page}쪽 · {band.offsetPages.toFixed(1)}p'));
+        assert.ok(source.includes('(nextPage - 1) * DEFAULT_SLOT_HEIGHT_PAGES * pageH'));
         """)
 
     def test_both_boundary_units_remain_visible_on_small_screens(self) -> None:
