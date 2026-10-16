@@ -28,6 +28,60 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 
 class TestUiHomeFlows(unittest.TestCase):
+    def test_early_session_request_is_consumed_once_and_refresh_fetches_fresh_state(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const board = fs.readFileSync('ui_prototype/board.html', 'utf8');
+        const bootstrap = board.split('<script id="initial-session-request">')[1].split('</script>')[0];
+        let requests = 0;
+        let validations = 0;
+        const sandbox = {
+          window: {},
+          fetch: async url => {
+            assert.equal(url, '/api/session/latest');
+            requests += 1;
+            return { status: 200, session: { id: `saved-${requests}` }, sessionRevision: requests };
+          },
+          expectOkJson: async response => { validations += 1; return response; },
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(bootstrap, sandbox);
+        assert.equal(requests, 1, 'restoration starts before the editor bundle runs');
+        vm.runInContext(section('async function fetchLatestSession(){', 'async function fetchSessionHistory(){'), sandbox);
+        (async () => {
+          assert.equal((await sandbox.fetchLatestSession()).id, 'saved-1');
+          assert.equal(requests, 1, 'hydration must reuse the early request');
+          assert.equal(sandbox.window.EDB_INITIAL_SESSION_REQUEST, undefined);
+          assert.equal((await sandbox.fetchLatestSession()).id, 'saved-2');
+          assert.equal(requests, 2, 'manual refresh must never reuse startup state');
+          assert.equal(validations, 2, 'all successful responses retain revision and error validation');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_early_session_error_is_handled_and_a_retry_uses_a_new_request(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const board = fs.readFileSync('ui_prototype/board.html', 'utf8');
+        const bootstrap = board.split('<script id="initial-session-request">')[1].split('</script>')[0];
+        const failure = new Error('local server unavailable');
+        let requests = 0;
+        let unhandled = 0;
+        process.on('unhandledRejection', () => { unhandled += 1; });
+        const sandbox = {
+          window: {}, fetch: async () => { requests += 1; throw failure; },
+          expectOkJson: async response => response,
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(bootstrap, sandbox);
+        vm.runInContext(section('async function fetchLatestSession(){', 'async function fetchSessionHistory(){'), sandbox);
+        (async () => {
+          await flush();
+          assert.equal(unhandled, 0, 'failure before bundle loading must be handled');
+          await assert.rejects(sandbox.fetchLatestSession(), error => error === failure);
+          sandbox.fetch = async () => { requests += 1; return { status: 404 }; };
+          assert.equal(await sandbox.fetchLatestSession(), null, 'a fresh 404 is a valid empty home');
+          assert.equal(requests, 2);
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
     def test_recent_history_can_find_entries_after_the_first_five(self) -> None:
         run_node(NODE_SETUP + r"""
         const sandbox = { useMemo: fn => fn() };

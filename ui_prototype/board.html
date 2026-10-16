@@ -91,6 +91,15 @@
 })();
 </script>
 
+<script id="initial-session-request">
+// Restore can start while the browser loads and compiles the editor bundle.
+// Settle failures here so startup never creates an unhandled rejection.
+window.EDB_INITIAL_SESSION_REQUEST = fetch('/api/session/latest').then(
+  response => ({ response }),
+  error => ({ error })
+);
+</script>
+
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
 
@@ -98,6 +107,6 @@
 <script src="review_filters.js?v=review-mode-copy-20260818"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=publish-guard-55e1675f59186696d051b997c798633928b55177409d1ea4c51f98c93280980d"></script>
-<script src="app.bundle.js?v=frontend-bundle-f8004213d800f12b66349000b6d87ff24aacc48f04179ab3090ada2b87c2046f"></script>
+<script src="app.bundle.js?v=frontend-bundle-583c31bb9a8ee6aaa7d52eaa495b379676f256018413877b7092be3acb3d8475"></script>
 </body>
 </html>

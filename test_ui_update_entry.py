@@ -80,11 +80,31 @@ const passageButton = tree => nodes(tree).find(node => node.type === 'button' &&
 
 
 class TestUiUpdateEntry(unittest.TestCase):
+    def test_update_request_selects_settings_during_render_and_preserves_later_tab_choices(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const selection = section('  const consumedUpdateRequestRef = useRef(0);', '  const [settingsOpen, setSettingsOpen]');
+        const selected = (request, consumed, stored) => {
+          const sandbox = {
+            updatePanelRequest: request,
+            useRef: () => ({ current: consumed }),
+            useStoredPreference: () => [stored, () => {}],
+            RIGHT_PANEL_TAB_KEY: 'tab', RIGHT_PANEL_TABS: ['item', 'placement', 'board'],
+          };
+          return vm.runInNewContext(selection + '\ntab;', sandbox);
+        };
+        assert.equal(selected(0, 0, 'item'), 'item');
+        assert.equal(selected(1, 0, 'placement'), 'board', 'the opening render must already show update settings');
+        assert.equal(selected(1, 1, 'placement'), 'placement', 'completed requests must not override a manual tab selection');
+        assert.equal(selected(2, 1, 'item'), 'board', 'a new update request must select settings again');
+        """)
+
     def test_update_panel_retries_layout_when_render_cancels_pending_scroll(self) -> None:
         run_node(NODE_SETUP + r"""
         let effect;
         let nextFrame = 0;
         let scrolled = 0;
+        let onResize;
+        let disconnected = 0;
         const frames = new Map();
         const disclosure = {
           open: false,
@@ -98,6 +118,11 @@ class TestUiUpdateEntry(unittest.TestCase):
           consumedUpdateRequestRef: { current: 0 },
           requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; },
           cancelAnimationFrame: id => frames.delete(id),
+          ResizeObserver: class {
+            constructor(callback) { onResize = callback; }
+            observe(element) { assert.equal(element, disclosure); }
+            disconnect() { disconnected += 1; }
+          },
         };
         vm.createContext(sandbox);
         vm.runInContext(section('  useEffect(() => {\n    if (!updatePanelRequest', '  const panelTabRefs'), sandbox);
@@ -105,6 +130,7 @@ class TestUiUpdateEntry(unittest.TestCase):
         assert.equal(disclosure.open, true);
         cancelled();
         assert.equal(frames.size, 0);
+        assert.equal(disconnected, 1, 'cancelled effects must release their resize observer');
         assert.equal(sandbox.consumedUpdateRequestRef.current, 0, 'cancelled layout must not consume the request');
         effect();
         while (frames.size) {
@@ -113,6 +139,11 @@ class TestUiUpdateEntry(unittest.TestCase):
           callback();
         }
         assert.equal(scrolled, 1);
+        onResize();
+        assert.equal(scrolled, 2, 'late update content must reveal the section again');
+        disclosure.open = false;
+        onResize();
+        assert.equal(scrolled, 2, 'a collapsed section must not scroll');
         assert.equal(sandbox.consumedUpdateRequestRef.current, 1);
         effect();
         assert.equal(frames.size, 0, 'completed requests must not scroll again on ordinary renders');

@@ -8953,7 +8953,11 @@ function SidePanel({
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
   focusMode = false, onToggleFocusPanel, homeSettingsOpen = false, onCloseHomeSettings,
 }){
-  const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
+  const consumedUpdateRequestRef = useRef(0);
+  const [storedTab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
+  // An explicit update request renders its tab in the same commit as opening
+  // the panel, instead of painting another tab and switching in an effect.
+  const tab = updatePanelRequest !== consumedUpdateRequestRef.current ? 'board' : storedTab;
   const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
   const toggleSettingsSection = (id) => {
     setSettingsOpen(prev => {
@@ -8991,26 +8995,32 @@ function SidePanel({
   const cropControlRef = useRef(null);
   const bugReportDisclosureRef = useRef(null);
   const updateDisclosureRef = useRef(null);
-  const consumedUpdateRequestRef = useRef(0);
   useEffect(() => {
     if (!updatePanelRequest || consumedUpdateRequestRef.current === updatePanelRequest) return;
-    if (tab !== 'board') {
-      setTab('board');
-      return;
-    }
+    setTab('board');
     const disclosure = updateDisclosureRef.current;
     if (!disclosure) return;
     disclosure.open = true;
+    const revealUpdate = () => {
+      if (disclosure.open) disclosure.scrollIntoView({ block: 'start' });
+    };
+    // Feed results and runtime diagnostics can resize the panel after opening.
+    // Keep the requested update section visible through those async changes.
+    const resizeObserver = new ResizeObserver(revealUpdate);
+    resizeObserver.observe(disclosure);
     // Wait for the newly opened panel and disclosure to finish layout before
     // scrolling; the home screen can otherwise leave the actions offscreen.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         consumedUpdateRequestRef.current = updatePanelRequest;
-        disclosure.scrollIntoView({ block: 'start' });
+        revealUpdate();
         disclosure.querySelector('summary')?.focus({ preventScroll: true });
       });
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+    };
   }, [updatePanelRequest, tab, setTab]);
   const panelTabRefs = useRef({});
   const panelBusy = Boolean(mutating || sessionEditState?.busy);
@@ -12465,7 +12475,11 @@ async function fetchLatestSession(){
 }
 
 async function fetchLatestSessionState(){
-  const resp = await fetch('/api/session/latest');
+  const startupRequest = typeof window !== 'undefined' && window.EDB_INITIAL_SESSION_REQUEST;
+  if (startupRequest) delete window.EDB_INITIAL_SESSION_REQUEST;
+  const result = startupRequest ? await startupRequest : { response: await fetch('/api/session/latest') };
+  if (result.error) throw result.error;
+  const resp = result.response;
   if (resp.status === 404) return { ok: true, session: null };
   return expectOkJson(resp, '세션 로드 실패');
 }
