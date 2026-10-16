@@ -4026,6 +4026,38 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
 VISUAL_MARKER_MAX_DIGIT_LEFT_PX = 14  # indent past the leftmost candidate
 
 
+def _starts_after_white_space(ink_rows: Any, top: int, gap_px: int, ink_limit: int, line_ink: int = 10, rule_ink: int = 0) -> bool:
+    """True when a blank band of ``gap_px`` precedes row ``top``.
+
+    One or two lines directly above are allowed when they themselves follow
+    such a band: a group instruction ("[41~42] 다음 글을 읽고 …") sits tight
+    above the first question number.  Prose is packed line after line.
+    """
+    row = top - 3
+    for line_count in range(3):
+        blank = 0
+        while row > 0 and int(ink_rows[row]) <= ink_limit:
+            blank += 1
+            row -= 1
+            if blank >= gap_px:
+                return True
+        if row <= 0:
+            return True
+        # a box border / rule right above closes the previous block
+        if rule_ink and blank >= 4 and int(ink_rows[row]) >= rule_ink:
+            return True
+        if line_count == 2:
+            return False
+        # climb over the text line above (dense rows only, so a packed
+        # paragraph is not climbed through its sparse inter-line rows)
+        dense = max(ink_limit + 1, line_ink)
+        if int(ink_rows[row]) <= dense:
+            return False
+        while row > 0 and int(ink_rows[row]) > dense:
+            row -= 1
+    return False
+
+
 def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[float]:
     offsets = _visual_problem_marker_offsets(
         image,
@@ -4042,14 +4074,29 @@ def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[flo
             image.crop((int(column_box.left), 0, int(column_box.right), image.height)).convert("L")
         ) < 160
         ink_rows = crop.sum(axis=1)
-    gap_px = max(14, int(image.height * 0.011))
+    gap_px = max(10, int(image.height * 0.006))
+    if ink_rows is not None:
+        # blank runs between body lines: a question start needs clearly more
+        # than the column's usual line gap
+        runs: list[int] = []
+        run = 0
+        for value in ink_rows[int(column_box.top) : int(column_box.bottom)]:
+            if int(value) <= 1:
+                run += 1
+            else:
+                if 3 <= run <= 80:
+                    runs.append(run)
+                run = 0
+        if len(runs) >= 8:
+            runs.sort()
+            line_gap = runs[len(runs) // 2]
+            gap_px = max(gap_px, int(line_gap * 1.35) + 2)
     tops: list[float] = []
     for offset in offsets:
         top = column_box.top + float(offset)
         # just under the page header an instruction line may sit tight above
         if ink_rows is not None and top > float(image.height) * 0.1:
-            above = ink_rows[max(0, int(top) - gap_px) : max(0, int(top) - 3)]
-            if above.size and int(above.max()) > max(3, int(column_box.width * 0.01)):
+            if not _starts_after_white_space(ink_rows, int(top), gap_px, 1, rule_ink=int(column_box.width * 0.5)):
                 continue
         if top < column_box.top - 1.0 or top > column_box.bottom + 1.0:
             continue
