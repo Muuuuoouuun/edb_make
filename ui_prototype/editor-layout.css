@@ -628,6 +628,40 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   }
 }
 
+@media (max-width: 700px) {
+  .app.editor-basic-mode > .topbar:has(.topbar-export-group) {
+    padding-inline: 8px;
+    column-gap: 4px;
+  }
+
+  .main.editor-basic-mode .stage > .stage-unified-toolbar {
+    flex: 0 0 auto;
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .stage-unified-toolbar .stage-unified-actions {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 380px) {
+  .topbar:has(.topbar-export-group) > .crumb { grid-column: 2 / -1; }
+  .topbar:has(.topbar-export-group) > .topbar-actions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .topbar:has(.topbar-export-group) > .topbar-save-state { grid-row: 3; }
+  .topbar:has(.topbar-export-group) > .topbar-export-group { grid-row: 4; }
+  .topbar:has(.topbar-export-group) > .progress { grid-row: 5; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .main.editor-basic-mode .item,
   .main.editor-basic-mode .item .grip,
