@@ -3515,6 +3515,9 @@ def _dark_numeric_problem_marker_component_offsets(
             # in scans of English passages and split them at every line.
             and digit["height"] >= max(dot["height"], dot["width"]) * 3.0
             and abs(dot["bottom"] - digit["bottom"]) <= max(6, int(digit["height"] * 0.35))
+            # at scan size a period sits on the baseline; the "~" of a
+            # "[31 ~ 34]" range or a jamo stroke sits higher
+            and (digit["height"] < 18 or dot["bottom"] >= digit["bottom"] - 2)
             # single-pixel scan noise / thin strokes are not a printed period
             # (only at scan resolution; tiny bitmap-font digits have 1px dots)
             and (
@@ -3549,7 +3552,8 @@ def _dark_numeric_problem_marker_component_offsets(
                     other
                     for other in digit_like
                     if other is not leftmost
-                    and 0 <= leftmost["x"] - other["right"] <= 8
+                    and -6 <= leftmost["x"] - other["right"] <= 8
+                    and other["x"] < leftmost["x"]
                     and abs(other["y"] - leftmost["y"]) <= 6
                 ),
                 None,
