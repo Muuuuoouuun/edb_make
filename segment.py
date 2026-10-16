@@ -3454,7 +3454,8 @@ def _dark_numeric_problem_marker_component_offsets(
         component
         for component in components
         if component["x"] <= 50
-        and 2 <= component["width"] <= 28
+        # bold italic two-digit numbers ("25.") touch into one component
+        and 2 <= component["width"] <= (40 if component["height"] >= 18 else 28)
         and 6 <= component["height"] <= 46
         and 8 <= component["area"] <= 320
     ]
@@ -3505,10 +3506,18 @@ def _dark_numeric_problem_marker_component_offsets(
             digit
             for digit in digit_like
             # the tail of a "2"/"7" can reach under the dot in scans
-            if digit["right"] <= dot["x"] + 4
-            and -3 <= dot["x"] - digit["right"] <= 18
+            if digit["right"] <= dot["x"] + (9 if digit["height"] >= 18 else 4)
+            and (-9 if digit["height"] >= 18 else -3) <= dot["x"] - digit["right"] <= 18
             and dot["y"] >= digit["y"] + max(2, int(digit["height"] * 0.45))
             and dot["y"] <= digit["bottom"] + 8
+            # A period is far smaller than a digit and sits on its baseline.
+            # Lowercase letters ("e" + "o", "s" + "i") passed the size gates
+            # in scans of English passages and split them at every line.
+            and digit["height"] >= max(dot["height"], dot["width"]) * 3.0
+            and abs(dot["bottom"] - digit["bottom"]) <= max(6, int(digit["height"] * 0.35))
+            # single-pixel scan noise / thin strokes are not a printed period
+            and min(dot["width"], dot["height"]) >= 2
+            and dot["area"] >= max(4, int(dot["width"] * dot["height"] * 0.5))
         ]
         if not candidate_digits:
             continue
@@ -4009,7 +4018,9 @@ def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[flo
         # running header page number / footer page box ("5 / 16")
         if top < float(image.height) * 0.01 or top > float(image.height) * 0.96:
             continue
-        if tops and top - tops[-1] <= 22.0:
+        # The wrapped second line of a stem starts at the same margin; two
+        # questions never start within ~one line height of each other.
+        if tops and top - tops[-1] <= max(22.0, float(image.height) * 0.022):
             continue
         tops.append(top)
     return tops
