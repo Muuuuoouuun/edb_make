@@ -15,7 +15,7 @@ function stateSandbox() {
     ...{ session, items }, fileName: session.session_name, boardColumns: 1, layoutGapMode: 'classin-grid',
     usingMock: false, initialSessionLoaded: true, initialSessionError: null, loading: null,
     hasRunningBackgroundJobs: false, hasPendingSessionConflict: false, restoringSessionId: null,
-    view: 'board', activeId: 'p2', mutating: false, published: true, refreshing: false,
+    view: 'board', activeId: 'p2', reviewEditorActive: false, mutating: false, published: true, refreshing: false,
     historyStack: [], historyStackRef: { current: [] },
     useCallback: fn => fn, LAYOUT_GAP_MODE_GRID: 'classin-grid', UNDO_HISTORY_LIMIT: 20,
     appendBoundedHistory: require('./ui_prototype/reorder.js').appendBoundedHistory,
@@ -215,6 +215,11 @@ class TestUiHistoryUndoSafety(unittest.TestCase):
           const { sandbox, state } = stateSandbox();
           sandbox.setHistoryStack([sandbox.session]);
           const originalHistory = sandbox.historyStack;
+          sandbox.reviewEditorActive = true;
+          await sandbox.undoMutation();
+          assert.equal(state.restores, 0, 'session undo must not discard an open crop draft');
+          assert.equal(sandbox.historyStack, originalHistory);
+          sandbox.reviewEditorActive = false;
           sandbox.mutatingRef.current = true;
           await sandbox.undoMutation();
           assert.equal(state.restores, 0, 'undo must not race an in-flight mutation');

@@ -58,7 +58,7 @@ class TestManualSplitInteractions(unittest.TestCase):
     def test_stamp_size_typing_keeps_partial_input_and_enter_only_commits_the_field(self):
         run_node(NODE_SETUP + r"""
         const Babel = require('./scripts/vendor/babel.min.js');
-        let draft, effects = [], changes = [], prevented = 0, stopped = 0, blurred = 0;
+        let draft, effects = [], changes = [], prevented = 0, stopped = 0, blurred = 0, selected = 0;
         const focused = { current: false };
         const sandbox = {
           React: { createElement: (type, props) => ({ type, props }) },
@@ -73,7 +73,7 @@ class TestManualSplitInteractions(unittest.TestCase):
           const tree = sandbox.ManualSplitStampDimensionInput({ value, maxValue: 2000, onChange: value => changes.push(value) });
           effects.splice(0).forEach(effect => effect()); return tree;
         };
-        let input = render(); input.props.onFocus();
+        let input = render(); input.props.onFocus({currentTarget:{select(){selected++}}}); assert.equal(selected,1);
         for (const text of ['3', '32', '320']) {
           input.props.onChange({ target: { value: text } }); input = render(changes.at(-1) || 880);
           assert.equal(input.props.value, text, 'controlled parent updates must not replace the typed number');

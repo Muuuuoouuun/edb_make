@@ -135,7 +135,7 @@ class TestEditorBasicMode(unittest.TestCase):
           {id:'b',name:'문항 B',step:'s2',imageUrl:'b.png'}];
         Object.assign(sandbox, {
           items, displayedItemRows: items.map((item,displayIndex)=>({item,displayIndex})),
-          selectedItemIds: new Set(), dropTarget:null, downloadingItemId:null,
+          editScope:null, editScopeIds:new Set(), selectedItemIds: new Set(), dropTarget:null, downloadingItemId:null,
           hasPageChromeArtifactFlag:()=>false,
           originalProblemNumberInfo:()=>({status:'known',description:'원문 번호 확인'}),
           moveFeedback:null, activeId:'a', pressedItemId:null, itemRefs:{current:{}},
@@ -175,6 +175,10 @@ class TestEditorBasicMode(unittest.TestCase):
         sandbox.filterActive=true;
         assert.ok(walk(rows()[0]).filter(node=>String(node.props.className).includes('item-move-action'))
           .every(button=>button.props.disabled));
+        sandbox.editScope={problemIds:['a']}; sandbox.editScopeIds=new Set(['a']);
+        const scoped=rows()[0]; assert.equal(scoped.props['data-edit-target'],'true');
+        assert.ok(walk(scoped).filter(node=>node.type==='button').every(button=>button.props.disabled));
+        sandbox.editScope=null; sandbox.editScopeIds=new Set();
         sandbox.filterActive=false; sandbox.reorderBusy=true;
         assert.ok(walk(rows()[1]).filter(node=>String(node.props.className).includes('item-move-action'))
           .every(button=>button.props.disabled));

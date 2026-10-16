@@ -6533,20 +6533,25 @@ def _crop_image_by_ratios(source_path: Path, crop: dict[str, float], output_path
         return cropped.size
 
 
+def _crop_loaded_image_by_bbox(image: Any, bbox: Box, output_path: Path) -> tuple[int, int]:
+    left = int(max(0, min(image.width - 1, math.floor(bbox.left))))
+    top = int(max(0, min(image.height - 1, math.floor(bbox.top))))
+    right = int(max(left + 1, min(image.width, math.ceil(bbox.right))))
+    bottom = int(max(top + 1, min(image.height, math.ceil(bbox.bottom))))
+    with image.crop((left, top, right, bottom)) as cropped:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cropped.save(output_path)
+        return cropped.size
+
+
 def _crop_image_by_bbox(source_path: Path, bbox: Box, output_path: Path) -> tuple[int, int]:
     from PIL import Image
 
     with Image.open(source_path) as image:
         if image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
-            image = image.convert("RGBA")
-        left = int(max(0, min(image.width - 1, math.floor(bbox.left))))
-        top = int(max(0, min(image.height - 1, math.floor(bbox.top))))
-        right = int(max(left + 1, min(image.width, math.ceil(bbox.right))))
-        bottom = int(max(top + 1, min(image.height, math.ceil(bbox.bottom))))
-        cropped = image.crop((left, top, right, bottom))
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        cropped.save(output_path)
-        return cropped.size
+            with image.convert("RGBA") as converted:
+                return _crop_loaded_image_by_bbox(converted, bbox, output_path)
+        return _crop_loaded_image_by_bbox(image, bbox, output_path)
 
 
 def _materialize_crop_base_image(
@@ -7150,36 +7155,43 @@ def _mutate_bulk_crop(
     source_uri = source_path.resolve().as_uri()
     candidate_session = {**session, "problems": list(session.get("problems") or [])}
     replacements: list[dict[str, Any]] = []
-    for index, (box, title) in enumerate(boxes, start=1):
-        new_id = _next_problem_id(candidate_session, base_id, f"crop-{index:02d}")
-        candidate_session["problems"].append({"id": new_id})
-        crop_path = crop_dir / _make_crop_filename(new_id, f"bulk_crop_{index:02d}")
-        _crop_image_by_bbox(source_path, box, crop_path)
+    # Decode a large source only once for a burst of crops.
+    from contextlib import ExitStack
 
-        entry = _problem_skeleton_from_parent(parent)
-        entry["id"] = new_id
-        entry["title"] = title
-        entry["sourcePageId"] = page_id
-        entry["sourceImagePath"] = source_uri
-        entry["sourceFileName"] = str(parent.get("sourceFileName") or source_path.name)
-        if replacement_source_id:
-            entry["replacesProblemId"] = replacement_source_id
-            entry["replaces_problem_id"] = replacement_source_id
-        entry["bbox"] = {
-            "left": box.left,
-            "top": box.top,
-            "width": box.width,
-            "height": box.height,
-        }
-        entry["imagePath"] = crop_path.resolve().as_uri()
-        entry["boardRenderPath"] = crop_path.resolve().as_uri()
-        entry["recordMode"] = "image-only"
-        entry["textRecordCount"] = 0
-        entry["imageRecordCount"] = 1
-        entry["riskFlags"] = []
-        entry["reviewStatus"] = "normal"
-        _refresh_mutated_crop_layout(entry, crop_path)
-        replacements.append(entry)
+    with ExitStack() as image_stack:
+        page_image = image_stack.enter_context(Image.open(source_path))
+        if page_image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+            page_image = image_stack.enter_context(page_image.convert("RGBA"))
+        for index, (box, title) in enumerate(boxes, start=1):
+            new_id = _next_problem_id(candidate_session, base_id, f"crop-{index:02d}")
+            candidate_session["problems"].append({"id": new_id})
+            crop_path = crop_dir / _make_crop_filename(new_id, f"bulk_crop_{index:02d}")
+            _crop_loaded_image_by_bbox(page_image, box, crop_path)
+
+            entry = _problem_skeleton_from_parent(parent)
+            entry["id"] = new_id
+            entry["title"] = title
+            entry["sourcePageId"] = page_id
+            entry["sourceImagePath"] = source_uri
+            entry["sourceFileName"] = str(parent.get("sourceFileName") or source_path.name)
+            if replacement_source_id:
+                entry["replacesProblemId"] = replacement_source_id
+                entry["replaces_problem_id"] = replacement_source_id
+            entry["bbox"] = {
+                "left": box.left,
+                "top": box.top,
+                "width": box.width,
+                "height": box.height,
+            }
+            entry["imagePath"] = crop_path.resolve().as_uri()
+            entry["boardRenderPath"] = crop_path.resolve().as_uri()
+            entry["recordMode"] = "image-only"
+            entry["textRecordCount"] = 0
+            entry["imageRecordCount"] = 1
+            entry["riskFlags"] = []
+            entry["reviewStatus"] = "normal"
+            _refresh_mutated_crop_layout(entry, crop_path)
+            replacements.append(entry)
 
     _replace_bulk_crop_problems(session, page, replacements, replace_ids)
     return session

@@ -121,11 +121,11 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
         let uploads = 0, preserved, dropped;
-        Object.assign(sandbox, { hasSessionItems: true, pendingFiles: [], dropZoneActive: false,
+        Object.assign(sandbox, { editScope:null, hasSessionItems: true, pendingFiles: [], dropZoneActive: false,
           addSample: () => uploads++, bulkApply: step => { preserved = step; },
           setDropZoneActive() {}, handleFiles: files => { dropped = files; } });
         compile(sandbox, 'globalThis.actions = () => (<>'
-          + section('        {(hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions',
+          + section('        {!editScope && (hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions',
             '        {!hasSessionItems && pendingFiles.length === 0 && (') + '</>);');
         let tree = sandbox.actions();
         const buttons = walk(tree).filter(node => node.type === 'button');
@@ -150,7 +150,7 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
 
     def test_rail_header_no_longer_duplicates_upload_or_uses_the_ai_icon_for_preservation(self) -> None:
         rail = component("ItemsRail")
-        header = rail.split('<div className="col-hd">', 1)[1].split("{hasSessionItems && (", 1)[0]
+        header = rail.split('<div className="col-hd">', 1)[1].split("{editScope && <div", 1)[0]
         self.assertEqual(header.count("<button"), 2)
         self.assertIn('aria-label="자료 목록 접기"', header)
         self.assertIn('aria-label="현재 원본에서 공통 지문 다시 추출"', header)

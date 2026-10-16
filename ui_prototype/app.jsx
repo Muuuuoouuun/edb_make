@@ -1740,6 +1740,7 @@ function BoxEditPanel({
   onMoveSegment,
   onReset,
   onCancel,
+  onManualSplit,
   onApply,
 }){
   const segmentList = segments || [];
@@ -1777,6 +1778,9 @@ function BoxEditPanel({
         <p>{multi
           ? '분할선이나 페이지를 넘어가는 지문을 여러 번 드래그하세요. 아래 순서대로 한 지문이 됩니다.'
           : '시험지 위의 파란 테두리와 조절점을 직접 움직이세요.'}</p>
+      {!multi && <button className="btn" type="button" onClick={onManualSplit} disabled={busy}>
+        {Icon.crop} 연속 자르기·스탬프
+      </button>}
       </div>
       {multi && (
         <div className="box-edit-panel-section multi-crop-segment-section">
@@ -1925,7 +1929,7 @@ function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange })
       step="10"
       value={draft}
       disabled={disabled}
-      onFocus={() => { focusedRef.current = true; }}
+      onFocus={evt => { focusedRef.current = true; evt?.currentTarget?.select(); }}
       onChange={event => {
         const text = event.target.value;
         setDraft(text);
@@ -1945,6 +1949,81 @@ function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange })
   );
 }
 
+function manualSplitStampBoxFromPoint(point, page, stampBox){
+  const width = Math.min(page.width, Math.max(1, finiteNumber(stampBox?.width, page.width * 0.36)));
+  const height = Math.min(page.height, Math.max(1, finiteNumber(stampBox?.height, page.height * 0.20)));
+  return {
+    left: Math.max(0, Math.min(page.width - width, point.x - width / 2)),
+    top: Math.max(0, Math.min(page.height - height, point.y - height / 2)),
+    width, height,
+  };
+}
+
+// Hover is transient: move just the preview, without rendering the review,
+// thumbnails and crop list again for every mouse event.
+function ManualSplitStampPreview({ canvasRef, page, stampBox, enabled }){
+  const previewRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const preview = previewRef.current;
+    if (!canvas || !preview) return undefined;
+    preview.hidden = true;
+    if (!enabled) return undefined;
+    let frame = null;
+    let latest = null;
+    const move = evt => {
+      latest = { x: evt.clientX, y: evt.clientY };
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const box = manualSplitStampBoxFromPoint({
+          x: (latest.x - rect.left) * page.width / rect.width,
+          y: (latest.y - rect.top) * page.height / rect.height,
+        }, page, stampBox);
+        Object.assign(preview.style, manualSplitBoxStyle(box, page));
+        preview.hidden = false;
+      });
+    };
+    const leave = () => {
+      if (frame != null) cancelAnimationFrame(frame);
+      frame = null;
+      preview.hidden = true;
+    };
+    canvas.addEventListener('mousemove', move);
+    canvas.addEventListener('mouseleave', leave);
+    return () => {
+      leave();
+      canvas.removeEventListener('mousemove', move);
+      canvas.removeEventListener('mouseleave', leave);
+    };
+  }, [canvasRef, page, stampBox, enabled]);
+  return <div ref={previewRef} hidden aria-hidden="true" className="manual-split-box draft stamp-preview">
+    <div className="review-bbox-label manual-split-badge">스탬프</div>
+  </div>;
+}
+
+function manualSplitScopeSummary(page, items, replaceProblemIds, scope){
+  const ids = new Set(replaceProblemIds || []);
+  const positions = (items || []).flatMap((item, index) => ids.has(item.id) ? [index + 1] : []);
+  const ranges = [];
+  for (let i = 0; i < positions.length; i++) {
+    const start = positions[i];
+    let end = start;
+    while (positions[i + 1] === end + 1) end = positions[++i];
+    ranges.push(start === end ? `${start}번` : `${start}–${end}번`);
+  }
+  return {
+    pageId: page.id,
+    problemIds: [...ids],
+    label: scope === 'page' ? `페이지 전체 ${ids.size}개 교체`
+      : ids.size ? `선택 ${ids.size}개만 교체` : '기존 문제 유지 · 새 영역 추가',
+    rangeLabel: positions.length ? `목록 ${ranges.join(', ')}` : '새 문제 추가',
+    pageLabel: `${page.pageNumber || page.id}페이지`,
+  };
+}
+
 function ManualSplitEditor({
   page,
   regions,
@@ -1955,8 +2034,6 @@ function ManualSplitEditor({
   hasOverlap,
   mutating,
   onCanvasMouseDown,
-  onCanvasMouseMove,
-  onCanvasMouseLeave,
   onModeChange,
   onSaveStampFromSelection,
   onRegionMouseDown,
@@ -1971,12 +2048,44 @@ function ManualSplitEditor({
   panelSide,
   onPanelSideChange,
   shortcutHelpOpen,
+  scope,
+  scopeSummary,
+  onScopeChange,
+  selectedScopeCount,
 }){
+  const canvasRef = useRef(null);
+  const panelRef = useRef(null);
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const wrap = panel?.closest('.review-wrap');
+    if (!panel || !wrap) return undefined;
+    let frame = null;
+    const measure = () => {
+      frame = null;
+      const available = Math.min(window.innerHeight, wrap.getBoundingClientRect().bottom)
+        - panel.getBoundingClientRect().top - 12;
+      panel.style.setProperty('--manual-panel-available', `${Math.max(180, available)}px`);
+    };
+    const schedule = () => {
+      if (frame == null) frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(wrap);
+    wrap.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    measure();
+    return () => {
+      observer.disconnect();
+      wrap.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      if (frame != null) cancelAnimationFrame(frame);
+    };
+  }, []);
   const dragRegionIdRef = useRef(null);
   const [listDragState, setListDragState] = useState(null);
   const selectedCount = selectedRegionIds?.size || 0;
   const regionList = regions || [];
-  const activeMode = mode === 'stamp' ? 'stamp' : 'draw';
+  const activeMode = ['stamp', 'select'].includes(mode) ? mode : 'draw';
   const selectedRegion = regionList.find(region => selectedRegionIds?.has(region.id)) || null;
   const focusShadeRegionId = draftBox ? null : selectedRegion?.id;
   const canSaveStamp = Boolean(selectedRegion?.bbox?.width && selectedRegion?.bbox?.height);
@@ -1999,13 +2108,12 @@ function ManualSplitEditor({
       <div className="manual-split-canvas-shell">
         <ReviewCanvasZoomShell>
           <div
-            className={`review-page-canvas manual-split-canvas ${activeMode === 'stamp' ? 'stamp-mode' : 'draw-mode'}`}
+            ref={canvasRef}
+            className={`review-page-canvas manual-split-canvas ${activeMode}-mode`}
             onMouseDown={(evt) => onCanvasMouseDown?.(evt, page)}
-            onMouseMove={(evt) => onCanvasMouseMove?.(evt, page)}
-            onMouseLeave={(evt) => onCanvasMouseLeave?.(evt, page)}
           >
             {page.sourceImageUri ? (
-              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} draggable={false} />
+              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} width={pageWidth} height={pageHeight} draggable={false} />
             ) : (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                 페이지 이미지를 불러올 수 없어요.
@@ -2028,7 +2136,7 @@ function ManualSplitEditor({
                   <div className="review-bbox-label manual-split-badge">
                     {String(region.order || 0).padStart(2, '0')}
                   </div>
-                  {isSelected && (
+                  {isSelected && activeMode !== 'stamp' && (
                     <>
                       <div className="crop-frame-label">영역</div>
                       {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
@@ -2056,10 +2164,22 @@ function ManualSplitEditor({
                 </div>
               </div>
             )}
+            <ManualSplitStampPreview canvasRef={canvasRef} page={page} stampBox={stampBox} enabled={activeMode === 'stamp' && !mutating} />
           </div>
         </ReviewCanvasZoomShell>
       </div>
-      <aside className="manual-split-panel" aria-label="수동 분할 영역 목록">
+      <aside ref={panelRef} className="manual-split-panel" aria-label="수동 분할 영역 목록">
+        <div className="manual-split-scope">
+          <label>적용 범위
+            <select aria-label="자르기 적용 범위" value={scope} disabled={mutating} onChange={evt => onScopeChange?.(evt.target.value)}>
+              {selectedScopeCount > 0 && <option value="selection">선택한 {selectedScopeCount}개 문제만</option>}
+              <option value="page">이 페이지 전체 다시 자르기</option>
+              <option value="append">기존 문제 유지하고 추가</option>
+            </select>
+          </label>
+          <span>{scopeSummary?.pageLabel} · {scopeSummary?.rangeLabel}</span>
+          <strong>{scopeSummary?.label}</strong>
+        </div>
         <div className="manual-split-panel-head">
           <span className="manual-split-panel-title" aria-live="polite">
             <strong>영역 {regionList.length}개</strong>
@@ -2077,11 +2197,17 @@ function ManualSplitEditor({
           </button>
         </div>
         <div className="manual-split-toolset" aria-label="영역 생성 방식">
+          <button type="button" className={`manual-split-tool ${activeMode === 'select' ? 'on' : ''}`}
+            aria-pressed={activeMode === 'select'} aria-keyshortcuts="V Escape" disabled={mutating}
+            title="기존 영역 선택·이동·크기 조절 (V / Esc)" onClick={() => onModeChange?.('select')}>
+            <span>선택·이동</span>
+          </button>
           <button
             type="button"
             className={`manual-split-tool ${activeMode === 'draw' ? 'on' : ''}`}
             title="드래그해서 자유 영역 만들기"
             aria-pressed={activeMode === 'draw'}
+            disabled={mutating}
             onClick={() => onModeChange?.('draw')}
           >
             {Icon.crop}
@@ -2092,12 +2218,18 @@ function ManualSplitEditor({
             className={`manual-split-tool ${activeMode === 'stamp' ? 'on' : ''}`}
             title="같은 크기 틀을 클릭으로 찍기 · Esc로 스탬프 종료"
             aria-pressed={activeMode === 'stamp'}
+            disabled={mutating}
             aria-keyshortcuts="Escape"
             onClick={() => onModeChange?.('stamp')}
           >
             {Icon.stamp}
             <span>스탬프</span>
           </button>
+        </div>
+        <div className="manual-split-note" role="status">
+          {activeMode === 'stamp' ? '클릭마다 새 영역 · Esc로 선택·이동'
+            : activeMode === 'draw' ? '드래그마다 새 영역 · 기존 영역 클릭으로 수정'
+            : '영역을 클릭해 이동·크기 조절 · G/S로 연속 생성'}
         </div>
         {activeMode === 'stamp' ? (
           <div className="manual-stamp-card">
@@ -2168,6 +2300,7 @@ function ManualSplitEditor({
           </button>
         ) : null}
         <div className="manual-split-shortcuts" aria-label="수동 분할 단축키">
+          <span>V 선택</span>
           <span>G 드래그</span>
           <span>S 스탬프</span>
           <span>P 패널 이동</span>
@@ -2176,6 +2309,7 @@ function ManualSplitEditor({
         {shortcutHelpOpen && (
           <div className="manual-split-shortcut-guide" id="manual-split-shortcuts" aria-label="수동 자르기 단축키 전체 목록">
             <span><kbd>G</kbd> 드래그 모드</span>
+            <span><kbd>V / Esc</kbd> 선택·이동 모드</span>
             <span><kbd>S</kbd> 스탬프 모드</span>
             <span><kbd>P</kbd> 패널 좌우 이동</span>
             <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 전체 선택</span>
@@ -2184,13 +2318,14 @@ function ManualSplitEditor({
             <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
             <span><kbd>Delete</kbd> 선택 삭제</span>
             <span><kbd>Enter</kbd> 분할 적용</span>
-            <span><kbd>Esc</kbd> 선택 해제·취소</span>
+            <span><kbd>Esc</kbd> 진행 중 조작 취소 · 영역 유지</span>
           </div>
         )}
         {regionList.length === 0 ? (
           <div className="manual-split-empty">
             {activeMode === 'stamp'
               ? '원본 위를 클릭해 같은 크기 영역을 찍으세요.'
+              : activeMode === 'select' ? '드래그나 스탬프로 영역을 만든 뒤 선택해 조절하세요.'
               : '원본 위에서 드래그해 자를 영역을 만드세요.'}
           </div>
         ) : (
@@ -2782,7 +2917,7 @@ function ReviewStage({
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
   onEditorModeChange, onOpenBoard, selectedIds, setSelectedIds, reviewUi, setReviewUi,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
-  onManualSplitFlowDone,
+  onManualSplitFlowDone, onEditScopeChange,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
   const sourcePageHeading = (page, pageIndex) => {
@@ -2939,7 +3074,7 @@ function ReviewStage({
     });
   }, [syncReviewPageNavigation]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onEditorModeChange?.(reviewEditorActive);
   }, [onEditorModeChange, reviewEditorActive]);
   useEffect(() => () => onEditorModeChange?.(false), [onEditorModeChange]);
@@ -3283,6 +3418,17 @@ function ReviewStage({
   const manualSplitPage = manualSplit
     ? pages.find(page => page.id === manualSplit.pageId)
     : null;
+  const manualSplitScope = useMemo(() => manualSplitPage ? {
+    ...manualSplitScopeSummary(manualSplitPage, items, manualSplit.replaceProblemIds, manualSplit.scope),
+    pageLabel: sourcePageHeading(manualSplitPage, pages.indexOf(manualSplitPage)),
+  } : null, [manualSplitPage, pages, items, manualSplit?.replaceProblemIds, manualSplit?.scope]);
+  useLayoutEffect(() => { onEditScopeChange?.(manualSplitScope); }, [onEditScopeChange, manualSplitScope]);
+  useEffect(() => () => onEditScopeChange?.(null), [onEditScopeChange]);
+  useLayoutEffect(() => {
+    if (!manualSplit?.pageId || !reviewWrapRef.current) return;
+    cancelSmoothScroll(reviewWrapRef.current);
+    reviewWrapRef.current.scrollTop = 0;
+  }, [manualSplit?.pageId]);
   const manualSplitSelectedIds = useMemo(
     () => new Set(manualSplit?.selectedRegionIds || []),
     [manualSplit?.selectedRegionIds]
@@ -3366,19 +3512,6 @@ function ReviewStage({
     });
   };
 
-  const manualSplitStampBoxFromPoint = (point, page, stampBox) => {
-    const pageWidth = Math.max(1, Number(page?.width) || 1);
-    const pageHeight = Math.max(1, Number(page?.height) || 1);
-    const width = Math.min(pageWidth, Math.max(1, finiteNumber(stampBox?.width, pageWidth * 0.36)));
-    const height = Math.min(pageHeight, Math.max(1, finiteNumber(stampBox?.height, pageHeight * 0.20)));
-    return clampReviewBox({
-      left: Math.max(0, Math.min(pageWidth - width, point.x - width / 2)),
-      top: Math.max(0, Math.min(pageHeight - height, point.y - height / 2)),
-      width,
-      height,
-    }, page);
-  };
-
   const beginManualPageSplit = (page, replaceProblemIds = [], options = {}) => {
     if (!page?.id || !page?.sourceImageUri || !page.width || !page.height) return;
     const replacementIds = listUnique((replaceProblemIds || []).filter(Boolean));
@@ -3389,13 +3522,19 @@ function ReviewStage({
     setManualSplitDraftBox(null);
     setManualSplitShortcutHelpOpen(false);
     setBoxEdit(null);
+    setPendingReviewNavigation(null);
+    pendingBoxEditProblemIdRef.current = '';
+    setReviewFilter('all');
+    setReviewRiskFilter(null);
     setSelectedIds(new Set(replacementIds));
     setManualSplit({
       pageId: page.id,
       replaceProblemIds: replacementIds,
+      selectionProblemIds: replacementIds,
+      scope: options.scope || (replacementIds.length ? 'selection' : 'append'),
       mode: 'draw',
-      stampBox,
-      regions: [],
+      stampBox: options.initialBox ? { width: options.initialBox.width, height: options.initialBox.height } : stampBox,
+      regions: options.initialBox ? [{ id: `draft-region-${manualSplitSeqRef.current++}`, pageId: page.id, bbox: { ...options.initialBox }, title: manualSplitTitle(0), order: 1 }] : [],
       selectedRegionIds: [],
       guided: !!options.guided,
     });
@@ -3404,6 +3543,17 @@ function ReviewStage({
   const beginManualSplitForSelection = () => {
     if (!selectedCanManualSplit || !selectedSourcePage) return;
     beginManualPageSplit(selectedSourcePage, selectedList);
+  };
+
+  const changeManualSplitScope = (scope) => {
+    if (!manualSplitPage || mutating) return;
+    setManualSplit(prev => {
+      if (!prev) return prev;
+      const replaceProblemIds = scope === 'page'
+        ? (session?.problems || []).filter(problem => problem.sourcePageId === prev.pageId).map(problem => problem.id)
+        : scope === 'selection' ? prev.selectionProblemIds : [];
+      return { ...prev, scope, replaceProblemIds };
+    });
   };
 
   const guidedSplitReplacementIds = (page) => {
@@ -3521,8 +3671,9 @@ function ReviewStage({
   };
 
   const setManualSplitMode = (mode) => {
-    const nextMode = mode === 'stamp' ? 'stamp' : 'draw';
-    manualSplitDragRef.current = null;
+    if (mutating) return;
+    const nextMode = ['stamp', 'select'].includes(mode) ? mode : 'draw';
+    cancelManualSplitGesture();
     setManualSplitDraftBox(null);
     setManualSplit(prev => prev ? { ...prev, mode: nextMode } : prev);
   };
@@ -3539,7 +3690,7 @@ function ReviewStage({
         current.clear();
         current.add(regionId);
       }
-      return { ...prev, selectedRegionIds: Array.from(current) };
+      return { ...prev, mode: 'select', selectedRegionIds: Array.from(current) };
     });
   };
 
@@ -3763,19 +3914,12 @@ function ReviewStage({
     });
   };
 
-  const updateManualSplitStampPreview = (evt, page) => {
-    if (!manualSplit || manualSplit.mode !== 'stamp' || manualSplit.pageId !== page?.id) return;
-    if (!evt.currentTarget?.getBoundingClientRect) return;
-    const rect = evt.currentTarget.getBoundingClientRect();
-    const point = manualSplitPointFromClient(evt.clientX, evt.clientY, page, rect);
-    setManualSplitDraftBox(manualSplitStampBoxFromPoint(point, page, manualSplit.stampBox));
-  };
-
-  const clearManualSplitStampPreview = () => {
-    if (manualSplit?.mode === 'stamp') setManualSplitDraftBox(null);
-  };
-
   const beginManualSplitCanvasAction = (evt, page) => {
+    if (mutating || evt.button !== 0) return;
+    if (manualSplit?.mode === 'select') {
+      setManualSplit(prev => prev ? { ...prev, selectedRegionIds: [] } : prev);
+      return;
+    }
     if (manualSplit?.mode === 'stamp') {
       stampManualSplitRegion(evt, page);
       return;
@@ -3802,7 +3946,8 @@ function ReviewStage({
   };
 
   const beginManualSplitRegionDrag = (regionId, evt) => {
-    if (!manualSplit || evt.button !== 0) return;
+    if (!manualSplit || mutating || evt.button !== 0) return;
+    if (manualSplit.mode === 'stamp') return;
     evt.preventDefault();
     evt.stopPropagation();
     if (evt.shiftKey) {
@@ -3821,7 +3966,7 @@ function ReviewStage({
     (manualSplit.regions || []).forEach(region => {
       if (regionIds.includes(region.id)) initialBoxes.set(region.id, { ...region.bbox });
     });
-    setManualSplit(prev => prev ? { ...prev, selectedRegionIds: regionIds } : prev);
+    setManualSplit(prev => prev ? { ...prev, mode: 'select', selectedRegionIds: regionIds } : prev);
     manualSplitDragRef.current = {
       mode: 'move',
       page,
@@ -3835,7 +3980,7 @@ function ReviewStage({
   };
 
   const beginManualSplitResize = (regionId, mode, evt) => {
-    if (!manualSplit || evt.button !== 0) return;
+    if (!manualSplit || mutating || evt.button !== 0) return;
     evt.preventDefault();
     evt.stopPropagation();
     const canvas = evt.currentTarget.closest?.('.review-page-canvas');
@@ -3843,7 +3988,7 @@ function ReviewStage({
     const page = manualSplitPage;
     const region = (manualSplit.regions || []).find(item => item.id === regionId);
     if (!rect?.width || !rect?.height || !page || !region) return;
-    setManualSplit(prev => prev ? { ...prev, selectedRegionIds: [regionId] } : prev);
+    setManualSplit(prev => prev ? { ...prev, mode: 'select', selectedRegionIds: [regionId] } : prev);
     manualSplitDragRef.current = {
       mode: 'resize',
       resizeMode: mode,
@@ -4453,7 +4598,9 @@ function ReviewStage({
   }, [boxEdit?.pageId, syncReviewPageNavigation]);
 
   useEffect(() => {
-    const onMove = (evt) => {
+    let frame = null;
+    let latest = null;
+    const move = (evt) => {
       const drag = manualSplitDragRef.current;
       if (!drag) return;
       if (drag.mode === 'draw') {
@@ -4512,7 +4659,16 @@ function ReviewStage({
         } : prev);
       }
     };
+    const onMove = evt => {
+      if (!manualSplitDragRef.current) return;
+      latest = { clientX: evt.clientX, clientY: evt.clientY };
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => { frame = null; move(latest); });
+    };
     const onUp = (evt) => {
+      if (frame != null) cancelAnimationFrame(frame);
+      frame = null;
+      move(evt);
       const drag = manualSplitDragRef.current;
       if (!drag) return;
       if (drag.mode === 'draw') {
@@ -4540,9 +4696,13 @@ function ReviewStage({
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    const onBlur = () => cancelManualSplitGesture();
+    window.addEventListener('blur', onBlur);
     return () => {
+      if (frame != null) cancelAnimationFrame(frame);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onBlur);
     };
   }, [clampReviewBox]);
 
@@ -4558,9 +4718,12 @@ function ReviewStage({
         setManualSplitShortcutHelpOpen(false);
         return;
       }
-      if (evt.key === 'Escape' && manualSplit.mode === 'stamp') {
+      if (mutating) return;
+      if (evt.key === 'Escape') {
         evt.preventDefault();
-        setManualSplitMode('draw');
+        cancelManualSplitGesture();
+        setManualSplitMode('select');
+        if (isFormControl) evt.target.blur?.();
         return;
       }
       if (isFormControl) return;
@@ -4577,6 +4740,11 @@ function ReviewStage({
       if (!primaryModifier && !evt.altKey && evt.key === '?') {
         evt.preventDefault();
         setManualSplitShortcutHelpOpen(open => !open);
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 'v') {
+        evt.preventDefault();
+        setManualSplitMode('select');
         return;
       }
       if (!primaryModifier && !evt.altKey && key === 'g') {
@@ -4599,16 +4767,6 @@ function ReviewStage({
           evt.preventDefault();
           deleteManualSplitSelected();
         }
-        return;
-      }
-      if (evt.key === 'Escape') {
-        evt.preventDefault();
-        if (cancelManualSplitGesture()) return;
-        if ((manualSplit.selectedRegionIds || []).length) {
-          setManualSplit(prev => prev ? { ...prev, selectedRegionIds: [] } : prev);
-          return;
-        }
-        cancelManualPageSplit();
         return;
       }
       if (evt.key === 'Enter') {
@@ -4778,7 +4936,7 @@ function ReviewStage({
         >
           {Icon.trash} 선택 삭제
         </button>
-        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
+        <button className="btn" type="button" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
       </div>
     </div>
   ) : selectedList.length === 0 ? (
@@ -5058,7 +5216,7 @@ function ReviewStage({
           aria-busy={mutating || Boolean(pendingReviewNavigation)}
         >
           {actionBar}
-          <div className="review-summary-strip">
+          {!reviewEditorActive && <div className="review-summary-strip">
             <div className="review-summary-overview">
               <span className="review-summary-title">검수 현황</span>
               <span className={`review-summary-chip ${reviewFlow.complete ? 'ok' : 'warn'}`}>
@@ -5259,7 +5417,7 @@ function ReviewStage({
             )}
             </div>
             )}
-          </div>
+          </div>}
           {pages.map((page, pageIndex) => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
@@ -5346,7 +5504,7 @@ function ReviewStage({
                       type="button"
                       title={retryDisabledReason || '이 페이지만 AI로 다시 인식'}
                       onClick={() => doRetryAi([page.id])}
-                      disabled={!aiAvailable || aiBusy || mutating}
+                      disabled={!aiAvailable || aiBusy || mutating || reviewEditorActive}
                     >
                       AI 재인식
                     </button>
@@ -5375,8 +5533,6 @@ function ReviewStage({
                     hasOverlap={manualSplitOverlaps}
                     mutating={mutating}
                     onCanvasMouseDown={beginManualSplitCanvasAction}
-                    onCanvasMouseMove={updateManualSplitStampPreview}
-                    onCanvasMouseLeave={clearManualSplitStampPreview}
                     onModeChange={setManualSplitMode}
                     onSaveStampFromSelection={saveManualSplitStampFromSelection}
                     onRegionMouseDown={beginManualSplitRegionDrag}
@@ -5391,6 +5547,10 @@ function ReviewStage({
                     panelSide={manualSplitPanelSide}
                     onPanelSideChange={setManualSplitPanelSide}
                     shortcutHelpOpen={manualSplitShortcutHelpOpen}
+                    scope={manualSplit.scope}
+                    scopeSummary={manualSplitScope}
+                    selectedScopeCount={manualSplit.selectionProblemIds.length}
+                    onScopeChange={changeManualSplitScope}
                   />
                 ) : (
                   <div className={`box-edit-layout ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
@@ -5558,6 +5718,7 @@ function ReviewStage({
                         onReset={resetBoxEdit}
                         onCancel={cancelBoxEdit}
                         onApply={applyBoxEdit}
+                        onManualSplit={() => beginManualPageSplit(page, [boxEdit.problemId], { initialBox: boxEdit.box })}
                       />
                     )}
                   </div>
@@ -5663,8 +5824,9 @@ function ItemsRail({
   onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
   onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
   collapsed, onToggleCollapsed,
-  splitMode, setSplitMode,
+  splitMode, setSplitMode, editScope = null,
 }){
+  const editScopeIds = useMemo(() => new Set(editScope?.problemIds || []), [editScope]);
   const dragId = useRef(null);
   const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
@@ -5726,10 +5888,10 @@ function ItemsRail({
         ];
   const visibleItemRows = useMemo(() => items
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => materialFilter === 'all'
+    .filter(({ item }) => editScope || materialFilter === 'all'
       || (materialFilter === 'questions' && !isPassageFragmentProblem(item))
-      || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter]);
-  const filterActive = materialFilter !== 'all';
+      || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter, editScope]);
+  const filterActive = !editScope && materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
   const draggingLayoutSignature = Array.from(draggingIds).join('|');
   const dropTargetLayoutSignature = dropTarget
@@ -6359,6 +6521,7 @@ function ItemsRail({
           title="자료 목록 접기"
           data-tooltip="자료 목록 접기 · 썸네일만 표시"
           aria-label="자료 목록 접기"
+          disabled={!!editScope}
           aria-expanded="true"
           onClick={onToggleCollapsed}
         >{Icon.arrowLeft}</button>
@@ -6374,11 +6537,16 @@ function ItemsRail({
             : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
           data-tooltip={reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '원본에서 공통 지문 다시 추출'}
           onClick={onReextractSharedPassages}
-          disabled={!canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
+          disabled={!!editScope || !canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
         >{Icon.refresh}</button>}
       </div>
 
-      {hasSessionItems && (
+      {editScope && <div className="rail-edit-scope" role="status" aria-live="polite">
+        <strong>{editScope.label}</strong>
+        <span>{editScope.pageLabel} · {editScope.rangeLabel}</span>
+        <small>{editScope.problemIds.length ? '표시된 문제를 새 영역으로 바꿉니다.' : '현재 페이지에 새 문제를 추가합니다.'}</small>
+      </div>}
+      {hasSessionItems && !editScope && (
         <div className="rail-control-stack">
           <div className="material-filter" role="group" aria-label="자료 모아보기">
             {materialFilterOptions.map(([value, label, count]) => (
@@ -6411,6 +6579,8 @@ function ItemsRail({
       <div
         className="items"
         ref={railRef}
+        onPointerDownCapture={editScope ? evt => { evt.stopPropagation(); evt.preventDefault(); } : undefined}
+        onClickCapture={editScope ? evt => { evt.stopPropagation(); evt.preventDefault(); } : undefined}
         onScroll={() => {
           const drag = pointerDragRef.current;
           if (!drag?.moved) return;
@@ -6427,7 +6597,7 @@ function ItemsRail({
           applyRailAutoScroll(e.clientX, e.clientY);
         }}
       >
-        {(hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions ${hasSessionItems ? 'has-items' : ''}`} role="group" aria-label="자료 추가와 일괄 처리">
+        {!editScope && (hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions ${hasSessionItems ? 'has-items' : ''}`} role="group" aria-label="자료 추가와 일괄 처리">
         <button
           type="button"
           className={`drop-zone ${hasSessionItems ? 'is-compact' : ''} ${dropZoneActive ? 'is-active' : ''}`}
@@ -6480,7 +6650,7 @@ function ItemsRail({
           </div>
         )}
 
-        {!!recentSessions?.length && (
+        {!editScope && !!recentSessions?.length && (
           <div className={`session-history-card ${recentSessionsCollapsed ? 'is-collapsed' : ''}`}>
             <button
               className="session-history-toggle"
@@ -6690,35 +6860,35 @@ function ItemsRail({
           </div>
         )}
 
-        {!!items.length && (
+        {!editScope && !!items.length && (
           <div className={`problem-order-status ${selectedItemCount > 1 ? 'is-selection' : ''}`} id="problem-order-help">
             {selectedItemCount > 1 ? (
               <>
                 <strong>{selectedItemCount}개 선택</strong>
                 <span><kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 선택 · 드래그/{ALTERNATE_MODIFIER_LABEL} 이동</span>
                 <div className="rail-selection-tools" role="group" aria-label="선택 문제 일괄 작업">
-                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's1')} disabled={reorderBusy}>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's1')} disabled={!!editScope || reorderBusy}>
                     1단계
                   </button>
-                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's2')} disabled={reorderBusy}>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's2')} disabled={!!editScope || reorderBusy}>
                     원문 보존
                   </button>
-                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's3')} disabled={reorderBusy}>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's3')} disabled={!!editScope || reorderBusy}>
                     고화질
                   </button>
-                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'question')} disabled={reorderBusy}>
+                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'question')} disabled={!!editScope || reorderBusy}>
                     문항
                   </button>
-                  <button className="btn" type="button" onClick={() => onConfirmSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
+                  <button className="btn" type="button" onClick={() => onConfirmSelected?.(orderedSelectedIds)} disabled={!!editScope || reorderBusy}>
                     {Icon.check} 확인
                   </button>
-                  <button className="btn" type="button" onClick={() => onDownloadSelected?.(orderedSelectedIds)} disabled={reorderBusy}>
+                  <button className="btn" type="button" onClick={() => onDownloadSelected?.(orderedSelectedIds)} disabled={!!editScope || reorderBusy}>
                     {Icon.download} PNG
                   </button>
-                  <button className="btn rail-selection-clear" type="button" onClick={clearRailSelection} disabled={reorderBusy}>
+                  <button className="btn rail-selection-clear" type="button" onClick={clearRailSelection} disabled={!!editScope || reorderBusy}>
                     해제
                   </button>
-                  <button className="btn danger rail-selection-delete" type="button" onClick={removeSelectedItems} disabled={reorderBusy}>
+                  <button className="btn danger rail-selection-delete" type="button" onClick={removeSelectedItems} disabled={!!editScope || reorderBusy}>
                     {Icon.trash} 삭제
                   </button>
                 </div>
@@ -6819,22 +6989,24 @@ function ItemsRail({
             }}
             className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${pressedItemId === itemId ? 'is-pressed' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
+            data-edit-target={editScopeIds.has(itemId) ? "true" : undefined}
             role="group"
-            tabIndex={0}
+            tabIndex={editScope ? -1 : 0}
             aria-current={activeId === it.id ? 'true' : undefined}
             aria-busy={reorderBusy ? 'true' : undefined}
-            aria-roledescription={filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
-            aria-keyshortcuts={filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
+            aria-roledescription={editScope ? '자르기 적용 범위' : filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
+            aria-keyshortcuts={editScope ? undefined : filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
             aria-posinset={i + 1}
             aria-setsize={displayedItemRows.length}
-            aria-describedby="problem-order-help"
-            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
+            aria-describedby={editScope ? undefined : "problem-order-help"}
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${editScopeIds.has(itemId) ? ', 교체 대상' : ''}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
             onClick={e => {
-              if (suppressClickRef.current) return;
+              if (editScope || suppressClickRef.current) return;
               selectRailItem(it.id, e);
             }}
             onKeyDown={e => {
               if (e.target !== e.currentTarget) return;
+              if (editScope) return;
               if (applyRailSelectionKeyboard(it, e)) return;
               if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                 e.preventDefault();
@@ -6894,7 +7066,7 @@ function ItemsRail({
                 title="한 칸 위로"
                 data-tooltip="한 칸 위로 이동"
                 aria-label={`${problemDisplayName(it, i)} 한 칸 위로 이동`}
-                disabled={reorderBusy || filterActive || i === 0}
+                disabled={!!editScope || reorderBusy || filterActive || i === 0}
                 onClick={e => {
                   e.stopPropagation();
                   moveItemByKeyboard(it, 'up');
@@ -6908,7 +7080,7 @@ function ItemsRail({
                 title="한 칸 아래로"
                 data-tooltip="한 칸 아래로 이동"
                 aria-label={`${problemDisplayName(it, i)} 한 칸 아래로 이동`}
-                disabled={reorderBusy || filterActive || i === items.length - 1}
+                disabled={!!editScope || reorderBusy || filterActive || i === items.length - 1}
                 onClick={e => {
                   e.stopPropagation();
                   moveItemByKeyboard(it, 'down');
@@ -6922,7 +7094,7 @@ function ItemsRail({
                 title={downloadTitle}
                 data-tooltip={downloadTitle}
                 aria-label={`${problemDisplayName(it, i)} PNG 다운로드`}
-                disabled={!canDownloadItem || isDownloading}
+                disabled={!!editScope || !canDownloadItem || isDownloading}
                 onClick={e => {
                   e.stopPropagation();
                   if (!canDownloadItem || isDownloading) return;
@@ -6934,6 +7106,7 @@ function ItemsRail({
               <button
                 className="icon-btn item-delete-action"
                 type="button"
+                disabled={!!editScope || reorderBusy}
                 title={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '삭제'}
                 data-tooltip={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '이 자료 삭제'}
                 aria-label={isSelected && selectedItemCount > 1
@@ -15500,6 +15673,7 @@ function App(){
   const [mobilePane, setMobilePane] = useState('stage');
   const [reviewFocus, setReviewFocus] = useState(null);
   const [reviewEditorActive, setReviewEditorActive] = useState(false);
+  const [reviewEditScope, setReviewEditScope] = useState(null);
   const revealSidePanel = useCallback(() => {
     setFocusPanelCollapsed(false);
     if (!reviewEditorActive) setMobilePane('panel');
@@ -15600,7 +15774,7 @@ function App(){
     jobDismissTimersRef.current.clear();
     activeViewTransitionRef.current?.skipTransition?.();
   }, []);
-  const canUndo = historyStack.length > 0 && !mutating;
+  const canUndo = historyStack.length > 0 && !mutating && !reviewEditorActive;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
@@ -16565,7 +16739,7 @@ function App(){
   }, [session, items, fileName, boardColumns, layoutGapMode, showSimpleErrorToast]);
 
   const undoMutation = useCallback(async () => {
-    if (mutatingRef.current) return false;
+    if (reviewEditorActive || mutatingRef.current) return false;
     const currentHistory = historyStackRef.current;
     if (currentHistory.length === 0) return;
     const snapshot = currentHistory[currentHistory.length - 1];
@@ -16595,7 +16769,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast]);
+  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast, reviewEditorActive]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -16606,13 +16780,13 @@ function App(){
       if (evt.shiftKey) return;  // reserve Ctrl/Cmd+Shift+Z for future redo
       const target = evt.target;
       if (isEditableKeyboardTarget(target)) return;
-      if (historyStack.length === 0 || mutating) return;
+      if (historyStack.length === 0 || mutating || reviewEditorActive) return;
       evt.preventDefault();
       undoMutation();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [historyStack.length, mutating, undoMutation]);
+  }, [historyStack.length, mutating, undoMutation, reviewEditorActive]);
 
   // initial session fetch — empty editor on 404, no automatic dummy data.
   useEffect(() => {
@@ -18443,7 +18617,7 @@ function App(){
         }}
       />
       <div
-        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
+        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed && !reviewEditorActive ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
         style={{ '--focus-board-color': t.boardColor }}
         data-mobile-pane={mobilePane}
         inert={hasPendingSessionConflict ? '' : undefined}
@@ -18468,7 +18642,8 @@ function App(){
           </nav>
         )}
         <ItemsRail
-          collapsed={effectiveRailCollapsed}
+          editScope={reviewEditScope}
+          collapsed={reviewEditorActive ? false : effectiveRailCollapsed}
           onToggleCollapsed={focusEditorActive ? () => setFocusRailExpanded(previous => !previous) : toggleLeftRailCollapsed}
           session={session}
           items={items}
@@ -18532,6 +18707,7 @@ function App(){
             onEnhanceImage={enhanceImageSession}
             imageEnhanceBusy={hasRunningImageEnhance}
             onEditorModeChange={setReviewEditorActive}
+            onEditScopeChange={setReviewEditScope}
             onOpenBoard={() => { setMobilePane('stage'); return requestViewChange('board'); }}
             selectedIds={selectedProblemIds}
             setSelectedIds={setSelectedProblemIds}

@@ -273,8 +273,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         board_stage = source.split("function BoardStage", 1)[1].split("function downloadPublishSummary", 1)[0]
 
         self.assertIn("LEFT_RAIL_COLLAPSED_KEY", source)
-        self.assertIn("${effectiveRailCollapsed ? 'left-collapsed' : ''}", source)
-        self.assertIn("collapsed={effectiveRailCollapsed}", source)
+        self.assertIn("${effectiveRailCollapsed && !reviewEditorActive ? 'left-collapsed' : ''}", source)
+        self.assertIn("collapsed={reviewEditorActive ? false : effectiveRailCollapsed}", source)
         self.assertIn("const effectiveRailCollapsed = focusEditorActive ? !focusRailExpanded : leftRailCollapsed;", source)
         self.assertIn("if (collapsed) {", rail)
         self.assertIn("rail-mini-item", rail)
@@ -854,7 +854,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
 
         self.assertIn("e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')", items_rail)
-        self.assertIn('aria-describedby="problem-order-help"', items_rail)
+        self.assertIn('aria-describedby={editScope ? undefined : "problem-order-help"}', items_rail)
         self.assertIn("filterActive ? '필터된 문제' : '순서 변경 가능한 문제'", items_rail)
         self.assertIn("Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape", items_rail)
         self.assertIn('role="status" aria-live="polite"', items_rail)

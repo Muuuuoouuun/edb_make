@@ -663,7 +663,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("review-zoom-controls", source)
         key_handler = source.split("const onKeyDown = (evt) => {", 1)[1]
         key_handler = key_handler.split("if (evt.key === 'Delete'", 1)[0]
-        self.assertLess(key_handler.index("manualSplit.mode === 'stamp'"), key_handler.index("if (isFormControl) return;"))
+        self.assertLess(key_handler.index("setManualSplitMode('select')"), key_handler.index("if (isFormControl) return;"))
         self.assertIn("0 0 0 9999px rgba(13,18,30,.20)", html)
         self.assertIn("선택 크기로 반복", source)
         self.assertNotIn("onManualSplitOutsideMouseDown", source)
@@ -672,7 +672,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("manual-split-row-grip", source)
         self.assertIn("drop-${listDragState.position}", source)
         self.assertIn("영역을 새 문제로 만들어요", source)
-        self.assertIn("Enter 적용 · Esc 취소", source)
+        self.assertIn("클릭마다 새 영역 · Esc로 선택·이동", source)
         manual_actionbar = source.split('className="review-actionbar manual-split-actionbar"', 1)[1]
         manual_actionbar = manual_actionbar.split(") : selectedList.length === 0", 1)[0]
         self.assertNotIn("onClick={applyManualPageSplit}", manual_actionbar)

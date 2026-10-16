@@ -6593,6 +6593,9 @@
     border-radius: 8px;
   }
   .manual-split-canvas.stamp-mode{ cursor: copy; }
+  .manual-split-canvas.select-mode{ cursor: default; }
+  .manual-split-canvas.stamp-mode > .manual-split-box:not(.draft){ pointer-events: none; }
+  .manual-split-box[hidden]{ display: none; }
   .manual-split-box{
     position: absolute;
     box-sizing: border-box;
@@ -6641,7 +6644,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-height: min(70vh, 720px);
+    max-height: min(var(--manual-panel-available, 70vh), 720px);
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -6682,7 +6685,7 @@
   }
   .manual-split-toolset{
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
   }
   .manual-split-tool{
@@ -6691,7 +6694,7 @@
     justify-content: center;
     gap: 6px;
     min-width: 0;
-    height: 34px;
+    min-height: 40px;
     border: 1px solid var(--line);
     border-radius: 7px;
     background: var(--surface-2);
@@ -6706,6 +6709,31 @@
     color: var(--accent-ink);
     box-shadow: inset 0 0 0 1px rgba(47,111,237,.12);
   }
+  .manual-split-scope,
+  .rail-edit-scope{
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+  }
+  .manual-split-scope label{ display: grid; gap: 6px; }
+  .manual-split-scope select{
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    padding: 6px;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+  }
+  .manual-split-scope span,
+  .rail-edit-scope span,
+  .rail-edit-scope small{ color: var(--muted); font-size: var(--text-xs); }
+  .rail-edit-scope{ padding: 12px; border-bottom: 1px solid var(--line); }
+  .item[data-edit-target="true"]{ outline: 2px solid var(--accent-ink); outline-offset: -2px; }
   .manual-stamp-card{
     display: flex;
     flex-direction: column;

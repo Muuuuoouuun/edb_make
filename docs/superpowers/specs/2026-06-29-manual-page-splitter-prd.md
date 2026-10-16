@@ -57,6 +57,18 @@ Box mode is the MVP.
 - Shift-click multi-selects boxes.
 - Selected boxes can be nudged by arrow keys.
 
+### Continuous editing and replacement scope (2026-10-16)
+
+- Teacher-defined regions are authoritative even when the source uses a different question layout or template.
+- Opening from a selected problem replaces only that selection by default. The source canvas still shows the whole page.
+- The scope picker explicitly offers whole-page replacement or adding regions while retaining existing problems. Changing scope preserves all draft regions and stamp dimensions.
+- The left source list identifies the affected items and their actual list positions, including separate ranges for non-contiguous selections. Other pages are never included implicitly.
+- The single-region editor opens continuous cropping directly, preserving its adjusted region as the first draft.
+- Each drag creates one region immediately; each stamp click creates another region, including over an existing region. There is no confirmation between regions. One final apply persists the batch.
+- `V` or `Esc` enters selection/move mode without discarding completed regions. During a gesture, `Esc` restores its starting geometry first. `G` and `S` resume continuous drawing/stamping; explicit Cancel exits the editor.
+- Selecting an existing region enables move/resize. Stamp dimensions remain available when returning to stamp mode, and Enter in a dimension field commits only that field.
+- Hover updates are frame-coalesced and do not re-render the review tree. Batch export decodes the source image once and preserves original crop pixels.
+
 ### Split-Line Mode
 
 Split-line mode is a follow-up but should be designed now.
